@@ -47,10 +47,10 @@ export function MeetingsView({
   const router = useRouter();
   const [creatingLink, setCreatingLink] = React.useState(false);
   const [toDelete, setToDelete] = React.useState<MeetingLink | null>(null);
-  const base = appBaseUrl || "";
+  const base = (typeof window !== "undefined" ? window.location.origin : "") || appBaseUrl || "";
 
   const urlFor = (slug: string) =>
-    `${base || (typeof window !== "undefined" ? window.location.origin : "")}/book/${slug}`;
+    `${base}/book/${slug}`;
 
   function copy(slug: string) {
     navigator.clipboard.writeText(urlFor(slug));

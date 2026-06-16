@@ -30,6 +30,7 @@ import {
   deleteCompanyPayment,
   toggleCompanyPaymentPaid,
 } from "./actions";
+import { useRealtimeSync } from "@/hooks/use-realtime-sync";
 
 type PaymentWithCreator = CompanyPayment & {
   creator?: Pick<MemberLite, "full_name" | "username" | "avatar_url"> | null;
@@ -40,6 +41,8 @@ export function PaymentsView({
 }: {
   payments: PaymentWithCreator[];
 }) {
+  useRealtimeSync("company_payments");
+
   const router = useRouter();
   const [query, setQuery] = React.useState("");
   const [creating, setCreating] = React.useState(false);

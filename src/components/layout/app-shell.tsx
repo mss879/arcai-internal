@@ -6,6 +6,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Topbar } from "@/components/layout/topbar";
 import type { Notification, Profile } from "@/lib/types";
+import { useRealtimeSync } from "@/hooks/use-realtime-sync";
 
 export function AppShell({
   profile,
@@ -16,6 +17,8 @@ export function AppShell({
   notifications: Notification[];
   children: React.ReactNode;
 }) {
+  useRealtimeSync("notifications");
+
   const [mobileOpen, setMobileOpen] = React.useState(false);
   const close = React.useCallback(() => setMobileOpen(false), []);
 

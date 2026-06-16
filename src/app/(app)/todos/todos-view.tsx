@@ -30,6 +30,7 @@ import { cn } from "@/lib/utils";
 import type { MemberLite, TodoStatus, TodoWithRelations } from "@/lib/types";
 
 import { deleteTodo, setTodoStatus } from "./actions";
+import { useRealtimeSync } from "@/hooks/use-realtime-sync";
 
 const FILTERS: { key: TodoStatus | "all"; label: string }[] = [
   { key: "all", label: "All" },
@@ -45,6 +46,8 @@ export function TodosView({
   todos: TodoWithRelations[];
   members: MemberLite[];
 }) {
+  useRealtimeSync("todos");
+
   const router = useRouter();
   const [items, setItems] = React.useState(todos);
   const [filter, setFilter] = React.useState<TodoStatus | "all">("all");

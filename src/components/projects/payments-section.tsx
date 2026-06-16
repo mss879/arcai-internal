@@ -26,6 +26,7 @@ import { formatCurrency } from "@/lib/utils";
 import type { Payment, PaymentStatus } from "@/lib/types";
 
 import { deletePayment, savePayment } from "@/app/(app)/projects/actions";
+import { useRealtimeSyncTables } from "@/hooks/use-realtime-sync";
 
 export type PaymentRow = Payment & { receiptUrl?: string | null };
 
@@ -38,6 +39,8 @@ export function PaymentsSection({
   currency: string;
   payments: PaymentRow[];
 }) {
+  useRealtimeSyncTables(["projects", "payments", "commissions"]);
+
   const router = useRouter();
   const [adding, setAdding] = React.useState(false);
   const [toDelete, setToDelete] = React.useState<Payment | null>(null);

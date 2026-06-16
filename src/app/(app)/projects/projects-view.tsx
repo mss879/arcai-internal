@@ -25,6 +25,7 @@ import { cn, formatCurrency } from "@/lib/utils";
 import type { Client, Project } from "@/lib/types";
 
 import { deleteProject } from "./actions";
+import { useRealtimeSyncTables } from "@/hooks/use-realtime-sync";
 
 type ProjectCard = Project & {
   client?: Pick<Client, "id" | "name" | "company"> | null;
@@ -38,6 +39,8 @@ export function ProjectsView({
   projects: ProjectCard[];
   clients: Pick<Client, "id" | "name" | "company">[];
 }) {
+  useRealtimeSyncTables(["projects", "payments"]);
+
   const router = useRouter();
   const [creating, setCreating] = React.useState(false);
   const [editing, setEditing] = React.useState<Project | null>(null);

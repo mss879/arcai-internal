@@ -19,6 +19,7 @@ import { TodoFormModal } from "@/components/todos/todo-form-modal";
 import { PRIORITY_META } from "@/lib/constants";
 import { cn, formatTime12 } from "@/lib/utils";
 import type { MemberLite, Todo } from "@/lib/types";
+import { useRealtimeSyncTables } from "@/hooks/use-realtime-sync";
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -39,6 +40,8 @@ export function Calendar({
   members: MemberLite[];
   bookings?: CalendarBooking[];
 }) {
+  useRealtimeSyncTables(["todos", "meeting_bookings"]);
+
   const [month, setMonth] = React.useState(() => new Date());
   const [editing, setEditing] = React.useState<Todo | null>(null);
   const [creating, setCreating] = React.useState<string | null>(null);

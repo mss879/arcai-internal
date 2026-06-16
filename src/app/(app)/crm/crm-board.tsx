@@ -51,15 +51,8 @@ import type {
   PipelineStage,
 } from "@/lib/types";
 
-import {
-  createPipeline,
-  createStage,
-  deleteLead,
-  deletePipeline,
-  deleteStage,
-  updateLeadPositions,
-  updateStage,
-} from "./actions";
+import { createPipeline, createStage, deleteLead, deletePipeline, deleteStage, updateLeadPositions, updateStage } from "./actions";
+import { useRealtimeSyncTables } from "@/hooks/use-realtime-sync";
 
 type Items = Record<string, string[]>;
 
@@ -78,6 +71,8 @@ export function CrmBoard({
   members: MemberLite[];
   clients: Pick<Client, "id" | "name" | "company">[];
 }) {
+  useRealtimeSyncTables(["pipelines", "pipeline_stages", "leads"]);
+
   const router = useRouter();
 
   const leadMap = React.useMemo(() => {

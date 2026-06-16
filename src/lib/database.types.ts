@@ -191,6 +191,8 @@ export type Database = {
           id: UUID;
           company_name: string;
           price_lkr: number;
+          status: "pending" | "upcoming";
+          is_paid: boolean;
           created_by: UUID | null;
           created_at: Timestamp;
         };
@@ -198,6 +200,8 @@ export type Database = {
           id?: UUID;
           company_name: string;
           price_lkr: number;
+          status?: "pending" | "upcoming";
+          is_paid?: boolean;
           created_by?: UUID | null;
           created_at?: Timestamp;
         };

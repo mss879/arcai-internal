@@ -57,11 +57,11 @@ export function Sidebar({
   return (
     <div className="flex h-full flex-col gradient-primary px-4 py-5">
       <div className="flex justify-center mb-6">
-        <div className="flex items-center justify-center bg-black rounded-2xl py-2 px-2 shadow-xl border border-white/10 w-full max-w-[200px] overflow-hidden">
+        <div className="flex items-center justify-center bg-black rounded-2xl p-5 shadow-xl border border-white/10 w-full max-w-[180px] aspect-square">
           <img
             src="/new-logo.png"
             alt="ARC AI Logo"
-            className="w-full h-auto max-h-20 object-contain shrink-0 scale-115"
+            className="w-full h-full object-contain shrink-0"
           />
         </div>
       </div>

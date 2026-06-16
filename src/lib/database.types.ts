@@ -186,6 +186,24 @@ export type Database = {
         Update: Partial<Database["public"]["Tables"]["projects"]["Insert"]>;
         Relationships: [];
       };
+      company_payments: {
+        Row: {
+          id: UUID;
+          company_name: string;
+          price_lkr: number;
+          created_by: UUID | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          company_name: string;
+          price_lkr: number;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["company_payments"]["Insert"]>;
+        Relationships: [];
+      };
       payments: {
         Row: {
           id: UUID;

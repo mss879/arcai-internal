@@ -9,6 +9,7 @@ export type Todo = Tables["todos"]["Row"];
 export type TodoMention = Tables["todo_mentions"]["Row"];
 export type Project = Tables["projects"]["Row"];
 export type Payment = Tables["payments"]["Row"];
+export type CompanyPayment = Tables["company_payments"]["Row"];
 export type Commission = Tables["commissions"]["Row"];
 export type Resource = Tables["resources"]["Row"];
 export type MeetingLink = Tables["meeting_links"]["Row"];

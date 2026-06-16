@@ -42,7 +42,7 @@ export async function saveProject(input: ProjectInput): Promise<ActionResult> {
     client_id: input.client_id || null,
     status: input.status ?? "planning",
     budget: input.budget ?? null,
-    currency: input.currency || "USD",
+    currency: input.currency || "LKR",
     start_date: input.start_date || null,
     due_date: input.due_date || null,
   };
@@ -86,7 +86,7 @@ export async function savePayment(input: PaymentInput): Promise<ActionResult> {
   const payload = {
     project_id: input.project_id,
     amount: input.amount,
-    currency: input.currency || "USD",
+    currency: input.currency || "LKR",
     status: input.status ?? "paid",
     paid_at: input.paid_at || null,
     method: input.method?.trim() || null,

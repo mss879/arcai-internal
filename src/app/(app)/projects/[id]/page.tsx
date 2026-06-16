@@ -27,15 +27,12 @@ export default async function ProjectDetailPage({
   const profile = await requireProfile();
   const supabase = await createClient();
 
-  const { data: project } = await supabase
-    .from("projects")
-    .select("*, client:clients(id, name, company)")
-    .eq("id", id)
-    .maybeSingle();
-
-  if (!project) notFound();
-
-  const [paymentsRes, commissionsRes, members] = await Promise.all([
+  const [projectRes, paymentsRes, commissionsRes, members] = await Promise.all([
+    supabase
+      .from("projects")
+      .select("*, client:clients(id, name, company)")
+      .eq("id", id)
+      .maybeSingle(),
     supabase
       .from("payments")
       .select("*")
@@ -50,6 +47,9 @@ export default async function ProjectDetailPage({
       .order("created_at", { ascending: false }),
     getMembers(),
   ]);
+
+  const project = projectRes.data;
+  if (!project) notFound();
 
   const payments: PaymentRow[] = await Promise.all(
     (paymentsRes.data ?? []).map(async (p) => {

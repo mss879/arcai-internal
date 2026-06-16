@@ -14,12 +14,17 @@ export default async function CrmPage({
   const { p } = await searchParams;
   const supabase = await createClient();
 
-  const { data: pipelines } = await supabase
-    .from("pipelines")
-    .select("*")
-    .order("position", { ascending: true })
-    .order("created_at", { ascending: true });
+  const [pipelinesRes, members, clientsRes] = await Promise.all([
+    supabase
+      .from("pipelines")
+      .select("*")
+      .order("position", { ascending: true })
+      .order("created_at", { ascending: true }),
+    getMembers(),
+    supabase.from("clients").select("id, name, company").order("name"),
+  ]);
 
+  const pipelines = pipelinesRes.data;
   const activeId =
     p && pipelines?.some((x) => x.id === p)
       ? p
@@ -46,11 +51,6 @@ export default async function CrmPage({
     stages = stagesRes.data ?? [];
     leads = (leadsRes.data ?? []) as unknown as LeadWithAssignee[];
   }
-
-  const [members, clientsRes] = await Promise.all([
-    getMembers(),
-    supabase.from("clients").select("id, name, company").order("name"),
-  ]);
 
   return (
     <CrmBoard

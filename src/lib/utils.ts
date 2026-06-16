@@ -6,12 +6,18 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-/** Format a number as currency (defaults to USD). */
+/** Format a number as currency (defaults to LKR). */
 export function formatCurrency(
   amount: number | null | undefined,
-  currency = "USD",
+  currency = "LKR",
 ) {
   const value = typeof amount === "number" ? amount : 0;
+  if (currency === "LKR" || currency === "Rs") {
+    return "Rs. " + value.toLocaleString("en-US", {
+      minimumFractionDigits: value % 1 === 0 ? 0 : 2,
+      maximumFractionDigits: 2,
+    });
+  }
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency,
@@ -20,8 +26,15 @@ export function formatCurrency(
   }).format(value);
 }
 
-/** Compact currency, e.g. $25.1K */
-export function formatCompactCurrency(amount: number, currency = "USD") {
+/** Compact currency, e.g. Rs. 25.1K */
+export function formatCompactCurrency(amount: number, currency = "LKR") {
+  if (currency === "LKR" || currency === "Rs") {
+    const formattedNumber = new Intl.NumberFormat("en-US", {
+      notation: "compact",
+      maximumFractionDigits: 1,
+    }).format(amount);
+    return "Rs. " + formattedNumber;
+  }
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency,
@@ -29,6 +42,7 @@ export function formatCompactCurrency(amount: number, currency = "USD") {
     maximumFractionDigits: 1,
   }).format(amount);
 }
+
 
 /** Initials from a full name, e.g. "Yana Summer" -> "YS". */
 export function getInitials(name: string | null | undefined) {

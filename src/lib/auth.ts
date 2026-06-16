@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { redirect } from "next/navigation";
 import type { User } from "@supabase/supabase-js";
 
@@ -68,7 +69,7 @@ async function ensureProfile(user: User): Promise<Profile | null> {
 }
 
 /** The currently authenticated profile, or null. Self-heals a missing row. */
-export async function getProfile(): Promise<Profile | null> {
+export const getProfile = cache(async (): Promise<Profile | null> => {
   if (!isSupabaseConfigured()) return null;
 
   const supabase = await createClient();
@@ -85,7 +86,7 @@ export async function getProfile(): Promise<Profile | null> {
 
   if (data) return data;
   return ensureProfile(user);
-}
+});
 
 /** Like getProfile but redirects to /login when not signed in. */
 export async function requireProfile(): Promise<Profile> {

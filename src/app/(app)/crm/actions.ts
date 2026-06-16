@@ -154,7 +154,7 @@ export async function saveLead(input: LeadInput): Promise<ActionResult> {
     contact_email: input.contact_email?.trim() || null,
     contact_phone: input.contact_phone?.trim() || null,
     value: input.value ?? null,
-    currency: input.currency || "USD",
+    currency: input.currency || "LKR",
     notes: input.notes?.trim() || null,
     assigned_to: input.assigned_to || null,
     client_id: input.client_id || null,

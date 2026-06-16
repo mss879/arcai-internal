@@ -138,6 +138,12 @@ export function Calendar({
               time: new Date(`${b.booking_date}T${b.start_time}:00`),
             })),
           ].sort((a, b) => {
+            const aDone = a.type === "todo" && a.data.status === "done";
+            const bDone = b.type === "todo" && b.data.status === "done";
+
+            if (aDone && !bDone) return 1;
+            if (!aDone && bDone) return -1;
+
             if (!a.time) return 1;
             if (!b.time) return -1;
             return a.time.getTime() - b.time.getTime();
@@ -147,7 +153,7 @@ export function Calendar({
             <div
               key={key}
               className={cn(
-                "group relative min-h-[88px] rounded-xl border p-1.5 transition",
+                "group relative min-h-[120px] rounded-xl border p-1.5 transition",
                 inMonth
                   ? "border-slate-100 bg-white hover:border-primary-200"
                   : "border-transparent bg-slate-50/50",
@@ -184,10 +190,12 @@ export function Calendar({
                         key={t.id}
                         onClick={() => setEditing(t)}
                         className={cn(
-                          "flex w-full items-center gap-1 rounded-md px-1.5 py-0.5 text-left text-[11px] font-medium transition hover:brightness-95 cursor-pointer",
+                          "flex w-full items-center gap-1 rounded-md text-left transition hover:brightness-95 cursor-pointer",
                           t.status === "done"
-                            ? "bg-slate-100 text-slate-400 line-through"
-                            : "bg-primary-50 text-primary-700",
+                            ? "bg-slate-100 text-slate-400 line-through text-[9.5px] py-0.5 px-1 font-medium opacity-65"
+                            : t.status === "in_progress"
+                              ? "animate-slow-flash text-[12px] py-1 px-1.5 font-semibold shadow-xs"
+                              : "bg-primary-50 text-primary-700 text-[12px] py-1 px-1.5 font-semibold shadow-xs",
                         )}
                       >
                         <span

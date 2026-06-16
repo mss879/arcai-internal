@@ -58,7 +58,7 @@ export function TeamView({
   const pending = invitations.filter((i) => i.status === "pending");
   const adminCount = members.filter((m) => m.role === "admin").length;
   const base =
-    (typeof window !== "undefined" ? window.location.origin : "") || appBaseUrl || "";
+    appBaseUrl || (typeof window !== "undefined" ? window.location.origin : "");
 
   function invite() {
     if (!email.trim()) {

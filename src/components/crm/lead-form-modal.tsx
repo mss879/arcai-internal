@@ -61,7 +61,7 @@ export function LeadFormModal({
             pipeline_id: pipelineId,
             stage_id: defaultStageId ?? stages[0]?.id ?? "",
             title: "",
-            currency: "USD",
+            currency: "LKR",
           },
     );
   }, [open, lead, pipelineId, defaultStageId, stages]);

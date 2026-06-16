@@ -145,15 +145,14 @@ export default async function DashboardPage() {
         ))}
       </div>
 
-      {/* Calendar + agenda */}
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
-        <div className="xl:col-span-2">
-          <Calendar todos={todos} members={members} bookings={bookings} />
-        </div>
+      {/* Calendar (Full Width) */}
+      <Calendar todos={todos} members={members} bookings={bookings} />
 
-        <div className="space-y-6">
-          {/* Today */}
-          <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[var(--shadow-card)]">
+      {/* Today's Tasks & Upcoming Meetings (Under the Calendar) */}
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+        {/* Today */}
+        <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[var(--shadow-card)] flex flex-col justify-between">
+          <div>
             <h2 className="text-sm font-semibold text-slate-900">
               Today&apos;s tasks
             </h2>
@@ -186,16 +185,18 @@ export default async function DashboardPage() {
                 ))
               )}
             </div>
-            <Link
-              href="/todos"
-              className="mt-3 block text-center text-xs font-medium text-primary-600 hover:text-primary-700"
-            >
-              View all tasks
-            </Link>
           </div>
+          <Link
+            href="/todos"
+            className="mt-4 block text-center text-xs font-medium text-primary-600 hover:text-primary-700"
+          >
+            View all tasks
+          </Link>
+        </div>
 
-          {/* Upcoming meetings */}
-          <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[var(--shadow-card)]">
+        {/* Upcoming meetings */}
+        <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[var(--shadow-card)] flex flex-col justify-between">
+          <div>
             <h2 className="text-sm font-semibold text-slate-900">
               Upcoming meetings
             </h2>
@@ -230,13 +231,13 @@ export default async function DashboardPage() {
                 ))
               )}
             </div>
-            <Link
-              href="/meetings"
-              className="mt-3 block text-center text-xs font-medium text-primary-600 hover:text-primary-700"
-            >
-              Manage meetings
-            </Link>
           </div>
+          <Link
+            href="/meetings"
+            className="mt-4 block text-center text-xs font-medium text-primary-600 hover:text-primary-700"
+          >
+            Manage meetings
+          </Link>
         </div>
       </div>
     </div>

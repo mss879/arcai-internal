@@ -41,7 +41,7 @@ export function ProjectFormModal({
             start_date: project.start_date,
             due_date: project.due_date,
           }
-        : { name: "", status: "planning", currency: "USD" },
+        : { name: "", status: "planning", currency: "LKR" },
     );
   }, [open, project]);
 

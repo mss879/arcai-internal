@@ -7,6 +7,7 @@ import { LogOut, ChevronLeft, ChevronRight } from "lucide-react";
 
 import { Logo } from "@/components/brand/logo";
 import { Avatar } from "@/components/ui/avatar";
+import { NavLoadingIndicator } from "@/components/layout/nav-loading-indicator";
 import { ADMIN_NAV, NAV, type NavItem } from "@/components/layout/nav";
 import { signOutAction } from "@/app/login/actions";
 import { cn } from "@/lib/utils";
@@ -60,6 +61,8 @@ function NavLink({
           </motion.span>
         )}
       </AnimatePresence>
+
+      <NavLoadingIndicator isCollapsed={isCollapsed} />
     </Link>
   );
 }

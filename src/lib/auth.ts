@@ -73,18 +73,31 @@ export const getProfile = cache(async (): Promise<Profile | null> => {
   if (!isSupabaseConfigured()) return null;
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return null;
+
+  // Fast path: validate the session JWT instead of always making a network
+  // round-trip to the Supabase Auth server. This runs on *every* navigation,
+  // so it dominates how fast tab switches feel. When the project uses
+  // asymmetric JWT signing keys, getClaims() verifies the token signature
+  // locally (no network); otherwise it transparently falls back to getUser().
+  // Either way the token is fully validated (signature + expiry), so this is
+  // safe — it only removes latency, it never trusts an invalid session.
+  const { data: claimsData, error } = await supabase.auth.getClaims();
+  const userId = claimsData?.claims?.sub;
+  if (error || !userId) return null;
 
   const { data } = await supabase
     .from("profiles")
     .select("*")
-    .eq("id", user.id)
+    .eq("id", userId)
     .maybeSingle();
 
   if (data) return data;
+
+  // No profile row yet — fetch the full user object to self-heal.
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return null;
   return ensureProfile(user);
 });
 

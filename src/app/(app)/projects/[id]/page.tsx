@@ -26,10 +26,11 @@ export default async function ProjectDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const profile = await requireProfile();
   const supabase = await createClient();
 
-  const [projectRes, paymentsRes, commissionsRes, members, docRequestsRes] = await Promise.all([
+  // Run the auth check concurrently with the data queries (see dashboard).
+  const [profile, projectRes, paymentsRes, commissionsRes, members, docRequestsRes] = await Promise.all([
+    requireProfile(),
     (supabase as any)
       .from("projects")
       .select("*, client:clients(id, name, company)")

@@ -39,10 +39,14 @@ export async function updateSession(request: NextRequest) {
     },
   });
 
-  // IMPORTANT: do not run code between createServerClient and getUser().
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // IMPORTANT: do not run code between createServerClient and the auth call.
+  // This runs on EVERY request, so it dominates navigation speed. getClaims()
+  // refreshes the session (via getSession) AND validates the JWT — locally,
+  // with no network round-trip, when the project uses asymmetric JWT signing
+  // keys. It transparently falls back to a network getUser() for legacy
+  // symmetric keys, so this is safe: the session is always validated.
+  const { data: claimsData } = await supabase.auth.getClaims();
+  const user = claimsData?.claims ?? null;
 
   const { pathname } = request.nextUrl;
 

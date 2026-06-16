@@ -26,12 +26,14 @@ function greeting() {
 }
 
 export default async function DashboardPage() {
-  const profile = await requireProfile();
   const supabase = await createClient();
   const today = format(new Date(), "yyyy-MM-dd");
 
-  const [todosRes, members, projectsCount, clientsCount, bookingsRes] =
+  // Run the auth check concurrently with the data queries so its latency
+  // overlaps with the DB round-trips instead of stacking before them.
+  const [profile, todosRes, members, projectsCount, clientsCount, bookingsRes] =
     await Promise.all([
+      requireProfile(),
       supabase.from("todos").select("*").order("due_date", { ascending: true }),
       getMembers(),
       supabase

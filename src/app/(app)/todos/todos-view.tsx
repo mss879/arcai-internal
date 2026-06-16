@@ -12,6 +12,7 @@ import {
   MoreVertical,
   Pencil,
   Plus,
+  Play,
   Trash2,
 } from "lucide-react";
 
@@ -63,6 +64,20 @@ export function TodosView({
 
   async function toggle(t: TodoWithRelations) {
     const next: TodoStatus = t.status === "done" ? "todo" : "done";
+    setItems((prev) =>
+      prev.map((x) => (x.id === t.id ? { ...x, status: next } : x)),
+    );
+    const res = await setTodoStatus(t.id, next);
+    if (!res.ok) {
+      toast.error(res.error);
+      setItems(todos);
+    } else {
+      router.refresh();
+    }
+  }
+
+  async function handleStatusChange(t: TodoWithRelations, targetStatus: TodoStatus) {
+    const next: TodoStatus = t.status === targetStatus ? "todo" : targetStatus;
     setItems((prev) =>
       prev.map((x) => (x.id === t.id ? { ...x, status: next } : x)),
     );
@@ -196,6 +211,41 @@ export function TodosView({
                         </span>
                       )}
                     </div>
+                  </div>
+
+                  {/* Status update buttons */}
+                  <div className="flex items-center gap-1.5 self-center shrink-0">
+                    <button
+                      onClick={() => handleStatusChange(t, "in_progress")}
+                      className={cn(
+                        "inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-semibold shadow-sm transition active:scale-95 duration-200",
+                        t.status === "in_progress"
+                          ? "bg-violet-600 border-violet-600 text-white hover:bg-violet-700 hover:border-violet-700"
+                          : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50 hover:border-slate-300"
+                      )}
+                      title="Set status to In Progress"
+                    >
+                      {t.status === "in_progress" ? (
+                        <span className="h-1.5 w-1.5 rounded-full bg-white animate-pulse" />
+                      ) : (
+                        <Play className="h-3 w-3 fill-current" />
+                      )}
+                      <span className="hidden sm:inline">In progress</span>
+                    </button>
+
+                    <button
+                      onClick={() => handleStatusChange(t, "done")}
+                      className={cn(
+                        "inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-semibold shadow-sm transition active:scale-95 duration-200",
+                        t.status === "done"
+                          ? "bg-emerald-600 border-emerald-600 text-white hover:bg-emerald-700 hover:border-emerald-700"
+                          : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50 hover:border-slate-300"
+                      )}
+                      title="Set status to Done"
+                    >
+                      <Check className="h-3 w-3" strokeWidth={3} />
+                      <span className="hidden sm:inline">Done</span>
+                    </button>
                   </div>
 
                   <Dropdown

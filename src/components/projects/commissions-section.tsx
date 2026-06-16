@@ -192,14 +192,14 @@ function CommissionModal({
     setForm(
       commission
         ? {
-            id: commission.id,
-            project_id: projectId,
-            user_id: commission.user_id,
-            amount: Number(commission.amount),
-            percentage: commission.percentage,
-            status: commission.status,
-            note: commission.note ?? "",
-          }
+          id: commission.id,
+          project_id: projectId,
+          user_id: commission.user_id,
+          amount: Number(commission.amount),
+          percentage: commission.percentage,
+          status: commission.status,
+          note: commission.note ?? "",
+        }
         : { project_id: projectId, user_id: "", amount: 0, status: "pending" },
     );
   }, [open, commission, projectId]);

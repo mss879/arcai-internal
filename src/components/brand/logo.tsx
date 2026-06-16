@@ -17,14 +17,11 @@ export function Logo({
 
   return (
     <div className={cn("flex items-center gap-2.5", className)}>
-      <div
-        className={cn(
-          "grid place-items-center font-bold text-white shadow-[0_8px_20px_-8px_rgba(76,54,214,0.7)] gradient-violet",
-          dims.box,
-        )}
-      >
-        A
-      </div>
+      <img
+        src="/arclogo.webp"
+        alt="ARC AI Logo"
+        className={cn("object-contain shrink-0", dims.box)}
+      />
       <div className="leading-none">
         <div
           className={cn(

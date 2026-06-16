@@ -116,7 +116,7 @@ export function PaymentsView({
         </div>
 
         <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[var(--shadow-card)] flex items-center gap-4">
-          <span className="grid h-12 w-12 place-items-center rounded-xl bg-violet-50 text-violet-600 shrink-0">
+          <span className="grid h-12 w-12 place-items-center rounded-xl bg-primary-50 text-primary-600 shrink-0">
             <Building2 className="h-6 w-6" />
           </span>
           <div>
@@ -254,7 +254,7 @@ export function PaymentsView({
                           ? "bg-emerald-50 text-emerald-600"
                           : p.status === "pending"
                             ? "bg-amber-50 text-amber-600"
-                            : "bg-violet-50 text-violet-600"
+                            : "bg-primary-50 text-primary-600"
                       )}>
                         <Building2 className="h-4 w-4" />
                       </span>

@@ -44,7 +44,7 @@ export const TODO_STATUS_META: Record<
   todo: { label: "To do", badge: "bg-slate-100 text-slate-600 ring-slate-200" },
   in_progress: {
     label: "In progress",
-    badge: "bg-violet-50 text-violet-600 ring-violet-200",
+    badge: "bg-primary-50 text-primary-600 ring-primary-200",
   },
   done: {
     label: "Done",
@@ -62,7 +62,7 @@ export const PROJECT_STATUS_META: Record<
   },
   active: {
     label: "Active",
-    badge: "bg-violet-50 text-violet-600 ring-violet-200",
+    badge: "bg-primary-50 text-primary-600 ring-primary-200",
   },
   on_hold: {
     label: "On hold",
@@ -106,7 +106,7 @@ export const COMMISSION_STATUS_META: Record<
   },
   approved: {
     label: "Approved",
-    badge: "bg-violet-50 text-violet-600 ring-violet-200",
+    badge: "bg-primary-50 text-primary-600 ring-primary-200",
   },
   paid: {
     label: "Paid",
@@ -124,7 +124,7 @@ export const CLIENT_STATUS_META: Record<
   },
   lead: {
     label: "Lead",
-    badge: "bg-violet-50 text-violet-600 ring-violet-200",
+    badge: "bg-primary-50 text-primary-600 ring-primary-200",
   },
   inactive: {
     label: "Inactive",
@@ -134,7 +134,7 @@ export const CLIENT_STATUS_META: Record<
 
 /** Default stages created with a new CRM pipeline. */
 export const DEFAULT_PIPELINE_STAGES: { name: string; color: string }[] = [
-  { name: "New Lead", color: "#6d5cff" },
+  { name: "New Lead", color: "#f97316" },
   { name: "Contacted", color: "#22b8cf" },
   { name: "Proposal Sent", color: "#ffb020" },
   { name: "Awaiting Payment", color: "#ff7a59" },
@@ -143,8 +143,8 @@ export const DEFAULT_PIPELINE_STAGES: { name: string; color: string }[] = [
 
 /** Palette offered when creating / editing a CRM stage. */
 export const STAGE_COLORS = [
-  "#6d5cff",
-  "#845ef7",
+  "#f97316",
+  "#ea580c",
   "#22b8cf",
   "#16c79a",
   "#51cf66",

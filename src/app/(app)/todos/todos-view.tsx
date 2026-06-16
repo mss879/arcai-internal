@@ -223,7 +223,7 @@ export function TodosView({
                       className={cn(
                         "inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-semibold shadow-sm transition active:scale-95 duration-200",
                         t.status === "in_progress"
-                          ? "bg-violet-600 border-violet-600 text-white hover:bg-violet-700 hover:border-violet-700"
+                          ? "bg-primary-600 border-primary-600 text-white hover:bg-primary-700 hover:border-primary-700"
                           : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50 hover:border-slate-300"
                       )}
                       title="Set status to In Progress"

@@ -216,7 +216,7 @@ export function Calendar({
                       <div
                         key={b.id}
                         title={`Meeting with ${b.client_name} - ${b.link?.title || "Meeting"}`}
-                        className="flex w-full items-center gap-1 rounded-md bg-violet-50 px-1.5 py-0.5 text-left text-[11px] font-semibold text-violet-700 truncate"
+                        className="flex w-full items-center gap-1 rounded-md bg-primary-50 px-1.5 py-0.5 text-left text-[11px] font-semibold text-primary-700 truncate"
                       >
                         <Clock className="h-3 w-3 shrink-0" />
                         <span className="truncate">

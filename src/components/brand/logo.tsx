@@ -17,7 +17,7 @@ export function Logo({
   return (
     <div className={cn("flex items-center justify-center w-full", className)}>
       <img
-        src="/arclogo.webp"
+        src="/new-logo.png"
         alt="ARC AI Logo"
         className={cn("object-contain shrink-0", dims)}
       />

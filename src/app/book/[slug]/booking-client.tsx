@@ -134,7 +134,7 @@ export function BookingClient({
 
   return (
     <div className="overflow-hidden rounded-3xl border border-slate-200/80 bg-white shadow-[var(--shadow-card)]">
-      <div className="gradient-violet px-7 py-6 text-white">
+      <div className="gradient-primary px-7 py-6 text-white">
         <Logo variant="light" size="sm" />
         <h1 className="mt-4 text-2xl font-semibold">{link.title}</h1>
         {link.description && (

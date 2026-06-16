@@ -58,13 +58,13 @@ export function getInitials(name: string | null | undefined) {
 /** A deterministic pleasant color derived from a string (for avatars). */
 export function colorFromString(input: string) {
   const palette = [
-    "#6d5cff",
+    "#f97316",
     "#ff7a59",
     "#16c79a",
     "#ffb020",
     "#ff5c8a",
     "#22b8cf",
-    "#845ef7",
+    "#ea580c",
     "#51cf66",
   ];
   let hash = 0;

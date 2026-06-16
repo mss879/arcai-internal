@@ -69,7 +69,7 @@ export default async function DashboardPage() {
       value: openTasks.length,
       icon: ListChecks,
       href: "/todos",
-      tint: "bg-violet-50 text-violet-500",
+      tint: "bg-primary-50 text-primary-500",
     },
     {
       label: "Active projects",
@@ -97,7 +97,7 @@ export default async function DashboardPage() {
   return (
     <div className="space-y-6">
       {/* Hero */}
-      <div className="relative overflow-hidden rounded-2xl gradient-violet p-6 sm:p-8">
+      <div className="relative overflow-hidden rounded-2xl gradient-primary p-6 sm:p-8">
         <div
           className="pointer-events-none absolute inset-0 opacity-70"
           style={{

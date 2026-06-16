@@ -55,9 +55,15 @@ export function Sidebar({
     pathname === href || pathname.startsWith(`${href}/`);
 
   return (
-    <div className="flex h-full flex-col gradient-violet px-4 py-5">
-      <div className="px-2">
-        <Logo variant="light" size="md" />
+    <div className="flex h-full flex-col gradient-primary px-4 py-5">
+      <div className="flex justify-center mb-6">
+        <div className="flex items-center justify-center bg-black rounded-2xl p-5 shadow-xl border border-white/10 w-full max-w-[180px] aspect-square">
+          <img
+            src="/new-logo.png"
+            alt="ARC AI Logo"
+            className="w-full h-full object-contain shrink-0"
+          />
+        </div>
       </div>
 
       <nav className="mt-8 flex-1 space-y-1">

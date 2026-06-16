@@ -4,18 +4,18 @@
    Design tokens
    ============================================================ */
 @theme {
-  /* Brand — violet / indigo */
-  --color-primary-50: #f3f1ff;
-  --color-primary-100: #ebe7ff;
-  --color-primary-200: #d9d2ff;
-  --color-primary-300: #bcaeff;
-  --color-primary-400: #9c84fc;
-  --color-primary-500: #6d5cff;
-  --color-primary-600: #5b45f0;
-  --color-primary-700: #4c36d6;
-  --color-primary-800: #3f2faf;
-  --color-primary-900: #362b8a;
-  --color-primary-950: #221a5e;
+  /* Brand — Tech Orange */
+  --color-primary-50: #fff7ed;
+  --color-primary-100: #ffedd5;
+  --color-primary-200: #fed7aa;
+  --color-primary-300: #fdba74;
+  --color-primary-400: #fb923c;
+  --color-primary-500: #f97316;
+  --color-primary-600: #ea580c;
+  --color-primary-700: #c2410c;
+  --color-primary-800: #9a3412;
+  --color-primary-900: #7c2d12;
+  --color-primary-950: #431407;
 
   /* Surfaces */
   --color-canvas: #f6f7fb;
@@ -26,13 +26,13 @@
   --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-geist-mono), ui-monospace, monospace;
 
-  /* Soft, layered shadows */
+  /* Soft, layered shadows (adjusted for orange brand highlight) */
   --shadow-soft: 0 1px 2px rgba(15, 23, 42, 0.04),
     0 8px 24px -12px rgba(15, 23, 42, 0.12);
   --shadow-card: 0 1px 3px rgba(15, 23, 42, 0.05),
-    0 12px 32px -16px rgba(76, 54, 214, 0.18);
+    0 12px 32px -16px rgba(194, 65, 12, 0.12);
   --shadow-lift: 0 2px 6px rgba(15, 23, 42, 0.06),
-    0 24px 48px -20px rgba(76, 54, 214, 0.28);
+    0 24px 48px -20px rgba(194, 65, 12, 0.22);
 }
 
 /* ============================================================
@@ -89,7 +89,7 @@ body {
 @utility app-bg {
   background-color: var(--color-canvas);
   background-image:
-    radial-gradient(60rem 60rem at 8% -10%, rgba(109, 92, 255, 0.12), transparent 55%),
+    radial-gradient(60rem 60rem at 8% -10%, rgba(249, 115, 22, 0.12), transparent 55%),
     radial-gradient(50rem 50rem at 105% 5%, rgba(34, 184, 207, 0.1), transparent 50%),
     radial-gradient(45rem 45rem at 50% 120%, rgba(255, 92, 138, 0.08), transparent 55%);
 }
@@ -118,7 +118,7 @@ body {
   color: transparent;
 }
 
-@utility gradient-violet {
+@utility gradient-primary {
   background-image: linear-gradient(
     135deg,
     var(--color-primary-500) 0%,

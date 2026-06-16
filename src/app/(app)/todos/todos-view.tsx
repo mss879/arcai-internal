@@ -148,14 +148,20 @@ export function TodosView({
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, scale: 0.98 }}
                   transition={{ duration: 0.18 }}
-                  className="group flex items-start gap-3 rounded-2xl border border-slate-200/80 bg-white p-4 shadow-[var(--shadow-soft)]"
+                  className={cn(
+                    "group flex items-start gap-3 rounded-2xl border transition-all duration-200 p-4 shadow-[var(--shadow-soft)]",
+                    done
+                      ? "border-slate-200 bg-slate-50/50 opacity-70"
+                      : "border-slate-200/80 bg-white"
+                  )}
                 >
                   <button
+                    disabled={done}
                     onClick={() => toggle(t)}
                     className={cn(
                       "mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-md border-2 transition",
                       done
-                        ? "border-emerald-500 bg-emerald-500 text-white"
+                        ? "border-emerald-500 bg-emerald-500 text-white cursor-not-allowed"
                         : "border-slate-300 hover:border-primary-400",
                     )}
                     aria-label="Toggle complete"
@@ -219,14 +225,17 @@ export function TodosView({
                   {/* Status update buttons */}
                   <div className="flex items-center gap-1.5 self-center shrink-0">
                     <button
+                      disabled={done}
                       onClick={() => handleStatusChange(t, "in_progress")}
                       className={cn(
                         "inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-semibold shadow-sm transition active:scale-95 duration-200",
                         t.status === "in_progress"
                           ? "bg-primary-600 border-primary-600 text-white hover:bg-primary-700 hover:border-primary-700"
-                          : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50 hover:border-slate-300"
+                          : done
+                            ? "bg-slate-100/50 border-slate-200/60 text-slate-400 cursor-not-allowed"
+                            : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50 hover:border-slate-300"
                       )}
-                      title="Set status to In Progress"
+                      title={done ? "Completed task cannot be changed" : "Set status to In Progress"}
                     >
                       {t.status === "in_progress" ? (
                         <span className="h-1.5 w-1.5 rounded-full bg-white animate-pulse" />
@@ -237,14 +246,17 @@ export function TodosView({
                     </button>
 
                     <button
+                      disabled={done}
                       onClick={() => handleStatusChange(t, "done")}
                       className={cn(
                         "inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-semibold shadow-sm transition active:scale-95 duration-200",
                         t.status === "done"
-                          ? "bg-emerald-600 border-emerald-600 text-white hover:bg-emerald-700 hover:border-emerald-700"
+                          ? done
+                            ? "bg-slate-200 border-slate-300 text-slate-600 cursor-not-allowed"
+                            : "bg-emerald-600 border-emerald-600 text-white hover:bg-emerald-700 hover:border-emerald-700"
                           : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50 hover:border-slate-300"
                       )}
-                      title="Set status to Done"
+                      title={done ? "Completed task" : "Set status to Done"}
                     >
                       <Check className="h-3 w-3" strokeWidth={3} />
                       <span className="hidden sm:inline">Done</span>

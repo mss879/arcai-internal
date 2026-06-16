@@ -69,28 +69,28 @@ export default async function DashboardPage() {
       value: openTasks.length,
       icon: ListChecks,
       href: "/todos",
-      tint: "bg-primary-50 text-primary-500",
+      tint: "bg-primary-500/10 text-primary-600 border border-primary-500/10",
     },
     {
       label: "Active projects",
       value: projectsCount.count ?? 0,
       icon: FolderKanban,
       href: "/projects",
-      tint: "bg-amber-50 text-amber-500",
+      tint: "bg-amber-500/10 text-amber-600 border border-amber-500/10",
     },
     {
       label: "Clients",
       value: clientsCount.count ?? 0,
       icon: Users,
       href: "/clients",
-      tint: "bg-emerald-50 text-emerald-500",
+      tint: "bg-emerald-500/10 text-emerald-600 border border-emerald-500/10",
     },
     {
       label: "Upcoming meetings",
       value: upcomingBookings.length,
       icon: CalendarClock,
       href: "/meetings",
-      tint: "bg-cyan-50 text-cyan-500",
+      tint: "bg-cyan-500/10 text-cyan-600 border border-cyan-500/10",
     },
   ];
 
@@ -123,25 +123,30 @@ export default async function DashboardPage() {
 
       {/* Stats */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        {stats.map((s) => (
-          <Link
+        {stats.map((s, idx) => (
+          <div
             key={s.label}
-            href={s.href}
-            className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[var(--shadow-card)] transition hover:shadow-[var(--shadow-lift)]"
+            style={{ animationDelay: `${idx * 300}ms` }}
+            className="animate-continuous-float"
           >
-            <span
-              className={cn(
-                "grid h-11 w-11 place-items-center rounded-xl",
-                s.tint,
-              )}
+            <Link
+              href={s.href}
+              className="block group rounded-2xl border border-white/30 bg-gradient-to-br from-white/60 to-white/25 p-5 shadow-sm backdrop-blur-xl transition-all duration-300 ease-out hover:-translate-y-1.5 hover:scale-[1.02] hover:from-white/75 hover:to-white/40 hover:border-primary-400 hover:shadow-md active:scale-[0.98]"
             >
-              <s.icon className="h-5 w-5" />
-            </span>
-            <p className="mt-3 text-2xl font-semibold text-slate-900">
-              {s.value}
-            </p>
-            <p className="text-sm text-slate-500">{s.label}</p>
-          </Link>
+              <span
+                className={cn(
+                  "grid h-11 w-11 place-items-center rounded-xl transition-transform duration-500 ease-out group-hover:scale-115 group-hover:rotate-6",
+                  s.tint,
+                )}
+              >
+                <s.icon className="h-5 w-5" />
+              </span>
+              <p className="mt-3 text-2xl font-extrabold text-slate-800 tracking-tight">
+                {s.value}
+              </p>
+              <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mt-1">{s.label}</p>
+            </Link>
+          </div>
         ))}
       </div>
 

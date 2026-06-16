@@ -2,11 +2,12 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Menu, Search } from "lucide-react";
+import { Menu } from "lucide-react";
 
 import { Avatar } from "@/components/ui/avatar";
 import { NotificationsBell } from "@/components/layout/notifications-bell";
 import { titleForPath } from "@/components/layout/nav";
+import { GlobalSearch } from "@/components/layout/global-search";
 import type { Notification, Profile } from "@/lib/types";
 
 export function Topbar({
@@ -35,14 +36,7 @@ export function Topbar({
       </h1>
 
       <div className="ml-auto flex items-center gap-1.5 sm:gap-2">
-        <div className="relative hidden md:block">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-          <input
-            type="search"
-            placeholder="Search…"
-            className="h-10 w-56 rounded-xl border border-slate-200 bg-white pl-9 pr-3 text-sm text-slate-700 placeholder:text-slate-400 focus:border-primary-400 focus:outline-none focus:ring-4 focus:ring-primary-100"
-          />
-        </div>
+        <GlobalSearch />
 
         <NotificationsBell initial={notifications} />
 
@@ -56,3 +50,4 @@ export function Topbar({
     </header>
   );
 }
+

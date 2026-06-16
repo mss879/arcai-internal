@@ -16,7 +16,7 @@ export type ClientInput = {
   notes?: string;
 };
 
-export async function saveClient(input: ClientInput): Promise<ActionResult> {
+export async function saveClient(input: ClientInput): Promise<ActionResult<{ client?: any }>> {
   const supabase = await createClient();
   const {
     data: { user },
@@ -34,14 +34,16 @@ export async function saveClient(input: ClientInput): Promise<ActionResult> {
     notes: input.notes?.trim() || null,
   };
 
-  const { error } = input.id
-    ? await supabase.from("clients").update(payload).eq("id", input.id)
-    : await supabase.from("clients").insert(payload);
+  const query = input.id
+    ? supabase.from("clients").update(payload).eq("id", input.id)
+    : supabase.from("clients").insert(payload);
+
+  const { data, error } = await query.select().single();
 
   if (error) return { ok: false, error: error.message };
 
   revalidatePath("/clients");
-  return { ok: true };
+  return { ok: true, client: data };
 }
 
 export async function deleteClient(id: string): Promise<ActionResult> {

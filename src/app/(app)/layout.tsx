@@ -1,11 +1,9 @@
+import { Suspense } from "react";
 import { AppShell } from "@/components/layout/app-shell";
 import { requireProfile } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 
-// Authenticated app — always render per-request.
-export const dynamic = "force-dynamic";
-
-export default async function AppLayout({
+async function AuthenticatedShell({
   children,
 }: {
   children: React.ReactNode;
@@ -23,5 +21,17 @@ export default async function AppLayout({
     <AppShell profile={profile} notifications={notifications ?? []}>
       {children}
     </AppShell>
+  );
+}
+
+export default function AppLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <Suspense>
+      <AuthenticatedShell>{children}</AuthenticatedShell>
+    </Suspense>
   );
 }

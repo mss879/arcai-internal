@@ -9,6 +9,7 @@ import {
   format,
   isSameMonth,
   isToday,
+  startOfDay,
   startOfMonth,
   startOfWeek,
   subMonths,
@@ -42,6 +43,7 @@ export function Calendar({
 }) {
   useRealtimeSyncTables(["todos", "meeting_bookings"]);
 
+  const today = React.useMemo(() => startOfDay(new Date()), []);
   const [month, setMonth] = React.useState(() => new Date());
   const [editing, setEditing] = React.useState<Todo | null>(null);
   const [creating, setCreating] = React.useState<string | null>(null);
@@ -82,28 +84,28 @@ export function Calendar({
   }
 
   return (
-    <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[var(--shadow-card)]">
-      <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-base font-semibold text-slate-900">
+    <div className="glass rounded-3xl border border-white/30 p-6 shadow-xl relative overflow-hidden backdrop-blur-xl saturate-150">
+      <div className="mb-5 flex items-center justify-between">
+        <h2 className="text-lg font-bold text-slate-800 tracking-tight">
           {format(month, "MMMM yyyy")}
         </h2>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1.5">
           <button
             onClick={() => setMonth((m) => subMonths(m, 1))}
-            className="grid h-8 w-8 place-items-center rounded-lg text-slate-500 hover:bg-slate-100"
+            className="grid h-8 w-8 place-items-center rounded-lg border border-white/20 bg-white/40 text-slate-600 hover:bg-white/60 transition shadow-sm"
             aria-label="Previous month"
           >
             <ChevronLeft className="h-4 w-4" />
           </button>
           <button
             onClick={() => setMonth(new Date())}
-            className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:bg-slate-100"
+            className="rounded-lg border border-white/20 bg-white/40 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-white/60 transition shadow-sm"
           >
             Today
           </button>
           <button
             onClick={() => setMonth((m) => addMonths(m, 1))}
-            className="grid h-8 w-8 place-items-center rounded-lg text-slate-500 hover:bg-slate-100"
+            className="grid h-8 w-8 place-items-center rounded-lg border border-white/20 bg-white/40 text-slate-600 hover:bg-white/60 transition shadow-sm"
             aria-label="Next month"
           >
             <ChevronRight className="h-4 w-4" />
@@ -111,11 +113,11 @@ export function Calendar({
         </div>
       </div>
 
-      <div className="grid grid-cols-7 gap-1">
+      <div className="grid grid-cols-7 gap-1.5">
         {WEEKDAYS.map((d) => (
           <div
             key={d}
-            className="pb-1 text-center text-[11px] font-semibold uppercase tracking-wide text-slate-400"
+            className="pb-2 text-center text-xs font-bold uppercase tracking-wider text-slate-500/80"
           >
             {d}
           </div>
@@ -151,40 +153,49 @@ export function Calendar({
             if (!b.time) return -1;
             return a.time.getTime() - b.time.getTime();
           });
+          const hasEvents = dayEvents.length > 0;
+          const isPastDay = startOfDay(day) < today;
 
           return (
             <div
               key={key}
               className={cn(
-                "group relative min-h-[120px] rounded-xl border p-1.5 transition",
+                "group relative rounded-2xl border p-2 transition duration-300 ease-in-out",
+                hasEvents ? "min-h-[125px]" : "min-h-[62px]",
                 inMonth
-                  ? "border-slate-100 bg-white hover:border-primary-200"
-                  : "border-transparent bg-slate-50/50",
+                  ? isPastDay
+                    ? "border-slate-200/40 bg-slate-100/40 text-slate-400/80 opacity-60"
+                    : "border-white/25 bg-white/35 hover:bg-white/55 hover:border-primary-400 hover:shadow-md"
+                  : "border-transparent bg-white/5 opacity-30",
               )}
             >
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between mb-1.5">
                 <span
                   className={cn(
-                    "grid h-6 w-6 place-items-center rounded-full text-xs font-medium",
+                    "grid h-6 w-6 place-items-center rounded-full text-xs font-bold transition-transform group-hover:scale-105",
                     isToday(day)
-                      ? "bg-primary-600 text-white"
+                      ? "bg-gradient-to-br from-primary-500 to-primary-600 text-white shadow-md font-extrabold"
                       : inMonth
-                        ? "text-slate-600"
-                        : "text-slate-300",
+                        ? isPastDay
+                          ? "text-slate-400 font-normal"
+                          : "text-slate-700"
+                        : "text-slate-400/50",
                   )}
                 >
                   {format(day, "d")}
                 </span>
-                <button
-                  onClick={() => openCreate(day)}
-                  className="grid h-5 w-5 place-items-center rounded-md text-slate-300 opacity-0 transition hover:bg-primary-50 hover:text-primary-600 group-hover:opacity-100"
-                  aria-label="Add task"
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                </button>
+                {!isPastDay && (
+                  <button
+                    onClick={() => openCreate(day)}
+                    className="grid h-5 w-5 place-items-center rounded-md text-slate-400 opacity-0 transition hover:bg-primary-500/20 hover:text-primary-800 group-hover:opacity-100"
+                    aria-label="Add task"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </button>
+                )}
               </div>
 
-              <div className="mt-1 space-y-1">
+              <div className="space-y-1">
                 {dayEvents.slice(0, 3).map((event) => {
                   if (event.type === "todo") {
                     const t = event.data;
@@ -193,12 +204,12 @@ export function Calendar({
                         key={t.id}
                         onClick={() => setEditing(t)}
                         className={cn(
-                          "flex w-full items-center gap-1 rounded-md text-left transition hover:brightness-95 cursor-pointer",
+                          "flex w-full items-center gap-1.5 rounded-lg text-left transition hover:brightness-95 cursor-pointer",
                           t.status === "done"
-                            ? "bg-slate-100 text-slate-400 line-through text-[9.5px] py-0.5 px-1 font-medium opacity-65"
+                            ? "bg-slate-200/40 text-slate-500/70 line-through text-[10px] py-0.5 px-1.5 font-medium opacity-60"
                             : t.status === "in_progress"
-                              ? "animate-slow-flash text-[12px] py-1 px-1.5 font-semibold shadow-xs"
-                              : "bg-primary-50 text-primary-700 text-[12px] py-1 px-1.5 font-semibold shadow-xs",
+                              ? "bg-amber-500/10 border border-amber-500/25 text-amber-950 text-[11px] py-0.5 px-1.5 font-bold shadow-xs animate-slow-flash"
+                              : "bg-primary-500/10 border border-primary-500/20 text-primary-950 text-[11px] py-0.5 px-1.5 font-bold shadow-xs",
                         )}
                       >
                         <span
@@ -216,9 +227,9 @@ export function Calendar({
                       <div
                         key={b.id}
                         title={`Meeting with ${b.client_name} - ${b.link?.title || "Meeting"}`}
-                        className="flex w-full items-center gap-1 rounded-md bg-primary-50 px-1.5 py-0.5 text-left text-[11px] font-semibold text-primary-700 truncate"
+                        className="flex w-full items-center gap-1.5 rounded-lg bg-cyan-500/10 border border-cyan-500/20 px-1.5 py-0.5 text-left text-[11px] font-bold text-cyan-950 truncate shadow-xs"
                       >
-                        <Clock className="h-3 w-3 shrink-0" />
+                        <Clock className="h-3.5 w-3.5 shrink-0 text-cyan-700" />
                         <span className="truncate">
                           {formatTime12(b.start_time)} {b.client_name}
                         </span>
@@ -227,7 +238,7 @@ export function Calendar({
                   }
                 })}
                 {dayEvents.length > 3 && (
-                  <p className="px-1.5 text-[10px] font-medium text-slate-400">
+                  <p className="px-1.5 text-[10px] font-semibold text-slate-400/90">
                     +{dayEvents.length - 3} more
                   </p>
                 )}

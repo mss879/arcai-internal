@@ -247,16 +247,16 @@ export function CrmBoard({
       />
 
       {/* Pipeline tabs */}
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2 rounded-2xl bg-slate-100/50 border border-slate-200/40 p-1.5 w-fit">
         {pipelines.map((p) => (
           <button
             key={p.id}
             onClick={() => router.push(`/crm?p=${p.id}`)}
             className={cn(
-              "rounded-xl border px-3.5 py-1.5 text-sm font-medium transition",
+              "rounded-xl px-4 py-1.5 text-xs font-bold tracking-tight transition-all duration-200 cursor-pointer",
               p.id === activePipelineId
-                ? "border-primary-300 bg-primary-50 text-primary-700"
-                : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50",
+                ? "bg-primary-500 text-white shadow-[0_4px_12px_rgba(249,115,22,0.25)] border-transparent"
+                : "text-slate-500 hover:text-slate-800 hover:bg-white/40 border border-transparent",
             )}
           >
             {p.name}
@@ -264,15 +264,15 @@ export function CrmBoard({
         ))}
         <button
           onClick={() => setPipelineModal(true)}
-          className="inline-flex items-center gap-1 rounded-xl border border-dashed border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-500 hover:bg-slate-50"
+          className="inline-flex items-center gap-1 rounded-xl border border-dashed border-slate-300 px-3 py-1.5 text-xs font-bold text-slate-500 hover:bg-white hover:text-primary-600 transition cursor-pointer"
         >
-          <Plus className="h-4 w-4" /> Pipeline
+          <Plus className="h-3.5 w-3.5" /> Pipeline
         </button>
         {activePipelineId && (
           <Dropdown
             trigger={
-              <button className="grid h-9 w-9 place-items-center rounded-xl border border-slate-200 bg-white text-slate-400 hover:text-slate-700">
-                <Settings2 className="h-4 w-4" />
+              <button className="grid h-7 w-7 place-items-center rounded-xl border border-slate-200 bg-white text-slate-400 hover:text-slate-700 hover:shadow-xs transition cursor-pointer">
+                <Settings2 className="h-3.5 w-3.5" />
               </button>
             }
           >
@@ -320,6 +320,7 @@ export function CrmBoard({
                     <SortableLeadCard
                       key={id}
                       lead={leadMap[id]}
+                      stageColor={stage.color}
                       onClick={() =>
                         setLeadModal({ stageId: stage.id, lead: leadMap[id] })
                       }
@@ -333,9 +334,12 @@ export function CrmBoard({
           {/* Add stage */}
           <button
             onClick={() => setStageModal("new")}
-            className="flex h-fit w-72 shrink-0 items-center justify-center gap-1.5 rounded-2xl border border-dashed border-slate-300 py-3 text-sm font-medium text-slate-500 hover:border-primary-300 hover:bg-primary-50/40"
+            className="flex h-[150px] w-72 shrink-0 flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-slate-200 bg-slate-50/20 py-4 text-xs font-bold text-slate-400/90 hover:text-primary-600 hover:border-primary-300 hover:bg-primary-50/20 transition cursor-pointer hover:shadow-xs group/addstage"
           >
-            <Plus className="h-4 w-4" /> Add stage
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-white border border-slate-100 shadow-xs text-slate-400 transition group-hover/addstage:scale-105 group-hover/addstage:border-primary-200 group-hover/addstage:text-primary-500">
+              <Plus className="h-4 w-4" />
+            </div>
+            <span>Add pipeline stage</span>
           </button>
         </div>
 
@@ -449,22 +453,41 @@ function StageColumn({
 
   return (
     <div className="flex w-72 shrink-0 flex-col">
-      <div className="mb-2.5 flex items-center justify-between px-1">
-        <div className="flex items-center gap-2">
+      <div className="mb-3 flex items-center justify-between px-1">
+        <div className="flex items-center gap-2 min-w-0">
           <span
-            className="h-2.5 w-2.5 rounded-full"
+            className="h-2 w-2 shrink-0 rounded-full"
             style={{ backgroundColor: stage.color }}
           />
-          <span className="text-sm font-semibold text-slate-800">
+          <span className="text-[13px] font-bold text-slate-800 truncate" title={stage.name}>
             {stage.name}
           </span>
-          <span className="rounded-full bg-slate-100 px-1.5 text-xs font-medium text-slate-500">
+          <span
+            className="rounded-lg border px-1.5 py-0.5 text-[10px] font-bold shrink-0"
+            style={{
+              backgroundColor: `${stage.color}15`,
+              color: stage.color,
+              borderColor: `${stage.color}25`
+            }}
+          >
             {count}
           </span>
+          {total > 0 && (
+            <span
+              className="rounded-lg border px-1.5 py-0.5 text-[10px] font-bold shrink-0"
+              style={{
+                backgroundColor: `${stage.color}15`,
+                color: stage.color,
+                borderColor: `${stage.color}25`
+              }}
+            >
+              {formatCompactCurrency(total)}
+            </span>
+          )}
         </div>
         <Dropdown
           trigger={
-            <button className="grid h-7 w-7 place-items-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700">
+            <button className="grid h-7 w-7 place-items-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition">
               <MoreVertical className="h-4 w-4" />
             </button>
           }
@@ -485,25 +508,25 @@ function StageColumn({
         </Dropdown>
       </div>
 
-      {total > 0 && (
-        <p className="mb-2 px-1 text-xs font-medium text-slate-400">
-          {formatCompactCurrency(total)}
-        </p>
-      )}
-
       <div
         ref={setNodeRef}
+        style={{
+          backgroundColor: isOver ? undefined : `${stage.color}08`,
+          borderColor: isOver ? undefined : `${stage.color}20`,
+        }}
         className={cn(
-          "flex min-h-[120px] flex-1 flex-col gap-2.5 rounded-2xl border border-slate-200/70 bg-slate-50/60 p-2.5 transition",
-          isOver && "border-primary-300 bg-primary-50/60",
+          "flex min-h-[150px] flex-1 flex-col gap-3 rounded-2xl border p-3 transition-all duration-300 shadow-[inset_0_1px_2px_rgba(0,0,0,0.01)]",
+          isOver && "border-primary-400 bg-primary-50/30 ring-4 ring-primary-100/20",
         )}
       >
         <SortableContext items={ids} strategy={verticalListSortingStrategy}>
-          {children}
+          <div className="flex flex-col gap-3">
+            {children}
+          </div>
         </SortableContext>
         <button
           onClick={onAddLead}
-          className="flex items-center justify-center gap-1 rounded-xl border border-dashed border-slate-300 py-2 text-xs font-medium text-slate-400 transition hover:border-primary-300 hover:text-primary-600"
+          className="flex items-center justify-center gap-1.5 rounded-xl border border-dashed border-slate-200 bg-white/40 hover:bg-white py-2 text-xs font-bold text-slate-400 hover:text-primary-600 hover:border-primary-300 hover:shadow-xs transition active:scale-98"
         >
           <Plus className="h-3.5 w-3.5" /> Add lead
         </button>

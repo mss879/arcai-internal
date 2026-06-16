@@ -171,3 +171,18 @@ body {
   animation: slow-flash 2.2s ease-in-out infinite;
 }
 
+/* Continuous slow floating animation for dashboard elements */
+@keyframes continuous-float {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-5px);
+  }
+}
+
+.animate-continuous-float {
+  animation: continuous-float 6s ease-in-out infinite;
+}
+
+

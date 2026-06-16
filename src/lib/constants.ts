@@ -159,3 +159,9 @@ export const STORAGE_BUCKETS = {
   resources: "resources",
   avatars: "avatars",
 } as const;
+
+export const SERVICE_TYPE_LABELS: Record<string, string> = {
+  business_website: "Business Website",
+  ecommerce_website: "E-commerce Website",
+  social_media_marketing: "Social Media Marketing",
+};

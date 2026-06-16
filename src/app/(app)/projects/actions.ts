@@ -29,6 +29,9 @@ export type ProjectInput = {
   currency?: string;
   start_date?: string | null;
   due_date?: string | null;
+  total_value?: number | null;
+  deposit_paid?: number | null;
+  service_type?: string | null;
 };
 
 export async function saveProject(input: ProjectInput): Promise<ActionResult> {
@@ -45,11 +48,14 @@ export async function saveProject(input: ProjectInput): Promise<ActionResult> {
     currency: input.currency || "LKR",
     start_date: input.start_date || null,
     due_date: input.due_date || null,
+    total_value: input.total_value ?? 0.00,
+    deposit_paid: input.deposit_paid ?? 0.00,
+    service_type: input.service_type || null,
   };
 
   const { error } = input.id
-    ? await supabase.from("projects").update(payload).eq("id", input.id)
-    : await supabase.from("projects").insert(payload);
+    ? await (supabase as any).from("projects").update(payload).eq("id", input.id)
+    : await (supabase as any).from("projects").insert(payload);
 
   if (error) return { ok: false, error: error.message };
   revalidatePath("/projects");

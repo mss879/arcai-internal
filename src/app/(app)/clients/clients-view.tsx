@@ -212,7 +212,7 @@ export function ClientsView({ clients }: { clients: Client[] }) {
   );
 }
 
-function ClientFormModal({
+export function ClientFormModal({
   open,
   client,
   onClose,
@@ -221,7 +221,7 @@ function ClientFormModal({
   open: boolean;
   client: Client | null;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (client?: any) => void;
 }) {
   const [pending, startTransition] = React.useTransition();
   const [form, setForm] = React.useState<ClientInput>({ name: "" });
@@ -254,7 +254,7 @@ function ClientFormModal({
       const res = await saveClient(form);
       if (res.ok) {
         toast.success(client ? "Client updated" : "Client added");
-        onSaved();
+        onSaved((res as any).client);
         onClose();
       } else {
         toast.error(res.error);

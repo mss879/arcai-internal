@@ -7,6 +7,7 @@ import { Sidebar } from "@/components/layout/sidebar";
 import { Topbar } from "@/components/layout/topbar";
 import type { Notification, Profile } from "@/lib/types";
 import { useRealtimeSync } from "@/hooks/use-realtime-sync";
+import { cn } from "@/lib/utils";
 
 export function AppShell({
   profile,
@@ -22,11 +23,38 @@ export function AppShell({
   const [mobileOpen, setMobileOpen] = React.useState(false);
   const close = React.useCallback(() => setMobileOpen(false), []);
 
+  const [isCollapsed, setIsCollapsed] = React.useState(false);
+
+  // Safely read from localStorage after mount to avoid hydration mismatch
+  React.useEffect(() => {
+    const stored = localStorage.getItem("sidebar-collapsed");
+    if (stored === "true") {
+      setIsCollapsed(true);
+    }
+  }, []);
+
+  const toggleCollapse = React.useCallback(() => {
+    setIsCollapsed((prev) => {
+      const next = !prev;
+      localStorage.setItem("sidebar-collapsed", String(next));
+      return next;
+    });
+  }, []);
+
   return (
-    <div className="app-bg min-h-screen lg:pl-[260px]">
+    <div className="app-bg min-h-screen flex">
       {/* Desktop sidebar */}
-      <aside className="fixed inset-y-0 left-0 z-40 hidden w-[260px] lg:block">
-        <Sidebar profile={profile} />
+      <aside
+        className={cn(
+          "hidden lg:flex flex-col shrink-0 sticky top-0 h-screen z-40 transition-all duration-300 ease-in-out overflow-visible",
+          isCollapsed ? "w-[84px]" : "w-[260px]"
+        )}
+      >
+        <Sidebar
+          profile={profile}
+          isCollapsed={isCollapsed}
+          onToggleCollapse={toggleCollapse}
+        />
       </aside>
 
       {/* Mobile drawer */}
@@ -53,15 +81,18 @@ export function AppShell({
         )}
       </AnimatePresence>
 
-      <Topbar
-        profile={profile}
-        notifications={notifications}
-        onOpenMobile={() => setMobileOpen(true)}
-      />
+      {/* Main content area */}
+      <div className="flex-1 min-w-0 flex flex-col">
+        <Topbar
+          profile={profile}
+          notifications={notifications}
+          onOpenMobile={() => setMobileOpen(true)}
+        />
 
-      <main className="mx-auto w-full max-w-[1400px] px-4 py-6 sm:px-6 lg:px-8">
-        {children}
-      </main>
+        <main className="mx-auto w-full max-w-[1400px] px-4 py-6 sm:px-6 lg:px-8">
+          {children}
+        </main>
+      </div>
     </div>
   );
 }

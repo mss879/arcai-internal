@@ -9,15 +9,15 @@ export function Logo({
   variant?: "dark" | "light";
 }) {
   const dims = {
-    sm: "h-12 w-12",
-    md: "h-20 w-20",
-    lg: "h-32 w-32",
+    sm: "h-8 w-auto",
+    md: "h-12 w-auto",
+    lg: "h-20 w-auto",
   }[size];
 
   return (
     <div className={cn("flex items-center justify-center w-full", className)}>
       <img
-        src="/new-logo.png"
+        src="/new-logo.png?v=2"
         alt="ARC AI Logo"
         className={cn("object-contain shrink-0", dims)}
       />

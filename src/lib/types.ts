@@ -7,7 +7,23 @@ export type Invitation = Tables["invitations"]["Row"];
 export type Client = Tables["clients"]["Row"];
 export type Todo = Tables["todos"]["Row"];
 export type TodoMention = Tables["todo_mentions"]["Row"];
-export type Project = Tables["projects"]["Row"];
+export type Project = Tables["projects"]["Row"] & {
+  total_value?: number;
+  deposit_paid?: number;
+  share_token?: string;
+  service_type?: string | null;
+};
+export type ProjectDocumentRequest = {
+  id: string;
+  project_id: string;
+  title: string;
+  description: string | null;
+  status: "pending" | "submitted";
+  file_url: string | null;
+  file_name: string | null;
+  submitted_at: string | null;
+  created_at: string;
+};
 export type Payment = Tables["payments"]["Row"];
 export type CompanyPayment = Tables["company_payments"]["Row"];
 export type Commission = Tables["commissions"]["Row"];

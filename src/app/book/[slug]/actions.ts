@@ -1,5 +1,7 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
+
 import { createAdminClient } from "@/lib/supabase/admin";
 import { generateTimeSlots } from "@/lib/utils";
 
@@ -34,12 +36,19 @@ export async function submitBooking(input: {
   }
 
   // Validate the date is within the allowed window.
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const date = new Date(`${input.date}T00:00:00`);
-  const max = new Date(today);
-  max.setDate(max.getDate() + link.advance_days);
-  if (date < today || date > max) {
+  // To avoid timezone discrepancies between server and client, we check if
+  // the selected date is within [-1 day, +advance_days + 1 day] of UTC today.
+  const todayUTC = new Date();
+  const todayStr = todayUTC.toISOString().split("T")[0]; // YYYY-MM-DD in UTC
+  
+  const bookingDate = new Date(`${input.date}T00:00:00Z`);
+  const minDate = new Date(`${todayStr}T00:00:00Z`);
+  minDate.setUTCDate(minDate.getUTCDate() - 1);
+  
+  const maxDate = new Date(`${todayStr}T00:00:00Z`);
+  maxDate.setUTCDate(maxDate.getUTCDate() + link.advance_days + 1);
+
+  if (bookingDate < minDate || bookingDate > maxDate) {
     return { ok: false, error: "Please choose a date within the available range." };
   }
 
@@ -78,6 +87,11 @@ export async function submitBooking(input: {
       link: `/meetings/${link.id}`,
     });
   }
+
+  // Revalidate paths to ensure the dashboard and meetings list reflect the booking immediately
+  revalidatePath("/");
+  revalidatePath("/meetings");
+  revalidatePath(`/meetings/${link.id}`);
 
   return { ok: true };
 }

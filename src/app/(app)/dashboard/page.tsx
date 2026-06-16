@@ -42,11 +42,9 @@ export default async function DashboardPage() {
       supabase
         .from("meeting_bookings")
         .select("*, link:meeting_links(title)")
-        .gte("booking_date", today)
         .eq("status", "confirmed")
         .order("booking_date", { ascending: true })
-        .order("start_time", { ascending: true })
-        .limit(6),
+        .order("start_time", { ascending: true }),
     ]);
 
   const todos = (todosRes.data ?? []) as Todo[];
@@ -61,6 +59,9 @@ export default async function DashboardPage() {
     client_name: string;
     link?: { title: string } | null;
   }[];
+  const upcomingBookings = bookings
+    .filter((b) => b.booking_date >= today)
+    .slice(0, 6);
 
   const stats = [
     {
@@ -86,7 +87,7 @@ export default async function DashboardPage() {
     },
     {
       label: "Upcoming meetings",
-      value: bookings.length,
+      value: upcomingBookings.length,
       icon: CalendarClock,
       href: "/meetings",
       tint: "bg-cyan-50 text-cyan-500",
@@ -147,7 +148,7 @@ export default async function DashboardPage() {
       {/* Calendar + agenda */}
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
         <div className="xl:col-span-2">
-          <Calendar todos={todos} members={members} />
+          <Calendar todos={todos} members={members} bookings={bookings} />
         </div>
 
         <div className="space-y-6">
@@ -199,12 +200,12 @@ export default async function DashboardPage() {
               Upcoming meetings
             </h2>
             <div className="mt-3 space-y-2">
-              {bookings.length === 0 ? (
+              {upcomingBookings.length === 0 ? (
                 <p className="py-6 text-center text-sm text-slate-400">
                   No meetings booked.
                 </p>
               ) : (
-                bookings.map((b) => (
+                upcomingBookings.map((b) => (
                   <div
                     key={b.id}
                     className="flex items-center gap-3 rounded-xl border border-slate-100 px-3 py-2"

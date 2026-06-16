@@ -45,7 +45,7 @@ export function MeetingsView({
   appBaseUrl: string;
 }) {
   const router = useRouter();
-  const [creating, setCreating] = React.useState(false);
+  const [creatingLink, setCreatingLink] = React.useState(false);
   const [toDelete, setToDelete] = React.useState<MeetingLink | null>(null);
   const base = appBaseUrl || "";
 
@@ -57,13 +57,31 @@ export function MeetingsView({
     toast.success("Link copied");
   }
 
+  async function handleCreateLink() {
+    setCreatingLink(true);
+    const res = await createMeetingLink({
+      title: "Meeting",
+      duration_minutes: 60,
+      start_hour: 9,
+      end_hour: 21,
+      advance_days: 14,
+    });
+    setCreatingLink(false);
+    if (res.ok) {
+      toast.success("Shareable booking link generated!");
+      router.refresh();
+    } else {
+      toast.error(res.error);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader
         title="Meetings"
         description="Generate a public booking link, share it on WhatsApp, and clients pick a slot."
         actions={
-          <Button onClick={() => setCreating(true)}>
+          <Button onClick={handleCreateLink} loading={creatingLink}>
             <Plus className="h-4 w-4" /> Create link
           </Button>
         }
@@ -75,7 +93,7 @@ export function MeetingsView({
           title="No booking links yet"
           description="Create a link clients can use to book a time with you."
           action={
-            <Button onClick={() => setCreating(true)}>
+            <Button onClick={handleCreateLink} loading={creatingLink}>
               <Plus className="h-4 w-4" /> Create link
             </Button>
           }
@@ -196,7 +214,7 @@ export function MeetingsView({
         </div>
       )}
 
-      <CreateLinkModal open={creating} onClose={() => setCreating(false)} />
+
 
       <ConfirmDialog
         open={!!toDelete}
@@ -216,144 +234,4 @@ export function MeetingsView({
   );
 }
 
-function CreateLinkModal({
-  open,
-  onClose,
-}: {
-  open: boolean;
-  onClose: () => void;
-}) {
-  const router = useRouter();
-  const [pending, startTransition] = React.useTransition();
-  const [form, setForm] = React.useState<MeetingLinkInput>({
-    title: "",
-    duration_minutes: 60,
-    start_hour: 9,
-    end_hour: 21,
-    advance_days: 14,
-  });
 
-  React.useEffect(() => {
-    if (open)
-      setForm({
-        title: "",
-        duration_minutes: 60,
-        start_hour: 9,
-        end_hour: 21,
-        advance_days: 14,
-        description: "",
-        location: "",
-      });
-  }, [open]);
-
-  function set<K extends keyof MeetingLinkInput>(k: K, v: MeetingLinkInput[K]) {
-    setForm((f) => ({ ...f, [k]: v }));
-  }
-
-  function submit() {
-    startTransition(async () => {
-      const res = await createMeetingLink(form);
-      if (res.ok) {
-        toast.success("Booking link created");
-        router.refresh();
-        onClose();
-      } else toast.error(res.error);
-    });
-  }
-
-  const hours = Array.from({ length: 25 }, (_, i) => i);
-
-  return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title="Create booking link"
-      description="Clients can book up to 2 weeks in advance."
-      footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={pending}>
-            Cancel
-          </Button>
-          <Button onClick={submit} loading={pending}>
-            Create link
-          </Button>
-        </>
-      }
-    >
-      <div className="space-y-4">
-        <Field label="Title" required>
-          <Input
-            value={form.title}
-            onChange={(e) => set("title", e.target.value)}
-            placeholder="Discovery call"
-            autoFocus
-          />
-        </Field>
-        <Field label="Description">
-          <Textarea
-            rows={2}
-            value={form.description ?? ""}
-            onChange={(e) => set("description", e.target.value)}
-          />
-        </Field>
-        <div className="grid grid-cols-2 gap-4">
-          <Field label="Duration (min)">
-            <Select
-              value={form.duration_minutes}
-              onChange={(e) => set("duration_minutes", Number(e.target.value))}
-            >
-              {[15, 30, 45, 60, 90, 120].map((d) => (
-                <option key={d} value={d}>
-                  {d} minutes
-                </option>
-              ))}
-            </Select>
-          </Field>
-          <Field label="Days ahead">
-            <Select
-              value={form.advance_days}
-              onChange={(e) => set("advance_days", Number(e.target.value))}
-            >
-              {[3, 5, 7, 10, 14].map((d) => (
-                <option key={d} value={d}>
-                  {d} days
-                </option>
-              ))}
-            </Select>
-          </Field>
-          <Field label="Start time">
-            <Select
-              value={form.start_hour}
-              onChange={(e) => set("start_hour", Number(e.target.value))}
-            >
-              {hours.slice(0, 24).map((h) => (
-                <option key={h} value={h}>
-                  {formatTime12(`${h}:00`)}
-                </option>
-              ))}
-            </Select>
-          </Field>
-          <Field label="End time">
-            <Select
-              value={form.end_hour}
-              onChange={(e) => set("end_hour", Number(e.target.value))}
-            >
-              {hours.slice(1).map((h) => (
-                <option key={h} value={h}>
-                  {formatTime12(`${h}:00`)}
-                </option>
-              ))}
-            </Select>
-          </Field>
-        </div>
-        <Field label="Location / notes">
-          <Input
-            value={form.location ?? ""}
-            onChange={(e) => set("location", e.target.value)}
-            placeholder="Google Meet, office address…"
-          />
-        </Field>
-      </div>
-    </Modal>
-  );
-}

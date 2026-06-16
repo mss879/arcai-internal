@@ -13,21 +13,31 @@ import {
   startOfWeek,
   subMonths,
 } from "date-fns";
-import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
+import { ChevronLeft, ChevronRight, Plus, Clock } from "lucide-react";
 
 import { TodoFormModal } from "@/components/todos/todo-form-modal";
 import { PRIORITY_META } from "@/lib/constants";
-import { cn } from "@/lib/utils";
+import { cn, formatTime12 } from "@/lib/utils";
 import type { MemberLite, Todo } from "@/lib/types";
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
+type CalendarBooking = {
+  id: string;
+  booking_date: string;
+  start_time: string;
+  client_name: string;
+  link?: { title: string } | null;
+};
+
 export function Calendar({
   todos,
   members,
+  bookings = [],
 }: {
   todos: Todo[];
   members: MemberLite[];
+  bookings?: CalendarBooking[];
 }) {
   const [month, setMonth] = React.useState(() => new Date());
   const [editing, setEditing] = React.useState<Todo | null>(null);
@@ -50,6 +60,17 @@ export function Calendar({
     }
     return map;
   }, [todos]);
+
+  const bookingsByDay = React.useMemo(() => {
+    const map = new Map<string, CalendarBooking[]>();
+    for (const b of bookings) {
+      const key = b.booking_date;
+      const arr = map.get(key) ?? [];
+      arr.push(b);
+      map.set(key, arr);
+    }
+    return map;
+  }, [bookings]);
 
   function openCreate(day: Date) {
     const at = new Date(day);
@@ -100,7 +121,28 @@ export function Calendar({
         {days.map((day) => {
           const key = format(day, "yyyy-MM-dd");
           const items = byDay.get(key) ?? [];
+          const dayBookings = bookingsByDay.get(key) ?? [];
           const inMonth = isSameMonth(day, month);
+
+          const dayEvents = [
+            ...items.map((t) => ({
+              id: t.id,
+              type: "todo" as const,
+              data: t,
+              time: t.due_date ? new Date(t.due_date) : null,
+            })),
+            ...dayBookings.map((b) => ({
+              id: b.id,
+              type: "booking" as const,
+              data: b,
+              time: new Date(`${b.booking_date}T${b.start_time}:00`),
+            })),
+          ].sort((a, b) => {
+            if (!a.time) return 1;
+            if (!b.time) return -1;
+            return a.time.getTime() - b.time.getTime();
+          });
+
           return (
             <div
               key={key}
@@ -134,29 +176,48 @@ export function Calendar({
               </div>
 
               <div className="mt-1 space-y-1">
-                {items.slice(0, 3).map((t) => (
-                  <button
-                    key={t.id}
-                    onClick={() => setEditing(t)}
-                    className={cn(
-                      "flex w-full items-center gap-1 rounded-md px-1.5 py-0.5 text-left text-[11px] font-medium transition hover:brightness-95",
-                      t.status === "done"
-                        ? "bg-slate-100 text-slate-400 line-through"
-                        : "bg-primary-50 text-primary-700",
-                    )}
-                  >
-                    <span
-                      className={cn(
-                        "h-1.5 w-1.5 shrink-0 rounded-full",
-                        PRIORITY_META[t.priority].dot,
-                      )}
-                    />
-                    <span className="truncate">{t.title}</span>
-                  </button>
-                ))}
-                {items.length > 3 && (
+                {dayEvents.slice(0, 3).map((event) => {
+                  if (event.type === "todo") {
+                    const t = event.data;
+                    return (
+                      <button
+                        key={t.id}
+                        onClick={() => setEditing(t)}
+                        className={cn(
+                          "flex w-full items-center gap-1 rounded-md px-1.5 py-0.5 text-left text-[11px] font-medium transition hover:brightness-95 cursor-pointer",
+                          t.status === "done"
+                            ? "bg-slate-100 text-slate-400 line-through"
+                            : "bg-primary-50 text-primary-700",
+                        )}
+                      >
+                        <span
+                          className={cn(
+                            "h-1.5 w-1.5 shrink-0 rounded-full",
+                            PRIORITY_META[t.priority].dot,
+                          )}
+                        />
+                        <span className="truncate">{t.title}</span>
+                      </button>
+                    );
+                  } else {
+                    const b = event.data;
+                    return (
+                      <div
+                        key={b.id}
+                        title={`Meeting with ${b.client_name} - ${b.link?.title || "Meeting"}`}
+                        className="flex w-full items-center gap-1 rounded-md bg-violet-50 px-1.5 py-0.5 text-left text-[11px] font-semibold text-violet-700 truncate"
+                      >
+                        <Clock className="h-3 w-3 shrink-0" />
+                        <span className="truncate">
+                          {formatTime12(b.start_time)} {b.client_name}
+                        </span>
+                      </div>
+                    );
+                  }
+                })}
+                {dayEvents.length > 3 && (
                   <p className="px-1.5 text-[10px] font-medium text-slate-400">
-                    +{items.length - 3} more
+                    +{dayEvents.length - 3} more
                   </p>
                 )}
               </div>

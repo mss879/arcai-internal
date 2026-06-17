@@ -6,6 +6,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Topbar } from "@/components/layout/topbar";
 import { IdleTimeout } from "@/components/layout/idle-timeout";
+import { VoiceAssistant } from "@/components/assistant/voice-assistant";
 import type { Notification, Profile } from "@/lib/types";
 import { useRealtimeSync } from "@/hooks/use-realtime-sync";
 import { cn } from "@/lib/utils";
@@ -97,6 +98,9 @@ export function AppShell({
           {children}
         </main>
       </div>
+
+      {/* Floating voice + workspace AI assistant */}
+      <VoiceAssistant firstName={profile.full_name.split(" ")[0] || "there"} />
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import {
   CalendarClock,
   CreditCard,
+  FileText,
   FolderKanban,
   FolderOpen,
   KanbanSquare,
@@ -25,6 +26,7 @@ export const NAV: NavItem[] = [
   { label: "CRM Pipeline", href: "/crm", icon: KanbanSquare },
   { label: "Meetings", href: "/meetings", icon: CalendarClock },
   { label: "Payments", href: "/payments", icon: CreditCard },
+  { label: "Invoices", href: "/invoices", icon: FileText },
   { label: "Resources", href: "/resources", icon: FolderOpen },
 ];
 

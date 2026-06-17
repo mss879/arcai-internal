@@ -71,6 +71,10 @@ export function PaymentsView({
     .filter((p) => p.status === "upcoming" && !p.is_paid)
     .reduce((sum, p) => sum + Number(p.price_lkr), 0);
 
+  const totalPaid = payments
+    .filter((p) => p.is_paid)
+    .reduce((sum, p) => sum + Number(p.price_lkr), 0);
+
   function formatLKR(amount: number) {
     return "Rs. " + amount.toLocaleString("en-US", {
       minimumFractionDigits: 2,
@@ -90,9 +94,9 @@ export function PaymentsView({
         }
       />
 
-      <div className="grid grid-cols-1 gap-5 sm:grid-cols-3">
+      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
         <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[var(--shadow-card)] flex items-center gap-4">
-          <span className="grid h-12 w-12 place-items-center rounded-xl bg-emerald-50 text-emerald-600 shrink-0">
+          <span className="grid h-12 w-12 place-items-center rounded-xl bg-indigo-50 text-indigo-600 shrink-0">
             <CreditCard className="h-6 w-6" />
           </span>
           <div>
@@ -123,6 +127,18 @@ export function PaymentsView({
             <p className="text-xs font-medium text-slate-400">Total Upcoming (Future)</p>
             <h3 className="mt-1 text-xl font-bold text-slate-900">
               {formatLKR(totalUpcoming)}
+            </h3>
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[var(--shadow-card)] flex items-center gap-4">
+          <span className="grid h-12 w-12 place-items-center rounded-xl bg-emerald-50 text-emerald-600 shrink-0">
+            <Check className="h-6 w-6" />
+          </span>
+          <div>
+            <p className="text-xs font-medium text-slate-400">Total Paid</p>
+            <h3 className="mt-1 text-xl font-bold text-slate-900">
+              {formatLKR(totalPaid)}
             </h3>
           </div>
         </div>

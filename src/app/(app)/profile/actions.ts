@@ -45,3 +45,46 @@ export async function changePassword(
   if (error) return { ok: false, error: error.message };
   return { ok: true };
 }
+
+/** Store (or refresh) a web-push subscription for the current device. */
+export async function savePushSubscription(
+  sub: { endpoint: string; keys: { p256dh: string; auth: string } },
+  userAgent?: string,
+): Promise<ActionResult> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+
+  const { error } = await supabase.from("push_subscriptions").upsert(
+    {
+      user_id: user.id,
+      endpoint: sub.endpoint,
+      p256dh: sub.keys.p256dh,
+      auth: sub.keys.auth,
+      user_agent: userAgent ?? null,
+    },
+    { onConflict: "endpoint" },
+  );
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
+}
+
+/** Remove a device's web-push subscription. */
+export async function deletePushSubscription(
+  endpoint: string,
+): Promise<ActionResult> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+
+  const { error } = await supabase
+    .from("push_subscriptions")
+    .delete()
+    .eq("endpoint", endpoint);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
+}

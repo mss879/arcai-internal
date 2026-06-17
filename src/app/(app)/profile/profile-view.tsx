@@ -17,6 +17,7 @@ import { formatCurrency } from "@/lib/utils";
 import type { Commission, Profile } from "@/lib/types";
 
 import { changePassword, updateProfile } from "./actions";
+import { PushToggle } from "./push-toggle";
 
 type CommissionRow = Commission & {
   project?: { id: string; name: string } | null;
@@ -189,6 +190,8 @@ export function ProfileView({
               </Button>
             </div>
           </div>
+
+          <PushToggle />
         </div>
 
         {/* Commissions list */}

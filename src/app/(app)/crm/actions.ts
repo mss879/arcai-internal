@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import { createClient } from "@/lib/supabase/server";
+import { sendPushToUser } from "@/lib/push";
 import { DEFAULT_PIPELINE_STAGES } from "@/lib/constants";
 import type { ActionResult } from "@/lib/types";
 
@@ -181,6 +182,12 @@ export async function saveLead(input: LeadInput): Promise<ActionResult> {
         user_id: input.assigned_to,
         actor_id: user.id,
         type: "assignment",
+        title: "You were assigned a lead",
+        body: input.title.trim(),
+        link: "/crm",
+      });
+      await sendPushToUser({
+        userId: input.assigned_to,
         title: "You were assigned a lead",
         body: input.title.trim(),
         link: "/crm",

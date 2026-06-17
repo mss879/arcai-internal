@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import { createAdminClient } from "@/lib/supabase/admin";
+import { sendPushToUser } from "@/lib/push";
 import { generateTimeSlots } from "@/lib/utils";
 
 export type BookingResult = { ok: true } | { ok: false; error: string };
@@ -79,11 +80,19 @@ export async function submitBooking(input: {
   }
 
   if (link.created_by) {
+    const title = "New meeting booked";
+    const body = `${input.client_name.trim()} booked ${input.date} at ${slot.start}`;
     await admin.from("notifications").insert({
       user_id: link.created_by,
       type: "system",
-      title: "New meeting booked",
-      body: `${input.client_name.trim()} booked ${input.date} at ${slot.start}`,
+      title,
+      body,
+      link: `/meetings/${link.id}`,
+    });
+    await sendPushToUser({
+      userId: link.created_by,
+      title,
+      body,
       link: `/meetings/${link.id}`,
     });
   }

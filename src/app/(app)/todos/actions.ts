@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import { createClient } from "@/lib/supabase/server";
+import { sendPushToUser } from "@/lib/push";
 import { extractMentions } from "@/lib/utils";
 import type { ActionResult, TodoPriority, TodoStatus } from "@/lib/types";
 
@@ -106,6 +107,18 @@ export async function saveTodo(input: TodoInput): Promise<ActionResult> {
         body: input.title.trim(),
         link: "/todos",
       })),
+    );
+
+    // Also push to each recipient's devices (no-op unless they've enabled it).
+    await Promise.all(
+      Array.from(recipients.entries()).map(([uid, info]) =>
+        sendPushToUser({
+          userId: uid,
+          title: info.title,
+          body: input.title.trim(),
+          link: "/todos",
+        }),
+      ),
     );
   }
 

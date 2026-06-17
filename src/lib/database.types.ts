@@ -472,6 +472,30 @@ export type Database = {
         Update: Partial<Database["public"]["Tables"]["notifications"]["Insert"]>;
         Relationships: [];
       };
+      push_subscriptions: {
+        Row: {
+          id: UUID;
+          user_id: UUID;
+          endpoint: string;
+          p256dh: string;
+          auth: string;
+          user_agent: string | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          user_id: UUID;
+          endpoint: string;
+          p256dh: string;
+          auth: string;
+          user_agent?: string | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["push_subscriptions"]["Insert"]
+        >;
+        Relationships: [];
+      };
     };
     Views: Record<never, never>;
     Functions: {

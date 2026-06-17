@@ -9,15 +9,26 @@ import { LoginForm } from "./login-form";
 export const metadata = { title: "Log in" };
 export const dynamic = "force-dynamic";
 
-export default async function LoginPage() {
+export default async function LoginPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ timeout?: string }>;
+}) {
   const configured = isSupabaseConfigured();
 
   if (configured && (await getProfile())) {
     redirect("/dashboard");
   }
 
+  const { timeout } = await searchParams;
+
   return (
     <AuthShell>
+      {configured && timeout === "1" && (
+        <Alert variant="info" className="mb-4">
+          You were signed out due to inactivity. Please log in again.
+        </Alert>
+      )}
       {!configured ? (
         <div className="space-y-4">
           <h1 className="text-2xl font-semibold tracking-tight text-slate-900">

@@ -5,6 +5,7 @@ import { AnimatePresence, motion } from "motion/react";
 
 import { Sidebar } from "@/components/layout/sidebar";
 import { Topbar } from "@/components/layout/topbar";
+import { IdleTimeout } from "@/components/layout/idle-timeout";
 import type { Notification, Profile } from "@/lib/types";
 import { useRealtimeSync } from "@/hooks/use-realtime-sync";
 import { cn } from "@/lib/utils";
@@ -43,6 +44,9 @@ export function AppShell({
 
   return (
     <div className="app-bg min-h-screen flex">
+      {/* Auto sign-out after inactivity */}
+      <IdleTimeout />
+
       {/* Desktop sidebar */}
       <aside
         className={cn(

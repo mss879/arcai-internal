@@ -109,7 +109,7 @@ export function AppShell({
         <VoiceAssistant firstName={firstName} />
       </div>
       <div className="lg:hidden">
-        <MobileVoiceScreen firstName={firstName} />
+        <MobileVoiceScreen />
       </div>
     </div>
   );

@@ -15,14 +15,7 @@ import {
 
 import { cn } from "@/lib/utils";
 import { EventChip, useVoiceChat } from "@/components/assistant/use-voice-chat";
-
-const SESSION_KEY = "arc-voice-seen";
-
-const EXAMPLES = [
-  "What's on my plate today?",
-  "Add a task to follow up with the client tomorrow",
-  "Show my upcoming meetings",
-];
+import { VoiceVisualizer } from "@/components/assistant/voice-visualizer";
 
 /**
  * Full-screen, voice-first Arc experience for phones. Auto-opens once per
@@ -31,7 +24,7 @@ const EXAMPLES = [
  *
  * Rendered only on small screens by <AppShell>.
  */
-export function MobileVoiceScreen({ firstName }: { firstName: string }) {
+export function MobileVoiceScreen() {
   const [open, setOpen] = React.useState(false);
   const {
     status,
@@ -50,6 +43,9 @@ export function MobileVoiceScreen({ firstName }: { firstName: string }) {
 
   const scrollRef = React.useRef<HTMLDivElement | null>(null);
 
+  // The reactive backdrop is drawn around this orb's live position.
+  const orbRef = React.useRef<HTMLButtonElement | null>(null);
+
   // This surface is phones-only. Track it in JS too (not just the CSS gate in
   // AppShell) so its side effects never fire on desktop.
   const [isMobile, setIsMobile] = React.useState(false);
@@ -61,17 +57,11 @@ export function MobileVoiceScreen({ firstName }: { firstName: string }) {
     return () => mq.removeEventListener("change", update);
   }, []);
 
-  // Auto-open the first time we land in the app this session (after login).
+  // On mobile the voice agent leads: open it as soon as we land in the app
+  // (after login or a fresh load). The (app) layout persists across in-app
+  // navigation, so this fires once per real page load — not on every click.
   React.useEffect(() => {
-    if (!isMobile) return;
-    try {
-      if (!sessionStorage.getItem(SESSION_KEY)) {
-        sessionStorage.setItem(SESSION_KEY, "1");
-        setOpen(true);
-      }
-    } catch {
-      setOpen(true);
-    }
+    if (isMobile) setOpen(true);
   }, [isMobile]);
 
   // Lock background scroll while the overlay is up.
@@ -108,24 +98,6 @@ export function MobileVoiceScreen({ firstName }: { firstName: string }) {
 
   const amp = status === "listening" ? Math.min(level * 5, 1) : 0;
 
-  const bigLabel =
-    status === "listening"
-      ? "Listening…"
-      : status === "thinking"
-        ? "Thinking…"
-        : status === "speaking"
-          ? "Speaking…"
-          : "Tap to speak";
-
-  const subLabel =
-    status === "listening"
-      ? "Tap again to stop"
-      : status === "thinking"
-        ? "Working on it"
-        : status === "speaking"
-          ? "Tap to interrupt"
-          : "Ask anything — or say “add a task…”";
-
   if (!isMobile) return null;
 
   return (
@@ -158,14 +130,12 @@ export function MobileVoiceScreen({ firstName }: { firstName: string }) {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.25 }}
-            className="fixed inset-0 z-[60] flex flex-col text-white"
-            style={{
-              background:
-                "radial-gradient(40rem 40rem at 50% -10%, rgba(249,115,22,0.35), transparent 60%)," +
-                "radial-gradient(36rem 36rem at 110% 110%, rgba(194,65,12,0.30), transparent 55%)," +
-                "linear-gradient(160deg, #1a1206 0%, #0b0a0f 55%, #07060b 100%)",
-            }}
+            className="fixed inset-0 z-[60] overflow-hidden bg-[#07060b] text-white"
           >
+            {/* Living, audio-reactive backdrop */}
+            <VoiceVisualizer status={status} level={level} targetRef={orbRef} />
+
+            <div className="relative z-10 flex h-full flex-col">
             {/* Header */}
             <div className="flex items-center justify-between gap-3 px-5 pt-[max(1rem,env(safe-area-inset-top))] pb-3">
               <div className="flex items-center gap-2.5">
@@ -197,9 +167,10 @@ export function MobileVoiceScreen({ firstName }: { firstName: string }) {
               </div>
             </div>
 
-            {/* Hero orb */}
-            <div className="flex shrink-0 flex-col items-center justify-center px-6 pt-4 pb-2">
+            {/* Hero orb — centred inside the reactive ring */}
+            <div className="flex flex-1 items-center justify-center px-6">
               <button
+                ref={orbRef}
                 onClick={onOrbTap}
                 aria-label={
                   status === "listening" ? "Stop recording" : "Start talking"
@@ -263,37 +234,15 @@ export function MobileVoiceScreen({ firstName }: { firstName: string }) {
                   )}
                 </motion.span>
               </button>
-
-              <p className="mt-6 text-xl font-semibold tracking-tight">{bigLabel}</p>
-              <p className="mt-1 text-sm text-white/55">{subLabel}</p>
             </div>
 
-            {/* Transcript / examples */}
-            <div
-              ref={scrollRef}
-              className="mt-2 flex-1 space-y-3 overflow-y-auto px-5 pb-2"
-            >
-              {messages.length === 0 ? (
-                <div className="mx-auto max-w-sm space-y-3 pt-2">
-                  <p className="text-center text-sm leading-relaxed text-white/70">
-                    Hi {firstName}, I’m Arc. Speak to add or edit anything in your
-                    workspace — tasks, clients, leads, meetings and more.
-                  </p>
-                  <div className="flex flex-col gap-2">
-                    {EXAMPLES.map((ex) => (
-                      <button
-                        key={ex}
-                        onClick={() => sendText(ex)}
-                        disabled={busy}
-                        className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-left text-sm text-white/80 transition hover:bg-white/10 disabled:opacity-50"
-                      >
-                        “{ex}”
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ) : (
-                messages.map((m, i) => (
+            {/* Conversation transcript (only once there's something to show) */}
+            {messages.length > 0 && (
+              <div
+                ref={scrollRef}
+                className="max-h-[38vh] shrink-0 space-y-3 overflow-y-auto px-5 pb-2"
+              >
+                {messages.map((m, i) => (
                   <div
                     key={i}
                     className={cn(
@@ -306,7 +255,7 @@ export function MobileVoiceScreen({ firstName }: { firstName: string }) {
                         "max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed",
                         m.role === "user"
                           ? "bg-primary-600 text-white"
-                          : "border border-white/10 bg-white/10 text-white/90",
+                          : "border border-white/10 bg-white/10 text-white/90 backdrop-blur-md",
                       )}
                     >
                       {m.content}
@@ -319,15 +268,15 @@ export function MobileVoiceScreen({ firstName }: { firstName: string }) {
                       )}
                     </div>
                   </div>
-                ))
-              )}
+                ))}
+              </div>
+            )}
 
-              {error && (
-                <div className="rounded-xl bg-rose-500/15 px-3.5 py-2.5 text-sm text-rose-200 ring-1 ring-rose-400/30">
-                  {error}
-                </div>
-              )}
-            </div>
+            {error && (
+              <div className="mx-5 mb-1 shrink-0 rounded-xl bg-rose-500/15 px-3.5 py-2.5 text-sm text-rose-200 ring-1 ring-rose-400/30">
+                {error}
+              </div>
+            )}
 
             {/* Type fallback */}
             <div className="px-5 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3">
@@ -345,7 +294,7 @@ export function MobileVoiceScreen({ firstName }: { firstName: string }) {
                     status === "listening" ? "Listening…" : "Or type a message…"
                   }
                   disabled={status === "listening"}
-                  className="h-12 w-full rounded-2xl border border-white/15 bg-white/10 px-4 text-sm text-white outline-none transition placeholder:text-white/45 focus:border-primary-400/60 focus:bg-white/15 disabled:opacity-60"
+                  className="h-12 w-full rounded-2xl border border-white/15 bg-white/10 px-4 text-sm text-white outline-none backdrop-blur-md transition placeholder:text-white/45 focus:border-primary-400/60 focus:bg-white/15 disabled:opacity-60"
                 />
                 <button
                   type="submit"
@@ -356,6 +305,7 @@ export function MobileVoiceScreen({ firstName }: { firstName: string }) {
                   <Send className="h-5 w-5" />
                 </button>
               </form>
+            </div>
             </div>
           </motion.div>
         )}

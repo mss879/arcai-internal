@@ -1,7 +1,9 @@
 "use client";
 
 import * as React from "react";
+import { useRouter } from "next/navigation";
 import { format } from "date-fns";
+import { toast } from "sonner";
 import { Plus, Trash2, Download } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -15,6 +17,8 @@ import {
   parseAmount,
   type InvoiceLineItem,
 } from "@/lib/invoice";
+
+import { saveInvoice } from "./actions";
 
 const fieldCls =
   "w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm transition-colors placeholder:text-slate-400 focus:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-100";
@@ -35,6 +39,39 @@ export function InvoiceGenerator() {
   const grandTotal = items.reduce((sum, l) => sum + lineItemTotal(l), 0);
   const dueTodayValue =
     dueToday.trim() === "" ? grandTotal : parseAmount(dueToday);
+
+  const router = useRouter();
+  const [saving, setSaving] = React.useState(false);
+
+  // Save a snapshot to "Past invoices", then open the print/download dialog.
+  // Printing always proceeds even if saving fails — the download is the
+  // primary action; archiving it is the bonus.
+  const handleDownload = async () => {
+    setSaving(true);
+    const res = await saveInvoice({
+      invoice_number: invoiceNumber,
+      invoice_date: invoiceDate,
+      bill_to_name: billToName,
+      bill_to_details: billToDetails,
+      items: items.map((l) => ({
+        item: l.item,
+        description: l.description,
+        qty: l.qty,
+        rate: l.rate,
+        total: lineItemTotal(l),
+      })),
+      grand_total: grandTotal,
+      due_today: dueTodayValue,
+    });
+    setSaving(false);
+    if (res.ok) {
+      toast.success("Saved to Past invoices.");
+      router.refresh();
+    } else {
+      toast.error(`Couldn't save: ${res.error}`);
+    }
+    window.print();
+  };
 
   const updateItem = (id: string, patch: Partial<InvoiceLineItem>) =>
     setItems((prev) =>
@@ -65,7 +102,7 @@ export function InvoiceGenerator() {
             save a PDF.
           </p>
         </div>
-        <Button onClick={() => window.print()}>
+        <Button onClick={handleDownload} loading={saving}>
           <Download className="h-4 w-4" />
           Download PDF
         </Button>
@@ -282,7 +319,7 @@ export function InvoiceGenerator() {
 /* The printable invoice — styled to match the template.              */
 /* ------------------------------------------------------------------ */
 
-function InvoiceDocument({
+export function InvoiceDocument({
   invoiceNumber,
   displayDate,
   billToName,

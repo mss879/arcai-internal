@@ -31,6 +31,15 @@ export type NotificationType =
   | "commission"
   | "system";
 
+/** A single saved invoice line item (stored as JSONB on `invoices.items`). */
+export type InvoiceItem = {
+  item: string;
+  description: string;
+  qty: string;
+  rate: string;
+  total: number;
+};
+
 export type Database = {
   public: {
     Tables: {
@@ -206,6 +215,34 @@ export type Database = {
           created_at?: Timestamp;
         };
         Update: Partial<Database["public"]["Tables"]["company_payments"]["Insert"]>;
+        Relationships: [];
+      };
+      invoices: {
+        Row: {
+          id: UUID;
+          invoice_number: string;
+          invoice_date: string;
+          bill_to_name: string;
+          bill_to_details: string;
+          items: InvoiceItem[];
+          grand_total: number;
+          due_today: number;
+          created_by: UUID | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          invoice_number: string;
+          invoice_date: string;
+          bill_to_name?: string;
+          bill_to_details?: string;
+          items?: InvoiceItem[];
+          grand_total?: number;
+          due_today?: number;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["invoices"]["Insert"]>;
         Relationships: [];
       };
       payments: {

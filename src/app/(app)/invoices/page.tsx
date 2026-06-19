@@ -1,7 +1,15 @@
-import { InvoiceGenerator } from "./invoice-generator";
+import { createClient } from "@/lib/supabase/server";
 
-export const metadata = { title: "Invoice Generator" };
+import { InvoicesView } from "./invoices-view";
 
-export default function InvoicesPage() {
-  return <InvoiceGenerator />;
+export const metadata = { title: "Invoices" };
+
+export default async function InvoicesPage() {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("invoices")
+    .select("*")
+    .order("created_at", { ascending: false });
+
+  return <InvoicesView pastInvoices={data ?? []} />;
 }

@@ -1,6 +1,9 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // react-pdf ships its own font/PDF binaries — let Next require it at runtime
+  // from node_modules instead of bundling it into the serverless function.
+  serverExternalPackages: ["@react-pdf/renderer"],
   async headers() {
     return [
       {

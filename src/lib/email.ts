@@ -2,6 +2,9 @@ import "server-only";
 
 import { Resend } from "resend";
 
+import { INVOICE_COMPANY } from "@/lib/invoice";
+import type { InvoiceEmailData } from "@/lib/invoice-pdf";
+
 const FROM = process.env.RESEND_FROM_EMAIL || "ARC AI <onboarding@resend.dev>";
 
 function getResend() {
@@ -109,6 +112,89 @@ export async function sendCredentialsEmail(opts: {
       to: opts.to,
       subject: "Your ARC AI login details",
       html: shell("Your account is ready 🎉", body),
+    });
+    if (error) return { sent: false, error: error.message };
+    return { sent: true };
+  } catch (e) {
+    return { sent: false, error: e instanceof Error ? e.message : "send failed" };
+  }
+}
+
+// ---- Invoice email -------------------------------------------------------
+
+/** Escape user-supplied text before it goes into the HTML email. */
+function esc(value: string): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/**
+ * Email a saved invoice to one or more recipients as a PDF attachment that
+ * matches the in-app invoice template. The body is short — the invoice is the
+ * attached PDF — but can carry a custom message (e.g. a payment reminder).
+ * Used by the assistant's confirmed send flow.
+ */
+export async function sendInvoiceEmail(opts: {
+  to: string | string[];
+  invoice: InvoiceEmailData;
+  message?: string;
+}): Promise<SendResult> {
+  const resend = getResend();
+  if (!resend) return { sent: false, error: "RESEND_API_KEY not configured" };
+
+  // Render the PDF lazily so the heavy react-pdf dependency only loads when an
+  // invoice is actually emailed — not on invite/credential emails.
+  let pdf: Buffer;
+  try {
+    const { renderInvoicePdf } = await import("@/lib/invoice-pdf");
+    pdf = await renderInvoicePdf(opts.invoice);
+  } catch (e) {
+    return {
+      sent: false,
+      error:
+        e instanceof Error ? e.message : "Could not render the invoice PDF.",
+    };
+  }
+
+  const name = opts.invoice.bill_to_name?.trim();
+  const safeNumber =
+    opts.invoice.invoice_number.replace(/[^a-zA-Z0-9-]/g, "") || "invoice";
+  const customMessage = opts.message?.trim();
+
+  // The custom message (if any) becomes the main paragraph; otherwise a plain
+  // "here is your invoice" line. Newlines in the message become paragraphs.
+  const lead = customMessage
+    ? customMessage
+        .split(/\n+/)
+        .map(
+          (line) =>
+            `<p style="margin:0 0 12px;color:#334155;font-size:15px;line-height:1.6;">${esc(line)}</p>`,
+        )
+        .join("")
+    : `<p style="margin:0 0 14px;color:#475569;font-size:15px;line-height:1.6;">Hi${name ? ` ${esc(name)}` : ""}, here is your invoice.</p>`;
+
+  const body = `
+    ${lead}
+    <p style="margin:0 0 14px;color:#475569;font-size:14px;line-height:1.6;">
+      Your invoice is attached as a PDF.
+    </p>
+    <p style="margin:0;color:#94a3b8;font-size:13px;">
+      Any questions? Just reply to this email or contact ${esc(INVOICE_COMPANY.email)}.
+    </p>
+  `;
+
+  try {
+    const { error } = await resend.emails.send({
+      from: FROM,
+      to: opts.to,
+      subject: customMessage
+        ? `Payment reminder — Invoice ${opts.invoice.invoice_number} from ${INVOICE_COMPANY.name}`
+        : `Invoice ${opts.invoice.invoice_number} from ${INVOICE_COMPANY.name}`,
+      html: shell(customMessage ? "Payment reminder" : "Your invoice", body),
+      attachments: [{ filename: `Invoice-${safeNumber}.pdf`, content: pdf }],
     });
     if (error) return { sent: false, error: error.message };
     return { sent: true };

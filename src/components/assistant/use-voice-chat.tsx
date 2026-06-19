@@ -4,6 +4,7 @@ import * as React from "react";
 import { CheckCircle2, Eye, Pencil } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import type { AssistantCard } from "@/lib/assistant-cards";
 
 /**
  * The voice engine shared by both Arc surfaces — the desktop floating panel
@@ -23,11 +24,15 @@ export type Message = {
   role: "user" | "assistant";
   content: string;
   events?: ToolEvent[];
+  cards?: AssistantCard[];
 };
+
+export type SendInvoiceResult = { ok: boolean; error?: string };
 
 export type Status = "idle" | "listening" | "thinking" | "speaking";
 
-const SILENCE_MS = 1500; // auto-stop this long after you STOP talking
+const SILENCE_MS = 15000; // auto-stop this long after you STOP talking — long
+// enough to ride out mid-sentence breaths/pauses (tap the mic to stop sooner).
 const SPEECH_LEVEL = 0.04; // RMS above this counts as voice (gates out room noise)
 const VOICE_FRAMES = 5; // need this many consecutive voiced frames to "arm"
 
@@ -109,6 +114,12 @@ export type VoiceChat = {
   setMuted: React.Dispatch<React.SetStateAction<boolean>>;
   toggleMic: () => void;
   sendText: (value: string) => void;
+  /** Actually email a saved invoice — fired only by the user's Send tap. */
+  sendInvoice: (
+    invoiceId: string,
+    emails: string[],
+    message?: string,
+  ) => Promise<SendInvoiceResult>;
   stopListening: () => void;
   /** Stop capture + playback without wiping the transcript. */
   stop: () => void;
@@ -258,7 +269,8 @@ export function useVoiceChat(): VoiceChat {
         }
         const reply: string = data.reply || "";
         const events: ToolEvent[] = data.events || [];
-        setMessages([...next, { role: "assistant", content: reply, events }]);
+        const cards: AssistantCard[] = data.cards || [];
+        setMessages([...next, { role: "assistant", content: reply, events, cards }]);
         await speak(reply);
       } catch {
         setError("Could not reach the assistant.");
@@ -436,6 +448,30 @@ export function useVoiceChat(): VoiceChat {
     setText("");
   }, [stop]);
 
+  const sendInvoice = React.useCallback(
+    async (
+      invoiceId: string,
+      emails: string[],
+      message?: string,
+    ): Promise<SendInvoiceResult> => {
+      try {
+        const res = await fetch("/api/assistant/send-invoice", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ invoiceId, emails, message }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data?.ok) {
+          return { ok: false, error: data?.error || "Could not send the invoice." };
+        }
+        return { ok: true };
+      } catch {
+        return { ok: false, error: "Could not reach the server." };
+      }
+    },
+    [],
+  );
+
   return {
     status,
     messages,
@@ -448,6 +484,7 @@ export function useVoiceChat(): VoiceChat {
     setMuted,
     toggleMic,
     sendText,
+    sendInvoice,
     stopListening,
     stop,
     reset,

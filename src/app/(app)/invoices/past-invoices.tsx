@@ -4,7 +4,7 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import { format } from "date-fns";
 import { toast } from "sonner";
-import { Download, FileText, Trash2 } from "lucide-react";
+import { Download, FileText, Mail, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -67,7 +67,18 @@ export function PastInvoices({ invoices }: { invoices: SavedInvoice[] }) {
                 className="border-b border-slate-50 last:border-0 hover:bg-slate-50/60"
               >
                 <td className="px-4 py-3 font-semibold text-slate-900">
-                  {inv.invoice_number}
+                  <div className="flex items-center gap-2">
+                    {inv.invoice_number}
+                    {inv.recipient_email && (
+                      <span
+                        title={`Emailed to ${inv.recipient_email}`}
+                        className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700"
+                      >
+                        <Mail className="h-3 w-3" />
+                        Emailed
+                      </span>
+                    )}
+                  </div>
                 </td>
                 <td className="px-4 py-3 text-slate-600">
                   {inv.bill_to_name || "—"}

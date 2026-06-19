@@ -10,6 +10,7 @@ import type {
   TodoStatus,
 } from "@/lib/database.types";
 import type { ToolSchema } from "@/lib/ai/openai";
+import type { AssistantCard, InvoiceCardData } from "@/lib/assistant-cards";
 
 /**
  * The assistant's "hands and eyes" on the workspace.
@@ -41,6 +42,8 @@ export type ToolResult = {
   content: unknown;
   /** Optional UI event (writes, mainly). */
   event?: ToolEvent;
+  /** Optional rich card rendered in the assistant transcript (e.g. an invoice). */
+  card?: AssistantCard;
 };
 
 // ---- Tool schemas advertised to the model --------------------------------
@@ -351,6 +354,103 @@ export const ASSISTANT_TOOLS: ToolSchema[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "create_invoice",
+      description:
+        "Create and save a new invoice from details the user dictates, then show it to them for review. Use for requests like 'create an invoice for…'. Each line item has a service description and a unit price; quantity defaults to 1. The saved invoice is shown to the user automatically. This does NOT email anything — emailing is a separate, user-confirmed step (prepare_invoice_email).",
+      parameters: {
+        type: "object",
+        properties: {
+          company_name: {
+            type: "string",
+            description: "Who the invoice is billed to — the client or company name.",
+          },
+          invoice_number: {
+            type: "string",
+            description:
+              "The invoice number if the user gives one (e.g. '205' or '#00205'). Omit to auto-generate the next number.",
+          },
+          invoice_date: {
+            type: "string",
+            description: "Invoice date as ISO YYYY-MM-DD. Defaults to today if omitted.",
+          },
+          bill_to_details: {
+            type: "string",
+            description: "Optional recipient address / contact lines, one per line.",
+          },
+          items: {
+            type: "array",
+            description: "The line items being billed. At least one is required.",
+            items: {
+              type: "object",
+              properties: {
+                item: {
+                  type: "string",
+                  description:
+                    "The service or product NAME — shown in the ITEM / SERVICE column. Always fill this when the user names a service or product. Example: the user says 'the service is Smart website' → item is 'Smart website'.",
+                },
+                description: {
+                  type: "string",
+                  description:
+                    "Extra detail about the line — shown in the DESCRIPTION column. Example: the user says 'description is upgrade from Wordpress' → description is 'upgrade from Wordpress'. If the user gives only one phrase for the line and no separate name, put that phrase here.",
+                },
+                unit_price: {
+                  type: "number",
+                  description: "Price per unit in LKR.",
+                },
+                quantity: {
+                  type: "number",
+                  description: "Quantity. Defaults to 1 if omitted.",
+                },
+              },
+              required: ["unit_price"],
+              additionalProperties: false,
+            },
+          },
+          due_today: {
+            type: "number",
+            description:
+              "Amount due now in LKR. Omit to charge the full total (a deposit would be a smaller number).",
+          },
+        },
+        required: ["company_name", "items"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "prepare_invoice_email",
+      description:
+        "Prepare to email a saved invoice to one or more recipients, and show the user a confirmation containing the invoice, the recipient addresses AND any custom message. Use this for 'email this invoice' and 'send a payment reminder'. IMPORTANT: this does NOT send the email. It only asks the user to confirm — the user must tap the Send button to actually send. Never tell the user the invoice has been sent or emailed; instead tell them to review it and tap Send. Convert spoken email addresses to standard form (e.g. 'john at acme dot com' becomes 'john@acme.com').",
+      parameters: {
+        type: "object",
+        properties: {
+          recipient_emails: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "One or more email addresses to send the invoice to. Include every address the user lists.",
+          },
+          message: {
+            type: "string",
+            description:
+              "Optional custom note to include in the email body, e.g. a payment-reminder warning. Reproduce the user's wording as closely as possible.",
+          },
+          invoice_number: {
+            type: "string",
+            description:
+              "Which saved invoice to send (e.g. '#00205'). Omit to use the most recently created invoice.",
+          },
+        },
+        required: ["recipient_emails"],
+        additionalProperties: false,
+      },
+    },
+  },
 ];
 
 // ---- Helpers -------------------------------------------------------------
@@ -441,6 +541,28 @@ function colomboDayRange(dateStr: string): { start: string; end: string } {
   const start = new Date(`${dateStr}T00:00:00+05:30`);
   const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
   return { start: start.toISOString(), end: end.toISOString() };
+}
+
+/** Basic email shape check — the human still verifies it on the confirm card. */
+function isEmail(value: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+/**
+ * Use the number the user gave, or generate the next one. Generated numbers
+ * follow the workspace's "#00200" style, continuing from how many invoices
+ * already exist.
+ */
+async function nextInvoiceNumber(
+  supabase: DB,
+  provided?: string | null,
+): Promise<string> {
+  const p = (provided ?? "").trim();
+  if (p) return p.startsWith("#") ? p : `#${p}`;
+  const { count } = await supabase
+    .from("invoices")
+    .select("*", { count: "exact", head: true });
+  return "#" + String(200 + (count ?? 0) + 1).padStart(5, "0");
 }
 
 // ---- Executor ------------------------------------------------------------
@@ -1028,6 +1150,189 @@ export async function executeTool(
               : `Rescheduled: ${target.client_name}`,
           href: "/meetings",
         },
+      };
+    }
+
+    case "create_invoice": {
+      const company = String(args.company_name ?? "").trim();
+      if (!company)
+        return {
+          content: { ok: false, error: "Need the company or client name for the invoice." },
+        };
+
+      const rawItems = Array.isArray(args.items) ? args.items : [];
+      const items = rawItems
+        .map((raw) => {
+          const o = (raw ?? {}) as Record<string, unknown>;
+          const description = String(o.description ?? "").trim();
+          const label = String(o.item ?? o.name ?? "").trim();
+          const unit =
+            typeof o.unit_price === "number"
+              ? o.unit_price
+              : Number(o.unit_price) || 0;
+          const qtyNum =
+            typeof o.quantity === "number" && o.quantity > 0 ? o.quantity : 1;
+          // `item` = the ITEM/SERVICE name, `description` = the DESCRIPTION
+          // detail — kept separate so each lands in its own column exactly as
+          // the user dictated them.
+          return {
+            item: label,
+            description,
+            qty: String(qtyNum),
+            rate: String(unit),
+            total: unit * qtyNum,
+          };
+        })
+        .filter((it) => it.description || it.item || it.total > 0);
+
+      if (!items.length)
+        return {
+          content: {
+            ok: false,
+            error: "Need at least one line item — a service and its price.",
+          },
+        };
+
+      const grand = items.reduce((sum, it) => sum + it.total, 0);
+      const due =
+        typeof args.due_today === "number" && args.due_today >= 0
+          ? args.due_today
+          : grand;
+      const invoiceDate =
+        typeof args.invoice_date === "string" && args.invoice_date.trim()
+          ? args.invoice_date.trim()
+          : today;
+      const number = await nextInvoiceNumber(
+        supabase,
+        args.invoice_number as string,
+      );
+      const billToDetails = String(args.bill_to_details ?? "").trim();
+
+      const { data, error } = await supabase
+        .from("invoices")
+        .insert({
+          invoice_number: number,
+          invoice_date: invoiceDate,
+          bill_to_name: company,
+          bill_to_details: billToDetails,
+          items,
+          grand_total: grand,
+          due_today: due,
+        })
+        .select("id")
+        .single();
+      if (error || !data)
+        return {
+          content: {
+            ok: false,
+            error: error?.message ?? "Could not save the invoice.",
+          },
+        };
+
+      const invoice: InvoiceCardData = {
+        id: data.id,
+        invoice_number: number,
+        invoice_date: invoiceDate,
+        bill_to_name: company,
+        bill_to_details: billToDetails,
+        items,
+        grand_total: grand,
+        due_today: due,
+      };
+
+      return {
+        content: {
+          ok: true,
+          invoice_number: number,
+          company,
+          grand_total: grand,
+          due_today: due,
+          currency: "LKR",
+          note: "Invoice saved and shown to the user for review.",
+        },
+        event: { kind: "created", label: `Invoice ${number}`, href: "/invoices" },
+        card: { type: "invoice", invoice },
+      };
+    }
+
+    case "prepare_invoice_email": {
+      // Accept an array, a comma/space separated string, or the old singular
+      // field — then keep only the well-formed addresses.
+      const rawEmails = args.recipient_emails ?? args.recipient_email ?? "";
+      const candidates = (
+        Array.isArray(rawEmails) ? rawEmails : String(rawEmails).split(/[,\s]+/)
+      )
+        .map((e) => String(e).trim())
+        .filter(Boolean);
+      const emails = candidates.filter(isEmail);
+      const invalid = candidates.filter((e) => !isEmail(e));
+      if (!emails.length)
+        return {
+          content: {
+            ok: false,
+            error: `No valid email address given${invalid.length ? ` ("${invalid.join('", "')}" looks wrong)` : ""}. Ask the user to repeat it.`,
+          },
+        };
+
+      const message = String(args.message ?? "").trim() || undefined;
+      const number = String(args.invoice_number ?? "").trim();
+      let query = supabase
+        .from("invoices")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(1);
+      if (number) {
+        const term = `%${number.replace(/^#/, "")}%`;
+        query = supabase
+          .from("invoices")
+          .select("*")
+          .ilike("invoice_number", term)
+          .order("created_at", { ascending: false })
+          .limit(1);
+      } else {
+        query = supabase
+          .from("invoices")
+          .select("*")
+          .eq("created_by", ctx.userId)
+          .order("created_at", { ascending: false })
+          .limit(1);
+      }
+
+      const { data } = await query;
+      const row = data?.[0];
+      if (!row)
+        return {
+          content: {
+            ok: false,
+            error: number
+              ? `No saved invoice matching "${number}".`
+              : "There's no invoice to send yet — create one first.",
+          },
+        };
+
+      const invoice: InvoiceCardData = {
+        id: row.id,
+        invoice_number: row.invoice_number,
+        invoice_date: row.invoice_date,
+        bill_to_name: row.bill_to_name,
+        bill_to_details: row.bill_to_details,
+        items: (row.items ?? []) as InvoiceCardData["items"],
+        grand_total: Number(row.grand_total),
+        due_today: Number(row.due_today),
+      };
+
+      return {
+        content: {
+          ok: true,
+          awaiting_user_confirmation: true,
+          invoice_number: row.invoice_number,
+          company: row.bill_to_name,
+          total: invoice.grand_total,
+          recipient_emails: emails,
+          message: message ?? null,
+          note: "Shown to the user for confirmation. The invoice is NOT sent until the user taps Send. Do not say it has been sent.",
+        },
+        card: { type: "confirm_send", invoice, emails, message },
       };
     }
 

@@ -15,6 +15,7 @@ import {
 
 import { cn } from "@/lib/utils";
 import { EventChip, useVoiceChat } from "@/components/assistant/use-voice-chat";
+import { AssistantCardView } from "@/components/assistant/assistant-card";
 import { VoiceVisualizer } from "@/components/assistant/voice-visualizer";
 
 /**
@@ -38,6 +39,7 @@ export function MobileVoiceScreen() {
     setMuted,
     toggleMic,
     sendText,
+    sendInvoice,
     stop,
   } = useVoiceChat();
 
@@ -248,30 +250,42 @@ export function MobileVoiceScreen() {
                 className="flex-1 min-h-0 space-y-3 overflow-y-auto px-5 pb-2"
               >
                 {messages.map((m, i) => (
-                  <div
-                    key={i}
-                    className={cn(
-                      "flex",
-                      m.role === "user" ? "justify-end" : "justify-start",
-                    )}
-                  >
+                  <div key={i} className="space-y-2">
                     <div
                       className={cn(
-                        "max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed",
-                        m.role === "user"
-                          ? "bg-primary-600 text-white"
-                          : "border border-white/10 bg-white/10 text-white/90 backdrop-blur-md",
+                        "flex",
+                        m.role === "user" ? "justify-end" : "justify-start",
                       )}
                     >
-                      {m.content}
-                      {m.events && m.events.length > 0 && (
-                        <div className="mt-2 flex flex-col gap-1.5 border-t border-white/15 pt-2">
-                          {m.events.map((ev, j) => (
-                            <EventChip key={j} event={ev} />
-                          ))}
-                        </div>
-                      )}
+                      <div
+                        className={cn(
+                          "max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed",
+                          m.role === "user"
+                            ? "bg-primary-600 text-white"
+                            : "border border-white/10 bg-white/10 text-white/90 backdrop-blur-md",
+                        )}
+                      >
+                        {m.content}
+                        {m.events && m.events.length > 0 && (
+                          <div className="mt-2 flex flex-col gap-1.5 border-t border-white/15 pt-2">
+                            {m.events.map((ev, j) => (
+                              <EventChip key={j} event={ev} />
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     </div>
+                    {m.cards && m.cards.length > 0 && (
+                      <div className="flex flex-col items-start gap-2">
+                        {m.cards.map((card, k) => (
+                          <AssistantCardView
+                            key={k}
+                            card={card}
+                            onSend={sendInvoice}
+                          />
+                        ))}
+                      </div>
+                    )}
                   </div>
                 ))}
 

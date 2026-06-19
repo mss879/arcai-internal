@@ -393,6 +393,56 @@ function endOfWeek(today: string): string {
   return d.toISOString().slice(0, 10);
 }
 
+const WORKSPACE_TZ = "Asia/Colombo";
+
+/**
+ * Format a stored date/time into a clear, workspace-local (Sri Lanka) string
+ * for the model. To-do due dates are stored as UTC timestamps, so without this
+ * the model would read e.g. 2pm Colombo as the underlying "08:30" and report
+ * the wrong time. Date-only values (all-day) are shown without a time.
+ */
+function fmtDateTime(value: string | null | undefined): string | null {
+  if (!value) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return new Intl.DateTimeFormat("en-US", {
+      timeZone: WORKSPACE_TZ,
+      weekday: "long",
+      month: "long",
+      day: "numeric",
+      year: "numeric",
+    }).format(new Date(`${value}T12:00:00+05:30`));
+  }
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: WORKSPACE_TZ,
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).format(d);
+}
+
+/** "14:00" -> "2:00 PM" (booking times are already workspace-local wall clock). */
+function fmtTime(hhmm: string | null | undefined): string | null {
+  if (!hhmm) return null;
+  const [h, m] = hhmm.split(":").map(Number);
+  if (Number.isNaN(h)) return hhmm;
+  const period = h >= 12 ? "PM" : "AM";
+  const hour = h % 12 === 0 ? 12 : h % 12;
+  return `${hour}:${String(m ?? 0).padStart(2, "0")} ${period}`;
+}
+
+/** UTC range covering a single Colombo calendar day (for due-date filtering). */
+function colomboDayRange(dateStr: string): { start: string; end: string } {
+  const start = new Date(`${dateStr}T00:00:00+05:30`);
+  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+  return { start: start.toISOString(), end: end.toISOString() };
+}
+
 // ---- Executor ------------------------------------------------------------
 
 export async function executeTool(
@@ -504,10 +554,19 @@ export async function executeTool(
       return {
         content: {
           clients: clients.data ?? [],
-          todos: todos.data ?? [],
+          todos: (todos.data ?? []).map((t) => ({
+            title: t.title,
+            status: t.status,
+            priority: t.priority,
+            due: fmtDateTime(t.due_date),
+          })),
           projects: projects.data ?? [],
           leads: leads.data ?? [],
-          meetings: meetings.data ?? [],
+          meetings: (meetings.data ?? []).map((m) => ({
+            client_name: m.client_name,
+            date: fmtDateTime(m.booking_date),
+            start_time: fmtTime(m.start_time),
+          })),
           resources: resources.data ?? [],
         },
       };
@@ -523,7 +582,11 @@ export async function executeTool(
       if (args.status) q = q.eq("status", args.status as TodoStatus);
       if (args.scope === "mine") q = q.eq("assigned_to", ctx.userId);
       if (args.due === "overdue") q = q.lt("due_date", today).neq("status", "done");
-      if (args.due === "today") q = q.eq("due_date", today);
+      if (args.due === "today") {
+        // due_date may be a UTC timestamp, so match the whole Colombo day.
+        const { start, end } = colomboDayRange(today);
+        q = q.gte("due_date", start).lt("due_date", end);
+      }
       if (args.due === "week") q = q.gte("due_date", today).lte("due_date", endOfWeek(today));
 
       const { data } = await q;
@@ -534,7 +597,7 @@ export async function executeTool(
             title: t.title,
             status: t.status,
             priority: t.priority,
-            due_date: t.due_date,
+            due: fmtDateTime(t.due_date),
             assignee: t.assigned_to ? names.get(t.assigned_to) ?? null : null,
           })),
         },
@@ -556,7 +619,7 @@ export async function executeTool(
       });
       if (error) return { content: { ok: false, error: error.message } };
       return {
-        content: { ok: true, title, due_date: args.due_date ?? null },
+        content: { ok: true, title, due: fmtDateTime((args.due_date as string) || null) },
         event: { kind: "created", label: `To-do: ${title}`, href: "/todos" },
       };
     }
@@ -586,7 +649,7 @@ export async function executeTool(
       });
 
       return {
-        content: { ok: true, text, remind_at: remindAt },
+        content: { ok: true, text, remind_at: fmtDateTime(remindAt) },
         event: { kind: "created", label: `Reminder: ${text}`, href: "/todos" },
       };
     }
@@ -644,7 +707,15 @@ export async function executeTool(
       if (args.status) q = q.eq("status", args.status as ProjectStatus);
       const { data } = await q;
       return {
-        content: { projects: data ?? [] },
+        content: {
+          projects: (data ?? []).map((p) => ({
+            name: p.name,
+            status: p.status,
+            budget: p.budget,
+            currency: p.currency,
+            due: fmtDateTime(p.due_date),
+          })),
+        },
         event: { kind: "read", label: "Looked up projects", href: "/projects" },
       };
     }
@@ -692,7 +763,15 @@ export async function executeTool(
       if (!args.include_past) q = q.gte("booking_date", today);
       const { data } = await q;
       return {
-        content: { meetings: data ?? [] },
+        content: {
+          meetings: (data ?? []).map((m) => ({
+            client_name: m.client_name,
+            date: fmtDateTime(m.booking_date),
+            start_time: fmtTime(m.start_time),
+            end_time: fmtTime(m.end_time),
+            status: m.status,
+          })),
+        },
         event: { kind: "read", label: "Looked up meetings", href: "/meetings" },
       };
     }

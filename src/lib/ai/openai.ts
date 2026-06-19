@@ -77,7 +77,8 @@ export async function openaiChat(
     body: JSON.stringify({
       model: AI_MODELS.chat,
       messages,
-      temperature: 0.3,
+      // Keep it factual/deterministic — this assistant must not improvise data.
+      temperature: 0,
       ...(tools && tools.length ? { tools, tool_choice: "auto" } : {}),
     }),
   });

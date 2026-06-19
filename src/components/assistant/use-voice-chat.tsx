@@ -64,6 +64,39 @@ function pickMimeType(): { mime: string; ext: string } {
   return { mime: "", ext: "webm" };
 }
 
+// A tiny valid silent WAV, used to "unlock" audio playback on the first tap so
+// iOS/Safari will let later spoken replies play. Built once, lazily.
+let _silentClip: string | null = null;
+function silentClip(): string {
+  if (_silentClip) return _silentClip;
+  const sampleRate = 8000;
+  const samples = 800; // ~100ms of silence
+  const dataLen = samples * 2;
+  const buf = new ArrayBuffer(44 + dataLen);
+  const v = new DataView(buf);
+  const w = (o: number, s: string) => {
+    for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i));
+  };
+  w(0, "RIFF");
+  v.setUint32(4, 36 + dataLen, true);
+  w(8, "WAVE");
+  w(12, "fmt ");
+  v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true); // PCM
+  v.setUint16(22, 1, true); // mono
+  v.setUint32(24, sampleRate, true);
+  v.setUint32(28, sampleRate * 2, true);
+  v.setUint16(32, 2, true);
+  v.setUint16(34, 16, true);
+  w(36, "data");
+  v.setUint32(40, dataLen, true);
+  let bin = "";
+  const bytes = new Uint8Array(buf);
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  _silentClip = "data:audio/wav;base64," + btoa(bin);
+  return _silentClip;
+}
+
 export type VoiceChat = {
   status: Status;
   messages: Message[];
@@ -100,12 +133,52 @@ export function useVoiceChat(): VoiceChat {
   const hasSpokenRef = React.useRef(false);
   const lastLoudRef = React.useRef(0);
   const playerRef = React.useRef<HTMLAudioElement | null>(null);
+  const audioUnlockedRef = React.useRef(false);
+  const currentUrlRef = React.useRef<string | null>(null);
   const mutedRef = React.useRef(muted);
   React.useEffect(() => {
     mutedRef.current = muted;
   }, [muted]);
 
   const busy = status === "thinking" || status === "speaking";
+
+  // One reusable <audio> element for all spoken replies.
+  const getPlayer = React.useCallback(() => {
+    if (!playerRef.current && typeof Audio !== "undefined") {
+      const el = new Audio();
+      el.preload = "auto";
+      playerRef.current = el;
+    }
+    return playerRef.current;
+  }, []);
+
+  // Must run inside a user gesture (tap). Plays a silent clip so the browser
+  // marks the element as user-initiated; later replies can then auto-play —
+  // without this, voice replies are silent on iOS/Safari.
+  const unlockAudio = React.useCallback(() => {
+    if (audioUnlockedRef.current) return;
+    const el = getPlayer();
+    if (!el) return;
+    audioUnlockedRef.current = true;
+    try {
+      el.muted = true;
+      el.src = silentClip();
+      const p = el.play();
+      if (p && typeof p.then === "function") {
+        p.then(() => {
+          el.pause();
+          el.currentTime = 0;
+          el.muted = false;
+        }).catch(() => {
+          el.muted = false;
+        });
+      } else {
+        el.muted = false;
+      }
+    } catch {
+      el.muted = false;
+    }
+  }, [getPlayer]);
 
   const teardownCapture = React.useCallback(() => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
@@ -122,42 +195,48 @@ export function useVoiceChat(): VoiceChat {
     return () => {
       teardownCapture();
       playerRef.current?.pause();
+      if (currentUrlRef.current) URL.revokeObjectURL(currentUrlRef.current);
     };
   }, [teardownCapture]);
 
-  const speak = React.useCallback(async (reply: string) => {
-    if (mutedRef.current || !reply.trim()) {
-      setStatus("idle");
-      return;
-    }
-    try {
-      setStatus("speaking");
-      const res = await fetch("/api/assistant/speak", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: reply }),
-      });
-      if (!res.ok) {
+  const speak = React.useCallback(
+    async (reply: string) => {
+      if (mutedRef.current || !reply.trim()) {
         setStatus("idle");
         return;
       }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
-      playerRef.current = audio;
-      audio.onended = () => {
-        URL.revokeObjectURL(url);
+      const el = getPlayer();
+      if (!el) {
         setStatus("idle");
-      };
-      audio.onerror = () => {
-        URL.revokeObjectURL(url);
+        return;
+      }
+      try {
+        setStatus("speaking");
+        const res = await fetch("/api/assistant/speak", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: reply }),
+        });
+        if (!res.ok) {
+          setStatus("idle");
+          return;
+        }
+        const blob = await res.blob();
+        if (currentUrlRef.current) URL.revokeObjectURL(currentUrlRef.current);
+        const url = URL.createObjectURL(blob);
+        currentUrlRef.current = url;
+        el.muted = false;
+        el.src = url;
+        el.onended = () => setStatus("idle");
+        el.onerror = () => setStatus("idle");
+        await el.play();
+      } catch {
+        // Autoplay can still be refused; the reply is already shown as text.
         setStatus("idle");
-      };
-      await audio.play();
-    } catch {
-      setStatus("idle");
-    }
-  }, []);
+      }
+    },
+    [getPlayer],
+  );
 
   const runChat = React.useCallback(
     async (next: Message[]) => {
@@ -193,12 +272,13 @@ export function useVoiceChat(): VoiceChat {
     (value: string) => {
       const trimmed = value.trim();
       if (!trimmed || busy) return;
+      unlockAudio(); // we're in the tap/submit gesture — prime voice output
       setText("");
       const next: Message[] = [...messages, { role: "user", content: trimmed }];
       setMessages(next);
       void runChat(next);
     },
-    [busy, messages, runChat],
+    [busy, messages, runChat, unlockAudio],
   );
 
   const transcribeAndSend = React.useCallback(
@@ -240,14 +320,24 @@ export function useVoiceChat(): VoiceChat {
 
   const startListening = React.useCallback(async () => {
     setError(null);
+    unlockAudio(); // we're in the tap gesture — prime voice output for mobile
     // Stop any in-progress playback first.
     playerRef.current?.pause();
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setError(
+        typeof window !== "undefined" && !window.isSecureContext
+          ? "Voice needs a secure (https) connection. Open the app over https."
+          : "Microphone isn't available in this browser.",
+      );
+      return;
+    }
 
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch {
-      setError("Microphone access was blocked. Allow it in your browser.");
+      setError("Microphone access was blocked. Allow mic access for this site.");
       return;
     }
     streamRef.current = stream;
@@ -326,7 +416,7 @@ export function useVoiceChat(): VoiceChat {
 
     recorder.start();
     setStatus("listening");
-  }, [stopListening, teardownCapture, transcribeAndSend]);
+  }, [stopListening, teardownCapture, transcribeAndSend, unlockAudio]);
 
   const toggleMic = React.useCallback(() => {
     if (status === "listening") stopListening();

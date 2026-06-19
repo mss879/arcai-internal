@@ -168,7 +168,12 @@ export function MobileVoiceScreen() {
             </div>
 
             {/* Hero orb — centred inside the reactive ring */}
-            <div className="flex flex-1 items-center justify-center px-6">
+            <div
+              className={cn(
+                "flex items-center justify-center px-6",
+                messages.length === 0 ? "flex-1" : "shrink-0 pt-3 pb-1",
+              )}
+            >
               <button
                 ref={orbRef}
                 onClick={onOrbTap}
@@ -240,7 +245,7 @@ export function MobileVoiceScreen() {
             {messages.length > 0 && (
               <div
                 ref={scrollRef}
-                className="max-h-[38vh] shrink-0 space-y-3 overflow-y-auto px-5 pb-2"
+                className="flex-1 min-h-0 space-y-3 overflow-y-auto px-5 pb-2"
               >
                 {messages.map((m, i) => (
                   <div
@@ -269,6 +274,14 @@ export function MobileVoiceScreen() {
                     </div>
                   </div>
                 ))}
+
+                {status === "thinking" && (
+                  <div className="flex justify-start">
+                    <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/10 px-3.5 py-2.5 text-sm text-white/70 backdrop-blur-md">
+                      <Loader2 className="h-4 w-4 animate-spin" /> Working on it…
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 

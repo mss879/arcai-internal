@@ -3,6 +3,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type {
+  ClientStatus,
   Database,
   ProjectStatus,
   TodoPriority,
@@ -255,6 +256,97 @@ export const ASSISTANT_TOOLS: ToolSchema[] = [
           stage: { type: "string", description: "Stage name; defaults to the first stage." },
         },
         required: ["title"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "update_client",
+      description:
+        "Edit an existing client's details. Find them by name, company or email via 'query', then pass only the fields to change.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description: "Name, company or email used to find the client to edit.",
+          },
+          name: { type: "string", description: "New client name." },
+          company: { type: "string" },
+          email: { type: "string" },
+          phone: { type: "string" },
+          city: { type: "string" },
+          notes: { type: "string" },
+          status: { type: "string", enum: ["active", "lead", "inactive"] },
+        },
+        required: ["query"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "update_lead",
+      description:
+        "Edit a CRM lead or move it between pipeline stages. Find it by title, company or contact via 'query', then pass the fields to change (e.g. stage to move it, or value to update the deal size).",
+      parameters: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description: "Title, company or contact name used to find the lead.",
+          },
+          title: { type: "string", description: "New lead title / deal name." },
+          stage: {
+            type: "string",
+            description: "Name of the pipeline stage to move the lead to.",
+          },
+          value: { type: "number", description: "New estimated deal value." },
+          company: { type: "string" },
+          contact_name: { type: "string" },
+          contact_email: { type: "string" },
+          contact_phone: { type: "string" },
+          notes: { type: "string" },
+        },
+        required: ["query"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "reschedule_meeting",
+      description:
+        "Reschedule or cancel an upcoming meeting booking. Find it by the client's name via 'query', then pass a new date/time, or set cancel to true.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description: "Client name used to find the upcoming meeting.",
+          },
+          date: {
+            type: "string",
+            description: "New booking date as ISO YYYY-MM-DD. Resolve relative dates against today.",
+          },
+          start_time: {
+            type: "string",
+            description: "New start time as 24-hour HH:MM (e.g. 14:30).",
+          },
+          end_time: {
+            type: "string",
+            description: "New end time as 24-hour HH:MM.",
+          },
+          cancel: {
+            type: "boolean",
+            description: "Set true to cancel the meeting instead of moving it.",
+          },
+        },
+        required: ["query"],
         additionalProperties: false,
       },
     },
@@ -679,6 +771,184 @@ export async function executeTool(
       return {
         content: { ok: true, title, stage: stage?.name ?? null },
         event: { kind: "created", label: `Lead: ${title}`, href: "/crm" },
+      };
+    }
+
+    case "update_client": {
+      const query = String(args.query ?? "").trim();
+      if (!query)
+        return { content: { ok: false, error: "Need a name or company to find the client." } };
+
+      const term = `%${query}%`;
+      const { data: matches } = await supabase
+        .from("clients")
+        .select("id, name")
+        .or(`name.ilike.${term},company.ilike.${term},email.ilike.${term}`)
+        .limit(2);
+      if (!matches?.length)
+        return { content: { ok: false, error: `No client matching "${query}".` } };
+      if (matches.length > 1)
+        return {
+          content: {
+            ok: false,
+            error: `More than one client matches "${query}". Be more specific.`,
+            candidates: matches.map((m) => m.name),
+          },
+        };
+      const target = matches[0];
+
+      const patch: Database["public"]["Tables"]["clients"]["Update"] = {};
+      if (typeof args.name === "string" && args.name.trim()) patch.name = args.name.trim();
+      if (typeof args.company === "string") patch.company = args.company.trim() || null;
+      if (typeof args.email === "string") patch.email = args.email.trim() || null;
+      if (typeof args.phone === "string") patch.phone = args.phone.trim() || null;
+      if (typeof args.city === "string") patch.city = args.city.trim() || null;
+      if (typeof args.notes === "string") patch.notes = args.notes.trim() || null;
+      if (args.status) patch.status = args.status as ClientStatus;
+
+      if (Object.keys(patch).length === 0)
+        return { content: { ok: false, error: "Nothing to update — say what to change." } };
+
+      const { error } = await supabase.from("clients").update(patch).eq("id", target.id);
+      if (error) return { content: { ok: false, error: error.message } };
+      return {
+        content: { ok: true, name: target.name, changed: Object.keys(patch) },
+        event: { kind: "updated", label: `Updated client: ${target.name}`, href: "/clients" },
+      };
+    }
+
+    case "update_lead": {
+      const query = String(args.query ?? "").trim();
+      if (!query)
+        return { content: { ok: false, error: "Need a lead title or company to find it." } };
+
+      const term = `%${query}%`;
+      const { data: matches } = await supabase
+        .from("leads")
+        .select("id, title, pipeline_id")
+        .or(`title.ilike.${term},company.ilike.${term},contact_name.ilike.${term}`)
+        .limit(2);
+      if (!matches?.length)
+        return { content: { ok: false, error: `No lead matching "${query}".` } };
+      if (matches.length > 1)
+        return {
+          content: {
+            ok: false,
+            error: `More than one lead matches "${query}". Be more specific.`,
+            candidates: matches.map((m) => m.title),
+          },
+        };
+      const target = matches[0];
+
+      const patch: Database["public"]["Tables"]["leads"]["Update"] = {};
+      if (typeof args.title === "string" && args.title.trim()) patch.title = args.title.trim();
+      if (typeof args.company === "string") patch.company = args.company.trim() || null;
+      if (typeof args.contact_name === "string")
+        patch.contact_name = args.contact_name.trim() || null;
+      if (typeof args.contact_email === "string")
+        patch.contact_email = args.contact_email.trim() || null;
+      if (typeof args.contact_phone === "string")
+        patch.contact_phone = args.contact_phone.trim() || null;
+      if (typeof args.value === "number") patch.value = args.value;
+      if (typeof args.notes === "string") patch.notes = args.notes.trim() || null;
+
+      let movedTo: string | null = null;
+      if (typeof args.stage === "string" && args.stage.trim()) {
+        const { data: stages } = await supabase
+          .from("pipeline_stages")
+          .select("id, name")
+          .eq("pipeline_id", target.pipeline_id);
+        const match = (stages ?? []).find(
+          (s) => s.name.toLowerCase() === String(args.stage).toLowerCase(),
+        );
+        if (!match)
+          return {
+            content: {
+              ok: false,
+              error: `No pipeline stage called "${args.stage}".`,
+              stages: (stages ?? []).map((s) => s.name),
+            },
+          };
+        patch.stage_id = match.id;
+        movedTo = match.name;
+      }
+
+      if (Object.keys(patch).length === 0)
+        return { content: { ok: false, error: "Nothing to update — say what to change." } };
+
+      patch.updated_at = new Date().toISOString();
+      const { error } = await supabase.from("leads").update(patch).eq("id", target.id);
+      if (error) return { content: { ok: false, error: error.message } };
+      return {
+        content: { ok: true, title: target.title, stage: movedTo, changed: Object.keys(patch) },
+        event: {
+          kind: "updated",
+          label: movedTo
+            ? `${target.title} → ${movedTo}`
+            : `Updated lead: ${target.title}`,
+          href: "/crm",
+        },
+      };
+    }
+
+    case "reschedule_meeting": {
+      const query = String(args.query ?? "").trim();
+      if (!query)
+        return { content: { ok: false, error: "Need a client name to find the meeting." } };
+
+      const term = `%${query}%`;
+      const { data: matches } = await supabase
+        .from("meeting_bookings")
+        .select("id, client_name, booking_date, start_time")
+        .or(`client_name.ilike.${term},notes.ilike.${term}`)
+        .gte("booking_date", today)
+        .order("booking_date", { ascending: true })
+        .limit(2);
+      if (!matches?.length)
+        return { content: { ok: false, error: `No upcoming meeting matching "${query}".` } };
+      if (matches.length > 1)
+        return {
+          content: {
+            ok: false,
+            error: `More than one upcoming meeting matches "${query}". Be more specific.`,
+            candidates: matches.map((m) => `${m.client_name} on ${m.booking_date}`),
+          },
+        };
+      const target = matches[0];
+
+      const patch: Database["public"]["Tables"]["meeting_bookings"]["Update"] = {};
+      if (typeof args.date === "string" && args.date.trim()) patch.booking_date = args.date.trim();
+      if (typeof args.start_time === "string" && args.start_time.trim())
+        patch.start_time = args.start_time.trim();
+      if (typeof args.end_time === "string" && args.end_time.trim())
+        patch.end_time = args.end_time.trim();
+      if (args.cancel === true) patch.status = "cancelled";
+
+      if (Object.keys(patch).length === 0)
+        return {
+          content: { ok: false, error: "Say a new date/time, or that it should be cancelled." },
+        };
+
+      const { error } = await supabase
+        .from("meeting_bookings")
+        .update(patch)
+        .eq("id", target.id);
+      if (error) return { content: { ok: false, error: error.message } };
+      return {
+        content: {
+          ok: true,
+          client: target.client_name,
+          cancelled: args.cancel === true,
+          changed: Object.keys(patch),
+        },
+        event: {
+          kind: "updated",
+          label:
+            args.cancel === true
+              ? `Cancelled: ${target.client_name}`
+              : `Rescheduled: ${target.client_name}`,
+          href: "/meetings",
+        },
       };
     }
 

@@ -35,6 +35,8 @@ function systemPrompt(name: string, today: string): string {
     ``,
     `When the user refers to a relative date like "tomorrow" or "next Friday", convert it to an ISO date (YYYY-MM-DD) based on today before calling a tool.`,
     `When assigning a task, pass the person's name as assignee_name; use "me" when the user means themselves.`,
+    `You can also edit existing records — update a client's details, move a CRM lead between stages or change its value, and reschedule or cancel meetings. To edit, find the record with the matching tool's "query" first, then change only what was asked.`,
+    `Before cancelling a meeting or any other destructive change, briefly confirm with the user first instead of doing it immediately.`,
     `After you create or change anything, briefly confirm what you did. If a tool reports an error, explain it simply.`,
   ].join("\n");
 }

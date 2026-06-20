@@ -167,6 +167,7 @@ export default async function ProjectDetailPage({
           <CommissionsSection
             projectId={id}
             currency={project.currency}
+            totalValue={Number(project.total_value) || 0}
             isAdmin={profile.role === "admin"}
             members={members}
             commissions={(commissionsRes.data ?? []) as unknown as CommissionRow[]}

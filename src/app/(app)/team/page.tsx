@@ -9,7 +9,7 @@ export default async function TeamPage() {
   const profile = await requireAdmin();
   const supabase = await createClient();
 
-  const [membersRes, invitesRes] = await Promise.all([
+  const [membersRes, invitesRes, commissionsRes] = await Promise.all([
     supabase
       .from("profiles")
       .select("*")
@@ -19,12 +19,18 @@ export default async function TeamPage() {
       .from("invitations")
       .select("*")
       .order("created_at", { ascending: false }),
+    supabase
+      .from("commissions")
+      .select("*, project:projects(id, name)")
+      .order("created_at", { ascending: false }),
   ]);
 
   return (
     <TeamView
       members={membersRes.data ?? []}
       invitations={invitesRes.data ?? []}
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      commissions={(commissionsRes.data ?? []) as any}
       currentUserId={profile.id}
       appBaseUrl={process.env.NEXT_PUBLIC_APP_URL ?? ""}
     />

@@ -2,9 +2,11 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { formatDistanceToNow } from "date-fns";
+import { format, formatDistanceToNow } from "date-fns";
 import { toast } from "sonner";
 import {
+  Calendar,
+  ChevronRight,
   Copy,
   Mail,
   MoreVertical,
@@ -14,6 +16,7 @@ import {
   Trash2,
   UserPlus,
   Users,
+  Wallet,
 } from "lucide-react";
 
 import { Avatar } from "@/components/ui/avatar";
@@ -23,10 +26,12 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dropdown, DropdownItem } from "@/components/ui/dropdown";
 import { Input, Select } from "@/components/ui/input";
+import { Modal } from "@/components/ui/modal";
 import { PageHeader } from "@/components/ui/page-header";
-import { cn } from "@/lib/utils";
+import { COMMISSION_STATUS_META } from "@/lib/constants";
+import { cn, formatCurrency } from "@/lib/utils";
 import { useRealtimeSyncTables } from "@/hooks/use-realtime-sync";
-import type { Invitation, Profile, UserRole } from "@/lib/types";
+import type { Commission, Invitation, Profile, UserRole } from "@/lib/types";
 
 import {
   createInvite,
@@ -35,14 +40,20 @@ import {
   updateMemberRole,
 } from "./actions";
 
+type MemberCommission = Commission & {
+  project?: { id: string; name: string } | null;
+};
+
 export function TeamView({
   members,
   invitations,
+  commissions,
   currentUserId,
   appBaseUrl,
 }: {
   members: Profile[];
   invitations: Invitation[];
+  commissions: MemberCommission[];
   currentUserId: string;
   appBaseUrl: string;
 }) {
@@ -56,6 +67,18 @@ export function TeamView({
     emailSent: boolean;
   } | null>(null);
   const [toRemove, setToRemove] = React.useState<Profile | null>(null);
+  const [selected, setSelected] = React.useState<Profile | null>(null);
+
+  // Group commissions by member so each profile shows its own allocations.
+  const commissionsByUser = React.useMemo(() => {
+    const map = new Map<string, MemberCommission[]>();
+    for (const c of commissions) {
+      const list = map.get(c.user_id);
+      if (list) list.push(c);
+      else map.set(c.user_id, [c]);
+    }
+    return map;
+  }, [commissions]);
 
   const pending = invitations.filter((i) => i.status === "pending");
   const adminCount = members.filter((m) => m.role === "admin").length;
@@ -232,20 +255,40 @@ export function TeamView({
               key={m.id}
               className="flex items-center gap-3 px-5 py-3.5 hover:bg-slate-50/60"
             >
-              <Avatar name={m.full_name} src={m.avatar_url} size="sm" />
-              <div className="min-w-0 flex-1">
-                <p className="flex items-center gap-2 text-sm font-medium text-slate-900">
-                  {m.full_name || m.username}
-                  {m.id === currentUserId && (
-                    <span className="text-xs font-normal text-slate-400">
-                      (you)
-                    </span>
-                  )}
-                </p>
-                <p className="truncate text-xs text-slate-400">
-                  @{m.username} · {m.email}
-                </p>
-              </div>
+              <button
+                type="button"
+                onClick={() => setSelected(m)}
+                className="-my-1.5 flex min-w-0 flex-1 items-center gap-3 rounded-lg py-1.5 text-left transition hover:opacity-80"
+                title="View member details"
+              >
+                <Avatar name={m.full_name} src={m.avatar_url} size="sm" />
+                <div className="min-w-0 flex-1">
+                  <p className="flex items-center gap-2 text-sm font-medium text-slate-900">
+                    <span className="truncate">{m.full_name || m.username}</span>
+                    {m.id === currentUserId && (
+                      <span className="text-xs font-normal text-slate-400">
+                        (you)
+                      </span>
+                    )}
+                  </p>
+                  <p className="truncate text-xs text-slate-400">
+                    @{m.username} · {m.email}
+                  </p>
+                </div>
+                <ChevronRight className="h-4 w-4 shrink-0 text-slate-300" />
+              </button>
+              {(() => {
+                const total = (commissionsByUser.get(m.id) ?? []).reduce(
+                  (s, c) => s + Number(c.amount),
+                  0,
+                );
+                return total > 0 ? (
+                  <span className="hidden shrink-0 items-center gap-1 text-xs font-medium text-slate-500 sm:flex">
+                    <Wallet className="h-3.5 w-3.5 text-slate-400" />
+                    {formatCurrency(total)}
+                  </span>
+                ) : null;
+              })()}
               <Badge
                 className={cn(
                   m.role === "admin"
@@ -307,6 +350,13 @@ export function TeamView({
         </ul>
       </div>
 
+      <MemberDetailModal
+        member={selected}
+        commissions={selected ? commissionsByUser.get(selected.id) ?? [] : []}
+        isYou={selected?.id === currentUserId}
+        onClose={() => setSelected(null)}
+      />
+
       <ConfirmDialog
         open={!!toRemove}
         onClose={() => setToRemove(null)}
@@ -344,6 +394,166 @@ function StatCard({
         <p className="text-2xl font-semibold text-slate-900">{value}</p>
         <p className="text-sm text-slate-500">{label}</p>
       </div>
+    </div>
+  );
+}
+
+function MemberDetailModal({
+  member,
+  commissions,
+  isYou,
+  onClose,
+}: {
+  member: Profile | null;
+  commissions: MemberCommission[];
+  isYou: boolean;
+  onClose: () => void;
+}) {
+  const totals = React.useMemo(() => {
+    const sum = (pred: (c: MemberCommission) => boolean) =>
+      commissions.filter(pred).reduce((s, c) => s + Number(c.amount), 0);
+    return {
+      total: sum(() => true),
+      paid: sum((c) => c.status === "paid"),
+      outstanding: sum((c) => c.status !== "paid"),
+    };
+  }, [commissions]);
+
+  return (
+    <Modal
+      open={!!member}
+      onClose={onClose}
+      title="Member details"
+      size="lg"
+    >
+      {member && (
+        <div className="space-y-6">
+          {/* Identity */}
+          <div className="flex items-center gap-4">
+            <Avatar name={member.full_name} src={member.avatar_url} size="lg" />
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="text-lg font-semibold text-slate-900">
+                  {member.full_name || member.username}
+                </h3>
+                {isYou && (
+                  <span className="text-xs font-normal text-slate-400">(you)</span>
+                )}
+                <Badge
+                  className={cn(
+                    member.role === "admin"
+                      ? "bg-primary-50 text-primary-700 ring-primary-200"
+                      : "bg-slate-100 text-slate-600 ring-slate-200",
+                  )}
+                >
+                  {member.role === "admin" ? (
+                    <ShieldCheck className="h-3 w-3" />
+                  ) : (
+                    <Shield className="h-3 w-3" />
+                  )}
+                  {member.role}
+                </Badge>
+              </div>
+              {member.title && (
+                <p className="text-sm text-slate-500">{member.title}</p>
+              )}
+              <p className="truncate text-xs text-slate-400">
+                @{member.username} · {member.email}
+              </p>
+            </div>
+          </div>
+
+          {/* Meta */}
+          <div className="flex items-center gap-2 rounded-xl bg-slate-50 px-3.5 py-2.5 text-sm text-slate-500">
+            <Calendar className="h-4 w-4 text-slate-400" />
+            Joined {format(new Date(member.created_at), "MMM d, yyyy")}
+          </div>
+
+          {/* Commission summary */}
+          <div className="grid grid-cols-3 gap-3">
+            <SummaryCard label="Total" value={formatCurrency(totals.total)} accent />
+            <SummaryCard label="Paid out" value={formatCurrency(totals.paid)} />
+            <SummaryCard
+              label="Outstanding"
+              value={formatCurrency(totals.outstanding)}
+            />
+          </div>
+
+          {/* Commission list */}
+          <div className="rounded-2xl border border-slate-200/80">
+            <div className="flex items-center gap-2 border-b border-slate-100 px-4 py-3">
+              <Wallet className="h-4 w-4 text-primary-500" />
+              <h4 className="text-sm font-semibold text-slate-900">
+                Commissions
+              </h4>
+              <span className="text-xs text-slate-400">
+                ({commissions.length})
+              </span>
+            </div>
+            {commissions.length === 0 ? (
+              <p className="px-4 py-8 text-center text-sm text-slate-400">
+                No commissions allocated yet.
+              </p>
+            ) : (
+              <ul className="max-h-64 divide-y divide-slate-50 overflow-y-auto">
+                {commissions.map((c) => (
+                  <li
+                    key={c.id}
+                    className="flex items-center gap-3 px-4 py-3"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-slate-800">
+                        {c.project?.name ?? "—"}
+                      </p>
+                      <p className="text-xs text-slate-400">
+                        {format(new Date(c.created_at), "MMM d, yyyy")}
+                        {c.percentage != null && ` · ${c.percentage}%`}
+                      </p>
+                    </div>
+                    <Badge className={COMMISSION_STATUS_META[c.status].badge}>
+                      {COMMISSION_STATUS_META[c.status].label}
+                    </Badge>
+                    <p className="w-24 shrink-0 text-right text-sm font-semibold text-slate-900">
+                      {formatCurrency(Number(c.amount))}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+function SummaryCard({
+  label,
+  value,
+  accent,
+}: {
+  label: string;
+  value: string;
+  accent?: boolean;
+}) {
+  return (
+    <div
+      className={cn(
+        "rounded-xl border p-3.5",
+        accent
+          ? "border-primary-200 bg-primary-50/60"
+          : "border-slate-200/80 bg-white",
+      )}
+    >
+      <p className="text-xs text-slate-500">{label}</p>
+      <p
+        className={cn(
+          "mt-1 text-lg font-semibold",
+          accent ? "text-primary-700" : "text-slate-900",
+        )}
+      >
+        {value}
+      </p>
     </div>
   );
 }

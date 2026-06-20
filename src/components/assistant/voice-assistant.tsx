@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { AnimatePresence, motion } from "motion/react";
+import { AnimatePresence, motion, useMotionValue } from "motion/react";
 import {
   Mic,
   Square,
@@ -37,6 +37,47 @@ export function VoiceAssistant({ firstName }: { firstName: string }) {
 
   const scrollRef = React.useRef<HTMLDivElement | null>(null);
 
+  // Draggable launcher position. Stored as an offset from the default
+  // bottom-right anchor and persisted so it stays where the user leaves it.
+  const x = useMotionValue(0);
+  const y = useMotionValue(0);
+  const [dragBounds, setDragBounds] = React.useState({
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
+  });
+  // Set true while an actual drag happens so the trailing click doesn't open the panel.
+  const draggedRef = React.useRef(false);
+
+  React.useEffect(() => {
+    const BTN = 56; // h-14 w-14
+    const MARGIN = 16; // keep a little gap from the viewport edges
+
+    const recompute = () => {
+      const maxLeft = -(window.innerWidth - BTN - MARGIN * 2);
+      const maxUp = -(window.innerHeight - BTN - MARGIN * 2);
+      setDragBounds({ left: maxLeft, right: 0, top: maxUp, bottom: 0 });
+      if (x.get() < maxLeft) x.set(maxLeft);
+      if (y.get() < maxUp) y.set(maxUp);
+    };
+
+    try {
+      const saved = localStorage.getItem("arc-assistant-pos");
+      if (saved) {
+        const p = JSON.parse(saved);
+        if (typeof p.x === "number") x.set(p.x);
+        if (typeof p.y === "number") y.set(p.y);
+      }
+    } catch {
+      // ignore malformed storage
+    }
+
+    recompute();
+    window.addEventListener("resize", recompute);
+    return () => window.removeEventListener("resize", recompute);
+  }, [x, y]);
+
   // Auto-scroll the transcript.
   React.useEffect(() => {
     scrollRef.current?.scrollTo({
@@ -54,15 +95,38 @@ export function VoiceAssistant({ firstName }: { firstName: string }) {
         {!open && (
           <motion.button
             key="launcher"
+            style={{ x, y }}
+            drag
+            dragMomentum={false}
+            dragElastic={0.06}
+            dragConstraints={dragBounds}
+            onDragStart={() => {
+              draggedRef.current = true;
+            }}
+            onDragEnd={() => {
+              localStorage.setItem(
+                "arc-assistant-pos",
+                JSON.stringify({ x: x.get(), y: y.get() }),
+              );
+            }}
             initial={{ scale: 0, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
             exit={{ scale: 0, opacity: 0 }}
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
             transition={{ type: "spring", stiffness: 400, damping: 25 }}
-            onClick={() => setOpen(true)}
-            aria-label="Open Arc voice assistant"
-            className="fixed bottom-6 right-6 z-50 grid h-14 w-14 place-items-center rounded-full bg-gradient-to-br from-primary-500 to-primary-700 text-white shadow-lift ring-1 ring-white/30 transition hover:scale-105 active:scale-95"
+            onClick={() => {
+              // Suppress the click that fires at the end of a drag.
+              if (draggedRef.current) {
+                draggedRef.current = false;
+                return;
+              }
+              setOpen(true);
+            }}
+            aria-label="Open Arc voice assistant — drag to reposition"
+            className="fixed bottom-6 right-6 z-50 grid h-14 w-14 cursor-grab touch-none place-items-center rounded-full bg-gradient-to-br from-primary-500 to-primary-700 text-white shadow-lift ring-1 ring-white/30 active:cursor-grabbing"
           >
-            <span className="absolute inset-0 -z-10 animate-ping rounded-full bg-primary-500/40" />
+            <span className="pointer-events-none absolute inset-0 -z-10 animate-ping rounded-full bg-primary-500/40" />
             <Sparkles className="h-6 w-6" />
           </motion.button>
         )}

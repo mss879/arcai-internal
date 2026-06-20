@@ -33,12 +33,14 @@ export type CommissionRow = Commission & {
 export function CommissionsSection({
   projectId,
   currency,
+  totalValue,
   isAdmin,
   members,
   commissions,
 }: {
   projectId: string;
   currency: string;
+  totalValue: number;
   isAdmin: boolean;
   members: MemberLite[];
   commissions: CommissionRow[];
@@ -140,6 +142,8 @@ export function CommissionsSection({
         <CommissionModal
           open={creating || !!editing}
           projectId={projectId}
+          currency={currency}
+          totalValue={totalValue}
           members={members}
           commission={editing}
           onClose={() => {
@@ -169,12 +173,16 @@ export function CommissionsSection({
 function CommissionModal({
   open,
   projectId,
+  currency,
+  totalValue,
   members,
   commission,
   onClose,
 }: {
   open: boolean;
   projectId: string;
+  currency: string;
+  totalValue: number;
   members: MemberLite[];
   commission: Commission | null;
   onClose: () => void;
@@ -259,16 +267,37 @@ function CommissionModal({
               onChange={(e) => set("amount", Number(e.target.value))}
             />
           </Field>
-          <Field label="Percentage" hint="Optional">
+          <Field
+            label="Percentage"
+            hint={
+              totalValue > 0
+                ? `of ${formatCurrency(totalValue, currency)} total`
+                : "Optional"
+            }
+          >
             <Input
               type="number"
               min={0}
               max={100}
               step="0.01"
               value={form.percentage ?? ""}
-              onChange={(e) =>
-                set("percentage", e.target.value ? Number(e.target.value) : null)
-              }
+              onChange={(e) => {
+                const raw = e.target.value;
+                if (raw === "") {
+                  setForm((f) => ({ ...f, percentage: null }));
+                  return;
+                }
+                const pct = Number(raw);
+                setForm((f) => ({
+                  ...f,
+                  percentage: pct,
+                  // Auto-fill amount as that % of the project's total value.
+                  amount:
+                    totalValue > 0
+                      ? Math.round(totalValue * pct) / 100
+                      : f.amount,
+                }));
+              }}
             />
           </Field>
         </div>

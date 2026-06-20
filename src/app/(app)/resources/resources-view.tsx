@@ -26,6 +26,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { STORAGE_BUCKETS } from "@/lib/constants";
 import { uploadFile } from "@/lib/upload";
 import { cn, formatBytes } from "@/lib/utils";
+import { useRealtimeSync } from "@/hooks/use-realtime-sync";
 import type { MemberLite, Resource } from "@/lib/types";
 
 import { createResource, deleteResource } from "./actions";
@@ -39,6 +40,7 @@ export function ResourcesView({
 }: {
   resources: ResourceWithUploader[];
 }) {
+  useRealtimeSync("resources");
   const router = useRouter();
   const [adding, setAdding] = React.useState(false);
   const [toDelete, setToDelete] = React.useState<Resource | null>(null);

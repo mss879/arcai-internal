@@ -26,11 +26,13 @@ import { Field, Input, Select, Textarea } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { PageHeader } from "@/components/ui/page-header";
 import { CLIENT_STATUS_META } from "@/lib/constants";
+import { useRealtimeSync } from "@/hooks/use-realtime-sync";
 import type { Client, ClientStatus } from "@/lib/types";
 
 import { deleteClient, saveClient, type ClientInput } from "./actions";
 
 export function ClientsView({ clients }: { clients: Client[] }) {
+  useRealtimeSync("clients");
   const router = useRouter();
   const [query, setQuery] = React.useState("");
   const [editing, setEditing] = React.useState<Client | null>(null);

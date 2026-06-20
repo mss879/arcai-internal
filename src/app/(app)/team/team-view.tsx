@@ -25,6 +25,7 @@ import { Dropdown, DropdownItem } from "@/components/ui/dropdown";
 import { Input, Select } from "@/components/ui/input";
 import { PageHeader } from "@/components/ui/page-header";
 import { cn } from "@/lib/utils";
+import { useRealtimeSyncTables } from "@/hooks/use-realtime-sync";
 import type { Invitation, Profile, UserRole } from "@/lib/types";
 
 import {
@@ -45,6 +46,7 @@ export function TeamView({
   currentUserId: string;
   appBaseUrl: string;
 }) {
+  useRealtimeSyncTables(["profiles", "invitations"]);
   const router = useRouter();
   const [email, setEmail] = React.useState("");
   const [role, setRole] = React.useState<UserRole>("member");

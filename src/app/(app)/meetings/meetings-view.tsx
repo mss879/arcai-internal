@@ -26,6 +26,7 @@ import { Field, Input, Select, Textarea } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { PageHeader } from "@/components/ui/page-header";
 import { formatTime12 } from "@/lib/utils";
+import { useRealtimeSyncTables } from "@/hooks/use-realtime-sync";
 import type { MeetingLink } from "@/lib/types";
 
 import {
@@ -44,6 +45,7 @@ export function MeetingsView({
   links: LinkRow[];
   appBaseUrl: string;
 }) {
+  useRealtimeSyncTables(["meeting_bookings", "meeting_links"]);
   const router = useRouter();
   const [creatingLink, setCreatingLink] = React.useState(false);
   const [toDelete, setToDelete] = React.useState<MeetingLink | null>(null);

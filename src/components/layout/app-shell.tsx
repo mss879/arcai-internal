@@ -47,14 +47,14 @@ export function AppShell({
   }, []);
 
   return (
-    <div className="app-bg min-h-screen flex">
+    <div className="app-bg flex min-h-screen lg:h-screen lg:overflow-hidden">
       {/* Auto sign-out after inactivity */}
       <IdleTimeout />
 
       {/* Desktop sidebar */}
       <aside
         className={cn(
-          "hidden lg:flex flex-col shrink-0 sticky top-0 h-screen z-40 transition-all duration-300 ease-in-out overflow-visible",
+          "hidden lg:flex flex-col shrink-0 h-screen z-40 transition-all duration-300 ease-in-out overflow-visible",
           isCollapsed ? "w-[84px]" : "w-[260px]"
         )}
       >
@@ -89,17 +89,21 @@ export function AppShell({
         )}
       </AnimatePresence>
 
-      {/* Main content area */}
-      <div className="flex-1 min-w-0 flex flex-col">
+      {/* Main content area. On desktop the shell is locked to the viewport and
+          only this column's inner wrapper scrolls, so the sidebar always fills
+          the full height. On mobile the document scrolls as usual. */}
+      <div className="flex-1 min-w-0 flex flex-col lg:h-screen lg:overflow-hidden">
         <Topbar
           profile={profile}
           notifications={notifications}
           onOpenMobile={() => setMobileOpen(true)}
         />
 
-        <main className="mx-auto w-full max-w-[1400px] px-4 py-6 sm:px-6 lg:px-8">
-          {children}
-        </main>
+        <div className="flex-1 lg:min-h-0 lg:overflow-y-auto">
+          <main className="mx-auto w-full max-w-[1400px] px-4 py-6 sm:px-6 lg:px-8">
+            {children}
+          </main>
+        </div>
       </div>
 
       {/* Voice + workspace AI assistant.

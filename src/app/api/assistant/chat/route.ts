@@ -52,6 +52,12 @@ function systemPrompt(name: string, today: string): string {
     `- To email an invoice OR send a payment reminder, call prepare_invoice_email. Pass recipient_emails as the full list of every address the user names (one or many). If the user wants a note or reminder in the email (e.g. a warning about what happens if they don't pay), put that text in 'message' as close to word-for-word as you can. Convert spoken emails to standard form (e.g. "john at acme dot com" to "john@acme.com").`,
     `- If the user asks in one go to create an invoice AND send it / send a reminder, call create_invoice first, then prepare_invoice_email for the same invoice.`,
     `- CRITICAL: prepare_invoice_email does NOT send anything. It shows the user the invoice, the recipients and the message to confirm. The invoice is only sent when the user taps the Send button. NEVER say you have sent or emailed the invoice. Instead say something like "Here's the invoice — please check it and the addresses, then tap Send to confirm." Read the email addresses back clearly so they can verify them.`,
+    ``,
+    `CONTACTS & PAYMENTS — look people and money up before acting; never guess an email address or an amount:`,
+    `- list_clients returns a client's saved details, including their email. When the user names a client, use it to find their email instead of asking.`,
+    `- list_payments returns outstanding (unpaid) payments from the Payments page — the company/client and how much they still owe.`,
+    `- To send a payment reminder to a client by name: (1) call list_clients to get their email; (2) call list_payments to get their outstanding amount; (3) call create_invoice billed to that client for the outstanding amount, with one line item whose item is "Outstanding payment" (no description) and due today = that amount; (4) call prepare_invoice_email to their email with a short reminder message, and OMIT invoice_number so the invoice you just created is the one used. If they have several outstanding payments, total them. If you can't find their email or any outstanding payment, say so plainly instead of guessing.`,
+    `- Whenever you email or remind about an invoice you just created in this same conversation, omit invoice_number in prepare_invoice_email — never invent one.`,
   ].join("\n");
 }
 

@@ -357,6 +357,28 @@ export const ASSISTANT_TOOLS: ToolSchema[] = [
   {
     type: "function",
     function: {
+      name: "list_payments",
+      description:
+        "List company payments from the Payments page — what clients/companies owe. Defaults to outstanding (unpaid) payments only. Use this to find how much a client still owes, e.g. before sending a payment reminder.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description: "Filter by client / company name.",
+          },
+          include_paid: {
+            type: "boolean",
+            description: "Set true to also include payments already marked paid.",
+          },
+        },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "create_invoice",
       description:
         "Create and save a new invoice from details the user dictates, then show it to them for review. Use for requests like 'create an invoice for…'. Each line item has a service description and a unit price; quantity defaults to 1. The saved invoice is shown to the user automatically. This does NOT email anything — emailing is a separate, user-confirmed step (prepare_invoice_email).",
@@ -1153,6 +1175,31 @@ export async function executeTool(
       };
     }
 
+    case "list_payments": {
+      let q = supabase
+        .from("company_payments")
+        .select("company_name, price_lkr, status, is_paid")
+        .order("created_at", { ascending: false })
+        .limit(25);
+      if (!args.include_paid) q = q.eq("is_paid", false);
+      if (args.query) {
+        q = q.ilike("company_name", `%${String(args.query)}%`);
+      }
+      const { data } = await q;
+      return {
+        content: {
+          payments: (data ?? []).map((p) => ({
+            company: p.company_name,
+            amount: Number(p.price_lkr),
+            currency: "LKR",
+            status: p.status,
+            paid: p.is_paid,
+          })),
+        },
+        event: { kind: "read", label: "Looked up payments", href: "/payments" },
+      };
+    }
+
     case "create_invoice": {
       const company = String(args.company_name ?? "").trim();
       if (!company)
@@ -1276,30 +1323,30 @@ export async function executeTool(
 
       const message = String(args.message ?? "").trim() || undefined;
       const number = String(args.invoice_number ?? "").trim();
-      let query = supabase
-        .from("invoices")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .limit(1);
+      // Compare invoice numbers by digits only, ignoring '#' and leading zeros,
+      // so a match is exact ("206" === "#00206") and a stray value can't
+      // silently grab a different invoice.
+      const normalizeNo = (s: string) => s.replace(/\D/g, "").replace(/^0+/, "");
+      let row: Database["public"]["Tables"]["invoices"]["Row"] | undefined;
       if (number) {
-        const term = `%${number.replace(/^#/, "")}%`;
-        query = supabase
+        const want = normalizeNo(number);
+        const { data } = await supabase
           .from("invoices")
           .select("*")
-          .ilike("invoice_number", term)
           .order("created_at", { ascending: false })
-          .limit(1);
+          .limit(50);
+        row = (data ?? []).find((r) => normalizeNo(r.invoice_number) === want);
       } else {
-        query = supabase
+        // No number given — use the most recent invoice this user created
+        // (i.e. the one they just made).
+        const { data } = await supabase
           .from("invoices")
           .select("*")
           .eq("created_by", ctx.userId)
           .order("created_at", { ascending: false })
           .limit(1);
+        row = data?.[0];
       }
-
-      const { data } = await query;
-      const row = data?.[0];
       if (!row)
         return {
           content: {

@@ -243,7 +243,7 @@ export function TeamView({
       )}
 
       {/* Members */}
-      <div className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-[var(--shadow-card)]">
+      <div className="rounded-2xl border border-slate-200/80 bg-white shadow-[var(--shadow-card)]">
         <div className="border-b border-slate-100 px-5 py-3.5">
           <h2 className="text-sm font-semibold text-slate-900">
             Members ({members.length})

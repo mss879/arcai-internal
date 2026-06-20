@@ -72,11 +72,11 @@ export function ProjectsView({
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {projects.map((p) => {
-            const paid = (p.payments ?? [])
-              .filter((x) => x.status === "paid")
-              .reduce((s, x) => s + Number(x.amount), 0);
-            const pct = p.budget
-              ? Math.min(100, Math.round((paid / Number(p.budget)) * 100))
+            const totalValue = Number(p.total_value) || 0;
+            const deposit = Number(p.deposit_paid) || 0;
+            const balance = Math.max(0, totalValue - deposit);
+            const pct = totalValue
+              ? Math.min(100, Math.round((deposit / totalValue) * 100))
               : 0;
             return (
               <div
@@ -127,27 +127,46 @@ export function ProjectsView({
                 </Link>
 
                 <div className="mt-4">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="inline-flex items-center gap-1.5 text-slate-500">
-                      <Wallet className="h-4 w-4 text-slate-400" />
-                      {formatCurrency(paid, p.currency)}
-                    </span>
-                    {p.budget ? (
-                      <span className="text-xs text-slate-400">
-                        of {formatCurrency(Number(p.budget), p.currency)}
+                  <div className="flex items-end justify-between gap-2 text-sm">
+                    <div className="min-w-0">
+                      <p className="text-[11px] font-medium uppercase tracking-wide text-slate-400">
+                        Deposit paid
+                      </p>
+                      <span className="inline-flex items-center gap-1.5 font-semibold text-slate-900">
+                        <Wallet className="h-4 w-4 text-emerald-500" />
+                        {formatCurrency(deposit, p.currency)}
                       </span>
-                    ) : null}
-                  </div>
-                  {p.budget ? (
-                    <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-100">
-                      <div
-                        className={cn(
-                          "h-full rounded-full transition-all",
-                          pct >= 100 ? "bg-emerald-500" : "bg-primary-500",
-                        )}
-                        style={{ width: `${pct}%` }}
-                      />
                     </div>
+                    <div className="text-right">
+                      <p className="text-[11px] font-medium uppercase tracking-wide text-slate-400">
+                        Balance due
+                      </p>
+                      <span
+                        className={cn(
+                          "font-semibold",
+                          balance > 0 ? "text-amber-600" : "text-emerald-600",
+                        )}
+                      >
+                        {formatCurrency(balance, p.currency)}
+                      </span>
+                    </div>
+                  </div>
+                  {totalValue ? (
+                    <>
+                      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-100">
+                        <div
+                          className={cn(
+                            "h-full rounded-full transition-all",
+                            pct >= 100 ? "bg-emerald-500" : "bg-primary-500",
+                          )}
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                      <p className="mt-1.5 text-xs text-slate-400">
+                        {formatCurrency(deposit, p.currency)} of{" "}
+                        {formatCurrency(totalValue, p.currency)} total
+                      </p>
+                    </>
                   ) : null}
                 </div>
               </div>

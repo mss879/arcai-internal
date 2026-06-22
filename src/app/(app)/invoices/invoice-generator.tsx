@@ -19,6 +19,7 @@ import {
 } from "@/lib/invoice";
 
 import { saveInvoice } from "./actions";
+import { downloadInvoicePdf } from "./download-pdf";
 
 const fieldCls =
   "w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm transition-colors placeholder:text-slate-400 focus:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-100";
@@ -43,12 +44,12 @@ export function InvoiceGenerator() {
   const router = useRouter();
   const [saving, setSaving] = React.useState(false);
 
-  // Save a snapshot to "Past invoices", then open the print/download dialog.
-  // Printing always proceeds even if saving fails — the download is the
+  // Save a snapshot to "Past invoices", then download the PDF straight away.
+  // The download always proceeds even if saving fails — getting the file is the
   // primary action; archiving it is the bonus.
   const handleDownload = async () => {
     setSaving(true);
-    const res = await saveInvoice({
+    const payload = {
       invoice_number: invoiceNumber,
       invoice_date: invoiceDate,
       bill_to_name: billToName,
@@ -62,15 +63,23 @@ export function InvoiceGenerator() {
       })),
       grand_total: grandTotal,
       due_today: dueTodayValue,
-    });
-    setSaving(false);
+    };
+    const res = await saveInvoice(payload);
     if (res.ok) {
       toast.success("Saved to Past invoices.");
       router.refresh();
     } else {
       toast.error(`Couldn't save: ${res.error}`);
     }
-    window.print();
+    try {
+      await downloadInvoicePdf(payload);
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't download the PDF.",
+      );
+    } finally {
+      setSaving(false);
+    }
   };
 
   const updateItem = (id: string, patch: Partial<InvoiceLineItem>) =>

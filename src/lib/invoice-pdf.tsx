@@ -90,8 +90,10 @@ const LINE_SOFT = "#e5e5e5";
 
 const styles = StyleSheet.create({
   page: {
-    paddingHorizontal: 46,
-    paddingVertical: 48,
+    // Tight side margins so the invoice fills the A4 width — just a small gap
+    // from the edge rather than the wide borders the old print output had.
+    paddingHorizontal: 30,
+    paddingVertical: 38,
     fontSize: 9,
     fontFamily: "Helvetica",
     color: BODY,
@@ -129,11 +131,12 @@ const styles = StyleSheet.create({
   bCell: { paddingHorizontal: 8, paddingVertical: 11 },
   vLine: { borderLeftWidth: 1, borderLeftColor: LINE },
   vSoft: { borderLeftWidth: 1, borderLeftColor: LINE_SOFT },
-  cItem: { width: "17%" },
-  cDesc: { width: "44%" },
+  // Give RATE and TOTAL enough room that "Rs. 72,000" stays on one line.
+  cItem: { width: "16%" },
+  cDesc: { width: "41%" },
   cQty: { width: "10%" },
-  cRate: { width: "14%" },
-  cTotal: { width: "15%" },
+  cRate: { width: "16%" },
+  cTotal: { width: "17%" },
   center: { textAlign: "center" },
   right: { textAlign: "right" },
   totals: { marginTop: 20, alignItems: "flex-end" },

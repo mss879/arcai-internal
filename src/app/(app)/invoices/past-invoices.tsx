@@ -17,6 +17,7 @@ import { useRealtimeSync } from "@/hooks/use-realtime-sync";
 
 import { InvoiceDocument } from "./invoice-generator";
 import { deleteInvoice } from "./actions";
+import { downloadInvoicePdf } from "./download-pdf";
 import type { SavedInvoice } from "./invoices-view";
 
 export function PastInvoices({ invoices }: { invoices: SavedInvoice[] }) {
@@ -24,6 +25,7 @@ export function PastInvoices({ invoices }: { invoices: SavedInvoice[] }) {
   const router = useRouter();
   const [viewing, setViewing] = React.useState<SavedInvoice | null>(null);
   const [toDelete, setToDelete] = React.useState<SavedInvoice | null>(null);
+  const [downloading, setDownloading] = React.useState(false);
 
   if (invoices.length === 0) {
     return (
@@ -43,6 +45,33 @@ export function PastInvoices({ invoices }: { invoices: SavedInvoice[] }) {
       router.refresh();
     } else {
       toast.error(res.error);
+    }
+  };
+
+  const handleDownload = async (inv: SavedInvoice) => {
+    setDownloading(true);
+    try {
+      await downloadInvoicePdf({
+        invoice_number: inv.invoice_number,
+        invoice_date: inv.invoice_date,
+        bill_to_name: inv.bill_to_name,
+        bill_to_details: inv.bill_to_details || "",
+        items: (inv.items ?? []).map((it) => ({
+          item: it.item ?? "",
+          description: it.description ?? "",
+          qty: it.qty ?? "",
+          rate: it.rate ?? "",
+          total: Number(it.total ?? 0),
+        })),
+        grand_total: Number(inv.grand_total),
+        due_today: Number(inv.due_today),
+      });
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't download the PDF.",
+      );
+    } finally {
+      setDownloading(false);
     }
   };
 
@@ -127,7 +156,10 @@ export function PastInvoices({ invoices }: { invoices: SavedInvoice[] }) {
         {viewing && (
           <div className="space-y-4">
             <div className="no-print flex justify-end">
-              <Button onClick={() => window.print()}>
+              <Button
+                onClick={() => handleDownload(viewing)}
+                loading={downloading}
+              >
                 <Download className="h-4 w-4" />
                 Download PDF
               </Button>

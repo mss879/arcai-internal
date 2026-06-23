@@ -46,6 +46,29 @@ export function ProjectsView({
   const [editing, setEditing] = React.useState<Project | null>(null);
   const [toDelete, setToDelete] = React.useState<Project | null>(null);
 
+  const activeProjects = projects.filter((p) => p.status === "active");
+  const activeCount = activeProjects.length;
+
+  const getSumByCurrency = (projectList: typeof projects) => {
+    const sums: Record<string, number> = {};
+    projectList.forEach((p) => {
+      const val = Number(p.total_value) || 0;
+      const curr = p.currency || "LKR";
+      sums[curr] = (sums[curr] || 0) + val;
+    });
+    return sums;
+  };
+
+  const totalSums = getSumByCurrency(projects);
+
+  const formatSums = (sums: Record<string, number>) => {
+    const entries = Object.entries(sums);
+    if (entries.length === 0) return formatCurrency(0, "LKR");
+    return entries
+      .map(([curr, val]) => formatCurrency(val, curr))
+      .join(" + ");
+  };
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -57,6 +80,32 @@ export function ProjectsView({
           </Button>
         }
       />
+
+      {projects.length > 0 && (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="animate-continuous-float" style={{ animationDelay: "0ms" }}>
+            <div className="group rounded-2xl border border-white/30 bg-gradient-to-br from-white/60 to-white/25 p-5 shadow-sm backdrop-blur-xl transition-all duration-300 ease-out hover:-translate-y-1 hover:scale-[1.01] hover:from-white/75 hover:to-white/40 hover:border-primary-400 hover:shadow-md">
+              <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                Active Projects
+              </p>
+              <p className="mt-2 text-3xl font-extrabold text-slate-800 tracking-tight">
+                {activeCount}
+              </p>
+            </div>
+          </div>
+
+          <div className="animate-continuous-float" style={{ animationDelay: "150ms" }}>
+            <div className="group rounded-2xl border border-white/30 bg-gradient-to-br from-white/60 to-white/25 p-5 shadow-sm backdrop-blur-xl transition-all duration-300 ease-out hover:-translate-y-1 hover:scale-[1.01] hover:from-white/75 hover:to-white/40 hover:border-emerald-400 hover:shadow-md">
+              <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                Total Value
+              </p>
+              <p className="mt-2 text-3xl font-extrabold text-slate-800 tracking-tight">
+                {formatSums(totalSums)}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {projects.length === 0 ? (
         <EmptyState

@@ -130,6 +130,8 @@ export type Database = {
           status: TodoStatus;
           due_date: Timestamp | null;
           assigned_to: UUID | null;
+          project_id: UUID | null;
+          position: number;
           created_by: UUID | null;
           completed_at: Timestamp | null;
           created_at: Timestamp;
@@ -142,11 +144,33 @@ export type Database = {
           status?: TodoStatus;
           due_date?: Timestamp | null;
           assigned_to?: UUID | null;
+          project_id?: UUID | null;
+          position?: number;
           created_by?: UUID | null;
           completed_at?: Timestamp | null;
           created_at?: Timestamp;
         };
         Update: Partial<Database["public"]["Tables"]["todos"]["Insert"]>;
+        Relationships: [];
+      };
+      todo_subtasks: {
+        Row: {
+          id: UUID;
+          todo_id: UUID;
+          title: string;
+          is_done: boolean;
+          position: number;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          todo_id: UUID;
+          title: string;
+          is_done?: boolean;
+          position?: number;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["todo_subtasks"]["Insert"]>;
         Relationships: [];
       };
       todo_mentions: {
@@ -247,6 +271,32 @@ export type Database = {
           created_at?: Timestamp;
         };
         Update: Partial<Database["public"]["Tables"]["invoices"]["Insert"]>;
+        Relationships: [];
+      };
+      proposals: {
+        Row: {
+          id: UUID;
+          client_name: string;
+          project_name: string;
+          proposal_date: string;
+          selection: Record<string, unknown>;
+          content: Record<string, unknown>;
+          grand_total: number;
+          created_by: UUID | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          client_name?: string;
+          project_name?: string;
+          proposal_date: string;
+          selection?: Record<string, unknown>;
+          content?: Record<string, unknown>;
+          grand_total?: number;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["proposals"]["Insert"]>;
         Relationships: [];
       };
       payments: {

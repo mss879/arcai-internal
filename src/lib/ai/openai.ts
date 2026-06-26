@@ -94,6 +94,41 @@ export async function openaiChat(
   return message as ChatMessage;
 }
 
+/**
+ * One round-trip that asks the model for a strict JSON object back.
+ * Used by the proposal generator. Returns the raw JSON string (the caller
+ * parses + validates it). Defaults to a little creative temperature since
+ * this writes prose, unlike the deterministic assistant above.
+ */
+export async function openaiChatJSON(
+  messages: ChatMessage[],
+  opts?: { temperature?: number; model?: string },
+): Promise<string> {
+  const res = await fetch(`${BASE_URL}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey()}`,
+    },
+    body: JSON.stringify({
+      model: opts?.model || AI_MODELS.chat,
+      messages,
+      temperature: opts?.temperature ?? 0.6,
+      response_format: { type: "json_object" },
+    }),
+  });
+
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(`OpenAI chat failed (${res.status}): ${detail}`);
+  }
+
+  const json = await res.json();
+  const content = json?.choices?.[0]?.message?.content;
+  if (!content) throw new Error("OpenAI returned no content.");
+  return content as string;
+}
+
 // ---- Transcription (speech -> text) --------------------------------------
 
 export async function openaiTranscribe(

@@ -7,6 +7,12 @@ import { sendPushToUser } from "@/lib/push";
 import { extractMentions } from "@/lib/utils";
 import type { ActionResult, TodoPriority, TodoStatus } from "@/lib/types";
 
+export type SubtaskInput = {
+  id?: string;
+  title: string;
+  is_done?: boolean;
+};
+
 export type TodoInput = {
   id?: string;
   title: string;
@@ -15,6 +21,8 @@ export type TodoInput = {
   status?: TodoStatus;
   due_date?: string | null;
   assigned_to?: string | null;
+  project_id?: string | null;
+  subtasks?: SubtaskInput[];
 };
 
 export async function saveTodo(input: TodoInput): Promise<ActionResult> {
@@ -33,6 +41,7 @@ export async function saveTodo(input: TodoInput): Promise<ActionResult> {
     status,
     due_date: input.due_date || null,
     assigned_to: input.assigned_to || null,
+    project_id: input.project_id || null,
     completed_at: status === "done" ? new Date().toISOString() : null,
   };
 
@@ -55,6 +64,46 @@ export async function saveTodo(input: TodoInput): Promise<ActionResult> {
   }
 
   if (!todoId) return { ok: false, error: "Could not save task." };
+
+  // --- Sync subtasks (delete removed, update existing, insert new) --
+  if (input.subtasks) {
+    const clean = input.subtasks
+      .map((s) => ({ ...s, title: s.title.trim() }))
+      .filter((s) => s.title.length > 0);
+
+    const { data: existing } = await supabase
+      .from("todo_subtasks")
+      .select("id")
+      .eq("todo_id", todoId);
+    const keepIds = new Set(clean.filter((s) => s.id).map((s) => s.id!));
+    const removeIds = (existing ?? [])
+      .map((s) => s.id)
+      .filter((id) => !keepIds.has(id));
+    if (removeIds.length) {
+      await supabase.from("todo_subtasks").delete().in("id", removeIds);
+    }
+
+    const toUpdate = clean.filter((s) => s.id);
+    const toInsert = clean.filter((s) => !s.id);
+    await Promise.all([
+      ...toUpdate.map((s, i) =>
+        supabase
+          .from("todo_subtasks")
+          .update({ title: s.title, is_done: !!s.is_done, position: i })
+          .eq("id", s.id!),
+      ),
+      toInsert.length
+        ? supabase.from("todo_subtasks").insert(
+            toInsert.map((s, i) => ({
+              todo_id: todoId!,
+              title: s.title,
+              is_done: !!s.is_done,
+              position: toUpdate.length + i,
+            })),
+          )
+        : Promise.resolve(),
+    ]);
+  }
 
   // --- Resolve @mentions -> profiles -------------------------------
   const usernames = extractMentions(input.description ?? "");
@@ -151,5 +200,47 @@ export async function deleteTodo(id: string): Promise<ActionResult> {
   if (error) return { ok: false, error: error.message };
   revalidatePath("/todos");
   revalidatePath("/dashboard");
+  return { ok: true };
+}
+
+/**
+ * Persist the board after a drag: each affected card gets its new column
+ * (status) and ordering (position). Moving in/out of "done" keeps
+ * completed_at in sync.
+ */
+export async function updateTodoPositions(
+  updates: { id: string; status: TodoStatus; position: number }[],
+): Promise<ActionResult> {
+  const supabase = await createClient();
+  const results = await Promise.all(
+    updates.map((u) =>
+      supabase
+        .from("todos")
+        .update({
+          status: u.status,
+          position: u.position,
+          completed_at: u.status === "done" ? new Date().toISOString() : null,
+        })
+        .eq("id", u.id),
+    ),
+  );
+  const failed = results.find((r) => r.error);
+  if (failed?.error) return { ok: false, error: failed.error.message };
+  revalidatePath("/todos");
+  revalidatePath("/dashboard");
+  return { ok: true };
+}
+
+export async function setSubtaskDone(
+  id: string,
+  isDone: boolean,
+): Promise<ActionResult> {
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("todo_subtasks")
+    .update({ is_done: isDone })
+    .eq("id", id);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath("/todos");
   return { ok: true };
 }

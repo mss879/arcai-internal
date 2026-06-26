@@ -7,6 +7,7 @@ import {
   KanbanSquare,
   LayoutDashboard,
   ListChecks,
+  ScrollText,
   ShieldCheck,
   Users,
   type LucideIcon,
@@ -27,6 +28,7 @@ export const NAV: NavItem[] = [
   { label: "Meetings", href: "/meetings", icon: CalendarClock },
   { label: "Payments", href: "/payments", icon: CreditCard },
   { label: "Invoices", href: "/invoices", icon: FileText },
+  { label: "Proposals", href: "/proposals", icon: ScrollText },
   { label: "Resources", href: "/resources", icon: FolderOpen },
 ];
 

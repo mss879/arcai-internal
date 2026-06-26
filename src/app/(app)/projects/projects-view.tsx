@@ -4,7 +4,9 @@ import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+import { format } from "date-fns";
 import {
+  ChevronDown,
   FolderKanban,
   MoreVertical,
   Pencil,
@@ -69,6 +71,133 @@ export function ProjectsView({
       .join(" + ");
   };
 
+  // Group projects by the month they were added (newest month first).
+  // `projects` already arrives ordered by created_at descending.
+  const monthGroups = React.useMemo(() => {
+    const groups: { key: string; label: string; projects: ProjectCard[] }[] = [];
+    const index = new Map<string, number>();
+    for (const p of projects) {
+      const date = p.created_at ? new Date(p.created_at) : new Date();
+      const key = format(date, "yyyy-MM");
+      const label = format(date, "MMMM yyyy");
+      let i = index.get(key);
+      if (i === undefined) {
+        i = groups.length;
+        index.set(key, i);
+        groups.push({ key, label, projects: [] });
+      }
+      groups[i].projects.push(p);
+    }
+    return groups;
+  }, [projects]);
+
+  // Most recent month open by default; once a newer month appears it opens at the top.
+  const [collapsed, setCollapsed] = React.useState<Record<string, boolean>>({});
+  const isOpen = (key: string, isFirst: boolean) =>
+    collapsed[key] === undefined ? isFirst : !collapsed[key];
+  const toggleMonth = (key: string, isFirst: boolean) =>
+    setCollapsed((prev) => ({ ...prev, [key]: isOpen(key, isFirst) }));
+
+  const renderCard = (p: ProjectCard) => {
+    const totalValue = Number(p.total_value) || 0;
+    const deposit = Number(p.deposit_paid) || 0;
+    const balance = Math.max(0, totalValue - deposit);
+    const pct = totalValue
+      ? Math.min(100, Math.round((deposit / totalValue) * 100))
+      : 0;
+    return (
+      <div
+        key={p.id}
+        className="group relative flex flex-col rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[var(--shadow-card)] transition hover:shadow-[var(--shadow-lift)]"
+      >
+        <div className="flex items-start justify-between gap-2">
+          <Badge className={PROJECT_STATUS_META[p.status].badge}>
+            {PROJECT_STATUS_META[p.status].label}
+          </Badge>
+          <Dropdown
+            trigger={
+              <button className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700">
+                <MoreVertical className="h-4 w-4" />
+              </button>
+            }
+          >
+            <DropdownItem
+              icon={<Pencil className="h-4 w-4" />}
+              onClick={() => setEditing(p)}
+            >
+              Edit
+            </DropdownItem>
+            <DropdownItem
+              destructive
+              icon={<Trash2 className="h-4 w-4" />}
+              onClick={() => setToDelete(p)}
+            >
+              Delete
+            </DropdownItem>
+          </Dropdown>
+        </div>
+
+        <Link href={`/projects/${p.id}`} className="mt-3 flex-1">
+          <h3 className="text-base font-semibold text-slate-900 group-hover:text-primary-700">
+            {p.name}
+          </h3>
+          {p.client && (
+            <p className="mt-0.5 text-sm text-slate-400">{p.client.name}</p>
+          )}
+          {p.description && (
+            <p className="mt-2 line-clamp-2 text-sm text-slate-500">
+              {p.description}
+            </p>
+          )}
+        </Link>
+
+        <div className="mt-4">
+          <div className="flex items-end justify-between gap-2 text-sm">
+            <div className="min-w-0">
+              <p className="text-[11px] font-medium uppercase tracking-wide text-slate-400">
+                Deposit paid
+              </p>
+              <span className="inline-flex items-center gap-1.5 font-semibold text-slate-900">
+                <Wallet className="h-4 w-4 text-emerald-500" />
+                {formatCurrency(deposit, p.currency)}
+              </span>
+            </div>
+            <div className="text-right">
+              <p className="text-[11px] font-medium uppercase tracking-wide text-slate-400">
+                Balance due
+              </p>
+              <span
+                className={cn(
+                  "font-semibold",
+                  balance > 0 ? "text-amber-600" : "text-emerald-600",
+                )}
+              >
+                {formatCurrency(balance, p.currency)}
+              </span>
+            </div>
+          </div>
+          {totalValue ? (
+            <>
+              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-100">
+                <div
+                  className={cn(
+                    "h-full rounded-full transition-all",
+                    pct >= 100 ? "bg-emerald-500" : "bg-primary-500",
+                  )}
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+              <p className="mt-1.5 text-xs text-slate-400">
+                {formatCurrency(deposit, p.currency)} of{" "}
+                {formatCurrency(totalValue, p.currency)} total
+              </p>
+            </>
+          ) : null}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -119,105 +248,40 @@ export function ProjectsView({
           }
         />
       ) : (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          {projects.map((p) => {
-            const totalValue = Number(p.total_value) || 0;
-            const deposit = Number(p.deposit_paid) || 0;
-            const balance = Math.max(0, totalValue - deposit);
-            const pct = totalValue
-              ? Math.min(100, Math.round((deposit / totalValue) * 100))
-              : 0;
+        <div className="space-y-4">
+          {monthGroups.map((group, gi) => {
+            const open = isOpen(group.key, gi === 0);
             return (
               <div
-                key={p.id}
-                className="group relative flex flex-col rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[var(--shadow-card)] transition hover:shadow-[var(--shadow-lift)]"
+                key={group.key}
+                className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white/60 shadow-[var(--shadow-card)] backdrop-blur-sm"
               >
-                <div className="flex items-start justify-between gap-2">
-                  <Badge className={PROJECT_STATUS_META[p.status].badge}>
-                    {PROJECT_STATUS_META[p.status].label}
-                  </Badge>
-                  <Dropdown
-                    trigger={
-                      <button className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700">
-                        <MoreVertical className="h-4 w-4" />
-                      </button>
-                    }
-                  >
-                    <DropdownItem
-                      icon={<Pencil className="h-4 w-4" />}
-                      onClick={() => setEditing(p)}
-                    >
-                      Edit
-                    </DropdownItem>
-                    <DropdownItem
-                      destructive
-                      icon={<Trash2 className="h-4 w-4" />}
-                      onClick={() => setToDelete(p)}
-                    >
-                      Delete
-                    </DropdownItem>
-                  </Dropdown>
-                </div>
-
-                <Link href={`/projects/${p.id}`} className="mt-3 flex-1">
-                  <h3 className="text-base font-semibold text-slate-900 group-hover:text-primary-700">
-                    {p.name}
-                  </h3>
-                  {p.client && (
-                    <p className="mt-0.5 text-sm text-slate-400">
-                      {p.client.name}
-                    </p>
-                  )}
-                  {p.description && (
-                    <p className="mt-2 line-clamp-2 text-sm text-slate-500">
-                      {p.description}
-                    </p>
-                  )}
-                </Link>
-
-                <div className="mt-4">
-                  <div className="flex items-end justify-between gap-2 text-sm">
-                    <div className="min-w-0">
-                      <p className="text-[11px] font-medium uppercase tracking-wide text-slate-400">
-                        Deposit paid
-                      </p>
-                      <span className="inline-flex items-center gap-1.5 font-semibold text-slate-900">
-                        <Wallet className="h-4 w-4 text-emerald-500" />
-                        {formatCurrency(deposit, p.currency)}
-                      </span>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-[11px] font-medium uppercase tracking-wide text-slate-400">
-                        Balance due
-                      </p>
-                      <span
-                        className={cn(
-                          "font-semibold",
-                          balance > 0 ? "text-amber-600" : "text-emerald-600",
-                        )}
-                      >
-                        {formatCurrency(balance, p.currency)}
-                      </span>
-                    </div>
+                <button
+                  type="button"
+                  onClick={() => toggleMonth(group.key, gi === 0)}
+                  aria-expanded={open}
+                  className="flex w-full items-center justify-between gap-3 px-5 py-4 text-left transition hover:bg-slate-50"
+                >
+                  <div className="flex items-center gap-3">
+                    <h2 className="text-base font-semibold text-slate-900">
+                      {group.label}
+                    </h2>
+                    <Badge className="bg-slate-100 text-slate-600">
+                      {group.projects.length}
+                    </Badge>
                   </div>
-                  {totalValue ? (
-                    <>
-                      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-100">
-                        <div
-                          className={cn(
-                            "h-full rounded-full transition-all",
-                            pct >= 100 ? "bg-emerald-500" : "bg-primary-500",
-                          )}
-                          style={{ width: `${pct}%` }}
-                        />
-                      </div>
-                      <p className="mt-1.5 text-xs text-slate-400">
-                        {formatCurrency(deposit, p.currency)} of{" "}
-                        {formatCurrency(totalValue, p.currency)} total
-                      </p>
-                    </>
-                  ) : null}
-                </div>
+                  <ChevronDown
+                    className={cn(
+                      "h-5 w-5 shrink-0 text-slate-400 transition-transform duration-200",
+                      open && "rotate-180",
+                    )}
+                  />
+                </button>
+                {open && (
+                  <div className="grid grid-cols-1 gap-4 border-t border-slate-200/60 p-5 sm:grid-cols-2 xl:grid-cols-3">
+                    {group.projects.map((p) => renderCard(p))}
+                  </div>
+                )}
               </div>
             );
           })}

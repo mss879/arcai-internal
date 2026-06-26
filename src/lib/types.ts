@@ -1,4 +1,5 @@
 import type { Database } from "@/lib/database.types";
+import type { ProposalSelection, ProposalContent } from "@/lib/proposal";
 
 type Tables = Database["public"]["Tables"];
 
@@ -7,6 +8,7 @@ export type Invitation = Tables["invitations"]["Row"];
 export type Client = Tables["clients"]["Row"];
 export type Todo = Tables["todos"]["Row"];
 export type TodoMention = Tables["todo_mentions"]["Row"];
+export type TodoSubtask = Tables["todo_subtasks"]["Row"];
 export type Project = Tables["projects"]["Row"] & {
   total_value?: number;
   deposit_paid?: number;
@@ -23,6 +25,13 @@ export type ProjectDocumentRequest = {
   file_name: string | null;
   submitted_at: string | null;
   created_at: string;
+};
+export type Proposal = Omit<
+  Tables["proposals"]["Row"],
+  "selection" | "content"
+> & {
+  selection: ProposalSelection;
+  content: ProposalContent;
 };
 export type Payment = Tables["payments"]["Row"];
 export type CompanyPayment = Tables["company_payments"]["Row"];
@@ -54,6 +63,8 @@ export type TodoWithRelations = Todo & {
   assignee?: Pick<Profile, "id" | "full_name" | "username" | "avatar_url"> | null;
   creator?: Pick<Profile, "id" | "full_name" | "username" | "avatar_url"> | null;
   mentions?: Pick<Profile, "id" | "full_name" | "username" | "avatar_url">[];
+  project?: Pick<Project, "id" | "name"> | null;
+  subtasks?: TodoSubtask[];
 };
 
 export type LeadWithAssignee = Lead & {

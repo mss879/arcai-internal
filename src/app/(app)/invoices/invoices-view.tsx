@@ -50,7 +50,7 @@ export function InvoicesView({
       </div>
 
       {tab === "create" ? (
-        <InvoiceGenerator />
+        <InvoiceGenerator pastInvoices={pastInvoices} />
       ) : (
         <PastInvoices invoices={pastInvoices} />
       )}

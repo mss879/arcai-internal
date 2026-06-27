@@ -251,6 +251,7 @@ export type Database = {
           items: InvoiceItem[];
           grand_total: number;
           due_today: number;
+          stamp: string | null;
           recipient_email: string | null;
           sent_at: Timestamp | null;
           created_by: UUID | null;
@@ -265,6 +266,7 @@ export type Database = {
           items?: InvoiceItem[];
           grand_total?: number;
           due_today?: number;
+          stamp?: string | null;
           recipient_email?: string | null;
           sent_at?: Timestamp | null;
           created_by?: UUID | null;

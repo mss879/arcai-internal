@@ -8,6 +8,7 @@ export type InvoicePdfPayload = {
   items: InvoiceItem[];
   grand_total: number;
   due_today: number;
+  stamp?: string | null;
 };
 
 /**

@@ -77,6 +77,7 @@ export async function POST(request: Request) {
       items: invoice.items ?? [],
       grand_total: Number(invoice.grand_total),
       due_today: Number(invoice.due_today),
+      stamp: invoice.stamp ?? null,
     },
   });
 

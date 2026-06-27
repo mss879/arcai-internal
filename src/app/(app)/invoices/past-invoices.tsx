@@ -11,8 +11,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Modal } from "@/components/ui/modal";
 import { formatCurrency } from "@/lib/utils";
-import type { InvoiceItem } from "@/lib/database.types";
-import type { InvoiceLineItem } from "@/lib/invoice";
+import { lineItemsFromSaved } from "@/lib/invoice";
 import { useRealtimeSync } from "@/hooks/use-realtime-sync";
 
 import { InvoiceDocument } from "./invoice-generator";
@@ -65,6 +64,7 @@ export function PastInvoices({ invoices }: { invoices: SavedInvoice[] }) {
         })),
         grand_total: Number(inv.grand_total),
         due_today: Number(inv.due_today),
+        stamp: inv.stamp ?? null,
       });
     } catch (err) {
       toast.error(
@@ -172,9 +172,10 @@ export function PastInvoices({ invoices }: { invoices: SavedInvoice[] }) {
                 billToLines={(viewing.bill_to_details || "")
                   .split("\n")
                   .filter(Boolean)}
-                items={toLineItems(viewing.items)}
+                items={lineItemsFromSaved(viewing.items)}
                 grandTotal={Number(viewing.grand_total)}
                 dueToday={Number(viewing.due_today)}
+                stamp={viewing.stamp}
               />
             </div>
           </div>
@@ -203,21 +204,4 @@ function fmtDate(d: string): string {
   } catch {
     return d;
   }
-}
-
-/**
- * Rebuild the generator's line-item shape from a saved snapshot so we can
- * re-render the exact same printable document. The stored `total` is treated
- * as the authoritative figure (totalManual), so the PDF matches what was sent.
- */
-function toLineItems(items: InvoiceItem[]): InvoiceLineItem[] {
-  return (items ?? []).map((it, i) => ({
-    id: String(i),
-    item: it.item ?? "",
-    description: it.description ?? "",
-    qty: it.qty ?? "",
-    rate: it.rate ?? "",
-    totalManual: true,
-    total: String(it.total ?? 0),
-  }));
 }

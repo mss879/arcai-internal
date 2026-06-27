@@ -45,6 +45,8 @@ export type InvoiceEmailData = {
   }[];
   grand_total: number;
   due_today: number;
+  /** "deposit_paid" | "payment_received" — null/absent means no stamp. */
+  stamp?: string | null;
 };
 
 function money(amount: number): string {
@@ -80,6 +82,30 @@ function getSignature(): string | null {
     signatureUri = null;
   }
   return signatureUri;
+}
+
+// Map a stamp value to its PNG in /public. Kept in sync with stampImage()
+// in @/lib/invoice (that helper returns browser paths; here we need filenames
+// to read off disk and inline as data URIs).
+const STAMP_FILES: Record<string, string> = {
+  deposit_paid: "Deposit-paid.png",
+  payment_received: "payment-recieved.png",
+};
+const stampUris = new Map<string, string | null>();
+function getStamp(stamp: string | null | undefined): string | null {
+  if (!stamp) return null;
+  const file = STAMP_FILES[stamp];
+  if (!file) return null;
+  if (stampUris.has(file)) return stampUris.get(file) ?? null;
+  let uri: string | null;
+  try {
+    const p = path.join(process.cwd(), "public", file);
+    uri = `data:image/png;base64,${fs.readFileSync(p).toString("base64")}`;
+  } catch {
+    uri = null;
+  }
+  stampUris.set(file, uri);
+  return uri;
 }
 
 const INK = "#171717";
@@ -140,6 +166,17 @@ const styles = StyleSheet.create({
   center: { textAlign: "center" },
   right: { textAlign: "right" },
   totals: { marginTop: 20, alignItems: "flex-end" },
+  // Big rubber "paid" stamp, centred over the whole page like a real stamp.
+  stampOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  stamp: { width: 360, objectFit: "contain" },
   totalLine: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -159,6 +196,7 @@ const styles = StyleSheet.create({
 
 function InvoicePdfDoc({ invoice }: { invoice: InvoiceEmailData }) {
   const sig = getSignature();
+  const stamp = getStamp(invoice.stamp);
   const billLines = (invoice.bill_to_details || "")
     .split("\n")
     .map((l) => l.trim())
@@ -304,6 +342,14 @@ function InvoicePdfDoc({ invoice }: { invoice: InvoiceEmailData }) {
             </View>
           </View>
         </View>
+
+        {/* Paid stamp — centred over the whole page, painted last so it sits on top */}
+        {stamp ? (
+          <View style={styles.stampOverlay}>
+            {/* eslint-disable-next-line jsx-a11y/alt-text -- react-pdf Image has no alt */}
+            <Image src={stamp} style={styles.stamp} />
+          </View>
+        ) : null}
       </Page>
     </Document>
   );

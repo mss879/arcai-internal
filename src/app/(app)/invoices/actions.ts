@@ -14,6 +14,7 @@ export type SaveInvoiceInput = {
   items: InvoiceItem[];
   grand_total: number;
   due_today: number;
+  stamp?: string | null;
 };
 
 export async function saveInvoice(
@@ -32,17 +33,36 @@ export async function saveInvoice(
     return { ok: false, error: "Invoice date is required." };
   }
 
-  const { error } = await supabase.from("invoices").insert({
-    invoice_number: input.invoice_number.trim(),
-    invoice_date: input.invoice_date,
-    bill_to_name: input.bill_to_name.trim(),
-    bill_to_details: input.bill_to_details,
-    items: input.items,
-    grand_total: input.grand_total,
-    due_today: input.due_today,
-  });
+  const { data: inserted, error } = await supabase
+    .from("invoices")
+    .insert({
+      invoice_number: input.invoice_number.trim(),
+      invoice_date: input.invoice_date,
+      bill_to_name: input.bill_to_name.trim(),
+      bill_to_details: input.bill_to_details,
+      items: input.items,
+      grand_total: input.grand_total,
+      due_today: input.due_today,
+    })
+    .select("id")
+    .single();
 
   if (error) return { ok: false, error: error.message };
+
+  // Best-effort: persist the "paid" stamp so the saved invoice re-downloads
+  // with it. Kept separate from the insert so saving still works if the
+  // 0024 migration (which adds the `stamp` column) hasn't been applied yet.
+  if (input.stamp && inserted?.id) {
+    try {
+      await supabase
+        .from("invoices")
+        .update({ stamp: input.stamp })
+        .eq("id", inserted.id);
+    } catch {
+      // ignore — stamping the saved copy is non-critical
+    }
+  }
+
   revalidatePath("/invoices");
   return { ok: true };
 }

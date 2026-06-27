@@ -12,20 +12,29 @@ import {
   INVOICE_COMPANY,
   INVOICE_BANK,
   INVOICE_SIGNOFF,
+  INVOICE_STAMP_OPTIONS,
   emptyLineItem,
+  lineItemsFromSaved,
   lineItemTotal,
   parseAmount,
+  stampImage,
   type InvoiceLineItem,
+  type InvoiceStamp,
 } from "@/lib/invoice";
 
 import { saveInvoice } from "./actions";
 import { downloadInvoicePdf } from "./download-pdf";
+import type { SavedInvoice } from "./invoices-view";
 
 const fieldCls =
   "w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm transition-colors placeholder:text-slate-400 focus:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-100";
 const labelCls = "block text-xs font-semibold text-slate-600 mb-1";
 
-export function InvoiceGenerator() {
+export function InvoiceGenerator({
+  pastInvoices = [],
+}: {
+  pastInvoices?: SavedInvoice[];
+}) {
   const [invoiceNumber, setInvoiceNumber] = React.useState("#00200");
   const [invoiceDate, setInvoiceDate] = React.useState(
     format(new Date(), "yyyy-MM-dd"),
@@ -36,6 +45,35 @@ export function InvoiceGenerator() {
     emptyLineItem(),
   ]);
   const [dueToday, setDueToday] = React.useState(""); // "" = same as total
+  const [stamp, setStamp] = React.useState<"none" | InvoiceStamp>("none");
+  // Which past invoice the form was loaded from (controls the picker only).
+  const [loadedId, setLoadedId] = React.useState("");
+
+  // Load a saved invoice's details into the form so the user can re-issue it
+  // (typically to slap a "Deposit paid" / "Payment received" stamp on it).
+  // Selecting the blank option resets to a fresh, empty invoice.
+  const loadPastInvoice = (id: string) => {
+    setLoadedId(id);
+    const inv = pastInvoices.find((p) => p.id === id);
+    if (!inv) {
+      setInvoiceNumber("#00200");
+      setInvoiceDate(format(new Date(), "yyyy-MM-dd"));
+      setBillToName("");
+      setBillToDetails("");
+      setItems([emptyLineItem()]);
+      setDueToday("");
+      setStamp("none");
+      return;
+    }
+    setInvoiceNumber(inv.invoice_number);
+    setInvoiceDate((inv.invoice_date || "").slice(0, 10));
+    setBillToName(inv.bill_to_name || "");
+    setBillToDetails(inv.bill_to_details || "");
+    const loaded = lineItemsFromSaved(inv.items ?? []);
+    setItems(loaded.length ? loaded : [emptyLineItem()]);
+    setDueToday(String(Number(inv.due_today)));
+    setStamp((inv.stamp as InvoiceStamp) || "none");
+  };
 
   const grandTotal = items.reduce((sum, l) => sum + lineItemTotal(l), 0);
   const dueTodayValue =
@@ -63,6 +101,7 @@ export function InvoiceGenerator() {
       })),
       grand_total: grandTotal,
       due_today: dueTodayValue,
+      stamp: stamp === "none" ? null : stamp,
     };
     const res = await saveInvoice(payload);
     if (res.ok) {
@@ -120,6 +159,31 @@ export function InvoiceGenerator() {
       <div className="grid gap-6 xl:grid-cols-[minmax(340px,400px)_1fr]">
         {/* ---------- FORM ---------- */}
         <div className="no-print space-y-5">
+          {pastInvoices.length > 0 && (
+            <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[var(--shadow-card)]">
+              <h2 className="mb-4 text-sm font-semibold text-slate-900">
+                Start from a past invoice
+              </h2>
+              <select
+                className={fieldCls}
+                value={loadedId}
+                onChange={(e) => loadPastInvoice(e.target.value)}
+              >
+                <option value="">New blank invoice</option>
+                {pastInvoices.map((inv) => (
+                  <option key={inv.id} value={inv.id}>
+                    {inv.invoice_number} — {inv.bill_to_name || "—"} (
+                    {formatCurrency(Number(inv.grand_total))})
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-[11px] text-slate-400">
+                Loads the invoice&rsquo;s details so you can add a Paid stamp
+                below and download it again.
+              </p>
+            </section>
+          )}
+
           <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[var(--shadow-card)]">
             <h2 className="mb-4 text-sm font-semibold text-slate-900">
               Invoice details
@@ -303,6 +367,27 @@ export function InvoiceGenerator() {
                   partial / deposit amount.
                 </p>
               </div>
+
+              <div>
+                <label className={labelCls}>Paid stamp</label>
+                <select
+                  className={fieldCls}
+                  value={stamp}
+                  onChange={(e) =>
+                    setStamp(e.target.value as "none" | InvoiceStamp)
+                  }
+                >
+                  {INVOICE_STAMP_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-[11px] text-slate-400">
+                  Stamps the invoice once the deposit is paid, or
+                  &ldquo;Payment received&rdquo; once it&rsquo;s settled in full.
+                </p>
+              </div>
             </div>
           </section>
         </div>
@@ -317,6 +402,7 @@ export function InvoiceGenerator() {
             items={items}
             grandTotal={grandTotal}
             dueToday={dueTodayValue}
+            stamp={stamp === "none" ? null : stamp}
           />
         </div>
       </div>
@@ -336,6 +422,7 @@ export function InvoiceDocument({
   items,
   grandTotal,
   dueToday,
+  stamp,
 }: {
   invoiceNumber: string;
   displayDate: string;
@@ -344,12 +431,26 @@ export function InvoiceDocument({
   items: InvoiceLineItem[];
   grandTotal: number;
   dueToday: number;
+  stamp?: string | null;
 }) {
+  const stampSrc = stampImage(stamp);
   return (
     <div
       id="invoice-print"
-      className="invoice-doc mx-auto w-[794px] max-w-full bg-white px-14 py-12 text-neutral-900 shadow-[var(--shadow-lift)] ring-1 ring-slate-200"
+      className="invoice-doc relative mx-auto w-[794px] max-w-full bg-white px-14 py-12 text-neutral-900 shadow-[var(--shadow-lift)] ring-1 ring-slate-200"
     >
+      {/* Paid stamp — big, centred over the whole page like a real rubber stamp */}
+      {stampSrc && (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={stampSrc}
+          alt=""
+          aria-hidden="true"
+          className="pointer-events-none absolute left-1/2 top-1/2 z-10 -translate-x-1/2 -translate-y-1/2 object-contain"
+          style={{ width: 480 }}
+        />
+      )}
+
       {/* Wordmark */}
       <h1 className="invoice-wordmark font-black text-neutral-900">INVOICE</h1>
 

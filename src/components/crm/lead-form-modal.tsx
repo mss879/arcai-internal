@@ -3,6 +3,7 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+import { Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select, Textarea } from "@/components/ui/input";
@@ -20,6 +21,7 @@ export function LeadFormModal({
   members,
   clients,
   lead,
+  onDelete,
 }: {
   open: boolean;
   onClose: () => void;
@@ -29,6 +31,7 @@ export function LeadFormModal({
   members: MemberLite[];
   clients: Pick<Client, "id" | "name" | "company">[];
   lead?: Lead | null;
+  onDelete?: () => void;
 }) {
   const router = useRouter();
   const [pending, startTransition] = React.useTransition();
@@ -89,6 +92,17 @@ export function LeadFormModal({
       size="lg"
       footer={
         <>
+          {lead && onDelete && (
+            <Button
+              variant="ghost"
+              onClick={onDelete}
+              disabled={pending}
+              className="mr-auto text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+            >
+              <Trash2 className="h-4 w-4" />
+              Delete
+            </Button>
+          )}
           <Button variant="outline" onClick={onClose} disabled={pending}>
             Cancel
           </Button>

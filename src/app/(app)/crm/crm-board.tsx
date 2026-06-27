@@ -359,6 +359,15 @@ export function CrmBoard({
           members={members}
           clients={clients}
           lead={leadModal.lead}
+          onDelete={
+            leadModal.lead
+              ? () => {
+                  const target = leadModal.lead;
+                  setLeadModal(null);
+                  setLeadToDelete(target);
+                }
+              : undefined
+          }
         />
       )}
 
@@ -395,6 +404,11 @@ export function CrmBoard({
         open={!!leadToDelete}
         onClose={() => setLeadToDelete(null)}
         title="Delete lead"
+        description={
+          leadToDelete
+            ? `Delete "${leadToDelete.title}"? This can't be undone.`
+            : undefined
+        }
         onConfirm={async () => {
           if (!leadToDelete) return;
           const res = await deleteLead(leadToDelete.id);

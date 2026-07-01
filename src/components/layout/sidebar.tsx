@@ -127,8 +127,15 @@ export function Sidebar({
         )}
       </div>
 
-      {/* Navigation menu */}
-      <nav className={cn("mt-8 flex-1 space-y-1.5 w-full", isCollapsed ? "px-0" : "")}>
+      {/* Navigation menu — scrolls independently so growing menus never push
+          the profile/logout footer off-screen. `min-h-0` lets this flex child
+          shrink below its content height so `overflow-y-auto` can engage. */}
+      <nav
+        className={cn(
+          "mt-8 min-h-0 flex-1 space-y-1.5 w-full overflow-y-auto overflow-x-hidden pb-2",
+          isCollapsed ? "px-0" : "",
+        )}
+      >
         {!isCollapsed ? (
           <p className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-wider text-white/40">
             Workspace

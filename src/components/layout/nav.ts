@@ -4,11 +4,13 @@ import {
   FileText,
   FolderKanban,
   FolderOpen,
+  Globe,
   KanbanSquare,
   LayoutDashboard,
   ListChecks,
   ScrollText,
   ShieldCheck,
+  Sparkles,
   Users,
   type LucideIcon,
 } from "lucide-react";
@@ -24,11 +26,13 @@ export const NAV: NavItem[] = [
   { label: "Clients", href: "/clients", icon: Users },
   { label: "To-Dos", href: "/todos", icon: ListChecks },
   { label: "Projects", href: "/projects", icon: FolderKanban },
+  { label: "Website Progress", href: "/website-progress", icon: Globe },
   { label: "CRM Pipeline", href: "/crm", icon: KanbanSquare },
   { label: "Meetings", href: "/meetings", icon: CalendarClock },
   { label: "Payments", href: "/payments", icon: CreditCard },
   { label: "Invoices", href: "/invoices", icon: FileText },
   { label: "Proposals", href: "/proposals", icon: ScrollText },
+  { label: "Content Studio", href: "/content", icon: Sparkles },
   { label: "Resources", href: "/resources", icon: FolderOpen },
 ];
 

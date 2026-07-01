@@ -22,6 +22,7 @@ export type ProjectStatus =
   | "completed"
   | "cancelled";
 export type PaymentStatus = "pending" | "paid" | "overdue";
+export type WebsiteStatus = "in_progress" | "waiting_client" | "launched";
 export type CommissionStatus = "pending" | "approved" | "paid";
 export type ResourceKind = "file" | "link";
 export type BookingStatus = "confirmed" | "cancelled";
@@ -299,6 +300,90 @@ export type Database = {
           created_at?: Timestamp;
         };
         Update: Partial<Database["public"]["Tables"]["proposals"]["Insert"]>;
+        Relationships: [];
+      };
+      content_references: {
+        Row: {
+          id: UUID;
+          name: string;
+          description: string;
+          image_url: string;
+          image_path: string;
+          mime_type: string;
+          created_by: UUID | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          name?: string;
+          description?: string;
+          image_url: string;
+          image_path: string;
+          mime_type?: string;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["content_references"]["Insert"]>;
+        Relationships: [];
+      };
+      content_generations: {
+        Row: {
+          id: UUID;
+          prompt: string;
+          image_url: string;
+          image_path: string;
+          mime_type: string;
+          aspect_ratio: string;
+          image_size: string;
+          model: string;
+          reference_ids: string[];
+          created_by: UUID | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          prompt?: string;
+          image_url: string;
+          image_path: string;
+          mime_type?: string;
+          aspect_ratio?: string;
+          image_size?: string;
+          model?: string;
+          reference_ids?: string[];
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["content_generations"]["Insert"]>;
+        Relationships: [];
+      };
+      website_projects: {
+        Row: {
+          id: UUID;
+          name: string;
+          url: string;
+          client_id: UUID | null;
+          progress: number;
+          status: WebsiteStatus;
+          notes: string;
+          launched_at: Timestamp | null;
+          created_by: UUID | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          name?: string;
+          url?: string;
+          client_id?: UUID | null;
+          progress?: number;
+          status?: WebsiteStatus;
+          notes?: string;
+          launched_at?: Timestamp | null;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["website_projects"]["Insert"]>;
         Relationships: [];
       };
       payments: {

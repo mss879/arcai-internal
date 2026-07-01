@@ -43,6 +43,9 @@ export type Pipeline = Tables["pipelines"]["Row"];
 export type PipelineStage = Tables["pipeline_stages"]["Row"];
 export type Lead = Tables["leads"]["Row"];
 export type Notification = Tables["notifications"]["Row"];
+export type ContentReference = Tables["content_references"]["Row"];
+export type ContentGeneration = Tables["content_generations"]["Row"];
+export type WebsiteProject = Tables["website_projects"]["Row"];
 
 export type {
   UserRole,
@@ -50,6 +53,7 @@ export type {
   TodoStatus,
   ProjectStatus,
   PaymentStatus,
+  WebsiteStatus,
   CommissionStatus,
   ClientStatus,
   ResourceKind,

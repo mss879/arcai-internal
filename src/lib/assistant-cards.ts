@@ -35,17 +35,48 @@ export type InvoiceCardData = {
   due_today: number;
 };
 
+export type SmsCardData = {
+  /** Recipient in Notify.lk format (94XXXXXXXXX). */
+  to_number: string;
+  /** Pretty-printed number for display, e.g. +94 71 234 5678. */
+  to_display: string;
+  client_id: string | null;
+  client_name: string;
+  /** The final message text exactly as it will be sent. */
+  message: string;
+  kind: "custom" | "payment_reminder";
+  invoice_id: string | null;
+  /** Human label for the linked invoice (e.g. "#00206"), if any. */
+  invoice_number: string | null;
+};
+
+export type CardSendState = "idle" | "sending" | "sent" | "error" | "cancelled";
+
+/**
+ * Client-side outcome of a confirm card. Normally the card manages its own
+ * state from its buttons; when the user confirms BY VOICE ("yes, send it")
+ * the voice hook resolves the send itself and records it here so the card
+ * reflects what happened. Never sent by the server.
+ */
+export type CardResolution = { state: CardSendState; error?: string };
+
 export type AssistantCard =
   /** A saved invoice shown for review (no action attached). */
   | { type: "invoice"; invoice: InvoiceCardData }
   /**
    * A pending email send the user must explicitly confirm. Sending happens
-   * only when the user taps Send in the UI — never by the model. May target
-   * several recipients and carry a custom note (e.g. a payment reminder).
+   * only when the user taps Send (or says yes) — never by the model. May
+   * target several recipients and carry a custom note (e.g. a reminder).
    */
   | {
       type: "confirm_send";
       invoice: InvoiceCardData;
       emails: string[];
       message?: string;
-    };
+      resolution?: CardResolution;
+    }
+  /**
+   * A pending SMS (custom text or payment reminder) the user must explicitly
+   * confirm. Like emails, nothing is sent until the user taps Send or says yes.
+   */
+  | { type: "confirm_send_sms"; sms: SmsCardData; resolution?: CardResolution };

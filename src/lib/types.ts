@@ -34,6 +34,7 @@ export type Proposal = Omit<
   content: ProposalContent;
 };
 export type Payment = Tables["payments"]["Row"];
+export type Invoice = Tables["invoices"]["Row"];
 export type CompanyPayment = Tables["company_payments"]["Row"];
 export type Commission = Tables["commissions"]["Row"];
 export type Resource = Tables["resources"]["Row"];
@@ -46,6 +47,31 @@ export type Notification = Tables["notifications"]["Row"];
 export type ContentReference = Tables["content_references"]["Row"];
 export type ContentGeneration = Tables["content_generations"]["Row"];
 export type WebsiteProject = Tables["website_projects"]["Row"];
+export type SmsMessage = Tables["sms_messages"]["Row"];
+export type SmsWorkflow = Tables["sms_workflows"]["Row"];
+export type SmsWorkflowStep = Tables["sms_workflow_steps"]["Row"];
+export type SmsWorkflowRun = Tables["sms_workflow_runs"]["Row"];
+export type Company = Tables["companies"]["Row"];
+export type CrmField = Tables["crm_fields"]["Row"];
+export type CrmSegment = Tables["crm_segments"]["Row"];
+export type LeadActivity = Tables["lead_activities"]["Row"];
+export type CrmTask = Tables["crm_tasks"]["Row"];
+export type Quote = Tables["quotes"]["Row"];
+export type Automation = Tables["automations"]["Row"];
+export type AutomationStep = Tables["automation_steps"]["Row"];
+export type AutomationRun = Tables["automation_runs"]["Row"];
+export type WebhookEndpoint = Tables["webhook_endpoints"]["Row"];
+export type ApiKey = Tables["api_keys"]["Row"];
+export type PaymentPlan = Tables["payment_plans"]["Row"];
+export type PaymentInstallment = Tables["payment_installments"]["Row"];
+export type Cheque = Tables["cheques"]["Row"];
+export type Expense = Tables["expenses"]["Row"];
+export type AiDigest = Tables["ai_digests"]["Row"];
+export type ChurnAlert = Tables["churn_alerts"]["Row"];
+export type Competitor = Tables["competitors"]["Row"];
+export type CompetitorEntry = Tables["competitor_entries"]["Row"];
+export type AdEntry = Tables["ad_entries"]["Row"];
+export type VisitorEvent = Tables["visitor_events"]["Row"];
 
 export type {
   UserRole,
@@ -60,6 +86,30 @@ export type {
   InviteStatus,
   BookingStatus,
   NotificationType,
+  SmsKind,
+  SmsStatus,
+  SmsStepKind,
+  SmsRunStatus,
+  CrmFieldKind,
+  LeadActivityKind,
+  CrmTaskStatus,
+  LeadStatus,
+  LeadScore,
+  QuoteStatus,
+  AutomationTrigger,
+  AutomationStepKind,
+  AutomationRunStatus,
+  WebhookAction,
+  PaymentPlanStatus,
+  InstallmentStatus,
+  ChequeDirection,
+  ChequeStatus,
+  ExpenseCategory,
+  ChurnSeverity,
+  ChurnStatus,
+  CompetitorEntryKind,
+  AdPlatform,
+  VisitorEventKind,
 } from "@/lib/database.types";
 
 /** A todo joined with the profile it's assigned to. */

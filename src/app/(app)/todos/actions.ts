@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 
 import { createClient } from "@/lib/supabase/server";
 import { sendPushToUser } from "@/lib/push";
+import { sendSmsToUser } from "@/lib/sms-alerts";
 import { extractMentions } from "@/lib/utils";
 import type { ActionResult, TodoPriority, TodoStatus } from "@/lib/types";
 
@@ -46,6 +47,23 @@ export async function saveTodo(input: TodoInput): Promise<ActionResult> {
   };
 
   let todoId = input.id;
+
+  // Snapshot who was already assigned/mentioned so SMS alerts only fire
+  // for NEW assignments and tags — not on every edit of an existing task.
+  let prevAssignee: string | null = null;
+  const prevMentions = new Set<string>();
+  if (input.id) {
+    const [prevRes, prevMentionsRes] = await Promise.all([
+      supabase
+        .from("todos")
+        .select("assigned_to")
+        .eq("id", input.id)
+        .maybeSingle(),
+      supabase.from("todo_mentions").select("user_id").eq("todo_id", input.id),
+    ]);
+    prevAssignee = prevRes.data?.assigned_to ?? null;
+    for (const m of prevMentionsRes.data ?? []) prevMentions.add(m.user_id);
+  }
 
   if (input.id) {
     const { error } = await supabase
@@ -169,6 +187,36 @@ export async function saveTodo(input: TodoInput): Promise<ActionResult> {
         }),
       ),
     );
+
+    // Text message alerts — only for people newly assigned or newly tagged,
+    // so editing a task doesn't re-text everyone on it.
+    const due = input.due_date ? ` (due ${input.due_date.slice(0, 10)})` : "";
+    const smsTargets = new Map<string, string>();
+    if (
+      input.assigned_to &&
+      input.assigned_to !== user.id &&
+      input.assigned_to !== prevAssignee
+    ) {
+      smsTargets.set(
+        input.assigned_to,
+        `ARC AI: ${actorName} assigned you a task — "${input.title.trim()}"${due}. Check the To-Dos board.`,
+      );
+    }
+    for (const id of mentionedIds) {
+      if (id !== user.id && !prevMentions.has(id) && !smsTargets.has(id)) {
+        smsTargets.set(
+          id,
+          `ARC AI: ${actorName} tagged you in a task — "${input.title.trim()}"${due}. Check the To-Dos board.`,
+        );
+      }
+    }
+    if (smsTargets.size) {
+      await Promise.all(
+        Array.from(smsTargets.entries()).map(([uid, message]) =>
+          sendSmsToUser({ userId: uid, message }),
+        ),
+      );
+    }
   }
 
   revalidatePath("/todos");

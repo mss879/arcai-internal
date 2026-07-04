@@ -10,7 +10,18 @@ import type {
   TodoStatus,
 } from "@/lib/database.types";
 import type { ToolSchema } from "@/lib/ai/openai";
-import type { AssistantCard, InvoiceCardData } from "@/lib/assistant-cards";
+import type {
+  AssistantCard,
+  InvoiceCardData,
+  SmsCardData,
+} from "@/lib/assistant-cards";
+import { isSmsConfigured } from "@/lib/sms";
+import {
+  SMS_MAX_LENGTH,
+  formatPhone,
+  normalizePhone,
+  personalizeMessage,
+} from "@/lib/sms-utils";
 
 /**
  * The assistant's "hands and eyes" on the workspace.
@@ -248,17 +259,52 @@ export const ASSISTANT_TOOLS: ToolSchema[] = [
     type: "function",
     function: {
       name: "create_lead",
-      description: "Add a new lead to the CRM pipeline.",
+      description:
+        "Add a new lead to the CRM pipeline. Include the phone number whenever the user gives one — active 'lead created' automations (e.g. the welcome / keep-warm SMS flow) fire for the new lead automatically.",
       parameters: {
         type: "object",
         properties: {
           title: { type: "string", description: "Lead title / deal name." },
           company: { type: "string" },
           contact_name: { type: "string" },
+          contact_phone: { type: "string", description: "Phone, e.g. 0712345678." },
+          contact_email: { type: "string" },
           value: { type: "number", description: "Estimated deal value." },
           stage: { type: "string", description: "Stage name; defaults to the first stage." },
         },
         required: ["title"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "sales_assist",
+      description:
+        "AI sales help on one CRM lead: 'summary' condenses its full history, 'next_action' suggests the best next move (both are saved onto the lead), 'draft_reply' writes a short reply message to send the lead. Find the lead by title, company or contact name via 'query'.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Lead title / company / contact name." },
+          mode: { type: "string", enum: ["summary", "next_action", "draft_reply"] },
+        },
+        required: ["query", "mode"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "score_leads",
+      description:
+        "Score open CRM leads hot/warm/cold so reps call the right people first. By default only unscored leads are scored; set rescore_all to redo everyone.",
+      parameters: {
+        type: "object",
+        properties: {
+          rescore_all: { type: "boolean" },
+        },
         additionalProperties: false,
       },
     },
@@ -469,6 +515,47 @@ export const ASSISTANT_TOOLS: ToolSchema[] = [
           },
         },
         required: ["recipient_emails"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "prepare_sms",
+      description:
+        "Prepare a text message (SMS) to a client's phone and show the user a confirmation with the recipient and the exact message. Use for 'text …', 'send an SMS', 'message their phone', including SMS payment reminders. IMPORTANT: this does NOT send the SMS. The user must tap the Send button on the confirmation card — never say the text has been sent. Find the client by name via client_query (their saved phone is used automatically), or pass an explicit phone number the user dictates.",
+      parameters: {
+        type: "object",
+        properties: {
+          client_query: {
+            type: "string",
+            description:
+              "Client name or company used to find their saved phone number. Omit if the user dictated a raw number instead.",
+          },
+          phone: {
+            type: "string",
+            description:
+              "Explicit Sri Lankan phone number (e.g. 0712345678 or 94712345678). Overrides the client's saved number.",
+          },
+          message: {
+            type: "string",
+            description:
+              "The SMS text to send, as close to the user's wording as possible. Keep it short — it's a text message.",
+          },
+          kind: {
+            type: "string",
+            enum: ["custom", "payment_reminder"],
+            description:
+              "'payment_reminder' when the text is a payment reminder; otherwise 'custom'. Defaults to custom.",
+          },
+          invoice_number: {
+            type: "string",
+            description:
+              "Optional saved invoice number (e.g. '#00206') to link a payment reminder to.",
+          },
+        },
+        required: ["message"],
         additionalProperties: false,
       },
     },
@@ -981,20 +1068,98 @@ export async function executeTool(
         .select("*", { count: "exact", head: true })
         .eq("stage_id", stage?.id ?? "");
 
-      const { error } = await supabase.from("leads").insert({
-        pipeline_id: pipeline.id,
-        stage_id: stage?.id ?? null,
-        title,
-        company: (args.company as string)?.trim() || null,
-        contact_name: (args.contact_name as string)?.trim() || null,
-        value: typeof args.value === "number" ? args.value : null,
-        position: count ?? 0,
-      });
+      const { data: created, error } = await supabase
+        .from("leads")
+        .insert({
+          pipeline_id: pipeline.id,
+          stage_id: stage?.id ?? null,
+          title,
+          company: (args.company as string)?.trim() || null,
+          contact_name: (args.contact_name as string)?.trim() || null,
+          contact_phone: (args.contact_phone as string)?.trim() || null,
+          contact_email: (args.contact_email as string)?.trim() || null,
+          value: typeof args.value === "number" ? args.value : null,
+          source: "manual",
+          position: count ?? 0,
+        })
+        .select("*")
+        .single();
       if (error) return { content: { ok: false, error: error.message } };
+
+      // Kick off keep-warm / welcome automations for the new lead.
+      if (created) {
+        const { fireAutomationTrigger } = await import("@/lib/automation");
+        await fireAutomationTrigger(supabase, {
+          trigger: "lead_created",
+          lead: created,
+          triggerKey: `${created.id}:created`,
+        });
+      }
+
       return {
         content: { ok: true, title, stage: stage?.name ?? null },
         event: { kind: "created", label: `Lead: ${title}`, href: "/crm" },
       };
+    }
+
+    case "sales_assist": {
+      const query = String(args.query ?? "").trim();
+      const mode = String(args.mode ?? "summary") as
+        | "summary"
+        | "next_action"
+        | "draft_reply";
+      if (!query)
+        return { content: { ok: false, error: "Need a lead name to look up." } };
+
+      const term = `%${query}%`;
+      const { data: matches } = await supabase
+        .from("leads")
+        .select("id, title")
+        .or(`title.ilike.${term},company.ilike.${term},contact_name.ilike.${term}`)
+        .is("deleted_at", null)
+        .limit(2);
+      if (!matches?.length)
+        return { content: { ok: false, error: `No lead matching "${query}".` } };
+      if (matches.length > 1)
+        return {
+          content: {
+            ok: false,
+            error: `More than one lead matches "${query}". Be more specific.`,
+            candidates: matches.map((m) => m.title),
+          },
+        };
+
+      const { aiLeadAssist } = await import("@/app/(app)/crm/actions");
+      const res = await aiLeadAssist(matches[0].id, mode);
+      if (!res.ok) return { content: { ok: false, error: res.error } };
+      return {
+        content: { ok: true, lead: matches[0].title, mode, result: res.text },
+        event: {
+          kind: "updated",
+          label: `AI ${mode.replace("_", " ")}: ${matches[0].title}`,
+          href: `/crm/lead/${matches[0].id}`,
+        },
+      };
+    }
+
+    case "score_leads": {
+      const { scoreLeads } = await import("@/lib/intelligence");
+      try {
+        const scored = await scoreLeads(supabase, {
+          rescoreAll: Boolean(args.rescore_all),
+        });
+        return {
+          content: { ok: true, scored },
+          event: { kind: "updated", label: `Scored ${scored} leads`, href: "/crm" },
+        };
+      } catch (e) {
+        return {
+          content: {
+            ok: false,
+            error: e instanceof Error ? e.message : "Scoring failed.",
+          },
+        };
+      }
     }
 
     case "update_client": {
@@ -1380,6 +1545,115 @@ export async function executeTool(
           note: "Shown to the user for confirmation. The invoice is NOT sent until the user taps Send. Do not say it has been sent.",
         },
         card: { type: "confirm_send", invoice, emails, message },
+      };
+    }
+
+    case "prepare_sms": {
+      if (!isSmsConfigured())
+        return {
+          content: {
+            ok: false,
+            error:
+              "SMS isn't configured — Notify.lk keys (NOTIFYLK_USER_ID / NOTIFYLK_API_KEY) are missing from the environment.",
+          },
+        };
+
+      const rawMessage = String(args.message ?? "").trim();
+      if (!rawMessage)
+        return { content: { ok: false, error: "Need the message text to send." } };
+
+      // Resolve the recipient: a named client (their saved phone) and/or an
+      // explicitly dictated number. The number the user dictates wins.
+      const clientQuery = String(args.client_query ?? "").trim();
+      let client: { id: string; name: string; phone: string | null } | null = null;
+      if (clientQuery) {
+        const term = `%${clientQuery}%`;
+        const { data: matches } = await supabase
+          .from("clients")
+          .select("id, name, phone")
+          .or(`name.ilike.${term},company.ilike.${term}`)
+          .limit(2);
+        if (!matches?.length)
+          return {
+            content: { ok: false, error: `No client matching "${clientQuery}".` },
+          };
+        if (matches.length > 1)
+          return {
+            content: {
+              ok: false,
+              error: `More than one client matches "${clientQuery}". Be more specific.`,
+              candidates: matches.map((m) => m.name),
+            },
+          };
+        client = matches[0];
+      }
+
+      const rawPhone = String(args.phone ?? "").trim() || client?.phone || "";
+      if (!rawPhone)
+        return {
+          content: {
+            ok: false,
+            error: client
+              ? `${client.name} has no phone number saved. Ask the user for the number.`
+              : "Need a client name or a phone number to text.",
+          },
+        };
+      const phone = normalizePhone(rawPhone);
+      if (!phone.ok) return { content: { ok: false, error: phone.error } };
+
+      const message = personalizeMessage(rawMessage, client?.name ?? "").trim();
+      if (message.length > SMS_MAX_LENGTH)
+        return {
+          content: {
+            ok: false,
+            error: `The message is too long (${message.length}/${SMS_MAX_LENGTH} characters). Shorten it.`,
+          },
+        };
+
+      // Optionally link a payment reminder to a saved invoice by its number.
+      const invoiceNo = String(args.invoice_number ?? "").trim();
+      let invoiceId: string | null = null;
+      let invoiceLabel: string | null = null;
+      if (invoiceNo) {
+        const normalizeNo = (s: string) => s.replace(/\D/g, "").replace(/^0+/, "");
+        const want = normalizeNo(invoiceNo);
+        const { data } = await supabase
+          .from("invoices")
+          .select("id, invoice_number")
+          .order("created_at", { ascending: false })
+          .limit(50);
+        const row = (data ?? []).find(
+          (r) => normalizeNo(r.invoice_number) === want,
+        );
+        if (row) {
+          invoiceId = row.id;
+          invoiceLabel = row.invoice_number;
+        }
+      }
+
+      const sms: SmsCardData = {
+        to_number: phone.value,
+        to_display: formatPhone(phone.value),
+        client_id: client?.id ?? null,
+        client_name: client?.name ?? "",
+        message,
+        kind: args.kind === "payment_reminder" ? "payment_reminder" : "custom",
+        invoice_id: invoiceId,
+        invoice_number: invoiceLabel,
+      };
+
+      return {
+        content: {
+          ok: true,
+          awaiting_user_confirmation: true,
+          to: sms.to_display,
+          client: sms.client_name || null,
+          message,
+          kind: sms.kind,
+          linked_invoice: invoiceLabel,
+          note: "Shown to the user for confirmation. The SMS is NOT sent until the user taps Send. Do not say it has been sent.",
+        },
+        card: { type: "confirm_send_sms", sms },
       };
     }
 

@@ -22,6 +22,8 @@ import {
   type InvoiceStamp,
 } from "@/lib/invoice";
 
+import type { Quote } from "@/lib/types";
+
 import { saveInvoice } from "./actions";
 import { downloadInvoicePdf } from "./download-pdf";
 import type { SavedInvoice } from "./invoices-view";
@@ -32,8 +34,10 @@ const labelCls = "block text-xs font-semibold text-slate-600 mb-1";
 
 export function InvoiceGenerator({
   pastInvoices = [],
+  quotes = [],
 }: {
   pastInvoices?: SavedInvoice[];
+  quotes?: Quote[];
 }) {
   const [invoiceNumber, setInvoiceNumber] = React.useState("#00200");
   const [invoiceDate, setInvoiceDate] = React.useState(
@@ -46,14 +50,16 @@ export function InvoiceGenerator({
   ]);
   const [dueToday, setDueToday] = React.useState(""); // "" = same as total
   const [stamp, setStamp] = React.useState<"none" | InvoiceStamp>("none");
-  // Which past invoice the form was loaded from (controls the picker only).
+  // Which past invoice / quote the form was loaded from (controls the pickers only).
   const [loadedId, setLoadedId] = React.useState("");
+  const [loadedQuoteId, setLoadedQuoteId] = React.useState("");
 
   // Load a saved invoice's details into the form so the user can re-issue it
   // (typically to slap a "Deposit paid" / "Payment received" stamp on it).
   // Selecting the blank option resets to a fresh, empty invoice.
   const loadPastInvoice = (id: string) => {
     setLoadedId(id);
+    setLoadedQuoteId("");
     const inv = pastInvoices.find((p) => p.id === id);
     if (!inv) {
       setInvoiceNumber("#00200");
@@ -73,6 +79,24 @@ export function InvoiceGenerator({
     setItems(loaded.length ? loaded : [emptyLineItem()]);
     setDueToday(String(Number(inv.due_today)));
     setStamp((inv.stamp as InvoiceStamp) || "none");
+  };
+
+  // Load a quote's customer + line items into the invoice form — the fastest
+  // way to turn an accepted quotation into the branded invoice template.
+  const loadQuote = (id: string) => {
+    setLoadedQuoteId(id);
+    setLoadedId("");
+    const quote = quotes.find((q) => q.id === id);
+    if (!quote) return;
+    setBillToName(quote.customer_name || "");
+    setBillToDetails(
+      [quote.customer_email, quote.customer_phone].filter(Boolean).join("\n"),
+    );
+    const loaded = lineItemsFromSaved(quote.items ?? []);
+    setItems(loaded.length ? loaded : [emptyLineItem()]);
+    setDueToday("");
+    setStamp("none");
+    setInvoiceDate(format(new Date(), "yyyy-MM-dd"));
   };
 
   const grandTotal = items.reduce((sum, l) => sum + lineItemTotal(l), 0);
@@ -159,28 +183,58 @@ export function InvoiceGenerator({
       <div className="grid gap-6 xl:grid-cols-[minmax(340px,400px)_1fr]">
         {/* ---------- FORM ---------- */}
         <div className="no-print space-y-5">
-          {pastInvoices.length > 0 && (
+          {(pastInvoices.length > 0 || quotes.length > 0) && (
             <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[var(--shadow-card)]">
               <h2 className="mb-4 text-sm font-semibold text-slate-900">
-                Start from a past invoice
+                Start from…
               </h2>
-              <select
-                className={fieldCls}
-                value={loadedId}
-                onChange={(e) => loadPastInvoice(e.target.value)}
-              >
-                <option value="">New blank invoice</option>
-                {pastInvoices.map((inv) => (
-                  <option key={inv.id} value={inv.id}>
-                    {inv.invoice_number} — {inv.bill_to_name || "—"} (
-                    {formatCurrency(Number(inv.grand_total))})
-                  </option>
-                ))}
-              </select>
-              <p className="mt-1 text-[11px] text-slate-400">
-                Loads the invoice&rsquo;s details so you can add a Paid stamp
-                below and download it again.
-              </p>
+              <div className="space-y-3">
+                {quotes.length > 0 && (
+                  <div>
+                    <label className={labelCls}>A quote</label>
+                    <select
+                      className={fieldCls}
+                      value={loadedQuoteId}
+                      onChange={(e) => loadQuote(e.target.value)}
+                    >
+                      <option value="">Pick a quote…</option>
+                      {quotes.map((q) => (
+                        <option key={q.id} value={q.id}>
+                          {q.quote_number} — {q.customer_name || "—"} (
+                          {formatCurrency(Number(q.grand_total))})
+                          {q.status === "accepted" ? " ✍ accepted" : ""}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="mt-1 text-[11px] text-slate-400">
+                      Pulls the quote&rsquo;s customer and line items into the
+                      invoice template.
+                    </p>
+                  </div>
+                )}
+                {pastInvoices.length > 0 && (
+                  <div>
+                    <label className={labelCls}>A past invoice</label>
+                    <select
+                      className={fieldCls}
+                      value={loadedId}
+                      onChange={(e) => loadPastInvoice(e.target.value)}
+                    >
+                      <option value="">New blank invoice</option>
+                      {pastInvoices.map((inv) => (
+                        <option key={inv.id} value={inv.id}>
+                          {inv.invoice_number} — {inv.bill_to_name || "—"} (
+                          {formatCurrency(Number(inv.grand_total))})
+                        </option>
+                      ))}
+                    </select>
+                    <p className="mt-1 text-[11px] text-slate-400">
+                      Loads the invoice&rsquo;s details so you can add a Paid
+                      stamp below and download it again.
+                    </p>
+                  </div>
+                )}
+              </div>
             </section>
           )}
 

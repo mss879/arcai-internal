@@ -132,6 +132,49 @@ function esc(value: string): string {
 }
 
 /**
+ * Plain branded email with a subject and free-text body. Newlines become
+ * paragraphs. Used by the automation engine's "send email" action and the
+ * quote share flow.
+ */
+export async function sendGenericEmail(opts: {
+  to: string | string[];
+  subject: string;
+  body: string;
+  /** Optional CTA button appended after the body. */
+  cta?: { href: string; label: string };
+}): Promise<SendResult> {
+  const resend = getResend();
+  if (!resend) return { sent: false, error: "RESEND_API_KEY not configured" };
+
+  const paragraphs = opts.body
+    .split(/\n+/)
+    .filter((l) => l.trim())
+    .map(
+      (line) =>
+        `<p style="margin:0 0 12px;color:#334155;font-size:15px;line-height:1.6;">${esc(line)}</p>`,
+    )
+    .join("");
+
+  const body = `
+    ${paragraphs}
+    ${opts.cta ? `<p style="margin:24px 0 0;">${button(opts.cta.href, opts.cta.label)}</p>` : ""}
+  `;
+
+  try {
+    const { error } = await resend.emails.send({
+      from: FROM,
+      to: opts.to,
+      subject: opts.subject,
+      html: shell(opts.subject, body),
+    });
+    if (error) return { sent: false, error: error.message };
+    return { sent: true };
+  } catch (e) {
+    return { sent: false, error: e instanceof Error ? e.message : "send failed" };
+  }
+}
+
+/**
  * Email a saved invoice to one or more recipients as a PDF attachment that
  * matches the in-app invoice template. The body is short — the invoice is the
  * attached PDF — but can carry a custom message (e.g. a payment reminder).

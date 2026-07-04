@@ -40,10 +40,23 @@ import {
   SortableLeadCard,
 } from "@/components/crm/lead-card";
 import { LeadFormModal } from "@/components/crm/lead-form-modal";
+import {
+  applyFilters,
+  CrmToolbar,
+  EMPTY_FILTERS,
+  type LeadFilters,
+  type ViewMode,
+} from "@/components/crm/crm-toolbar";
+import { LeadTable } from "@/components/crm/lead-table";
+import { ForecastView } from "@/components/crm/forecast-view";
 import { STAGE_COLORS } from "@/lib/constants";
 import { cn, formatCompactCurrency } from "@/lib/utils";
 import type {
   Client,
+  Company,
+  CrmField,
+  CrmSegment,
+  CrmTask,
   Lead,
   LeadWithAssignee,
   MemberLite,
@@ -60,9 +73,13 @@ export function CrmBoard({
   pipelines,
   activePipelineId,
   stages,
-  leads,
+  leads: allLeads,
   members,
   clients,
+  customFields,
+  segments,
+  companies,
+  openTasks,
 }: {
   pipelines: Pipeline[];
   activePipelineId: string | null;
@@ -70,10 +87,30 @@ export function CrmBoard({
   leads: LeadWithAssignee[];
   members: MemberLite[];
   clients: Pick<Client, "id" | "name" | "company">[];
+  customFields: CrmField[];
+  segments: CrmSegment[];
+  companies: Company[];
+  openTasks: CrmTask[];
 }) {
-  useRealtimeSyncTables(["pipelines", "pipeline_stages", "leads"]);
+  useRealtimeSyncTables(["pipelines", "pipeline_stages", "leads", "crm_tasks"]);
 
   const router = useRouter();
+
+  const activePipeline = pipelines.find((p) => p.id === activePipelineId) ?? null;
+  const staleAfterDays = activePipeline?.stale_after_days ?? 7;
+
+  const [view, setView] = React.useState<ViewMode>("board");
+  const [filters, setFilters] = React.useState<LeadFilters>(EMPTY_FILTERS);
+
+  const leads = React.useMemo(
+    () => applyFilters(allLeads, filters, staleAfterDays),
+    [allLeads, filters, staleAfterDays],
+  );
+
+  const allTags = React.useMemo(
+    () => Array.from(new Set(allLeads.flatMap((l) => l.tags ?? []))).sort(),
+    [allLeads],
+  );
 
   const leadMap = React.useMemo(() => {
     const m: Record<string, LeadWithAssignee> = {};
@@ -287,7 +324,32 @@ export function CrmBoard({
         )}
       </div>
 
+      {/* Search / filters / segments / views */}
+      <CrmToolbar
+        filters={filters}
+        onFilters={setFilters}
+        view={view}
+        onView={setView}
+        segments={segments}
+        allTags={allTags}
+        members={members}
+        tasks={openTasks}
+        matchCount={leads.length}
+      />
+
+      {view === "table" && (
+        <LeadTable
+          leads={leads}
+          stages={stages}
+          members={members}
+          staleAfterDays={staleAfterDays}
+        />
+      )}
+
+      {view === "forecast" && <ForecastView leads={leads} />}
+
       {/* Board */}
+      {view === "board" && (
       <DndContext
         sensors={sensors}
         collisionDetection={closestCorners}
@@ -321,9 +383,8 @@ export function CrmBoard({
                       key={id}
                       lead={leadMap[id]}
                       stageColor={stage.color}
-                      onClick={() =>
-                        setLeadModal({ stageId: stage.id, lead: leadMap[id] })
-                      }
+                      staleAfterDays={staleAfterDays}
+                      onClick={() => router.push(`/crm/lead/${id}`)}
                     />
                   ) : null,
                 )}
@@ -347,6 +408,7 @@ export function CrmBoard({
           {activeLead ? <LeadCardContent lead={activeLead} dragging /> : null}
         </DragOverlay>
       </DndContext>
+      )}
 
       {/* Modals */}
       {activePipelineId && leadModal && (
@@ -358,6 +420,8 @@ export function CrmBoard({
           defaultStageId={leadModal.stageId}
           members={members}
           clients={clients}
+          companies={companies}
+          customFields={customFields}
           lead={leadModal.lead}
           onDelete={
             leadModal.lead

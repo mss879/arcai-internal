@@ -1,4 +1,5 @@
 import {
+  BrainCircuit,
   CalendarClock,
   CreditCard,
   FileText,
@@ -6,12 +7,15 @@ import {
   FolderOpen,
   Globe,
   KanbanSquare,
+  Landmark,
   LayoutDashboard,
   ListChecks,
+  MessageSquareText,
   ScrollText,
   ShieldCheck,
   Sparkles,
   Users,
+  Zap,
   type LucideIcon,
 } from "lucide-react";
 
@@ -28,10 +32,14 @@ export const NAV: NavItem[] = [
   { label: "Projects", href: "/projects", icon: FolderKanban },
   { label: "Website Progress", href: "/website-progress", icon: Globe },
   { label: "CRM Pipeline", href: "/crm", icon: KanbanSquare },
+  { label: "Automation", href: "/automation", icon: Zap },
+  { label: "Money & Finance", href: "/finance", icon: Landmark },
+  { label: "AI & Intelligence", href: "/intelligence", icon: BrainCircuit },
   { label: "Meetings", href: "/meetings", icon: CalendarClock },
   { label: "Payments", href: "/payments", icon: CreditCard },
-  { label: "Invoices", href: "/invoices", icon: FileText },
+  { label: "Invoices & Quotes", href: "/invoices", icon: FileText },
   { label: "Proposals", href: "/proposals", icon: ScrollText },
+  { label: "SMS", href: "/sms", icon: MessageSquareText },
   { label: "Content Studio", href: "/content", icon: Sparkles },
   { label: "Resources", href: "/resources", icon: FolderOpen },
 ];

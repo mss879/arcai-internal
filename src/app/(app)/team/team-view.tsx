@@ -10,6 +10,8 @@ import {
   Copy,
   Mail,
   MoreVertical,
+  Pencil,
+  Phone,
   Send,
   Shield,
   ShieldCheck,
@@ -25,10 +27,11 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dropdown, DropdownItem } from "@/components/ui/dropdown";
-import { Input, Select } from "@/components/ui/input";
+import { Field, Input, Select } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { PageHeader } from "@/components/ui/page-header";
 import { COMMISSION_STATUS_META } from "@/lib/constants";
+import { formatPhone } from "@/lib/sms-utils";
 import { cn, formatCurrency } from "@/lib/utils";
 import { useRealtimeSyncTables } from "@/hooks/use-realtime-sync";
 import type { Commission, Invitation, Profile, UserRole } from "@/lib/types";
@@ -37,6 +40,7 @@ import {
   createInvite,
   removeMember,
   revokeInvite,
+  updateMemberProfile,
   updateMemberRole,
 } from "./actions";
 
@@ -68,6 +72,7 @@ export function TeamView({
   } | null>(null);
   const [toRemove, setToRemove] = React.useState<Profile | null>(null);
   const [selected, setSelected] = React.useState<Profile | null>(null);
+  const [toEdit, setToEdit] = React.useState<Profile | null>(null);
 
   // Group commissions by member so each profile shows its own allocations.
   const commissionsByUser = React.useMemo(() => {
@@ -273,6 +278,7 @@ export function TeamView({
                   </p>
                   <p className="truncate text-xs text-slate-400">
                     @{m.username} · {m.email}
+                    {m.phone ? ` · ${formatPhone(m.phone)}` : ""}
                   </p>
                 </div>
                 <ChevronRight className="h-4 w-4 shrink-0 text-slate-300" />
@@ -310,6 +316,12 @@ export function TeamView({
                   </button>
                 }
               >
+                <DropdownItem
+                  icon={<Pencil className="h-4 w-4" />}
+                  onClick={() => setToEdit(m)}
+                >
+                  Edit profile
+                </DropdownItem>
                 {m.role === "member" ? (
                   <DropdownItem
                     icon={<ShieldCheck className="h-4 w-4" />}
@@ -357,6 +369,8 @@ export function TeamView({
         onClose={() => setSelected(null)}
       />
 
+      <EditMemberModal member={toEdit} onClose={() => setToEdit(null)} />
+
       <ConfirmDialog
         open={!!toRemove}
         onClose={() => setToRemove(null)}
@@ -395,6 +409,88 @@ function StatCard({
         <p className="text-sm text-slate-500">{label}</p>
       </div>
     </div>
+  );
+}
+
+/** Admin edit of another member's details (name, title, phone for SMS alerts). */
+function EditMemberModal({
+  member,
+  onClose,
+}: {
+  member: Profile | null;
+  onClose: () => void;
+}) {
+  const router = useRouter();
+  const [fullName, setFullName] = React.useState("");
+  const [title, setTitle] = React.useState("");
+  const [phone, setPhone] = React.useState("");
+  const [saving, startSave] = React.useTransition();
+
+  React.useEffect(() => {
+    if (!member) return;
+    setFullName(member.full_name ?? "");
+    setTitle(member.title ?? "");
+    setPhone(member.phone ? formatPhone(member.phone) : "");
+  }, [member]);
+
+  function save() {
+    if (!member) return;
+    startSave(async () => {
+      const res = await updateMemberProfile(member.id, {
+        full_name: fullName,
+        title,
+        phone,
+      });
+      if (res.ok) {
+        toast.success("Profile updated");
+        router.refresh();
+        onClose();
+      } else toast.error(res.error);
+    });
+  }
+
+  return (
+    <Modal
+      open={!!member}
+      onClose={onClose}
+      title={member ? `Edit ${member.full_name || member.username}` : ""}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose} disabled={saving}>
+            Cancel
+          </Button>
+          <Button onClick={save} loading={saving} disabled={!fullName.trim()}>
+            Save changes
+          </Button>
+        </>
+      }
+    >
+      {member && (
+        <div className="space-y-4">
+          <Field label="Full name">
+            <Input value={fullName} onChange={(e) => setFullName(e.target.value)} />
+          </Field>
+          <Field label="Title / role">
+            <Input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="e.g. Designer"
+            />
+          </Field>
+          <Field
+            label="Phone number"
+            hint="They'll get an SMS alert when assigned a task or tagged. Sri Lankan number, e.g. 0712345678."
+          >
+            <Input
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              placeholder="0712345678"
+              inputMode="tel"
+            />
+          </Field>
+        </div>
+      )}
+    </Modal>
   );
 }
 
@@ -464,9 +560,17 @@ function MemberDetailModal({
           </div>
 
           {/* Meta */}
-          <div className="flex items-center gap-2 rounded-xl bg-slate-50 px-3.5 py-2.5 text-sm text-slate-500">
-            <Calendar className="h-4 w-4 text-slate-400" />
-            Joined {format(new Date(member.created_at), "MMM d, yyyy")}
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-2 rounded-xl bg-slate-50 px-3.5 py-2.5 text-sm text-slate-500">
+              <Calendar className="h-4 w-4 text-slate-400" />
+              Joined {format(new Date(member.created_at), "MMM d, yyyy")}
+            </div>
+            <div className="flex items-center gap-2 rounded-xl bg-slate-50 px-3.5 py-2.5 text-sm text-slate-500">
+              <Phone className="h-4 w-4 text-slate-400" />
+              {member.phone
+                ? formatPhone(member.phone)
+                : "No phone — SMS alerts off"}
+            </div>
           </div>
 
           {/* Commission summary */}

@@ -1,7 +1,21 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
-const PUBLIC_PREFIXES = ["/login", "/admin", "/join", "/book", "/auth"];
+const PUBLIC_PREFIXES = [
+  "/login",
+  "/admin",
+  "/join",
+  "/book",
+  "/auth",
+  // Public quote acceptance page (share link).
+  "/q",
+  // Public APIs: inquiry forms, inbound webhooks, visitor tracking, open API.
+  "/api/public",
+  // Cron tick endpoints (optionally guarded by SMS_CRON_SECRET themselves).
+  "/api/automation/tick",
+  "/api/sms/automation/tick",
+  "/api/intelligence/digest",
+];
 
 function isPublicPath(pathname: string) {
   if (pathname === "/") return true;

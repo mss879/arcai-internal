@@ -1,6 +1,13 @@
 import { getMembers } from "@/lib/data";
 import { createClient } from "@/lib/supabase/server";
-import type { LeadWithAssignee, PipelineStage } from "@/lib/types";
+import type {
+  Company,
+  CrmField,
+  CrmSegment,
+  CrmTask,
+  LeadWithAssignee,
+  PipelineStage,
+} from "@/lib/types";
 
 import { CrmBoard } from "./crm-board";
 
@@ -14,15 +21,25 @@ export default async function CrmPage({
   const { p } = await searchParams;
   const supabase = await createClient();
 
-  const [pipelinesRes, members, clientsRes] = await Promise.all([
-    supabase
-      .from("pipelines")
-      .select("*")
-      .order("position", { ascending: true })
-      .order("created_at", { ascending: true }),
-    getMembers(),
-    supabase.from("clients").select("id, name, company").order("name"),
-  ]);
+  const [pipelinesRes, members, clientsRes, fieldsRes, segmentsRes, companiesRes, tasksRes] =
+    await Promise.all([
+      supabase
+        .from("pipelines")
+        .select("*")
+        .order("position", { ascending: true })
+        .order("created_at", { ascending: true }),
+      getMembers(),
+      supabase.from("clients").select("id, name, company").order("name"),
+      supabase.from("crm_fields").select("*").order("position"),
+      supabase.from("crm_segments").select("*").order("position").order("created_at"),
+      supabase.from("companies").select("*").order("name"),
+      supabase
+        .from("crm_tasks")
+        .select("*")
+        .eq("status", "open")
+        .order("due_at", { ascending: true })
+        .limit(200),
+    ]);
 
   const pipelines = pipelinesRes.data;
   const activeId =
@@ -46,6 +63,7 @@ export default async function CrmPage({
           "*, assignee:profiles!leads_assigned_to_fkey(id, full_name, username, avatar_url)",
         )
         .eq("pipeline_id", activeId)
+        .is("deleted_at", null)
         .order("position", { ascending: true }),
     ]);
     stages = stagesRes.data ?? [];
@@ -60,6 +78,10 @@ export default async function CrmPage({
       leads={leads}
       members={members}
       clients={clientsRes.data ?? []}
+      customFields={(fieldsRes.data ?? []) as CrmField[]}
+      segments={(segmentsRes.data ?? []) as CrmSegment[]}
+      companies={(companiesRes.data ?? []) as Company[]}
+      openTasks={(tasksRes.data ?? []) as CrmTask[]}
     />
   );
 }

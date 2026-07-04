@@ -2,23 +2,42 @@
 
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { Building2, GripVertical, Mail, Phone } from "lucide-react";
+import { Building2, Clock, GripVertical, Mail, Phone } from "lucide-react";
 
 import { Avatar } from "@/components/ui/avatar";
 import { cn, formatCurrency } from "@/lib/utils";
 import type { LeadWithAssignee } from "@/lib/types";
 
+const SCORE_META = {
+  hot: { label: "🔥 Hot", cls: "bg-rose-50 text-rose-600 border-rose-200" },
+  warm: { label: "🌤 Warm", cls: "bg-amber-50 text-amber-600 border-amber-200" },
+  cold: { label: "🧊 Cold", cls: "bg-sky-50 text-sky-600 border-sky-200" },
+} as const;
+
+/** Days since the lead's last activity. */
+export function daysInactive(lead: Pick<LeadWithAssignee, "last_activity_at">): number {
+  return Math.floor(
+    (Date.now() - new Date(lead.last_activity_at).getTime()) / 86400_000,
+  );
+}
+
 export function LeadCardContent({
   lead,
   dragging,
   stageColor,
+  staleAfterDays,
   onClick,
 }: {
   lead: LeadWithAssignee;
   dragging?: boolean;
   stageColor?: string;
+  /** Show a stale badge when the lead sat untouched this long. */
+  staleAfterDays?: number;
   onClick?: () => void;
 }) {
+  const inactive = daysInactive(lead);
+  const stale =
+    staleAfterDays != null && lead.status === "open" && inactive >= staleAfterDays;
   return (
     <div
       onClick={onClick}
@@ -40,6 +59,50 @@ export function LeadCardContent({
           </span>
         )}
       </div>
+
+      {(lead.score || stale || lead.status !== "open" || (lead.tags?.length ?? 0) > 0) && (
+        <div className="mt-2 flex flex-wrap items-center gap-1">
+          {lead.status === "won" && (
+            <span className="rounded-md border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold text-emerald-600">
+              Won
+            </span>
+          )}
+          {lead.status === "lost" && (
+            <span className="rounded-md border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-bold text-slate-500">
+              Lost
+            </span>
+          )}
+          {lead.score && (
+            <span
+              className={cn(
+                "rounded-md border px-1.5 py-0.5 text-[10px] font-bold",
+                SCORE_META[lead.score].cls,
+              )}
+            >
+              {SCORE_META[lead.score].label}
+            </span>
+          )}
+          {stale && (
+            <span className="inline-flex items-center gap-0.5 rounded-md border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-bold text-amber-600">
+              <Clock className="h-2.5 w-2.5" />
+              {inactive}d idle
+            </span>
+          )}
+          {(lead.tags ?? []).slice(0, 3).map((tag) => (
+            <span
+              key={tag}
+              className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500"
+            >
+              {tag}
+            </span>
+          ))}
+          {(lead.tags?.length ?? 0) > 3 && (
+            <span className="text-[10px] font-medium text-slate-400">
+              +{(lead.tags?.length ?? 0) - 3}
+            </span>
+          )}
+        </div>
+      )}
 
       {lead.company && (
         <p className="mt-2 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
@@ -92,10 +155,12 @@ export function LeadCardContent({
 export function SortableLeadCard({
   lead,
   stageColor,
+  staleAfterDays,
   onClick,
 }: {
   lead: LeadWithAssignee;
   stageColor?: string;
+  staleAfterDays?: number;
   onClick: () => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
@@ -113,7 +178,12 @@ export function SortableLeadCard({
       {...listeners}
       className="touch-none"
     >
-      <LeadCardContent lead={lead} stageColor={stageColor} onClick={onClick} />
+      <LeadCardContent
+        lead={lead}
+        stageColor={stageColor}
+        staleAfterDays={staleAfterDays}
+        onClick={onClick}
+      />
     </div>
   );
 }

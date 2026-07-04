@@ -40,6 +40,7 @@ export function MobileVoiceScreen() {
     toggleMic,
     sendText,
     sendInvoice,
+    sendSms,
     stop,
   } = useVoiceChat();
 
@@ -282,6 +283,7 @@ export function MobileVoiceScreen() {
                             key={k}
                             card={card}
                             onSend={sendInvoice}
+                            onSendSms={sendSms}
                           />
                         ))}
                       </div>

@@ -31,6 +31,108 @@ export type NotificationType =
   | "assignment"
   | "commission"
   | "system";
+export type SmsKind = "custom" | "payment_reminder" | "automation" | "promotion";
+export type SmsStatus = "sent" | "failed";
+export type SmsStepKind = "send_sms" | "wait";
+export type SmsRunStatus = "running" | "completed" | "cancelled" | "failed";
+export type CrmFieldKind =
+  | "text"
+  | "number"
+  | "date"
+  | "select"
+  | "checkbox"
+  | "url"
+  | "phone";
+export type LeadActivityKind =
+  | "created"
+  | "note"
+  | "call"
+  | "email"
+  | "sms"
+  | "meeting"
+  | "stage_changed"
+  | "field_changed"
+  | "status_changed"
+  | "task"
+  | "quote"
+  | "merged"
+  | "restored"
+  | "automation"
+  | "score";
+export type CrmTaskStatus = "open" | "done";
+export type LeadStatus = "open" | "won" | "lost";
+export type LeadScore = "hot" | "warm" | "cold";
+export type QuoteStatus =
+  | "draft"
+  | "sent"
+  | "viewed"
+  | "accepted"
+  | "declined"
+  | "expired";
+export type AutomationTrigger =
+  | "lead_created"
+  | "form_submitted"
+  | "stage_changed"
+  | "tag_added"
+  | "lead_inactive"
+  | "date_reached"
+  | "invoice_unpaid"
+  | "installment_due"
+  | "cheque_due"
+  | "quote_accepted"
+  | "client_created"
+  | "webhook";
+export type AutomationStepKind =
+  | "send_sms"
+  | "send_email"
+  | "create_task"
+  | "add_tag"
+  | "remove_tag"
+  | "assign_user"
+  | "move_stage"
+  | "update_field"
+  | "update_score"
+  | "notify"
+  | "webhook"
+  | "ai_agent"
+  | "enroll_sms_workflow"
+  | "wait";
+export type AutomationRunStatus =
+  | "running"
+  | "completed"
+  | "cancelled"
+  | "failed";
+export type WebhookAction = "create_lead" | "fire_automation";
+export type PaymentPlanStatus = "active" | "completed" | "cancelled";
+export type InstallmentStatus = "pending" | "paid";
+export type ChequeDirection = "received" | "issued";
+export type ChequeStatus =
+  | "pending"
+  | "deposited"
+  | "cleared"
+  | "bounced"
+  | "cancelled";
+export type ExpenseCategory =
+  | "salaries"
+  | "rent"
+  | "software"
+  | "ads"
+  | "hosting"
+  | "equipment"
+  | "transport"
+  | "utilities"
+  | "fees"
+  | "other";
+export type ChurnSeverity = "cooling" | "warm" | "cold";
+export type ChurnStatus = "open" | "actioned" | "dismissed";
+export type CompetitorEntryKind = "price" | "post" | "ad" | "news" | "note";
+export type AdPlatform = "meta" | "google" | "tiktok" | "other";
+export type VisitorEventKind =
+  | "pageview"
+  | "form_start"
+  | "form_abandon"
+  | "form_submit"
+  | "click";
 
 /** A single saved invoice line item (stored as JSONB on `invoices.items`). */
 export type InvoiceItem = {
@@ -52,6 +154,7 @@ export type Database = {
           email: string;
           role: UserRole;
           title: string | null;
+          phone: string | null;
           avatar_url: string | null;
           created_at: Timestamp;
         };
@@ -62,6 +165,7 @@ export type Database = {
           email: string;
           role?: UserRole;
           title?: string | null;
+          phone?: string | null;
           avatar_url?: string | null;
           created_at?: Timestamp;
         };
@@ -546,6 +650,7 @@ export type Database = {
           name: string;
           description: string | null;
           position: number;
+          stale_after_days: number;
           created_by: UUID | null;
           created_at: Timestamp;
         };
@@ -554,6 +659,7 @@ export type Database = {
           name: string;
           description?: string | null;
           position?: number;
+          stale_after_days?: number;
           created_by?: UUID | null;
           created_at?: Timestamp;
         };
@@ -601,6 +707,24 @@ export type Database = {
           created_by: UUID | null;
           created_at: Timestamp;
           updated_at: Timestamp;
+          // 0030 — CRM core
+          tags: string[];
+          custom: Record<string, unknown>;
+          source: string;
+          company_id: UUID | null;
+          deleted_at: Timestamp | null;
+          last_activity_at: Timestamp;
+          // 0031 — deal fields
+          status: LeadStatus;
+          won_at: Timestamp | null;
+          lost_at: Timestamp | null;
+          lost_reason: string | null;
+          expected_close_date: string | null;
+          probability: number | null;
+          score: LeadScore | null;
+          score_reason: string | null;
+          ai_summary: string | null;
+          ai_next_action: string | null;
         };
         Insert: {
           id?: UUID;
@@ -620,6 +744,22 @@ export type Database = {
           created_by?: UUID | null;
           created_at?: Timestamp;
           updated_at?: Timestamp;
+          tags?: string[];
+          custom?: Record<string, unknown>;
+          source?: string;
+          company_id?: UUID | null;
+          deleted_at?: Timestamp | null;
+          last_activity_at?: Timestamp;
+          status?: LeadStatus;
+          won_at?: Timestamp | null;
+          lost_at?: Timestamp | null;
+          lost_reason?: string | null;
+          expected_close_date?: string | null;
+          probability?: number | null;
+          score?: LeadScore | null;
+          score_reason?: string | null;
+          ai_summary?: string | null;
+          ai_next_action?: string | null;
         };
         Update: Partial<Database["public"]["Tables"]["leads"]["Insert"]>;
         Relationships: [];
@@ -671,6 +811,774 @@ export type Database = {
         };
         Update: Partial<
           Database["public"]["Tables"]["push_subscriptions"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      sms_workflows: {
+        Row: {
+          id: UUID;
+          name: string;
+          is_active: boolean;
+          created_by: UUID | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          name?: string;
+          is_active?: boolean;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["sms_workflows"]["Insert"]>;
+        Relationships: [];
+      };
+      sms_workflow_steps: {
+        Row: {
+          id: UUID;
+          workflow_id: UUID;
+          position: number;
+          kind: SmsStepKind;
+          message: string;
+          wait_minutes: number;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          workflow_id: UUID;
+          position?: number;
+          kind?: SmsStepKind;
+          message?: string;
+          wait_minutes?: number;
+          created_at?: Timestamp;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["sms_workflow_steps"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      sms_workflow_runs: {
+        Row: {
+          id: UUID;
+          workflow_id: UUID;
+          client_id: UUID | null;
+          client_name: string;
+          to_number: string;
+          step_index: number;
+          status: SmsRunStatus;
+          next_run_at: Timestamp;
+          error: string | null;
+          created_by: UUID | null;
+          created_at: Timestamp;
+          completed_at: Timestamp | null;
+        };
+        Insert: {
+          id?: UUID;
+          workflow_id: UUID;
+          client_id?: UUID | null;
+          client_name?: string;
+          to_number: string;
+          step_index?: number;
+          status?: SmsRunStatus;
+          next_run_at?: Timestamp;
+          error?: string | null;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+          completed_at?: Timestamp | null;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["sms_workflow_runs"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      sms_messages: {
+        Row: {
+          id: UUID;
+          to_number: string;
+          message: string;
+          client_id: UUID | null;
+          client_name: string;
+          kind: SmsKind;
+          status: SmsStatus;
+          error: string | null;
+          invoice_id: UUID | null;
+          workflow_id: UUID | null;
+          segments: number;
+          created_by: UUID | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          to_number: string;
+          message: string;
+          client_id?: UUID | null;
+          client_name?: string;
+          kind?: SmsKind;
+          status?: SmsStatus;
+          error?: string | null;
+          invoice_id?: UUID | null;
+          workflow_id?: UUID | null;
+          segments?: number;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["sms_messages"]["Insert"]>;
+        Relationships: [];
+      };
+      companies: {
+        Row: {
+          id: UUID;
+          name: string;
+          website: string | null;
+          email: string | null;
+          phone: string | null;
+          city: string | null;
+          industry: string | null;
+          notes: string | null;
+          created_by: UUID | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          name: string;
+          website?: string | null;
+          email?: string | null;
+          phone?: string | null;
+          city?: string | null;
+          industry?: string | null;
+          notes?: string | null;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["companies"]["Insert"]>;
+        Relationships: [];
+      };
+      crm_fields: {
+        Row: {
+          id: UUID;
+          key: string;
+          label: string;
+          kind: CrmFieldKind;
+          options: string[];
+          required: boolean;
+          position: number;
+          created_by: UUID | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          key: string;
+          label: string;
+          kind?: CrmFieldKind;
+          options?: string[];
+          required?: boolean;
+          position?: number;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["crm_fields"]["Insert"]>;
+        Relationships: [];
+      };
+      crm_segments: {
+        Row: {
+          id: UUID;
+          name: string;
+          filters: Record<string, unknown>;
+          position: number;
+          created_by: UUID | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          name: string;
+          filters?: Record<string, unknown>;
+          position?: number;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["crm_segments"]["Insert"]>;
+        Relationships: [];
+      };
+      lead_activities: {
+        Row: {
+          id: UUID;
+          lead_id: UUID;
+          kind: LeadActivityKind;
+          title: string;
+          body: string | null;
+          meta: Record<string, unknown>;
+          actor_id: UUID | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          lead_id: UUID;
+          kind?: LeadActivityKind;
+          title?: string;
+          body?: string | null;
+          meta?: Record<string, unknown>;
+          actor_id?: UUID | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["lead_activities"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      crm_tasks: {
+        Row: {
+          id: UUID;
+          lead_id: UUID | null;
+          company_id: UUID | null;
+          title: string;
+          notes: string | null;
+          due_at: Timestamp | null;
+          assigned_to: UUID | null;
+          status: CrmTaskStatus;
+          completed_at: Timestamp | null;
+          created_by: UUID | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          lead_id?: UUID | null;
+          company_id?: UUID | null;
+          title: string;
+          notes?: string | null;
+          due_at?: Timestamp | null;
+          assigned_to?: UUID | null;
+          status?: CrmTaskStatus;
+          completed_at?: Timestamp | null;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["crm_tasks"]["Insert"]>;
+        Relationships: [];
+      };
+      quotes: {
+        Row: {
+          id: UUID;
+          quote_number: string;
+          title: string;
+          customer_name: string;
+          customer_email: string | null;
+          customer_phone: string | null;
+          lead_id: UUID | null;
+          client_id: UUID | null;
+          items: InvoiceItem[];
+          subtotal: number;
+          discount: number;
+          tax_rate: number;
+          tax_amount: number;
+          grand_total: number;
+          currency: string;
+          valid_until: string | null;
+          notes: string | null;
+          terms: string | null;
+          status: QuoteStatus;
+          share_token: string;
+          sent_at: Timestamp | null;
+          viewed_at: Timestamp | null;
+          signed_name: string | null;
+          signature_data: string | null;
+          signed_ip: string | null;
+          accepted_at: Timestamp | null;
+          declined_at: Timestamp | null;
+          declined_reason: string | null;
+          invoice_id: UUID | null;
+          created_by: UUID | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          quote_number: string;
+          title?: string;
+          customer_name?: string;
+          customer_email?: string | null;
+          customer_phone?: string | null;
+          lead_id?: UUID | null;
+          client_id?: UUID | null;
+          items?: InvoiceItem[];
+          subtotal?: number;
+          discount?: number;
+          tax_rate?: number;
+          tax_amount?: number;
+          grand_total?: number;
+          currency?: string;
+          valid_until?: string | null;
+          notes?: string | null;
+          terms?: string | null;
+          status?: QuoteStatus;
+          share_token?: string;
+          sent_at?: Timestamp | null;
+          viewed_at?: Timestamp | null;
+          signed_name?: string | null;
+          signature_data?: string | null;
+          signed_ip?: string | null;
+          accepted_at?: Timestamp | null;
+          declined_at?: Timestamp | null;
+          declined_reason?: string | null;
+          invoice_id?: UUID | null;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["quotes"]["Insert"]>;
+        Relationships: [];
+      };
+      automations: {
+        Row: {
+          id: UUID;
+          name: string;
+          description: string | null;
+          is_active: boolean;
+          trigger: AutomationTrigger;
+          trigger_config: Record<string, unknown>;
+          conditions: Record<string, unknown>[];
+          runs_started: number;
+          last_run_at: Timestamp | null;
+          created_by: UUID | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          name?: string;
+          description?: string | null;
+          is_active?: boolean;
+          trigger?: AutomationTrigger;
+          trigger_config?: Record<string, unknown>;
+          conditions?: Record<string, unknown>[];
+          runs_started?: number;
+          last_run_at?: Timestamp | null;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["automations"]["Insert"]>;
+        Relationships: [];
+      };
+      automation_steps: {
+        Row: {
+          id: UUID;
+          automation_id: UUID;
+          position: number;
+          kind: AutomationStepKind;
+          config: Record<string, unknown>;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          automation_id: UUID;
+          position?: number;
+          kind?: AutomationStepKind;
+          config?: Record<string, unknown>;
+          created_at?: Timestamp;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["automation_steps"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      automation_runs: {
+        Row: {
+          id: UUID;
+          automation_id: UUID;
+          lead_id: UUID | null;
+          client_id: UUID | null;
+          subject_name: string;
+          subject_phone: string | null;
+          subject_email: string | null;
+          context: Record<string, unknown>;
+          trigger_key: string | null;
+          step_index: number;
+          status: AutomationRunStatus;
+          next_run_at: Timestamp;
+          log: Record<string, unknown>[];
+          error: string | null;
+          created_at: Timestamp;
+          completed_at: Timestamp | null;
+        };
+        Insert: {
+          id?: UUID;
+          automation_id: UUID;
+          lead_id?: UUID | null;
+          client_id?: UUID | null;
+          subject_name?: string;
+          subject_phone?: string | null;
+          subject_email?: string | null;
+          context?: Record<string, unknown>;
+          trigger_key?: string | null;
+          step_index?: number;
+          status?: AutomationRunStatus;
+          next_run_at?: Timestamp;
+          log?: Record<string, unknown>[];
+          error?: string | null;
+          created_at?: Timestamp;
+          completed_at?: Timestamp | null;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["automation_runs"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      webhook_endpoints: {
+        Row: {
+          id: UUID;
+          name: string;
+          token: string;
+          action: WebhookAction;
+          config: Record<string, unknown>;
+          hits: number;
+          last_hit_at: Timestamp | null;
+          created_by: UUID | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          name?: string;
+          token?: string;
+          action?: WebhookAction;
+          config?: Record<string, unknown>;
+          hits?: number;
+          last_hit_at?: Timestamp | null;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["webhook_endpoints"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      api_keys: {
+        Row: {
+          id: UUID;
+          name: string;
+          key: string;
+          is_active: boolean;
+          last_used_at: Timestamp | null;
+          created_by: UUID | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          name?: string;
+          key?: string;
+          is_active?: boolean;
+          last_used_at?: Timestamp | null;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["api_keys"]["Insert"]>;
+        Relationships: [];
+      };
+      app_settings: {
+        Row: {
+          key: string;
+          value: Record<string, unknown>;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          key: string;
+          value?: Record<string, unknown>;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["app_settings"]["Insert"]>;
+        Relationships: [];
+      };
+      payment_plans: {
+        Row: {
+          id: UUID;
+          title: string;
+          client_id: UUID | null;
+          lead_id: UUID | null;
+          invoice_id: UUID | null;
+          contact_name: string;
+          phone: string | null;
+          total: number;
+          currency: string;
+          notes: string | null;
+          status: PaymentPlanStatus;
+          remind_days_before: number | null;
+          created_by: UUID | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          title: string;
+          client_id?: UUID | null;
+          lead_id?: UUID | null;
+          invoice_id?: UUID | null;
+          contact_name?: string;
+          phone?: string | null;
+          total?: number;
+          currency?: string;
+          notes?: string | null;
+          status?: PaymentPlanStatus;
+          remind_days_before?: number | null;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["payment_plans"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      payment_installments: {
+        Row: {
+          id: UUID;
+          plan_id: UUID;
+          seq: number;
+          amount: number;
+          due_date: string;
+          status: InstallmentStatus;
+          paid_at: Timestamp | null;
+          reminder_sent_at: Timestamp | null;
+          overdue_sent_at: Timestamp | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          plan_id: UUID;
+          seq?: number;
+          amount?: number;
+          due_date: string;
+          status?: InstallmentStatus;
+          paid_at?: Timestamp | null;
+          reminder_sent_at?: Timestamp | null;
+          overdue_sent_at?: Timestamp | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["payment_installments"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      cheques: {
+        Row: {
+          id: UUID;
+          direction: ChequeDirection;
+          party_name: string;
+          client_id: UUID | null;
+          bank: string | null;
+          cheque_number: string | null;
+          amount: number;
+          currency: string;
+          due_date: string;
+          status: ChequeStatus;
+          notes: string | null;
+          alerted_at: Timestamp | null;
+          created_by: UUID | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          direction?: ChequeDirection;
+          party_name: string;
+          client_id?: UUID | null;
+          bank?: string | null;
+          cheque_number?: string | null;
+          amount?: number;
+          currency?: string;
+          due_date: string;
+          status?: ChequeStatus;
+          notes?: string | null;
+          alerted_at?: Timestamp | null;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["cheques"]["Insert"]>;
+        Relationships: [];
+      };
+      expenses: {
+        Row: {
+          id: UUID;
+          expense_date: string;
+          category: ExpenseCategory;
+          description: string;
+          vendor: string | null;
+          amount: number;
+          currency: string;
+          payment_method: string | null;
+          tax_amount: number;
+          created_by: UUID | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          expense_date?: string;
+          category?: ExpenseCategory;
+          description: string;
+          vendor?: string | null;
+          amount?: number;
+          currency?: string;
+          payment_method?: string | null;
+          tax_amount?: number;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["expenses"]["Insert"]>;
+        Relationships: [];
+      };
+      ai_digests: {
+        Row: {
+          id: UUID;
+          week_start: string;
+          content: string;
+          stats: Record<string, unknown>;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          week_start: string;
+          content?: string;
+          stats?: Record<string, unknown>;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["ai_digests"]["Insert"]>;
+        Relationships: [];
+      };
+      churn_alerts: {
+        Row: {
+          id: UUID;
+          client_id: UUID | null;
+          client_name: string;
+          severity: ChurnSeverity;
+          reason: string;
+          draft_message: string | null;
+          status: ChurnStatus;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          client_id?: UUID | null;
+          client_name?: string;
+          severity?: ChurnSeverity;
+          reason?: string;
+          draft_message?: string | null;
+          status?: ChurnStatus;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["churn_alerts"]["Insert"]>;
+        Relationships: [];
+      };
+      competitors: {
+        Row: {
+          id: UUID;
+          name: string;
+          website: string | null;
+          facebook: string | null;
+          instagram: string | null;
+          notes: string | null;
+          ai_summary: string | null;
+          ai_summary_at: Timestamp | null;
+          created_by: UUID | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          name: string;
+          website?: string | null;
+          facebook?: string | null;
+          instagram?: string | null;
+          notes?: string | null;
+          ai_summary?: string | null;
+          ai_summary_at?: Timestamp | null;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["competitors"]["Insert"]>;
+        Relationships: [];
+      };
+      competitor_entries: {
+        Row: {
+          id: UUID;
+          competitor_id: UUID;
+          kind: CompetitorEntryKind;
+          content: string;
+          created_by: UUID | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          competitor_id: UUID;
+          kind?: CompetitorEntryKind;
+          content: string;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["competitor_entries"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      ad_entries: {
+        Row: {
+          id: UUID;
+          platform: AdPlatform;
+          campaign: string;
+          period_start: string;
+          period_end: string;
+          spend: number;
+          currency: string;
+          impressions: number | null;
+          clicks: number | null;
+          leads: number | null;
+          revenue: number | null;
+          notes: string | null;
+          created_by: UUID | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          platform?: AdPlatform;
+          campaign: string;
+          period_start: string;
+          period_end: string;
+          spend?: number;
+          currency?: string;
+          impressions?: number | null;
+          clicks?: number | null;
+          leads?: number | null;
+          revenue?: number | null;
+          notes?: string | null;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["ad_entries"]["Insert"]>;
+        Relationships: [];
+      };
+      visitor_events: {
+        Row: {
+          id: UUID;
+          site: string;
+          session_id: string;
+          kind: VisitorEventKind;
+          path: string;
+          referrer: string | null;
+          meta: Record<string, unknown>;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          site?: string;
+          session_id?: string;
+          kind?: VisitorEventKind;
+          path?: string;
+          referrer?: string | null;
+          meta?: Record<string, unknown>;
+          created_at?: Timestamp;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["visitor_events"]["Insert"]
         >;
         Relationships: [];
       };

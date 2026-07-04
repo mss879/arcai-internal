@@ -185,6 +185,66 @@ body {
   animation: continuous-float 6s ease-in-out infinite;
 }
 
+/* ---------- Dashboard entrance choreography ---------- */
+
+/* Sections rise in one after another; set --rise-delay per element. */
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(18px) scale(0.985);
+    filter: blur(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+.animate-rise-in {
+  animation: rise-in 0.65s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation-delay: var(--rise-delay, 0ms);
+}
+
+/* Chart bars grow up from the baseline, staggered per bar. */
+@keyframes bar-grow {
+  from {
+    transform: scaleY(0);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+
+.animate-bar-grow {
+  transform-origin: bottom;
+  animation: bar-grow 0.9s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation-delay: var(--rise-delay, 0ms);
+}
+
+/* Slow diagonal light sweep across the hero card. */
+@keyframes hero-sheen {
+  0% {
+    transform: translateX(-120%) skewX(-18deg);
+  }
+  55%, 100% {
+    transform: translateX(220%) skewX(-18deg);
+  }
+}
+
+.animate-hero-sheen {
+  animation: hero-sheen 7s ease-in-out 1.2s infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-rise-in,
+  .animate-bar-grow,
+  .animate-hero-sheen,
+  .animate-continuous-float {
+    animation: none;
+  }
+}
+
 /* ---------- Invoice generator ---------- */
 
 /* Giant "INVOICE" wordmark — scales on screen, fixed for print. */

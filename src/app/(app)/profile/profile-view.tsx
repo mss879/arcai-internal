@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/input";
 import { PageHeader } from "@/components/ui/page-header";
 import { COMMISSION_STATUS_META, STORAGE_BUCKETS } from "@/lib/constants";
+import { formatPhone } from "@/lib/sms-utils";
 import { uploadFile } from "@/lib/upload";
 import { formatCurrency } from "@/lib/utils";
 import type { Commission, Profile } from "@/lib/types";
@@ -33,6 +34,9 @@ export function ProfileView({
   const router = useRouter();
   const [fullName, setFullName] = React.useState(profile.full_name);
   const [title, setTitle] = React.useState(profile.title ?? "");
+  const [phone, setPhone] = React.useState(
+    profile.phone ? formatPhone(profile.phone) : "",
+  );
   const [savingProfile, startSaveProfile] = React.useTransition();
   const [uploading, setUploading] = React.useState(false);
 
@@ -51,7 +55,7 @@ export function ProfileView({
 
   function saveProfile() {
     startSaveProfile(async () => {
-      const res = await updateProfile({ full_name: fullName, title });
+      const res = await updateProfile({ full_name: fullName, title, phone });
       if (res.ok) {
         toast.success("Profile updated");
         router.refresh();
@@ -160,6 +164,17 @@ export function ProfileView({
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
                   placeholder="e.g. Designer"
+                />
+              </Field>
+              <Field
+                label="Phone number"
+                hint="You'll get an SMS alert when you're assigned a task or tagged. Sri Lankan number, e.g. 0712345678."
+              >
+                <Input
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  placeholder="0712345678"
+                  inputMode="tel"
                 />
               </Field>
               <Button onClick={saveProfile} loading={savingProfile}>

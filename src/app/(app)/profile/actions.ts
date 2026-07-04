@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import { createClient } from "@/lib/supabase/server";
+import { normalizePhone } from "@/lib/sms-utils";
 import type { Database } from "@/lib/database.types";
 import type { ActionResult } from "@/lib/types";
 
@@ -11,6 +12,7 @@ type ProfileUpdate = Database["public"]["Tables"]["profiles"]["Update"];
 export async function updateProfile(input: {
   full_name?: string;
   title?: string;
+  phone?: string;
   avatar_url?: string | null;
 }): Promise<ActionResult> {
   const supabase = await createClient();
@@ -22,6 +24,15 @@ export async function updateProfile(input: {
   const patch: ProfileUpdate = {};
   if (input.full_name !== undefined) patch.full_name = input.full_name.trim();
   if (input.title !== undefined) patch.title = input.title.trim() || null;
+  if (input.phone !== undefined) {
+    if (!input.phone.trim()) {
+      patch.phone = null;
+    } else {
+      const phone = normalizePhone(input.phone);
+      if (!phone.ok) return { ok: false, error: phone.error };
+      patch.phone = phone.value;
+    }
+  }
   if (input.avatar_url !== undefined) patch.avatar_url = input.avatar_url;
 
   const { error } = await supabase

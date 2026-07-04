@@ -32,6 +32,7 @@ export function VoiceAssistant({ firstName }: { firstName: string }) {
     toggleMic,
     sendText,
     sendInvoice,
+    sendSms,
     reset,
   } = useVoiceChat();
 
@@ -227,6 +228,7 @@ export function VoiceAssistant({ firstName }: { firstName: string }) {
                           key={k}
                           card={card}
                           onSend={sendInvoice}
+                          onSendSms={sendSms}
                         />
                       ))}
                     </div>

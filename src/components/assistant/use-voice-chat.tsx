@@ -4,7 +4,11 @@ import * as React from "react";
 import { CheckCircle2, Eye, Pencil } from "lucide-react";
 
 import { cn } from "@/lib/utils";
-import type { AssistantCard } from "@/lib/assistant-cards";
+import type {
+  AssistantCard,
+  CardResolution,
+  SmsCardData,
+} from "@/lib/assistant-cards";
 
 /**
  * The voice engine shared by both Arc surfaces — the desktop floating panel
@@ -33,6 +37,11 @@ export type Status = "idle" | "listening" | "thinking" | "speaking";
 
 const SILENCE_MS = 15000; // auto-stop this long after you STOP talking — long
 // enough to ride out mid-sentence breaths/pauses (tap the mic to stop sooner).
+// When the mic re-armed itself for a send-confirmation, the expected answer is
+// a short "yes" / "no" — stop fast so the send feels instant, and give up
+// quietly if the user says nothing at all (the card's buttons still work).
+const CONFIRM_SILENCE_MS = 2000;
+const CONFIRM_MAX_WAIT_MS = 8000;
 const SPEECH_LEVEL = 0.04; // RMS above this counts as voice (gates out room noise)
 const VOICE_FRAMES = 5; // need this many consecutive voiced frames to "arm"
 
@@ -52,6 +61,26 @@ const HALLUCINATIONS = new Set([
 function looksLikeNoise(text: string): boolean {
   const norm = text.trim().toLowerCase().replace(/[.!?,]+$/g, "").trim();
   return norm.length < 2 || HALLUCINATIONS.has(norm);
+}
+
+// While a send-confirmation card is pending, the mic re-arms so the user can
+// just say "yes, send it". Negatives are checked first so "no, don't send"
+// never reads as a yes; anything that matches neither goes to the model as a
+// normal message (e.g. "change the amount to fifty thousand").
+const CONFIRM_NO_RE =
+  /\b(no|nope|don'?t|do not|cancel|stop|wait|hold on|not yet|wrong|incorrect|change|edit)\b/i;
+const CONFIRM_YES_RE =
+  /\b(yes|yeah|yep|yup|sure|correct|confirm|confirmed|okay|ok|go ahead|do it|send( it)?|looks good|perfect|that'?s right)\b/i;
+
+/** Where a pending confirm card lives in the transcript. */
+type PendingConfirm = { msgIndex: number; cardIndex: number };
+
+function lastConfirmCardIndex(cards: AssistantCard[]): number {
+  for (let i = cards.length - 1; i >= 0; i--) {
+    const t = cards[i].type;
+    if (t === "confirm_send" || t === "confirm_send_sms") return i;
+  }
+  return -1;
 }
 
 function pickMimeType(): { mime: string; ext: string } {
@@ -120,6 +149,8 @@ export type VoiceChat = {
     emails: string[],
     message?: string,
   ) => Promise<SendInvoiceResult>;
+  /** Actually send a prepared SMS — fired only by the user's Send tap. */
+  sendSms: (sms: SmsCardData) => Promise<SendInvoiceResult>;
   stopListening: () => void;
   /** Stop capture + playback without wiping the transcript. */
   stop: () => void;
@@ -152,6 +183,23 @@ export function useVoiceChat(): VoiceChat {
   }, [muted]);
 
   const busy = status === "thinking" || status === "speaking";
+
+  // Voice-confirm plumbing. A pending confirm card + "the user was talking"
+  // means we re-open the mic after the reply so a spoken yes/no can resolve it.
+  const pendingConfirmRef = React.useRef<PendingConfirm | null>(null);
+  const lastInputVoiceRef = React.useRef(false);
+  // Set just before an automatic re-arm; consumed by startListening so that
+  // one capture session uses the fast confirm timings instead of dictation's.
+  const autoListenRef = React.useRef(false);
+  const startListeningRef = React.useRef<() => void>(() => {});
+  const messagesRef = React.useRef(messages);
+  React.useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+  const statusRef = React.useRef(status);
+  React.useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
 
   // One reusable <audio> element for all spoken replies.
   const getPlayer = React.useCallback(() => {
@@ -210,15 +258,48 @@ export function useVoiceChat(): VoiceChat {
     };
   }, [teardownCapture]);
 
+  /** Record a confirm card's outcome on the message it belongs to. */
+  const updateCardResolution = React.useCallback(
+    (target: PendingConfirm, resolution: CardResolution) => {
+      setMessages((prev) =>
+        prev.map((m, i) =>
+          i !== target.msgIndex
+            ? m
+            : {
+                ...m,
+                cards: m.cards?.map((c, j) =>
+                  j !== target.cardIndex ? c : ({ ...c, resolution } as AssistantCard),
+                ),
+              },
+        ),
+      );
+    },
+    [],
+  );
+
+  // If a confirm card is waiting and the user was speaking (not typing),
+  // re-open the mic once the reply finishes so they can just say "yes, send".
+  const maybeAutoListen = React.useCallback(() => {
+    if (!pendingConfirmRef.current || !lastInputVoiceRef.current) return;
+    window.setTimeout(() => {
+      if (pendingConfirmRef.current && statusRef.current === "idle") {
+        autoListenRef.current = true;
+        startListeningRef.current();
+      }
+    }, 350);
+  }, []);
+
   const speak = React.useCallback(
     async (reply: string) => {
       if (mutedRef.current || !reply.trim()) {
         setStatus("idle");
+        maybeAutoListen();
         return;
       }
       const el = getPlayer();
       if (!el) {
         setStatus("idle");
+        maybeAutoListen();
         return;
       }
       try {
@@ -230,6 +311,7 @@ export function useVoiceChat(): VoiceChat {
         });
         if (!res.ok) {
           setStatus("idle");
+          maybeAutoListen();
           return;
         }
         const blob = await res.blob();
@@ -238,19 +320,143 @@ export function useVoiceChat(): VoiceChat {
         currentUrlRef.current = url;
         el.muted = false;
         el.src = url;
-        el.onended = () => setStatus("idle");
-        el.onerror = () => setStatus("idle");
+        el.onended = () => {
+          setStatus("idle");
+          maybeAutoListen();
+        };
+        el.onerror = () => {
+          setStatus("idle");
+          maybeAutoListen();
+        };
         await el.play();
       } catch {
         // Autoplay can still be refused; the reply is already shown as text.
         setStatus("idle");
+        maybeAutoListen();
       }
     },
-    [getPlayer],
+    [getPlayer, maybeAutoListen],
+  );
+
+  const sendInvoice = React.useCallback(
+    async (
+      invoiceId: string,
+      emails: string[],
+      message?: string,
+    ): Promise<SendInvoiceResult> => {
+      // A manual Send tap supersedes any pending voice confirmation.
+      pendingConfirmRef.current = null;
+      try {
+        const res = await fetch("/api/assistant/send-invoice", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ invoiceId, emails, message }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data?.ok) {
+          return { ok: false, error: data?.error || "Could not send the invoice." };
+        }
+        return { ok: true };
+      } catch {
+        return { ok: false, error: "Could not reach the server." };
+      }
+    },
+    [],
+  );
+
+  const sendSms = React.useCallback(
+    async (sms: SmsCardData): Promise<SendInvoiceResult> => {
+      pendingConfirmRef.current = null;
+      try {
+        const res = await fetch("/api/assistant/send-sms", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            toNumber: sms.to_number,
+            message: sms.message,
+            clientId: sms.client_id,
+            clientName: sms.client_name,
+            kind: sms.kind,
+            invoiceId: sms.invoice_id,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data?.ok) {
+          return { ok: false, error: data?.error || "Could not send the SMS." };
+        }
+        return { ok: true };
+      } catch {
+        return { ok: false, error: "Could not reach the server." };
+      }
+    },
+    [],
+  );
+
+  /**
+   * If a confirm card is pending and the user's words are a clear yes or no,
+   * resolve it right here — the send still happens through the same
+   * user-action-only routes as the buttons, never through the model. Returns
+   * true when the words were consumed; false hands them to the chat as usual.
+   */
+  const resolvePendingConfirm = React.useCallback(
+    async (said: string): Promise<boolean> => {
+      const pending = pendingConfirmRef.current;
+      if (!pending) return false;
+      const card = messagesRef.current[pending.msgIndex]?.cards?.[pending.cardIndex];
+      if (
+        !card ||
+        (card.type !== "confirm_send" && card.type !== "confirm_send_sms") ||
+        card.resolution
+      ) {
+        pendingConfirmRef.current = null;
+        return false;
+      }
+
+      const isNo = CONFIRM_NO_RE.test(said);
+      const isYes = !isNo && CONFIRM_YES_RE.test(said);
+      if (!isNo && !isYes) return false;
+
+      pendingConfirmRef.current = null;
+      setMessages((prev) => [...prev, { role: "user", content: said }]);
+
+      if (isNo) {
+        updateCardResolution(pending, { state: "cancelled" });
+        const reply = "Okay, cancelled — nothing was sent.";
+        setMessages((prev) => [...prev, { role: "assistant", content: reply }]);
+        await speak(reply);
+        return true;
+      }
+
+      setStatus("thinking");
+      updateCardResolution(pending, { state: "sending" });
+      const res =
+        card.type === "confirm_send_sms"
+          ? await sendSms(card.sms)
+          : await sendInvoice(card.invoice.id, card.emails, card.message);
+
+      let reply: string;
+      if (res.ok) {
+        updateCardResolution(pending, { state: "sent" });
+        reply =
+          card.type === "confirm_send_sms"
+            ? `Done — the text is on its way to ${card.sms.to_display}.`
+            : `Done — the invoice is on its way to ${card.emails.join(", ")}.`;
+      } else {
+        updateCardResolution(pending, { state: "error", error: res.error });
+        reply = `That didn't go through — ${res.error ?? "the send failed"}. You can tap Try again on the card.`;
+      }
+      setMessages((prev) => [...prev, { role: "assistant", content: reply }]);
+      await speak(reply);
+      return true;
+    },
+    [sendInvoice, sendSms, speak, updateCardResolution],
   );
 
   const runChat = React.useCallback(
     async (next: Message[]) => {
+      // A fresh round-trip supersedes any earlier pending confirmation — if
+      // this reply carries a new confirm card, it becomes the pending one.
+      pendingConfirmRef.current = null;
       setStatus("thinking");
       setError(null);
       try {
@@ -271,6 +477,13 @@ export function useVoiceChat(): VoiceChat {
         const events: ToolEvent[] = data.events || [];
         const cards: AssistantCard[] = data.cards || [];
         setMessages([...next, { role: "assistant", content: reply, events, cards }]);
+        const confirmIndex = lastConfirmCardIndex(cards);
+        if (confirmIndex >= 0) {
+          pendingConfirmRef.current = {
+            msgIndex: next.length,
+            cardIndex: confirmIndex,
+          };
+        }
         await speak(reply);
       } catch {
         setError("Could not reach the assistant.");
@@ -286,11 +499,19 @@ export function useVoiceChat(): VoiceChat {
       if (!trimmed || busy) return;
       unlockAudio(); // we're in the tap/submit gesture — prime voice output
       setText("");
-      const next: Message[] = [...messages, { role: "user", content: trimmed }];
-      setMessages(next);
-      void runChat(next);
+      lastInputVoiceRef.current = false;
+      void (async () => {
+        // A typed "yes" resolves a pending confirm card too.
+        if (await resolvePendingConfirm(trimmed)) return;
+        const next: Message[] = [
+          ...messagesRef.current,
+          { role: "user", content: trimmed },
+        ];
+        setMessages(next);
+        await runChat(next);
+      })();
     },
-    [busy, messages, runChat, unlockAudio],
+    [busy, resolvePendingConfirm, runChat, unlockAudio],
   );
 
   const transcribeAndSend = React.useCallback(
@@ -312,9 +533,18 @@ export function useVoiceChat(): VoiceChat {
         const said: string = (data.text || "").trim();
         if (!said || looksLikeNoise(said)) {
           setStatus("idle");
+          // Stay hands-free: if a confirmation is still waiting and we only
+          // heard noise, listen again instead of going quiet.
+          maybeAutoListen();
           return;
         }
-        const next: Message[] = [...messages, { role: "user", content: said }];
+        lastInputVoiceRef.current = true;
+        // A spoken "yes / no" resolves the pending confirm card directly.
+        if (await resolvePendingConfirm(said)) return;
+        const next: Message[] = [
+          ...messagesRef.current,
+          { role: "user", content: said },
+        ];
         setMessages(next);
         await runChat(next);
       } catch {
@@ -322,7 +552,7 @@ export function useVoiceChat(): VoiceChat {
         setStatus("idle");
       }
     },
-    [messages, runChat],
+    [maybeAutoListen, resolvePendingConfirm, runChat],
   );
 
   const stopListening = React.useCallback(() => {
@@ -331,6 +561,12 @@ export function useVoiceChat(): VoiceChat {
   }, []);
 
   const startListening = React.useCallback(async () => {
+    // Consume the auto-arm flag: this one session answers a confirm card, so
+    // it stops fast after a short reply instead of waiting out dictation.
+    const confirmMode = autoListenRef.current;
+    autoListenRef.current = false;
+    const silenceMs = confirmMode ? CONFIRM_SILENCE_MS : SILENCE_MS;
+
     setError(null);
     unlockAudio(); // we're in the tap gesture — prime voice output for mobile
     // Stop any in-progress playback first.
@@ -390,6 +626,7 @@ export function useVoiceChat(): VoiceChat {
       source.connect(analyser);
       const buf = new Uint8Array(analyser.fftSize);
       lastLoudRef.current = Date.now();
+      const startedAt = Date.now();
       let voicedFrames = 0;
 
       const tick = () => {
@@ -414,7 +651,17 @@ export function useVoiceChat(): VoiceChat {
 
         // Only auto-stop AFTER you've actually started talking and then gone
         // quiet — never cut you off while you're still gathering your words.
-        if (hasSpokenRef.current && now - lastLoudRef.current > SILENCE_MS) {
+        if (hasSpokenRef.current && now - lastLoudRef.current > silenceMs) {
+          stopListening();
+          return;
+        }
+        // Auto-armed confirm mic with no answer at all: close quietly rather
+        // than sitting open — the card's Send/Cancel buttons still work.
+        if (
+          confirmMode &&
+          !hasSpokenRef.current &&
+          now - startedAt > CONFIRM_MAX_WAIT_MS
+        ) {
           stopListening();
           return;
         }
@@ -430,12 +677,21 @@ export function useVoiceChat(): VoiceChat {
     setStatus("listening");
   }, [stopListening, teardownCapture, transcribeAndSend, unlockAudio]);
 
+  // Let earlier callbacks (speak → maybeAutoListen) re-arm the mic without a
+  // circular dependency on startListening.
+  React.useEffect(() => {
+    startListeningRef.current = () => {
+      void startListening();
+    };
+  }, [startListening]);
+
   const toggleMic = React.useCallback(() => {
     if (status === "listening") stopListening();
     else if (!busy) void startListening();
   }, [status, busy, startListening, stopListening]);
 
   const stop = React.useCallback(() => {
+    pendingConfirmRef.current = null; // don't re-arm the mic after a manual stop
     stopListening();
     playerRef.current?.pause();
     setStatus("idle");
@@ -447,30 +703,6 @@ export function useVoiceChat(): VoiceChat {
     setError(null);
     setText("");
   }, [stop]);
-
-  const sendInvoice = React.useCallback(
-    async (
-      invoiceId: string,
-      emails: string[],
-      message?: string,
-    ): Promise<SendInvoiceResult> => {
-      try {
-        const res = await fetch("/api/assistant/send-invoice", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ invoiceId, emails, message }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok || !data?.ok) {
-          return { ok: false, error: data?.error || "Could not send the invoice." };
-        }
-        return { ok: true };
-      } catch {
-        return { ok: false, error: "Could not reach the server." };
-      }
-    },
-    [],
-  );
 
   return {
     status,
@@ -485,6 +717,7 @@ export function useVoiceChat(): VoiceChat {
     toggleMic,
     sendText,
     sendInvoice,
+    sendSms,
     stopListening,
     stop,
     reset,

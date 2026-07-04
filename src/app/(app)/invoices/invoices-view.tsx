@@ -1,22 +1,34 @@
 "use client";
 
 import * as React from "react";
-import { FilePlus2, History } from "lucide-react";
+import { FilePlus2, FileSignature, History } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import type { Database } from "@/lib/database.types";
+import type { Quote } from "@/lib/types";
 
 import { InvoiceGenerator } from "./invoice-generator";
 import { PastInvoices } from "./past-invoices";
+import { QuotesSection, type ClientLite, type LeadLite } from "./quotes-section";
 
 export type SavedInvoice = Database["public"]["Tables"]["invoices"]["Row"];
 
+type Tab = "create" | "quotes" | "past";
+
 export function InvoicesView({
   pastInvoices,
+  quotes,
+  clients,
+  leads,
+  initialTab = "create",
 }: {
   pastInvoices: SavedInvoice[];
+  quotes: Quote[];
+  clients: ClientLite[];
+  leads: LeadLite[];
+  initialTab?: Tab;
 }) {
-  const [tab, setTab] = React.useState<"create" | "past">("create");
+  const [tab, setTab] = React.useState<Tab>(initialTab);
 
   return (
     <div className="space-y-6">
@@ -29,32 +41,46 @@ export function InvoicesView({
           Create
         </TabButton>
         <TabButton
+          active={tab === "quotes"}
+          onClick={() => setTab("quotes")}
+          icon={<FileSignature className="h-4 w-4" />}
+        >
+          Quotes
+          {quotes.length > 0 && <TabCount active={tab === "quotes"} count={quotes.length} />}
+        </TabButton>
+        <TabButton
           active={tab === "past"}
           onClick={() => setTab("past")}
           icon={<History className="h-4 w-4" />}
         >
           Past invoices
           {pastInvoices.length > 0 && (
-            <span
-              className={cn(
-                "ml-1.5 rounded-full px-1.5 py-0.5 text-[11px] font-semibold",
-                tab === "past"
-                  ? "bg-white/20 text-white"
-                  : "bg-slate-100 text-slate-500",
-              )}
-            >
-              {pastInvoices.length}
-            </span>
+            <TabCount active={tab === "past"} count={pastInvoices.length} />
           )}
         </TabButton>
       </div>
 
       {tab === "create" ? (
-        <InvoiceGenerator pastInvoices={pastInvoices} />
+        <InvoiceGenerator pastInvoices={pastInvoices} quotes={quotes} />
+      ) : tab === "quotes" ? (
+        <QuotesSection quotes={quotes} clients={clients} leads={leads} />
       ) : (
         <PastInvoices invoices={pastInvoices} />
       )}
     </div>
+  );
+}
+
+function TabCount({ active, count }: { active: boolean; count: number }) {
+  return (
+    <span
+      className={cn(
+        "ml-1.5 rounded-full px-1.5 py-0.5 text-[11px] font-semibold",
+        active ? "bg-white/20 text-white" : "bg-slate-100 text-slate-500",
+      )}
+    >
+      {count}
+    </span>
   );
 }
 

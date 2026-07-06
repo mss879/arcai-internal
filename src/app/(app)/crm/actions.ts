@@ -146,6 +146,7 @@ export type LeadInput = {
   stage_id: string;
   title: string;
   company?: string;
+  company_website?: string;
   contact_name?: string;
   contact_email?: string;
   contact_phone?: string;
@@ -176,6 +177,7 @@ export async function saveLead(input: LeadInput): Promise<ActionResult> {
     stage_id: input.stage_id,
     title: input.title.trim(),
     company: input.company?.trim() || null,
+    company_website: input.company_website?.trim() || null,
     contact_name: input.contact_name?.trim() || null,
     contact_email: input.contact_email?.trim() || null,
     contact_phone: input.contact_phone?.trim() || null,

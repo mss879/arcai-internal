@@ -733,6 +733,8 @@ export type Database = {
           score_reason: string | null;
           ai_summary: string | null;
           ai_next_action: string | null;
+          // 0038 — research anchor
+          company_website: string | null;
         };
         Insert: {
           id?: UUID;
@@ -768,6 +770,7 @@ export type Database = {
           score_reason?: string | null;
           ai_summary?: string | null;
           ai_next_action?: string | null;
+          company_website?: string | null;
         };
         Update: Partial<Database["public"]["Tables"]["leads"]["Insert"]>;
         Relationships: [];

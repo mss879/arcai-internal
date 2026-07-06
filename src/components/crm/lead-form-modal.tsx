@@ -77,6 +77,7 @@ export function LeadFormModal({
             stage_id: lead.stage_id ?? stages[0]?.id ?? "",
             title: lead.title,
             company: lead.company ?? "",
+            company_website: lead.company_website ?? "",
             contact_name: lead.contact_name ?? "",
             contact_email: lead.contact_email ?? "",
             contact_phone: lead.contact_phone ?? "",
@@ -170,6 +171,16 @@ export function LeadFormModal({
             <Input
               value={form.company ?? ""}
               onChange={(e) => set("company", e.target.value)}
+              placeholder="e.g. Acme (Pvt) Ltd"
+            />
+          </Field>
+          <Field label="Company website">
+            <Input
+              type="url"
+              inputMode="url"
+              value={form.company_website ?? ""}
+              onChange={(e) => set("company_website", e.target.value)}
+              placeholder="acme.lk — sharpens AI research"
             />
           </Field>
           <Field label="Value">

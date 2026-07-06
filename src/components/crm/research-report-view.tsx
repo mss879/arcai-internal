@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import {
+  BadgeCheck,
   Building2,
   ExternalLink,
   Globe,
@@ -9,6 +10,7 @@ import {
   Lightbulb,
   MessageCircleQuestion,
   Newspaper,
+  ShieldAlert,
   Swords,
   TriangleAlert,
 } from "lucide-react";
@@ -18,6 +20,7 @@ import { cn } from "@/lib/utils";
 import {
   parseResearchReport,
   parseResearchSources,
+  type MatchConfidence,
 } from "@/lib/research-report";
 import type { LeadResearch } from "@/lib/types";
 
@@ -52,6 +55,55 @@ function Fact({ label, value }: { label: string; value: string }) {
 }
 
 /**
+ * Tells the rep, up front, whether we're confident this report is about the
+ * right company. A "low" match is a prominent warning to add/verify the
+ * website; high/medium is a quiet reassuring line.
+ */
+function ConfidenceBanner({
+  confidence,
+  verification,
+}: {
+  confidence: MatchConfidence;
+  verification: string;
+}) {
+  if (!confidence) return null;
+
+  if (confidence === "low") {
+    return (
+      <div className="flex gap-2 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2.5">
+        <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+        <div className="text-sm text-amber-800">
+          <span className="font-semibold">May be the wrong company.</span>{" "}
+          {verification ||
+            "Couldn't confirm this is the intended business — add or fix the company website on the lead, then re-run."}
+        </div>
+      </div>
+    );
+  }
+
+  const isHigh = confidence === "high";
+  return (
+    <div
+      className={cn(
+        "flex items-center gap-1.5 text-xs",
+        isHigh ? "text-emerald-600" : "text-slate-500",
+      )}
+      title={verification || undefined}
+    >
+      <BadgeCheck
+        className={cn("h-3.5 w-3.5", isHigh ? "text-emerald-500" : "text-slate-400")}
+      />
+      <span className="font-medium">
+        {isHigh ? "Identity confirmed" : "Likely match"}
+      </span>
+      {verification && (
+        <span className="truncate text-slate-400">· {verification}</span>
+      )}
+    </div>
+  );
+}
+
+/**
  * Renders a stored `lead_research` report. Presentational and reusable
  * across the lead-detail side card and the standalone research page.
  * `compact` tightens spacing for the narrow side column.
@@ -77,6 +129,12 @@ export function ResearchReportView({
 
   return (
     <div className={cn("space-y-4", compact && "space-y-3.5")}>
+      {/* Identity confidence — is this even the right company? */}
+      <ConfidenceBanner
+        confidence={report.match_confidence}
+        verification={report.verification}
+      />
+
       {/* Quick links + provenance */}
       <div className="flex flex-wrap items-center gap-2">
         {website && (

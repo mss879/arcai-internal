@@ -86,11 +86,11 @@ async function researchInputForLead(
 ): Promise<ResearchInput> {
   const { data: lead } = await supabase
     .from("leads")
-    .select("company, contact_name, company_id")
+    .select("company, company_website, contact_name, company_id")
     .eq("id", leadId)
     .maybeSingle();
 
-  let website: string | null = null;
+  let website: string | null = lead?.company_website?.trim() || null;
   let industry: string | null = null;
   let location: string | null = null;
   if (lead?.company_id) {
@@ -99,7 +99,8 @@ async function researchInputForLead(
       .select("website, industry, city")
       .eq("id", lead.company_id)
       .maybeSingle();
-    website = company?.website ?? null;
+    // The lead's own website wins; fall back to the linked organization's.
+    website = website || company?.website || null;
     industry = company?.industry ?? null;
     location = company?.city ?? null;
   }
@@ -108,7 +109,9 @@ async function researchInputForLead(
     company: lead?.company?.trim() || fallbackCompany,
     website,
     industry,
-    location,
+    // Default the geography to Sri Lanka — every lead in this workspace is
+    // a Sri Lankan business, which massively disambiguates common names.
+    location: location || "Sri Lanka",
     contactName: lead?.contact_name ?? null,
   };
 }

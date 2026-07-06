@@ -11,6 +11,9 @@ export type ResearchCompetitor = { name: string; note: string };
 export type ResearchNewsItem = { title: string; summary: string; url: string };
 export type ResearchSource = { url: string; title: string; query: string };
 
+/** How confident we are the report is about the intended company. */
+export type MatchConfidence = "high" | "medium" | "low" | "";
+
 export type ResearchReport = {
   overview: string;
   industry: string;
@@ -25,9 +28,17 @@ export type ResearchReport = {
   pain_points: string[];
   talking_points: string[];
   discovery_questions: string[];
+  /** How sure we are this is the right company (see MatchConfidence). */
+  match_confidence: MatchConfidence;
+  /** One line explaining the confidence — how identity was (or wasn't) confirmed. */
+  verification: string;
   /** "ai" for OpenAI-written briefings, "basic" for the no-key fallback. */
   generated_by: "ai" | "basic";
 };
+
+function confidence(x: unknown): MatchConfidence {
+  return x === "high" || x === "medium" || x === "low" ? x : "";
+}
 
 function str(x: unknown): string {
   return typeof x === "string" ? x.trim() : "";
@@ -74,6 +85,8 @@ export function parseResearchReport(x: unknown): ResearchReport {
     pain_points: strArr(r.pain_points),
     talking_points: strArr(r.talking_points),
     discovery_questions: strArr(r.discovery_questions),
+    match_confidence: confidence(r.match_confidence),
+    verification: str(r.verification),
     generated_by: r.generated_by === "basic" ? "basic" : "ai",
   };
 }

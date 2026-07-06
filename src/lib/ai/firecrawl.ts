@@ -78,6 +78,10 @@ export async function firecrawlSearch(
     tbs?: string;
     /** Skip scraping and keep just titles/descriptions (faster). */
     withoutContent?: boolean;
+    /** Geo-target the search, e.g. "Colombo, Western, Sri Lanka". */
+    location?: string;
+    /** ISO country code for result ranking, e.g. "lk". */
+    country?: string;
   },
 ): Promise<FirecrawlPage[]> {
   let res: Response;
@@ -94,6 +98,8 @@ export async function firecrawlSearch(
         limit: opts?.limit ?? 4,
         sources: (opts?.sources ?? ["web"]).map((type) => ({ type })),
         ...(opts?.tbs ? { tbs: opts.tbs } : {}),
+        ...(opts?.location ? { location: opts.location } : {}),
+        ...(opts?.country ? { country: opts.country } : {}),
         ...(opts?.withoutContent
           ? {}
           : {

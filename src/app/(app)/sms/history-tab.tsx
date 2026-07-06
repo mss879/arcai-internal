@@ -35,6 +35,10 @@ const KIND_META: Record<SmsKind, { label: string; badge: string }> = {
     label: "Promotion",
     badge: "bg-cyan-50 text-cyan-600 ring-cyan-200",
   },
+  todo_reminder: {
+    label: "Task reminder",
+    badge: "bg-emerald-50 text-emerald-600 ring-emerald-200",
+  },
 };
 
 type Filter = "all" | SmsKind | "failed";
@@ -53,6 +57,7 @@ export function HistoryTab({ messages }: { messages: SmsMessage[] }) {
     { value: "all", label: "All" },
     { value: "custom", label: "Custom" },
     { value: "payment_reminder", label: "Reminders" },
+    { value: "todo_reminder", label: "Task reminders" },
     { value: "promotion", label: "Promotions" },
     { value: "automation", label: "Automation" },
     { value: "failed", label: "Failed" },

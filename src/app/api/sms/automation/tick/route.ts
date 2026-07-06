@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { createAdminClient } from "@/lib/supabase/admin";
 import { processDueSmsRuns } from "@/lib/sms-automation";
+import { processTodoReminders } from "@/lib/todo-reminders";
 import { isSmsConfigured } from "@/lib/sms";
 
 /**
@@ -38,7 +39,11 @@ export async function GET(request: Request) {
   try {
     const supabase = createAdminClient();
     const result = await processDueSmsRuns(supabase);
-    return NextResponse.json({ ok: true, ...result });
+    // Task deadline reminders are idempotent (reminder_sent_at), so it's
+    // safe to run them here too — whichever tick endpoint the scheduler
+    // hits, reminders keep flowing.
+    const todos = await processTodoReminders(supabase);
+    return NextResponse.json({ ok: true, ...result, todos });
   } catch (e) {
     return NextResponse.json(
       { error: e instanceof Error ? e.message : "Tick failed." },

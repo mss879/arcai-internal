@@ -16,9 +16,9 @@ export function isSmsConfigured(): boolean {
   );
 }
 
-/** The approved sender id; Notify.lk's shared demo id until one is approved. */
+/** The approved "ARC AI" mask; NOTIFYLK_SENDER_ID overrides if it ever changes. */
 export function smsSenderId(): string {
-  return process.env.NOTIFYLK_SENDER_ID?.trim() || "NotifyDEMO";
+  return process.env.NOTIFYLK_SENDER_ID?.trim() || "ARC AI";
 }
 
 export type SendSmsResult = { ok: true } | { ok: false; error: string };

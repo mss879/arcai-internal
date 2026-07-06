@@ -50,25 +50,31 @@ export async function saveTodo(input: TodoInput): Promise<ActionResult> {
 
   // Snapshot who was already assigned/mentioned so SMS alerts only fire
   // for NEW assignments and tags — not on every edit of an existing task.
+  // Also snapshot the due date: changing it re-arms the deadline reminder.
   let prevAssignee: string | null = null;
+  let prevDueDate: string | null = null;
   const prevMentions = new Set<string>();
   if (input.id) {
     const [prevRes, prevMentionsRes] = await Promise.all([
       supabase
         .from("todos")
-        .select("assigned_to")
+        .select("assigned_to, due_date")
         .eq("id", input.id)
         .maybeSingle(),
       supabase.from("todo_mentions").select("user_id").eq("todo_id", input.id),
     ]);
     prevAssignee = prevRes.data?.assigned_to ?? null;
+    prevDueDate = prevRes.data?.due_date ?? null;
     for (const m of prevMentionsRes.data ?? []) prevMentions.add(m.user_id);
   }
 
   if (input.id) {
+    const dueChanged =
+      (prevDueDate ? new Date(prevDueDate).getTime() : null) !==
+      (payload.due_date ? new Date(payload.due_date).getTime() : null);
     const { error } = await supabase
       .from("todos")
-      .update(payload)
+      .update(dueChanged ? { ...payload, reminder_sent_at: null } : payload)
       .eq("id", input.id);
     if (error) return { ok: false, error: error.message };
   } else {

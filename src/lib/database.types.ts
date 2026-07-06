@@ -31,7 +31,12 @@ export type NotificationType =
   | "assignment"
   | "commission"
   | "system";
-export type SmsKind = "custom" | "payment_reminder" | "automation" | "promotion";
+export type SmsKind =
+  | "custom"
+  | "payment_reminder"
+  | "automation"
+  | "promotion"
+  | "todo_reminder";
 export type SmsStatus = "sent" | "failed";
 export type SmsStepKind = "send_sms" | "wait";
 export type SmsRunStatus = "running" | "completed" | "cancelled" | "failed";
@@ -239,6 +244,7 @@ export type Database = {
           position: number;
           created_by: UUID | null;
           completed_at: Timestamp | null;
+          reminder_sent_at: Timestamp | null;
           created_at: Timestamp;
         };
         Insert: {
@@ -253,6 +259,7 @@ export type Database = {
           position?: number;
           created_by?: UUID | null;
           completed_at?: Timestamp | null;
+          reminder_sent_at?: Timestamp | null;
           created_at?: Timestamp;
         };
         Update: Partial<Database["public"]["Tables"]["todos"]["Insert"]>;

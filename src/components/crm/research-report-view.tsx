@@ -162,7 +162,7 @@ export function ResearchReportView({
           </a>
         )}
         {report.generated_by === "basic" && (
-          <Badge className="bg-amber-50 text-amber-700 ring-amber-200">
+          <Badge className="block max-w-full whitespace-normal bg-amber-50 text-amber-700 ring-amber-200">
             Basic report — add an OpenAI key for full analysis
           </Badge>
         )}
@@ -220,7 +220,7 @@ export function ResearchReportView({
           </SectionTitle>
           <ul className="mt-2 space-y-1.5">
             {report.competitors.map((c, i) => (
-              <li key={i} className="text-sm text-slate-700">
+              <li key={i} className="break-words text-sm text-slate-700">
                 <span className="font-medium text-slate-900">{c.name}</span>
                 {c.note && <span className="text-slate-500"> — {c.note}</span>}
               </li>
@@ -243,15 +243,15 @@ export function ResearchReportView({
                     href={n.url}
                     target="_blank"
                     rel="noreferrer"
-                    className="font-medium text-slate-900 underline-offset-2 hover:underline"
+                    className="break-words font-medium text-slate-900 underline-offset-2 hover:underline"
                   >
                     {n.title}
                   </a>
                 ) : (
-                  <span className="font-medium text-slate-900">{n.title}</span>
+                  <span className="break-words font-medium text-slate-900">{n.title}</span>
                 )}
                 {n.summary && (
-                  <p className="text-slate-500">{n.summary}</p>
+                  <p className="break-words text-slate-500">{n.summary}</p>
                 )}
               </li>
             ))}

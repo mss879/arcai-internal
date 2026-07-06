@@ -165,7 +165,7 @@ export function LeadDetail({
       <div className="flex flex-wrap items-center gap-3">
         <Link
           href="/crm"
-          className="grid h-9 w-9 place-items-center rounded-xl border border-slate-200 bg-white text-slate-500 shadow-sm transition hover:text-slate-800"
+          className="grid h-10 w-10 place-items-center rounded-xl border border-slate-200 bg-white text-slate-500 shadow-sm transition hover:text-slate-800 sm:h-9 sm:w-9"
           aria-label="Back to CRM"
         >
           <ArrowLeft className="h-4 w-4" />
@@ -186,7 +186,7 @@ export function LeadDetail({
           </p>
         </div>
 
-        <span className="ml-auto flex flex-wrap items-center gap-2">
+        <span className="flex w-full flex-wrap items-center gap-2 sm:ml-auto sm:w-auto">
           {lead.value != null && (
             <Badge className="bg-emerald-50 text-emerald-700 ring-emerald-200">
               {formatCurrency(Number(lead.value), lead.currency)}
@@ -208,7 +208,12 @@ export function LeadDetail({
           {stale && (
             <Badge className="bg-amber-50 text-amber-600 ring-amber-200">{idle}d idle</Badge>
           )}
-          <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setEditOpen(true)}
+            className="h-10 sm:h-9"
+          >
             <Pencil className="h-3.5 w-3.5" />
             Edit
           </Button>
@@ -217,7 +222,7 @@ export function LeadDetail({
               <Button
                 size="sm"
                 onClick={handleWon}
-                className="bg-emerald-600 hover:bg-emerald-500"
+                className="h-10 bg-emerald-600 hover:bg-emerald-500 sm:h-9"
               >
                 <Trophy className="h-3.5 w-3.5" />
                 Won
@@ -226,20 +231,25 @@ export function LeadDetail({
                 variant="outline"
                 size="sm"
                 onClick={() => setLostOpen(true)}
-                className="text-slate-500"
+                className="h-10 text-slate-500 sm:h-9"
               >
                 <ThumbsDown className="h-3.5 w-3.5" />
                 Lost
               </Button>
             </>
           ) : (
-            <Button variant="outline" size="sm" onClick={handleReopen}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleReopen}
+              className="h-10 sm:h-9"
+            >
               Reopen
             </Button>
           )}
           <button
             onClick={() => setConfirmTrash(true)}
-            className="grid h-9 w-9 place-items-center rounded-xl text-slate-400 transition hover:bg-rose-50 hover:text-rose-500"
+            className="grid h-10 w-10 place-items-center rounded-xl text-slate-400 transition hover:bg-rose-50 hover:text-rose-500 sm:h-9 sm:w-9"
             aria-label="Move to trash"
           >
             <Trash2 className="h-4 w-4" />
@@ -268,7 +278,7 @@ export function LeadDetail({
                 key={s.id}
                 onClick={() => handleStage(s.id)}
                 className={cn(
-                  "rounded-xl border px-3 py-1.5 text-xs font-semibold transition-colors",
+                  "rounded-xl border px-3 py-2 text-xs font-semibold transition-colors sm:py-1.5",
                   s.id === lead.stage_id
                     ? "text-white shadow-sm"
                     : reached
@@ -363,7 +373,7 @@ function Composer({ leadId }: { leadId: string }) {
             key={k}
             onClick={() => setKind(k)}
             className={cn(
-              "rounded-lg px-3 py-1.5 text-xs font-semibold capitalize transition-colors",
+              "rounded-lg px-3 py-2 text-xs font-semibold capitalize transition-colors sm:py-1.5",
               kind === k ? "bg-slate-900 text-white" : "text-slate-500 hover:bg-slate-100",
             )}
           >
@@ -438,9 +448,11 @@ function Timeline({
                 {ACTIVITY_ICON[activity.kind] ?? <Check className="h-3.5 w-3.5" />}
               </span>
               <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium text-slate-800">{activity.title}</p>
+                <p className="break-words text-sm font-medium text-slate-800">
+                  {activity.title}
+                </p>
                 {activity.body && (
-                  <p className="mt-0.5 whitespace-pre-line text-sm text-slate-500">
+                  <p className="mt-0.5 whitespace-pre-line break-words text-sm text-slate-500">
                     {activity.body}
                   </p>
                 )}
@@ -666,14 +678,14 @@ function DetailsCard({
         {lead.contact_name && <Row label="Contact">{lead.contact_name}</Row>}
         {lead.contact_phone && (
           <Row label="Phone">
-            <a href={`tel:${lead.contact_phone}`} className="text-primary-600 hover:underline">
+            <a href={`tel:${lead.contact_phone}`} className="break-all text-primary-600 hover:underline">
               {lead.contact_phone}
             </a>
           </Row>
         )}
         {lead.contact_email && (
           <Row label="Email">
-            <a href={`mailto:${lead.contact_email}`} className="text-primary-600 hover:underline">
+            <a href={`mailto:${lead.contact_email}`} className="break-all text-primary-600 hover:underline">
               {lead.contact_email}
             </a>
           </Row>

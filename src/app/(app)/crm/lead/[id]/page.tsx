@@ -6,6 +6,7 @@ import type {
   CrmField,
   CrmTask,
   LeadActivity,
+  LeadResearch,
   LeadWithAssignee,
   Pipeline,
   PipelineStage,
@@ -33,35 +34,48 @@ export default async function LeadPage({
     .maybeSingle();
   if (!lead) notFound();
 
-  const [activitiesRes, tasksRes, quotesRes, fieldsRes, stagesRes, pipelineRes, members] =
-    await Promise.all([
-      supabase
-        .from("lead_activities")
-        .select("*")
-        .eq("lead_id", id)
-        .order("created_at", { ascending: false })
-        .limit(200),
-      supabase
-        .from("crm_tasks")
-        .select("*")
-        .eq("lead_id", id)
-        .order("created_at", { ascending: false })
-        .limit(100),
-      supabase
-        .from("quotes")
-        .select("*")
-        .eq("lead_id", id)
-        .order("created_at", { ascending: false })
-        .limit(100),
-      supabase.from("crm_fields").select("*").order("position"),
-      supabase
-        .from("pipeline_stages")
-        .select("*")
-        .eq("pipeline_id", lead.pipeline_id)
-        .order("position"),
-      supabase.from("pipelines").select("*").eq("id", lead.pipeline_id).single(),
-      getMembers(),
-    ]);
+  const [
+    activitiesRes,
+    tasksRes,
+    quotesRes,
+    fieldsRes,
+    stagesRes,
+    pipelineRes,
+    researchRes,
+    members,
+  ] = await Promise.all([
+    supabase
+      .from("lead_activities")
+      .select("*")
+      .eq("lead_id", id)
+      .order("created_at", { ascending: false })
+      .limit(200),
+    supabase
+      .from("crm_tasks")
+      .select("*")
+      .eq("lead_id", id)
+      .order("created_at", { ascending: false })
+      .limit(100),
+    supabase
+      .from("quotes")
+      .select("*")
+      .eq("lead_id", id)
+      .order("created_at", { ascending: false })
+      .limit(100),
+    supabase.from("crm_fields").select("*").order("position"),
+    supabase
+      .from("pipeline_stages")
+      .select("*")
+      .eq("pipeline_id", lead.pipeline_id)
+      .order("position"),
+    supabase.from("pipelines").select("*").eq("id", lead.pipeline_id).single(),
+    supabase
+      .from("lead_research")
+      .select("*")
+      .eq("lead_id", id)
+      .maybeSingle(),
+    getMembers(),
+  ]);
 
   return (
     <LeadDetail
@@ -72,6 +86,7 @@ export default async function LeadPage({
       customFields={(fieldsRes.data ?? []) as CrmField[]}
       stages={(stagesRes.data ?? []) as PipelineStage[]}
       pipeline={(pipelineRes.data ?? null) as Pipeline | null}
+      research={(researchRes.data ?? null) as LeadResearch | null}
       members={members}
     />
   );

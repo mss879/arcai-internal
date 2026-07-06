@@ -18,6 +18,8 @@ import {
   Pencil,
   Phone,
   Plus,
+  RefreshCw,
+  ScanSearch,
   Sparkles,
   Tag,
   ThumbsDown,
@@ -42,12 +44,15 @@ import type {
   CrmTask,
   LeadActivity,
   LeadActivityKind,
+  LeadResearch,
   LeadWithAssignee,
   MemberLite,
   Pipeline,
   PipelineStage,
   Quote,
 } from "@/lib/types";
+import { ResearchReportView } from "@/components/crm/research-report-view";
+import { requestLeadResearch } from "../../research/actions";
 
 import {
   addLeadActivity,
@@ -95,6 +100,7 @@ export function LeadDetail({
   customFields,
   stages,
   pipeline,
+  research,
   members,
 }: {
   lead: LeadWithAssignee;
@@ -104,9 +110,15 @@ export function LeadDetail({
   customFields: CrmField[];
   stages: PipelineStage[];
   pipeline: Pipeline | null;
+  research: LeadResearch | null;
   members: MemberLite[];
 }) {
-  useRealtimeSyncTables(["leads", "lead_activities", "crm_tasks"]);
+  useRealtimeSyncTables([
+    "leads",
+    "lead_activities",
+    "crm_tasks",
+    "lead_research",
+  ]);
   const router = useRouter();
   const [editOpen, setEditOpen] = React.useState(false);
   const [confirmTrash, setConfirmTrash] = React.useState(false);
@@ -288,6 +300,7 @@ export function LeadDetail({
         {/* Side column */}
         <div className="space-y-4">
           <AiPanel lead={lead} />
+          <ResearchCard lead={lead} research={research} />
           <DetailsCard lead={lead} customFields={customFields} />
           <TasksCard leadId={lead.id} tasks={tasks} members={members} />
           <QuotesCard quotes={quotes} />
@@ -534,6 +547,102 @@ function AiPanel({ lead }: { lead: LeadWithAssignee }) {
           >
             Copy
           </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---- Research card ----------------------------------------------------------
+
+function ResearchCard({
+  lead,
+  research,
+}: {
+  lead: LeadWithAssignee;
+  research: LeadResearch | null;
+}) {
+  const router = useRouter();
+  const [busy, setBusy] = React.useState(false);
+
+  const status = research?.status;
+  const running = busy || status === "pending" || status === "running";
+  const hasCompany = Boolean(lead.company?.trim());
+
+  async function run() {
+    setBusy(true);
+    try {
+      const res = await requestLeadResearch(lead.id);
+      if (res.ok) {
+        toast.success("Research started — the briefing will appear here shortly.");
+        router.refresh();
+      } else {
+        toast.error(res.error);
+      }
+    } catch {
+      toast.error("Couldn't start research. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-[var(--shadow-card)]">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <ScanSearch className="h-4 w-4 text-primary-600" />
+          <h3 className="text-sm font-semibold text-slate-900">
+            Prospect research
+          </h3>
+        </div>
+        {(status === "done" || status === "error") && (
+          <Button variant="ghost" size="sm" onClick={run} loading={busy}>
+            <RefreshCw className="h-3.5 w-3.5" />
+            Re-run
+          </Button>
+        )}
+      </div>
+
+      {/* No report yet */}
+      {!research && (
+        <div className="mt-3">
+          <p className="text-sm text-slate-500">
+            Auto-research the company across LinkedIn, the web and recent news,
+            then get a call-ready briefing — competitors, pain points and
+            talking points.
+          </p>
+          <Button
+            className="mt-3"
+            size="sm"
+            onClick={run}
+            loading={busy}
+            disabled={!hasCompany}
+          >
+            <ScanSearch className="h-3.5 w-3.5" />
+            {hasCompany ? "Research this company" : "Add a company first"}
+          </Button>
+        </div>
+      )}
+
+      {/* Queued / in progress */}
+      {research && running && status !== "done" && (
+        <div className="mt-3 flex items-center gap-2 rounded-xl bg-slate-50 px-3 py-2.5 text-sm text-slate-500">
+          <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-slate-300 border-t-primary-500" />
+          Researching {research.company_name}…
+        </div>
+      )}
+
+      {/* Failed */}
+      {research && status === "error" && (
+        <p className="mt-3 rounded-xl bg-rose-50 px-3 py-2.5 text-sm text-rose-600">
+          {research.error || "Research failed. Try again."}
+        </p>
+      )}
+
+      {/* Done */}
+      {research && status === "done" && (
+        <div className="mt-3">
+          <ResearchReportView research={research} compact />
         </div>
       )}
     </div>

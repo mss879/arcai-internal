@@ -12,6 +12,7 @@ import {
   Filter,
   ListChecks,
   MoreHorizontal,
+  ScanSearch,
   Search,
   Settings2,
   Table2,
@@ -290,6 +291,12 @@ export function CrmToolbar({
             onClick={() => router.push("/crm/companies")}
           >
             Companies
+          </DropdownItem>
+          <DropdownItem
+            icon={<ScanSearch className="h-4 w-4" />}
+            onClick={() => router.push("/crm/research")}
+          >
+            Prospect research
           </DropdownItem>
           <DropdownItem
             icon={<Users2 className="h-4 w-4" />}

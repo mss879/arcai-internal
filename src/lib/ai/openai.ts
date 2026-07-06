@@ -102,7 +102,7 @@ export async function openaiChat(
  */
 export async function openaiChatJSON(
   messages: ChatMessage[],
-  opts?: { temperature?: number; model?: string },
+  opts?: { temperature?: number; model?: string; timeoutMs?: number },
 ): Promise<string> {
   const res = await fetch(`${BASE_URL}/chat/completions`, {
     method: "POST",
@@ -110,6 +110,9 @@ export async function openaiChatJSON(
       "Content-Type": "application/json",
       Authorization: `Bearer ${apiKey()}`,
     },
+    ...(opts?.timeoutMs
+      ? { signal: AbortSignal.timeout(opts.timeoutMs) }
+      : {}),
     body: JSON.stringify({
       model: opts?.model || AI_MODELS.chat,
       messages,

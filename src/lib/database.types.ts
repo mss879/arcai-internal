@@ -138,6 +138,7 @@ export type VisitorEventKind =
   | "form_abandon"
   | "form_submit"
   | "click";
+export type LeadResearchStatus = "pending" | "running" | "done" | "error";
 
 /** A single saved invoice line item (stored as JSONB on `invoices.items`). */
 export type InvoiceItem = {
@@ -1586,6 +1587,36 @@ export type Database = {
         };
         Update: Partial<
           Database["public"]["Tables"]["visitor_events"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      lead_research: {
+        Row: {
+          id: UUID;
+          lead_id: UUID;
+          company_name: string;
+          status: LeadResearchStatus;
+          error: string | null;
+          sources: Record<string, unknown>[];
+          report: Record<string, unknown>;
+          requested_by: UUID | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          lead_id: UUID;
+          company_name: string;
+          status?: LeadResearchStatus;
+          error?: string | null;
+          sources?: Record<string, unknown>[];
+          report?: Record<string, unknown>;
+          requested_by?: UUID | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["lead_research"]["Insert"]
         >;
         Relationships: [];
       };

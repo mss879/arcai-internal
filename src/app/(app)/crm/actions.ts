@@ -5,6 +5,8 @@ import { after } from "next/server";
 
 import { fireAutomationTrigger } from "@/lib/automation";
 import { createClient } from "@/lib/supabase/server";
+import { startLeadResearch } from "@/lib/research";
+import { isResearchConfigured } from "@/lib/ai/lead-research";
 import { sendPushToUser } from "@/lib/push";
 import { sendSmsToUser } from "@/lib/sms-alerts";
 import { DEFAULT_PIPELINE_STAGES } from "@/lib/constants";
@@ -253,6 +255,22 @@ export async function saveLead(input: LeadInput): Promise<ActionResult> {
         lead: created as Lead,
         triggerKey: `${created.id}:created`,
       });
+
+      // Kick off prospect research for a lead that names a company.
+      // Runs after the response so the "Add lead" click stays snappy;
+      // the automation tick retries if this call runs out of time.
+      const company = created.company?.trim();
+      if (company && isResearchConfigured()) {
+        const leadId = created.id;
+        const actorId = user.id;
+        after(async () => {
+          await startLeadResearch(supabase, {
+            leadId,
+            company,
+            requestedBy: actorId,
+          });
+        });
+      }
     }
 
     if (input.assigned_to && input.assigned_to !== user.id) {

@@ -3,3 +3,10 @@
 
 [build.environment]
   NODE_VERSION = "20"
+
+# User-defined serverless functions. The scheduled automation tick lives in
+# netlify/functions/automation-tick.mts and runs every minute to fire timers
+# (CRM research, SMS drips, finance + to-do reminders) with no external cron.
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"

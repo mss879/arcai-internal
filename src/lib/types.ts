@@ -77,6 +77,7 @@ export type Competitor = Tables["competitors"]["Row"];
 export type CompetitorEntry = Tables["competitor_entries"]["Row"];
 export type AdEntry = Tables["ad_entries"]["Row"];
 export type VisitorEvent = Tables["visitor_events"]["Row"];
+export type LeadResearch = Tables["lead_research"]["Row"];
 
 export type {
   UserRole,
@@ -115,6 +116,7 @@ export type {
   CompetitorEntryKind,
   AdPlatform,
   VisitorEventKind,
+  LeadResearchStatus,
 } from "@/lib/database.types";
 
 /** A todo joined with the profile it's assigned to. */

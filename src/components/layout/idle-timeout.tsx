@@ -125,7 +125,9 @@ export function IdleTimeout() {
       }
     };
 
-    const interval = window.setInterval(tick, 1000);
+    // 5s granularity is plenty for a multi-minute idle timeout and avoids
+    // waking React every second on every page.
+    const interval = window.setInterval(tick, 5000);
 
     return () => {
       ACTIVITY_EVENTS.forEach((e) => window.removeEventListener(e, onActivity));

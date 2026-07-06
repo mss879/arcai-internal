@@ -73,7 +73,7 @@ export function CrmBoard({
   pipelines,
   activePipelineId,
   stages,
-  leads: allLeads,
+  leads: leadsProp,
   members,
   clients,
   customFields,
@@ -89,7 +89,7 @@ export function CrmBoard({
   clients: Pick<Client, "id" | "name" | "company">[];
   customFields: CrmField[];
   segments: CrmSegment[];
-  companies: Company[];
+  companies: Pick<Company, "id" | "name">[];
   openTasks: CrmTask[];
 }) {
   useRealtimeSyncTables(["pipelines", "pipeline_stages", "leads", "crm_tasks"]);
@@ -101,6 +101,13 @@ export function CrmBoard({
 
   const [view, setView] = React.useState<ViewMode>("board");
   const [filters, setFilters] = React.useState<LeadFilters>(EMPTY_FILTERS);
+
+  // Local mirror of the leads prop so drags apply instantly (same pattern
+  // as the todos board). Without it, a realtime router.refresh() landing
+  // mid-save rebuilds the columns from stale server data and the dragged
+  // card snaps back until the save finishes.
+  const [allLeads, setAllLeads] = React.useState(leadsProp);
+  React.useEffect(() => setAllLeads(leadsProp), [leadsProp]);
 
   const leads = React.useMemo(
     () => applyFilters(allLeads, filters, staleAfterDays),
@@ -236,6 +243,17 @@ export function CrmBoard({
         stage_id: stageId,
         position: index,
       })),
+    );
+    // Optimistically apply the move so the card settles instantly; the
+    // server save and the realtime refresh catch up in the background.
+    const byId = new Map(updates.map((u) => [u.id, u]));
+    setAllLeads((prev) =>
+      prev.map((l) => {
+        const u = byId.get(l.id);
+        return u && (u.stage_id !== l.stage_id || u.position !== l.position)
+          ? { ...l, stage_id: u.stage_id, position: u.position }
+          : l;
+      }),
     );
     const res = await updateLeadPositions(updates);
     if (!res.ok) {

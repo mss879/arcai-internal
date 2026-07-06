@@ -45,12 +45,14 @@ export default async function LeadPage({
         .from("crm_tasks")
         .select("*")
         .eq("lead_id", id)
-        .order("created_at", { ascending: false }),
+        .order("created_at", { ascending: false })
+        .limit(100),
       supabase
         .from("quotes")
         .select("*")
         .eq("lead_id", id)
-        .order("created_at", { ascending: false }),
+        .order("created_at", { ascending: false })
+        .limit(100),
       supabase.from("crm_fields").select("*").order("position"),
       supabase
         .from("pipeline_stages")

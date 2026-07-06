@@ -68,7 +68,9 @@ export function SmsView({
     if (!smsReady) return;
     let cancelled = false;
     const tick = () => {
-      if (!cancelled) void tickSmsAutomation().catch(() => {});
+      // Skip ticks in background tabs — the cron route covers those.
+      if (!cancelled && document.visibilityState === "visible")
+        void tickSmsAutomation().catch(() => {});
     };
     tick();
     const interval = setInterval(tick, TICK_INTERVAL_MS);

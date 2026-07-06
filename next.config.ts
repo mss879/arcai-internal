@@ -4,6 +4,16 @@ const nextConfig: NextConfig = {
   // react-pdf ships its own font/PDF binaries — let Next require it at runtime
   // from node_modules instead of bundling it into the serverless function.
   serverExternalPackages: ["@react-pdf/renderer"],
+  images: {
+    // Avatars are uploaded to Supabase storage and rendered via next/image.
+    remotePatterns: [
+      {
+        protocol: "https",
+        hostname: "*.supabase.co",
+        pathname: "/storage/v1/object/public/**",
+      },
+    ],
+  },
   async headers() {
     return [
       {

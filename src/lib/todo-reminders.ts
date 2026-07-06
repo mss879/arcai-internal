@@ -2,6 +2,7 @@ import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { appLink } from "@/lib/app-url";
 import type { Database } from "@/lib/database.types";
 import { sendPushToUser } from "@/lib/push";
 import { isSmsConfigured, sendSms } from "@/lib/sms";
@@ -78,6 +79,8 @@ export async function processTodoReminders(supabase: DB): Promise<TodoReminderRe
   const profileById = new Map((profiles ?? []).map((p) => [p.id, p]));
 
   const smsReady = isSmsConfigured();
+  // App link so the recipient can open the board straight from the text.
+  const appUrl = appLink("/todos");
 
   for (const todo of due) {
     if (!todo.due_date) continue;
@@ -88,7 +91,7 @@ export async function processTodoReminders(supabase: DB): Promise<TodoReminderRe
     // Keep the SMS GSM-7 friendly (no smart punctuation) and short.
     const shortTitle =
       todo.title.length > 60 ? `${todo.title.slice(0, 57)}...` : todo.title;
-    const smsMessage = `ARC AI: Task reminder - "${shortTitle}" is due in ${remaining} (${when}). Check the To-Dos board.`;
+    const smsMessage = `ARC AI: Task reminder - "${shortTitle}" is due in ${remaining} (${when}). ${appUrl ? `Open: ${appUrl}` : "Check the To-Dos board."}`;
     const notifTitle = `Task due in ${remaining}`;
 
     const recipients = [

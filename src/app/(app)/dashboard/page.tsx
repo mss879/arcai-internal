@@ -32,7 +32,7 @@ import { requireProfile } from "@/lib/auth";
 import { getMembers } from "@/lib/data";
 import { createClient } from "@/lib/supabase/server";
 import { cn, formatCurrency, formatTime12 } from "@/lib/utils";
-import type { Notification, Todo } from "@/lib/types";
+import type { NotificationLite, Todo } from "@/lib/types";
 
 export const metadata = { title: "Dashboard" };
 
@@ -96,7 +96,7 @@ export default async function DashboardPage() {
       .eq("status", "open"),
     supabase
       .from("notifications")
-      .select("*")
+      .select("id, type, title, body, link, read, created_at")
       .eq("user_id", profile.id)
       .order("created_at", { ascending: false })
       .limit(6),
@@ -140,7 +140,7 @@ export default async function DashboardPage() {
     value: number | null;
     expected_close_date: string | null;
   }[];
-  const notifications = (notificationsRes.data ?? []) as Notification[];
+  const notifications = (notificationsRes.data ?? []) as NotificationLite[];
 
   const thisMonthStart = startOfMonth(new Date());
   const lastMonthStart = startOfMonth(subMonths(new Date(), 1));

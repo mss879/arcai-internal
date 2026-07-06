@@ -64,7 +64,9 @@ export function AutomationView({
   React.useEffect(() => {
     let cancelled = false;
     const tick = () => {
-      if (!cancelled) void tickAutomations().catch(() => {});
+      // Skip ticks in background tabs — the cron route covers those.
+      if (!cancelled && document.visibilityState === "visible")
+        void tickAutomations().catch(() => {});
     };
     tick();
     const interval = setInterval(tick, TICK_INTERVAL_MS);

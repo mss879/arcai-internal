@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
 
 import { fireAutomationTrigger } from "@/lib/automation";
 import { createClient } from "@/lib/supabase/server";
@@ -358,33 +359,49 @@ export async function updateLeadPositions(
   const ids = updates.map((u) => u.id);
   const { data: before } = await supabase
     .from("leads")
-    .select("id, stage_id")
+    .select("id, stage_id, position")
     .in("id", ids);
-  const beforeStage = new Map((before ?? []).map((l) => [l.id, l.stage_id]));
+  const beforeById = new Map((before ?? []).map((l) => [l.id, l]));
 
-  for (const u of updates) {
-    const { error } = await supabase
-      .from("leads")
-      .update({ stage_id: u.stage_id, position: u.position })
-      .eq("id", u.id);
-    if (error) return { ok: false, error: error.message };
-  }
+  // The client sends every card in both affected columns, but usually only
+  // a couple actually changed — skip the no-ops and write the rest in
+  // parallel so the drop isn't held up by sequential round-trips.
+  const changed = updates.filter((u) => {
+    const prev = beforeById.get(u.id);
+    return !prev || prev.stage_id !== u.stage_id || prev.position !== u.position;
+  });
+  const results = await Promise.all(
+    changed.map((u) =>
+      supabase
+        .from("leads")
+        .update({ stage_id: u.stage_id, position: u.position })
+        .eq("id", u.id),
+    ),
+  );
+  const failed = results.find((r) => r.error);
+  if (failed?.error) return { ok: false, error: failed.error.message };
 
-  for (const u of updates) {
-    if (beforeStage.get(u.id) !== u.stage_id) {
-      const { data: lead } = await supabase
+  // Fire stage_changed automations after the response is sent — they can
+  // send SMS/webhooks and must not hold up the drop.
+  const movedStageById = new Map(
+    changed
+      .filter((u) => beforeById.get(u.id)?.stage_id !== u.stage_id)
+      .map((u) => [u.id, u.stage_id]),
+  );
+  if (movedStageById.size) {
+    after(async () => {
+      const { data: movedLeads } = await supabase
         .from("leads")
         .select("*")
-        .eq("id", u.id)
-        .single();
-      if (lead) {
+        .in("id", [...movedStageById.keys()]);
+      for (const lead of movedLeads ?? []) {
         await fireAutomationTrigger(supabase, {
           trigger: "stage_changed",
           lead: lead as Lead,
-          payload: { stage_id: u.stage_id },
+          payload: { stage_id: movedStageById.get(lead.id) ?? lead.stage_id },
         });
       }
-    }
+    });
   }
 
   revalidatePath("/crm");

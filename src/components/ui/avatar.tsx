@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Image from "next/image";
 
 import { cn, colorFromString, getInitials } from "@/lib/utils";
 
@@ -41,11 +42,14 @@ export function Avatar({
       title={label}
     >
       {showImage ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
+        // Avatars are uploaded photos rendered at ≤64px; next/image serves
+        // a tiny resized version. Any load failure falls back to initials.
+        <Image
           src={src}
           alt={label}
-          className="h-full w-full object-cover"
+          fill
+          sizes="64px"
+          className="object-cover"
           onError={() => setErrored(true)}
         />
       ) : (

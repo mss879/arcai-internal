@@ -9,7 +9,7 @@ import { AtSign, Bell, CheckCheck, DollarSign, UserPlus } from "lucide-react";
 import { Dropdown } from "@/components/ui/dropdown";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
-import type { Notification } from "@/lib/types";
+import type { NotificationLite } from "@/lib/types";
 
 const ICONS = {
   mention: AtSign,
@@ -21,7 +21,7 @@ const ICONS = {
 export function NotificationsBell({
   initial,
 }: {
-  initial: Notification[];
+  initial: NotificationLite[];
 }) {
   const router = useRouter();
   const [items, setItems] = React.useState(initial);

@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 
+import { appLink } from "@/lib/app-url";
 import { createClient } from "@/lib/supabase/server";
 import { sendPushToUser } from "@/lib/push";
 import { sendSmsToUser } from "@/lib/sms-alerts";
@@ -195,8 +196,12 @@ export async function saveTodo(input: TodoInput): Promise<ActionResult> {
     );
 
     // Text message alerts — only for people newly assigned or newly tagged,
-    // so editing a task doesn't re-text everyone on it.
+    // so editing a task doesn't re-text everyone on it. Plain hyphens keep
+    // the message GSM-7 (an em-dash silently triples the segment cost), and
+    // the app link lets the recipient open the board straight from the text.
     const due = input.due_date ? ` (due ${input.due_date.slice(0, 10)})` : "";
+    const appUrl = appLink("/todos");
+    const smsTail = appUrl ? `Open: ${appUrl}` : "Check the To-Dos board.";
     const smsTargets = new Map<string, string>();
     if (
       input.assigned_to &&
@@ -205,14 +210,14 @@ export async function saveTodo(input: TodoInput): Promise<ActionResult> {
     ) {
       smsTargets.set(
         input.assigned_to,
-        `ARC AI: ${actorName} assigned you a task — "${input.title.trim()}"${due}. Check the To-Dos board.`,
+        `ARC AI: ${actorName} assigned you a task - "${input.title.trim()}"${due}. ${smsTail}`,
       );
     }
     for (const id of mentionedIds) {
       if (id !== user.id && !prevMentions.has(id) && !smsTargets.has(id)) {
         smsTargets.set(
           id,
-          `ARC AI: ${actorName} tagged you in a task — "${input.title.trim()}"${due}. Check the To-Dos board.`,
+          `ARC AI: ${actorName} tagged you in a task - "${input.title.trim()}"${due}. ${smsTail}`,
         );
       }
     }

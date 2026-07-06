@@ -2,7 +2,6 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { AnimatePresence, motion } from "motion/react";
 import {
   Search,
   Users,
@@ -283,15 +282,8 @@ export function GlobalSearch() {
         </div>
 
         {/* Dropdown Overlay for Desktop */}
-        <AnimatePresence>
-          {isOpen && (
-            <motion.div
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 4 }}
-              transition={{ duration: 0.15 }}
-              className="absolute right-0 top-full mt-2 w-[450px] overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-[var(--shadow-lift)] z-50"
-            >
+        {isOpen && (
+          <div className="animate-float-in absolute right-0 top-full mt-2 w-[450px] overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-[var(--shadow-lift)] z-50">
               <div className="max-h-[320px] overflow-y-auto px-2 py-3 scrollbar-thin">
                 {activeItems.length > 0 ? (
                   <div className="space-y-4">
@@ -411,9 +403,8 @@ export function GlobalSearch() {
                 </span>
                 <span>Press <kbd className="rounded bg-white border border-slate-200 px-1">ESC</kbd> to close</span>
               </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+          </div>
+        )}
       </div>
 
       {/* Mobile Search Button & Dropdown */}
@@ -426,15 +417,8 @@ export function GlobalSearch() {
           {isOpen ? <X className="h-5 w-5" /> : <Search className="h-5 w-5" />}
         </button>
 
-        <AnimatePresence>
-          {isOpen && (
-            <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 5 }}
-              transition={{ duration: 0.15 }}
-              className="fixed inset-x-4 top-16 z-50 rounded-2xl border border-slate-200 bg-white shadow-2xl p-2 flex flex-col max-h-[350px]"
-            >
+        {isOpen && (
+          <div className="animate-float-in fixed inset-x-4 top-16 z-50 rounded-2xl border border-slate-200 bg-white shadow-2xl p-2 flex flex-col max-h-[350px]">
               {/* Search input in mobile dropdown */}
               <div className="relative mb-2">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
@@ -527,9 +511,8 @@ export function GlobalSearch() {
                   </p>
                 )}
               </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -8,7 +8,7 @@ import { Avatar } from "@/components/ui/avatar";
 import { NotificationsBell } from "@/components/layout/notifications-bell";
 import { titleForPath } from "@/components/layout/nav";
 import { GlobalSearch } from "@/components/layout/global-search";
-import type { Notification, Profile } from "@/lib/types";
+import type { NotificationLite, Profile } from "@/lib/types";
 
 export function Topbar({
   profile,
@@ -16,7 +16,7 @@ export function Topbar({
   onOpenMobile,
 }: {
   profile: Profile;
-  notifications: Notification[];
+  notifications: NotificationLite[];
   onOpenMobile: () => void;
 }) {
   const pathname = usePathname();

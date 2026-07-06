@@ -45,7 +45,7 @@ export default async function IntelligencePage() {
       .select("*")
       .gte("created_at", monthAgo)
       .order("created_at", { ascending: false })
-      .limit(3000),
+      .limit(1000),
     supabase.from("competitors").select("*").order("created_at", { ascending: false }),
     supabase
       .from("competitor_entries")

@@ -1,11 +1,10 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { motion, AnimatePresence } from "motion/react";
 import { LogOut, ChevronLeft, ChevronRight } from "lucide-react";
 
-import { Logo } from "@/components/brand/logo";
 import { Avatar } from "@/components/ui/avatar";
 import { NavLoadingIndicator } from "@/components/layout/nav-loading-indicator";
 import { ADMIN_NAV, NAV, type NavItem } from "@/components/layout/nav";
@@ -40,27 +39,18 @@ function NavLink({
       )}
     >
       {active && (
-        <motion.span
-          layoutId="active-nav"
-          className="absolute inset-0 rounded-xl bg-white/15 ring-1 ring-inset ring-white/10"
-          transition={{ type: "spring", duration: 0.4, bounce: 0.15 }}
-        />
+        <span className="absolute inset-0 rounded-xl bg-white/15 ring-1 ring-inset ring-white/10" />
       )}
       <item.icon className={cn("relative shrink-0 transition-all duration-300", isCollapsed ? "h-6 w-6" : "h-5 w-5")} />
-      
-      <AnimatePresence initial={false} mode="popLayout">
-        {!isCollapsed && (
-          <motion.span
-            initial={{ opacity: 0, width: 0, marginLeft: 0 }}
-            animate={{ opacity: 1, width: "auto", marginLeft: 12 }}
-            exit={{ opacity: 0, width: 0, marginLeft: 0 }}
-            transition={{ duration: 0.2, ease: "easeInOut" }}
-            className="relative whitespace-nowrap overflow-hidden inline-block"
-          >
-            {item.label}
-          </motion.span>
+
+      <span
+        className={cn(
+          "relative inline-block overflow-hidden whitespace-nowrap transition-all duration-200 ease-in-out",
+          isCollapsed ? "ml-0 max-w-0 opacity-0" : "ml-3 max-w-[160px] opacity-100",
         )}
-      </AnimatePresence>
+      >
+        {item.label}
+      </span>
 
       <NavLoadingIndicator isCollapsed={isCollapsed} />
     </Link>
@@ -118,9 +108,13 @@ export function Sidebar({
           </div>
         ) : (
           <div className="flex items-center justify-center bg-black rounded-2xl py-3 px-5 shadow-xl border border-white/10 w-full max-w-[180px] transition-all duration-300">
-            <img
-              src="/new-logo.png?v=2"
+            <Image
+              src="/new-logo.png"
               alt="ARC AI Logo"
+              width={1310}
+              height={360}
+              sizes="180px"
+              priority
               className="w-full h-auto object-contain shrink-0"
             />
           </div>

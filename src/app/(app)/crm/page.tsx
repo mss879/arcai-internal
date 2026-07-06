@@ -1,7 +1,6 @@
 import { getMembers } from "@/lib/data";
 import { createClient } from "@/lib/supabase/server";
 import type {
-  Company,
   CrmField,
   CrmSegment,
   CrmTask,
@@ -32,7 +31,8 @@ export default async function CrmPage({
       supabase.from("clients").select("id, name, company").order("name"),
       supabase.from("crm_fields").select("*").order("position"),
       supabase.from("crm_segments").select("*").order("position").order("created_at"),
-      supabase.from("companies").select("*").order("name"),
+      // The board only needs companies for the lead-form picker.
+      supabase.from("companies").select("id, name").order("name"),
       supabase
         .from("crm_tasks")
         .select("*")
@@ -64,7 +64,10 @@ export default async function CrmPage({
         )
         .eq("pipeline_id", activeId)
         .is("deleted_at", null)
-        .order("position", { ascending: true }),
+        .order("position", { ascending: true })
+        // Defensive cap on the RSC payload; the board isn't usable far
+        // beyond this anyway.
+        .limit(1000),
     ]);
     stages = stagesRes.data ?? [];
     leads = (leadsRes.data ?? []) as unknown as LeadWithAssignee[];
@@ -80,7 +83,7 @@ export default async function CrmPage({
       clients={clientsRes.data ?? []}
       customFields={(fieldsRes.data ?? []) as CrmField[]}
       segments={(segmentsRes.data ?? []) as CrmSegment[]}
-      companies={(companiesRes.data ?? []) as Company[]}
+      companies={companiesRes.data ?? []}
       openTasks={(tasksRes.data ?? []) as CrmTask[]}
     />
   );

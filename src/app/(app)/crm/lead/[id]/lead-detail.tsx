@@ -300,15 +300,15 @@ export function LeadDetail({
         </div>
       )}
 
-      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
         {/* Main column: composer + timeline */}
-        <div className="space-y-4">
+        <div className="min-w-0 space-y-4">
           <Composer leadId={lead.id} />
           <Timeline activities={activities} members={members} />
         </div>
 
         {/* Side column */}
-        <div className="space-y-4">
+        <div className="min-w-0 space-y-4">
           <AiPanel lead={lead} />
           <ResearchCard lead={lead} research={research} />
           <DetailsCard lead={lead} customFields={customFields} />

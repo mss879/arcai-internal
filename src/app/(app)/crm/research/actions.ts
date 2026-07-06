@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { after } from "next/server";
 
 import { createClient } from "@/lib/supabase/server";
-import { queueLeadResearch, runResearchRow } from "@/lib/research";
+import { queueLeadResearch, advanceResearchRow } from "@/lib/research";
 import { isResearchConfigured } from "@/lib/ai/lead-research";
 import type { ActionResult } from "@/lib/types";
 
@@ -57,12 +57,10 @@ export async function requestLeadResearch(
   }
 
   const researchId = queued.id;
+  // Kick off the first pipeline step after the response; the tick advances
+  // the rest, so the click returns immediately and never times out.
   after(async () => {
-    await runResearchRow(supabase, {
-      id: researchId,
-      lead_id: leadId,
-      company_name: company,
-    });
+    await advanceResearchRow(supabase, researchId);
   });
 
   revalidatePath(`/crm/lead/${leadId}`);

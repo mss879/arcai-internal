@@ -30,12 +30,15 @@ export type ResearchRow = LeadResearch & {
   lead: { id: string; title: string; company: string | null } | null;
 };
 
+const INPROGRESS = { className: "bg-sky-50 text-sky-600 ring-sky-200" };
 const STATUS_META: Record<
   LeadResearch["status"],
   { label: string; className: string }
 > = {
   pending: { label: "Queued", className: "bg-slate-100 text-slate-500 ring-slate-200" },
-  running: { label: "Researching…", className: "bg-sky-50 text-sky-600 ring-sky-200" },
+  running: { label: "Researching…", ...INPROGRESS },
+  discovered: { label: "Analyzing site…", ...INPROGRESS },
+  analyzed: { label: "Writing dossier…", ...INPROGRESS },
   done: { label: "Ready", className: "bg-emerald-50 text-emerald-600 ring-emerald-200" },
   error: { label: "Failed", className: "bg-rose-50 text-rose-600 ring-rose-200" },
 };
@@ -103,7 +106,7 @@ function ResearchRowCard({ row }: { row: ResearchRow }) {
   const [confirmDelete, setConfirmDelete] = React.useState(false);
 
   const meta = STATUS_META[row.status];
-  const inProgress = row.status === "pending" || row.status === "running";
+  const inProgress = row.status !== "done" && row.status !== "error";
 
   async function rerun() {
     if (!row.lead) return;

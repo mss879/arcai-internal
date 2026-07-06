@@ -4,279 +4,94 @@ import { openaiChatJSON, isOpenAIConfigured, AI_MODELS } from "@/lib/ai/openai";
 import {
   firecrawlSearch,
   firecrawlScrape,
+  firecrawlMap,
   isFirecrawlConfigured,
   type FirecrawlPage,
+  type FirecrawlBranding,
 } from "@/lib/ai/firecrawl";
 import {
   parseResearchReport,
   type ResearchReport,
   type ResearchSource,
+  type ResearchBrand,
+  type ResearchSocialLink,
   type MatchConfidence,
 } from "@/lib/research-report";
 
 /**
- * The prospect research pipeline.
+ * Agency-grade prospect research, run as a 3-step pipeline (the orchestration
+ * in `research.ts` advances one step per tick so each stays inside the
+ * serverless time budget):
  *
- *   1. Fan out a handful of targeted searches through Firecrawl —
- *      the LinkedIn company page, a general overview, competitors,
- *      and recent news — collecting the scraped page markdown.
- *   2. Optionally scrape the company's own site if we found it.
- *   3. Feed the gathered context to OpenAI, which condenses it into
- *      a structured briefing (overview, competitors, pain points,
- *      talking points, discovery questions).
+ *   1. discover()          — scrape the homepage for its BRAND system
+ *                            (colours/fonts/logo via Firecrawl branding) +
+ *                            links (socials), map the site's pages, and run
+ *                            competitor / news / LinkedIn searches.
+ *   2. analyzeCompetitor() — scrape the top competitor's homepage (brand +
+ *                            content) for a real side-by-side.
+ *   3. synthesize()        — OpenAI writes the dossier: profile, web presence,
+ *                            competitor gaps, brand read, and pitch angles.
  *
- * Every external call degrades gracefully: no Firecrawl key → the
- * report is written from the lead's own fields; no OpenAI key → we
- * still return the raw sources with a lightweight heuristic summary.
+ * Every external call degrades gracefully (returns []/null, never throws), and
+ * the whole thing yields a useful report even with no OpenAI key — the brand,
+ * socials and page map are gathered deterministically.
  */
 
 export type ResearchInput = {
   company: string;
-  /** Optional extra signal that sharpens the searches. */
   website?: string | null;
   contactName?: string | null;
   industry?: string | null;
   location?: string | null;
 };
 
-export type ResearchResult = {
-  report: ResearchReport;
-  sources: ResearchSource[];
-};
-
-const MODEL = process.env.OPENAI_RESEARCH_MODEL || AI_MODELS.chat;
-
-/** Trim scraped markdown so a single page can't blow the token budget. */
-const MAX_CHARS_PER_PAGE = 4000;
-/** Cap total context handed to the model. */
-const MAX_TOTAL_CHARS = 24000;
-
-const SYSTEM = `You are a B2B sales research analyst preparing a rep for a first
-call with a prospect — a company based in Sri Lanka. You are given raw
-web/LinkedIn/news excerpts. Extract only what the excerpts support — never
-invent facts, numbers, funding, or people. When a field is unknown, return an
-empty string or empty array.
-
-CRITICAL — verify identity first: the excerpts may describe a DIFFERENT company
-that shares the name. Only use excerpts that clearly match the intended company
-by its website domain, its Sri Lanka location, and (if given) the named contact.
-If the excerpts do not convincingly describe that specific company, set
-match_confidence to "low", explain why in "verification", and leave the factual
-fields empty rather than reporting another company's details.
-
-Return ONLY one JSON object, no markdown fences.`;
-
-function userPrompt(
-  input: ResearchInput,
-  context: string,
-  signals: ResearchSignals,
-): string {
-  const domain = signals.anchorDomain;
-  const verifyBlock = `Verification signals (from our own checks):
-- Website given: ${signals.websiteProvided ? `yes (${domain})` : "no"}
-- Pages fetched from that domain: ${signals.siteReached ? "yes" : "no"}
-- That domain's own content names the company: ${signals.siteMentionsCompany ? "yes" : "no"}
-- Company name appears in other sources (LinkedIn/news): ${signals.nameSeenElsewhere ? "yes" : "no"}`;
-
-  return `Intended company: ${input.company} (Sri Lanka)
-${signals.websiteProvided ? `Official website (ground truth): ${input.website}\n` : ""}${
-    input.industry ? `Industry hint: ${input.industry}\n` : ""
-  }${input.location ? `Location: ${input.location}\n` : ""}${
-    input.contactName ? `Our contact there: ${input.contactName}\n` : ""
-  }
-${verifyBlock}
-
-Only report facts about the company at ${
-    domain ? `the domain ${domain}` : `"${input.company}" in Sri Lanka`
-  }. Ignore excerpts about same-named companies elsewhere.
-
-=== SOURCE EXCERPTS ===
-${context}
-=== END SOURCES ===
-
-Return a JSON object with EXACTLY these keys:
-{
-  "match_confidence": "high | medium | low — how sure you are these excerpts are the intended Sri Lankan company",
-  "verification": "one line: how you confirmed identity (domain/contact/location match), or why you couldn't",
-  "overview": "2-4 sentence plain-English summary of what the company does and who it serves",
-  "industry": "primary industry / vertical, or ''",
-  "headquarters": "city, country if known, else ''",
-  "company_size": "employee count or range if stated, else ''",
-  "founded": "founding year if stated, else ''",
-  "website": "official company website URL if found, else ''",
-  "linkedin_url": "company LinkedIn URL if found, else ''",
-  "products_services": ["their main products or services, one per item"],
-  "competitors": [{ "name": "Competitor", "note": "one line on why they compete" }],
-  "recent_news": [{ "title": "headline", "summary": "one sentence", "url": "source url or ''" }],
-  "pain_points": ["likely business challenges this company faces that we could help with"],
-  "talking_points": ["specific, personalised angles the rep can open with on the call"],
-  "discovery_questions": ["sharp questions to ask this prospect to qualify the opportunity"]
-}
-
-Guidance:
-- If match_confidence is "low", keep overview/products/etc. empty and only explain the mismatch in "verification".
-- competitors: 3-6 real competitors, preferably Sri Lankan / regional, inferred from the industry and offering.
-- talking_points & discovery_questions: 3-5 each, tailored to THIS company, not generic.
-- Keep every string tight; no fluff, no repetition of the raw excerpts verbatim.`;
-}
-
-/** Collapse a set of scraped pages into a labelled, length-capped context blob. */
-function buildContext(
-  groups: { label: string; pages: FirecrawlPage[] }[],
-): string {
-  const seen = new Set<string>();
-  const chunks: string[] = [];
-  let total = 0;
-
-  for (const group of groups) {
-    for (const page of group.pages) {
-      if (seen.has(page.url)) continue;
-      seen.add(page.url);
-
-      const body = (page.markdown || page.description || "")
-        .replace(/\n{3,}/g, "\n\n")
-        .slice(0, MAX_CHARS_PER_PAGE)
-        .trim();
-      if (!body) continue;
-
-      const chunk = `## [${group.label}] ${page.title}\nURL: ${page.url}\n${body}`;
-      // Skip a chunk that would overflow the budget, but keep going —
-      // a smaller later page (e.g. the company's own site) can still fit.
-      if (total + chunk.length > MAX_TOTAL_CHARS) continue;
-      chunks.push(chunk);
-      total += chunk.length;
-    }
-  }
-  return chunks.join("\n\n");
-}
+export type ResearchResult = { report: ResearchReport; sources: ResearchSource[] };
 
 /** Signals used to judge whether the research is about the RIGHT company. */
-type ResearchSignals = {
+export type ResearchSignals = {
   websiteProvided: boolean;
   anchorDomain: string;
-  /** At least one page on the anchor domain was fetched (scrape or site: search). */
   siteReached: boolean;
-  /** The anchor domain's OWN content actually names the company — the strong signal. */
   siteMentionsCompany: boolean;
-  /** Some source off the anchor domain (LinkedIn/news/overview) names the company. */
   nameSeenElsewhere: boolean;
 };
 
-/** Gather raw source pages for a company across targeted, geo-biased queries. */
-async function gatherSources(input: ResearchInput): Promise<{
-  groups: { label: string; pages: FirecrawlPage[] }[];
+/** Intermediate data carried between pipeline steps (stored in `analysis` jsonb). */
+export type ResearchAnalysis = {
+  brand: ResearchBrand;
+  socialLinks: ResearchSocialLink[];
+  siteMap: string[];
+  homepageContent: string;
+  competitorNames: string[];
+  competitorUrl: string;
+  competitorBrand: ResearchBrand | null;
+  competitorContent: string;
+  searchContext: string;
   sources: ResearchSource[];
   signals: ResearchSignals;
-}> {
-  const company = input.company.trim();
-  const contact = input.contactName?.trim();
-  const loc = input.location?.trim() || "Sri Lanka";
-  const siteUrl = input.website ? normaliseUrl(input.website) : null;
-  const anchorDomain = siteUrl ? domainOf(siteUrl) : "";
+};
 
-  // Only the highest-signal pages are scraped in full (LinkedIn, the company's
-  // own site, an overview); competitors + news + the person lookup use
-  // snippet-only search so the run stays inside the serverless time budget.
-  const queries: {
-    label: string;
-    query: string;
-    sources?: ("web" | "news")[];
-    tbs?: string;
-    limit: number;
-    withoutContent?: boolean;
-  }[] = [
-    {
-      label: "LinkedIn",
-      query: `${company} ${contact ? `${contact} ` : ""}${loc} site:linkedin.com`,
-      limit: 3,
-    },
-    // With a known domain, pull the company's OWN pages (site:) instead of a
-    // generic overview that can drift to a same-named company elsewhere.
-    anchorDomain
-      ? { label: "Site", query: `site:${anchorDomain}`, limit: 3 }
-      : {
-          label: "Overview",
-          query: `${company} ${loc} company overview products services`,
-          limit: 3,
-        },
-    { label: "Competitors", query: `${company} ${loc} competitors alternatives`, limit: 5, withoutContent: true },
-    { label: "News", query: `${company} ${loc} news`, sources: ["news"], tbs: "qdr:y", limit: 5, withoutContent: true },
-  ];
-  // A person lookup helps the model confirm the contact really works there.
-  if (contact) {
-    queries.push({
-      label: "Contact",
-      query: `"${contact}" ${company} ${loc}`,
-      limit: 3,
-      withoutContent: true,
-    });
-  }
+const MODEL = process.env.OPENAI_RESEARCH_MODEL || AI_MODELS.chat;
+const MAX_HOMEPAGE_CHARS = 8000;
+const MAX_COMPETITOR_CHARS = 4000;
+const MAX_SEARCH_CHARS = 8000;
 
-  // Fan every search out in parallel with the direct site scrape so the whole
-  // gather phase costs ~one slow request, not the sum of them. All searches
-  // are geo-biased to Sri Lanka to disambiguate common company names.
-  const [results, sitePage] = await Promise.all([
-    Promise.all(
-      queries.map((q) =>
-        firecrawlSearch(q.query, {
-          limit: q.limit,
-          sources: q.sources,
-          tbs: q.tbs,
-          withoutContent: q.withoutContent,
-          location: "Colombo, Western, Sri Lanka",
-          country: "lk",
-        }).then((pages) => ({ q, pages })),
-      ),
-    ),
-    siteUrl ? firecrawlScrape(siteUrl) : Promise.resolve(null),
-  ]);
+const EMPTY_BRAND: ResearchBrand = {
+  colors: [],
+  fonts: [],
+  logo: "",
+  color_scheme: "",
+  spacing: "",
+  style_notes: "",
+};
 
-  const sitePages: FirecrawlPage[] = sitePage ? [sitePage] : [];
+// ---- small helpers -----------------------------------------------------------
 
-  // Website/site pages first: the prospect's own site is the highest-signal
-  // source, so it claims budget before the SERP-derived groups (buildContext
-  // caps total length and drops whatever overflows).
-  const groups = [
-    ...(sitePages.length ? [{ label: "Website", pages: sitePages }] : []),
-    ...results.map(({ q, pages }) => ({ label: q.label, pages })),
-  ];
-
-  const sources: ResearchSource[] = [];
-  const seen = new Set<string>();
-  for (const { q, pages } of results) {
-    for (const p of pages) {
-      if (seen.has(p.url)) continue;
-      seen.add(p.url);
-      sources.push({ url: p.url, title: p.title, query: q.query });
-    }
-  }
-  for (const p of sitePages) {
-    if (!seen.has(p.url)) {
-      seen.add(p.url);
-      sources.push({ url: p.url, title: p.title, query: "company website" });
-    }
-  }
-
-  // Deterministic identity signals — content-based, not mere reachability.
-  const allPages = groups.flatMap((g) => g.pages);
-  const named = (p: FirecrawlPage) =>
-    mentionsCompany(p.title, company) || mentionsCompany(p.markdown, company);
-  const onAnchor = (p: FirecrawlPage) =>
-    Boolean(anchorDomain) && domainMatches(domainOf(p.url), anchorDomain);
-
-  const anchorPages = allPages.filter(onAnchor);
-
-  return {
-    groups,
-    sources,
-    signals: {
-      websiteProvided: Boolean(siteUrl),
-      anchorDomain,
-      siteReached: anchorPages.length > 0,
-      siteMentionsCompany: anchorPages.some(named),
-      nameSeenElsewhere: allPages.filter((p) => !onAnchor(p)).some(named),
-    },
-  };
+function str(x: unknown): string {
+  return typeof x === "string" ? x.trim() : "";
+}
+function obj(x: unknown): Record<string, unknown> {
+  return x && typeof x === "object" ? (x as Record<string, unknown>) : {};
 }
 
 function normaliseUrl(raw: string): string | null {
@@ -290,7 +105,6 @@ function normaliseUrl(raw: string): string | null {
   }
 }
 
-/** Bare registrable-ish host of a URL, lowercased, `www.` stripped. */
 function domainOf(url: string): string {
   try {
     return new URL(url).hostname.toLowerCase().replace(/^www\./, "");
@@ -299,7 +113,6 @@ function domainOf(url: string): string {
   }
 }
 
-/** True when `host` is the anchor domain or a subdomain of it (jobs.acme.lk ~ acme.lk). */
 function domainMatches(host: string, anchor: string): boolean {
   if (!host || !anchor) return false;
   return host === anchor || host.endsWith(`.${anchor}`);
@@ -313,7 +126,6 @@ function normaliseName(company: string): string {
     .trim();
 }
 
-/** The distinctive core of a company name — legal-form suffixes/punctuation stripped. */
 function coreName(company: string): string {
   return normaliseName(company)
     .replace(
@@ -324,12 +136,6 @@ function coreName(company: string): string {
     .trim();
 }
 
-/**
- * Word-boundary check that a blob of text is actually about this company.
- * Uses the distinctive core name, falling back to the full name when the core
- * is only legal-form tokens, and refuses cores too short to match reliably
- * (e.g. "ifs") so a common substring can't false-positive the identity signal.
- */
 function mentionsCompany(text: string, company: string): boolean {
   if (!text) return false;
   let needle = coreName(company);
@@ -341,17 +147,140 @@ function mentionsCompany(text: string, company: string): boolean {
   return new RegExp(`\\b${escaped}\\b`, "i").test(text);
 }
 
+// ---- brand + social + map extraction -----------------------------------------
+
+const SOCIAL_HOSTS: { re: RegExp; platform: string }[] = [
+  { re: /facebook\.com/i, platform: "Facebook" },
+  { re: /instagram\.com/i, platform: "Instagram" },
+  { re: /linkedin\.com/i, platform: "LinkedIn" },
+  { re: /(?:twitter\.com|x\.com)/i, platform: "X" },
+  { re: /(?:youtube\.com|youtu\.be)/i, platform: "YouTube" },
+  { re: /tiktok\.com/i, platform: "TikTok" },
+  { re: /pinterest\./i, platform: "Pinterest" },
+  { re: /wa\.me|api\.whatsapp/i, platform: "WhatsApp" },
+];
+
+function extractSocials(links: string[]): ResearchSocialLink[] {
+  const out: ResearchSocialLink[] = [];
+  const seen = new Set<string>();
+  for (const link of links) {
+    if (/sharer|\/share|intent\/|\/dialog\//i.test(link)) continue; // skip share buttons
+    for (const { re, platform } of SOCIAL_HOSTS) {
+      if (re.test(link) && !seen.has(platform)) {
+        seen.add(platform);
+        out.push({ platform, url: link });
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+/** Turn a Firecrawl branding profile into our normalised brand shape. */
+function normaliseBrand(raw: FirecrawlBranding | null): ResearchBrand {
+  if (!raw) return EMPTY_BRAND;
+  const colorsObj = obj(raw.colors);
+  const colors: { name: string; hex: string }[] = [];
+  const pushColor = (name: string, val: unknown) => {
+    const hex = str(val);
+    if (hex) colors.push({ name, hex });
+  };
+  pushColor("Primary", colorsObj.primary);
+  pushColor("Secondary", colorsObj.secondary);
+  pushColor("Accent", colorsObj.accent);
+  pushColor("Background", colorsObj.background);
+  pushColor("Text", colorsObj.textPrimary);
+  pushColor("Link", colorsObj.link);
+
+  const fonts = new Set<string>();
+  if (Array.isArray(raw.fonts)) {
+    for (const f of raw.fonts) {
+      const fam = typeof f === "string" ? f : str(obj(f).family);
+      if (fam) fonts.add(fam);
+    }
+  }
+  const fam = obj(obj(raw.typography).fontFamilies);
+  for (const k of ["primary", "heading", "body", "code"]) {
+    const v = str(fam[k]);
+    if (v) fonts.add(v);
+  }
+
+  const images = obj(raw.images);
+  const spacing = obj(raw.spacing);
+  // Only accept a string/number baseUnit — never stringify an object.
+  const baseUnit =
+    typeof spacing.baseUnit === "number"
+      ? String(spacing.baseUnit)
+      : str(spacing.baseUnit);
+  const spacingParts = [
+    baseUnit ? `base ${baseUnit}px` : "",
+    str(spacing.borderRadius) ? `radius ${str(spacing.borderRadius)}` : "",
+  ].filter(Boolean);
+
+  const personality = obj(raw.personality);
+  const styleParts = [
+    str(personality.tone),
+    str(personality.energy),
+    str(personality.targetAudience) || str(personality.audience),
+  ].filter(Boolean);
+
+  return {
+    colors,
+    fonts: [...fonts].slice(0, 8),
+    logo: str(raw.logo) || str(images.logo),
+    color_scheme: str(raw.colorScheme),
+    spacing: spacingParts.join(" · "),
+    style_notes: styleParts.join(" · "),
+  };
+}
+
+/** Readable page labels from a site map (title, else the path). */
+function extractSiteMap(
+  links: { url: string; title: string }[],
+  anchorDomain: string,
+): string[] {
+  const seen = new Set<string>();
+  const pages: string[] = [];
+  for (const l of links) {
+    if (anchorDomain && !domainMatches(domainOf(l.url), anchorDomain)) continue;
+    let label = l.title.trim();
+    if (!label) {
+      try {
+        const p = new URL(l.url).pathname.replace(/\/+$/, "");
+        label = p && p !== "" ? p : "Home";
+      } catch {
+        continue;
+      }
+    }
+    const key = label.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    pages.push(label);
+    if (pages.length >= 30) break;
+  }
+  return pages;
+}
+
+function brandToText(label: string, brand: ResearchBrand): string {
+  if (!brand.colors.length && !brand.fonts.length && !brand.style_notes) return "";
+  const parts = [
+    brand.colors.length
+      ? `colours: ${brand.colors.map((c) => `${c.name} ${c.hex}`).join(", ")}`
+      : "",
+    brand.fonts.length ? `fonts: ${brand.fonts.join(", ")}` : "",
+    brand.color_scheme ? `scheme: ${brand.color_scheme}` : "",
+    brand.style_notes ? `personality: ${brand.style_notes}` : "",
+  ].filter(Boolean);
+  return parts.length ? `${label} brand — ${parts.join("; ")}` : "";
+}
+
+// ---- confidence validation ---------------------------------------------------
+
 const CONF_RANK: Record<string, number> = { high: 3, medium: 2, low: 1, "": 0 };
 function rankToConf(r: number): MatchConfidence {
   return r >= 3 ? "high" : r === 2 ? "medium" : r >= 1 ? "low" : "";
 }
 
-/**
- * Clamp the model's self-reported confidence with what we could actually
- * verify. A model that claims "high" for a company whose given website we
- * never reached — and whose name never appears in any source — is capped
- * down so the rep sees an honest "couldn't confirm this is the right company".
- */
 function resolveConfidence(
   modelConfidence: MatchConfidence,
   signals: ResearchSignals,
@@ -362,11 +291,9 @@ function resolveConfidence(
 
   if (signals.websiteProvided) {
     if (signals.siteMentionsCompany) {
-      // The strongest signal: the given domain's OWN content names the company.
       ceiling = "high";
       ceilingReason = `Confirmed — ${domain}'s own content matches this company.`;
     } else if (signals.siteReached) {
-      // Reachable, but the content didn't clearly name the company: don't trust it.
       ceiling = "medium";
       ceilingReason = `Reached ${domain}, but its content didn't clearly confirm this company — double-check the website is right.`;
     } else {
@@ -383,136 +310,366 @@ function resolveConfidence(
       "No website given and the name didn't clearly appear in results — likely the wrong company. Add the company website.";
   }
 
-  const modelRank = CONF_RANK[modelConfidence] || 2; // default medium if unset
-  const finalRank = Math.min(modelRank, CONF_RANK[ceiling]);
-  return { confidence: rankToConf(finalRank), ceilingReason };
+  const modelRank = CONF_RANK[modelConfidence] || 2;
+  return {
+    confidence: rankToConf(Math.min(modelRank, CONF_RANK[ceiling])),
+    ceilingReason,
+  };
 }
 
-/**
- * A useful report even with no OpenAI key: pull a website + LinkedIn
- * URL out of the gathered sources and surface generic-but-relevant
- * prompts so the rep isn't walking in cold.
- */
-function heuristicReport(
-  input: ResearchInput,
-  sources: ResearchSource[],
-  signals: ResearchSignals,
-): ResearchReport {
-  const website =
-    normaliseUrl(input.website ?? "") ||
-    sources.find((s) => !/linkedin\.com/i.test(s.url))?.url ||
-    "";
-  const linkedin = sources.find((s) => /linkedin\.com\/company/i.test(s.url))?.url || "";
-  const company = input.company.trim();
-  const { confidence, ceilingReason } = resolveConfidence("medium", signals);
+// ---- analysis (de)serialisation ----------------------------------------------
 
-  return parseResearchReport({
-    match_confidence: confidence,
-    verification: ceilingReason,
-    overview: sources.length
-      ? `${company} — briefing assembled from ${sources.length} web source(s). Add an OPENAI_API_KEY to turn these into a full analyst report.`
-      : `No web sources were found for ${company}. Check the company name/website or add a FIRECRAWL_API_KEY to enable web research.`,
-    industry: input.industry ?? "",
-    website,
-    linkedin_url: linkedin,
-    talking_points: [
-      `Reference something specific from ${company}'s website or recent news to open warm.`,
-      `Confirm what ${company} actually does before pitching — don't assume from the name.`,
-    ],
-    discovery_questions: [
-      `What's driving ${company} to look at a solution like ours right now?`,
-      "Who else is involved in a decision like this on your side?",
-      "What does success look like 6 months after we start working together?",
-    ],
-    generated_by: "basic",
-  });
-}
-
-/**
- * Run the full research pipeline for one company.
- * Never throws — on total failure it returns a heuristic report so the
- * caller can always persist *something* and mark the row done.
- */
-export async function researchCompany(
-  input: ResearchInput,
-): Promise<ResearchResult> {
-  if (!input.company.trim()) {
-    const emptySignals: ResearchSignals = {
-      websiteProvided: false,
-      anchorDomain: "",
+function emptyAnalysis(input: ResearchInput): ResearchAnalysis {
+  const domain = input.website ? domainOf(normaliseUrl(input.website) ?? "") : "";
+  return {
+    brand: EMPTY_BRAND,
+    socialLinks: [],
+    siteMap: [],
+    homepageContent: "",
+    competitorNames: [],
+    competitorUrl: "",
+    competitorBrand: null,
+    competitorContent: "",
+    searchContext: "",
+    sources: [],
+    signals: {
+      websiteProvided: Boolean(domain),
+      anchorDomain: domain,
       siteReached: false,
       siteMentionsCompany: false,
       nameSeenElsewhere: false,
-    };
-    return { report: heuristicReport(input, [], emptySignals), sources: [] };
+    },
+  };
+}
+
+/** Coerce a stored `analysis` jsonb value back into a typed ResearchAnalysis. */
+export function parseAnalysis(x: unknown, input: ResearchInput): ResearchAnalysis {
+  const base = emptyAnalysis(input);
+  const a = obj(x);
+  if (!Object.keys(a).length) return base;
+  const sig = obj(a.signals);
+  return {
+    brand: (a.brand as ResearchBrand) || base.brand,
+    socialLinks: Array.isArray(a.socialLinks)
+      ? (a.socialLinks as ResearchSocialLink[])
+      : [],
+    siteMap: Array.isArray(a.siteMap) ? (a.siteMap as string[]) : [],
+    homepageContent: str(a.homepageContent),
+    competitorNames: Array.isArray(a.competitorNames)
+      ? (a.competitorNames as string[])
+      : [],
+    competitorUrl: str(a.competitorUrl),
+    competitorBrand: (a.competitorBrand as ResearchBrand | null) ?? null,
+    competitorContent: str(a.competitorContent),
+    searchContext: str(a.searchContext),
+    sources: Array.isArray(a.sources) ? (a.sources as ResearchSource[]) : [],
+    signals: {
+      websiteProvided: Boolean(sig.websiteProvided ?? base.signals.websiteProvided),
+      anchorDomain: str(sig.anchorDomain) || base.signals.anchorDomain,
+      siteReached: Boolean(sig.siteReached),
+      siteMentionsCompany: Boolean(sig.siteMentionsCompany),
+      nameSeenElsewhere: Boolean(sig.nameSeenElsewhere),
+    },
+  };
+}
+
+// ---- STEP 1: discover --------------------------------------------------------
+
+/** Choose the best competitor URL from search results to deep-dive later. */
+function pickCompetitorUrl(pages: FirecrawlPage[], anchorDomain: string): string {
+  for (const p of pages) {
+    const d = domainOf(p.url);
+    if (!d) continue;
+    if (anchorDomain && domainMatches(d, anchorDomain)) continue;
+    if (/wikipedia|facebook|instagram|linkedin|youtube|twitter|x\.com|crunchbase|glassdoor|indeed|yelp|reddit|medium\.com|\.gov/i.test(d))
+      continue;
+    return p.url;
+  }
+  return "";
+}
+
+export async function discover(input: ResearchInput): Promise<ResearchAnalysis> {
+  const analysis = emptyAnalysis(input);
+  const company = input.company.trim();
+  const loc = input.location?.trim() || "Sri Lanka";
+  const siteUrl = input.website ? normaliseUrl(input.website) : null;
+  const anchorDomain = siteUrl ? domainOf(siteUrl) : "";
+
+  const geo = { location: "Colombo, Western, Sri Lanka", country: "lk" as const };
+
+  const [homepage, mapLinks, competitorPages, newsPages, contactPages] =
+    await Promise.all([
+      siteUrl ? firecrawlScrape(siteUrl, { brand: true }) : Promise.resolve(null),
+      siteUrl
+        ? firecrawlMap(siteUrl, {
+            search: "about services products portfolio work blog case study team contact",
+            limit: 80,
+          })
+        : Promise.resolve([]),
+      firecrawlSearch(`${company} ${loc} competitors alternatives`, {
+        limit: 6,
+        withoutContent: true,
+        ...geo,
+      }),
+      firecrawlSearch(`${company} ${loc} news`, {
+        limit: 5,
+        sources: ["news"],
+        tbs: "qdr:y",
+        withoutContent: true,
+        ...geo,
+      }),
+      firecrawlSearch(
+        `${company} ${input.contactName ? `${input.contactName} ` : ""}${loc} site:linkedin.com`,
+        { limit: 4, withoutContent: true, ...geo },
+      ),
+    ]);
+
+  // Brand + socials + homepage content from the direct scrape.
+  if (homepage) {
+    analysis.brand = normaliseBrand(homepage.branding);
+    analysis.socialLinks = extractSocials(homepage.links);
+    analysis.homepageContent = homepage.markdown.slice(0, MAX_HOMEPAGE_CHARS);
+    analysis.signals.siteReached = true;
+    analysis.signals.siteMentionsCompany =
+      mentionsCompany(homepage.title, company) ||
+      mentionsCompany(homepage.markdown, company);
   }
 
-  let sources: ResearchSource[] = [];
-  let context = "";
-  let signals: ResearchSignals = {
-    websiteProvided: Boolean(input.website),
-    anchorDomain: input.website ? domainOf(normaliseUrl(input.website) ?? "") : "",
-    siteReached: false,
-    siteMentionsCompany: false,
-    nameSeenElsewhere: false,
+  // Site map → web-presence page list. Also mine it for socials.
+  analysis.siteMap = extractSiteMap(mapLinks, anchorDomain);
+  if (analysis.socialLinks.length === 0) {
+    analysis.socialLinks = extractSocials(mapLinks.map((l) => l.url));
+  }
+
+  // Search context + sources + competitor picks.
+  const searchChunks: string[] = [];
+  const sources: ResearchSource[] = [];
+  const seenSource = new Set<string>();
+  const addSources = (pages: FirecrawlPage[], label: string, query: string) => {
+    for (const p of pages) {
+      const line = `- [${label}] ${p.title}${p.description ? ` — ${p.description}` : ""} (${p.url})`;
+      searchChunks.push(line);
+      if (!seenSource.has(p.url)) {
+        seenSource.add(p.url);
+        sources.push({ url: p.url, title: p.title, query });
+      }
+    }
+  };
+  addSources(competitorPages, "Competitor", `${company} competitors`);
+  addSources(newsPages, "News", `${company} news`);
+  addSources(contactPages, "LinkedIn", `${company} linkedin`);
+  if (homepage) {
+    sources.unshift({ url: homepage.url, title: homepage.title, query: "company website" });
+  }
+
+  analysis.searchContext = searchChunks.join("\n").slice(0, MAX_SEARCH_CHARS);
+  analysis.sources = sources;
+  analysis.competitorUrl = pickCompetitorUrl(competitorPages, anchorDomain);
+  analysis.competitorNames = competitorPages
+    .map((p) => p.title.replace(/\s*[-–|:].*$/, "").trim())
+    .filter(Boolean)
+    .slice(0, 6);
+
+  analysis.signals.nameSeenElsewhere = [
+    ...competitorPages,
+    ...newsPages,
+    ...contactPages,
+  ].some((p) => mentionsCompany(p.title, company) || mentionsCompany(p.description, company));
+
+  return analysis;
+}
+
+// ---- STEP 2: analyze the top competitor --------------------------------------
+
+export async function analyzeCompetitor(
+  input: ResearchInput,
+  analysisRaw: unknown,
+): Promise<ResearchAnalysis> {
+  const analysis = parseAnalysis(analysisRaw, input);
+  if (!analysis.competitorUrl) return analysis;
+
+  const page = await firecrawlScrape(analysis.competitorUrl, { brand: true });
+  if (page) {
+    analysis.competitorBrand = normaliseBrand(page.branding);
+    analysis.competitorContent = page.markdown.slice(0, MAX_COMPETITOR_CHARS);
+  }
+  return analysis;
+}
+
+// ---- STEP 3: synthesize the dossier ------------------------------------------
+
+const SYSTEM = `You are a senior strategist at a web-design & digital agency,
+preparing your sales team to pitch a prospect — a company based in Sri Lanka.
+You are given real data scraped from the prospect's website (including its brand
+system), a map of its pages, its social links, competitor and news search
+results, and a scrape of a top competitor. Extract only what the data supports —
+never invent facts, numbers, funding, or people.
+
+CRITICAL — verify identity first: only use data that clearly matches the intended
+company (its website domain, Sri Lanka location, named contact). If it doesn't,
+set match_confidence "low", explain in "verification", and leave factual fields
+empty rather than describing a same-named company elsewhere.
+
+Think like an agency: assess their web presence and brand, and pinpoint concrete
+ways competitors are outperforming them online — that is the pitch. Return ONLY
+one JSON object, no markdown fences.`;
+
+function synthPrompt(input: ResearchInput, analysis: ResearchAnalysis): string {
+  const s = analysis.signals;
+  const verifyBlock = `Verification signals:
+- Website given: ${s.websiteProvided ? `yes (${s.anchorDomain})` : "no"}
+- Homepage fetched: ${s.siteReached ? "yes" : "no"}
+- Homepage content names the company: ${s.siteMentionsCompany ? "yes" : "no"}
+- Company named in other sources: ${s.nameSeenElsewhere ? "yes" : "no"}`;
+
+  const brandBlock = brandToText("Prospect", analysis.brand);
+  const compBrandBlock = analysis.competitorBrand
+    ? brandToText("Top competitor", analysis.competitorBrand)
+    : "";
+
+  return `Intended company: ${input.company} (Sri Lanka)
+${s.websiteProvided ? `Website: ${input.website}\n` : ""}${input.industry ? `Industry hint: ${input.industry}\n` : ""}${input.contactName ? `Contact: ${input.contactName}\n` : ""}
+${verifyBlock}
+
+Pages on their site (from a site map):
+${analysis.siteMap.length ? analysis.siteMap.map((p) => `- ${p}`).join("\n") : "(none found)"}
+
+Social profiles found: ${analysis.socialLinks.length ? analysis.socialLinks.map((l) => l.platform).join(", ") : "(none found)"}
+
+${brandBlock}
+${compBrandBlock}
+
+=== HOMEPAGE CONTENT ===
+${analysis.homepageContent || "(not available)"}
+
+=== SEARCH RESULTS (competitors / news / linkedin) ===
+${analysis.searchContext || "(none)"}
+
+=== TOP COMPETITOR HOMEPAGE (${analysis.competitorUrl || "n/a"}) ===
+${analysis.competitorContent || "(not scraped)"}
+
+Return a JSON object with EXACTLY these keys:
+{
+  "match_confidence": "high | medium | low",
+  "verification": "one line: how identity was confirmed, or why not",
+  "overview": "2-4 sentences: what they do and who they serve",
+  "industry": "primary industry, or ''",
+  "headquarters": "city, country if known, else ''",
+  "company_size": "employee range if known, else ''",
+  "founded": "founding year if known, else ''",
+  "products_services": ["their main products/services"],
+  "web_presence": {
+    "ctas": ["primary calls-to-action on their site"],
+    "gaps": ["specific weaknesses / things missing vs a modern site — agency angle"],
+    "notes": "1-2 sentences on site quality, tech, freshness"
+  },
+  "brand_style_notes": "1-2 sentences reading their visual brand's tone/style",
+  "competitors": [{ "name": "Competitor", "note": "one line on how they compete" }],
+  "competitor_gaps": ["specific ways competitors are OUTPERFORMING this prospect online (site, brand, content, social, SEO) — the pitch"],
+  "recent_news": [{ "title": "headline", "summary": "one sentence", "url": "source url or ''" }],
+  "pain_points": ["business/marketing challenges we could solve"],
+  "talking_points": ["specific opening angles for OUR agency's pitch, tied to their brand/site/competitors"],
+  "discovery_questions": ["sharp questions to qualify this prospect"]
+}
+
+Guidance:
+- If match_confidence is "low", keep factual fields empty and explain in "verification".
+- competitor_gaps & talking_points: 3-5 each, concrete and specific to THIS prospect, from a web-agency lens.
+- Keep strings tight; don't restate the raw data verbatim.`;
+}
+
+/** Build the final report, merging deterministic brand/socials with AI output. */
+function assembleReport(
+  input: ResearchInput,
+  analysis: ResearchAnalysis,
+  ai: Record<string, unknown> | null,
+): ResearchReport {
+  const web = obj(ai?.web_presence);
+  const brand: ResearchBrand = {
+    ...analysis.brand,
+    // Prefer the AI's read of style if the branding scan didn't provide one.
+    style_notes: analysis.brand.style_notes || str(ai?.brand_style_notes),
   };
 
-  if (isFirecrawlConfigured()) {
-    try {
-      const gathered = await gatherSources(input);
-      sources = gathered.sources;
-      context = buildContext(gathered.groups);
-      signals = gathered.signals;
-    } catch (e) {
-      console.error("[lead-research] gathering sources failed:", e);
-    }
-  }
+  const modelConfidence: MatchConfidence =
+    ai?.match_confidence === "high" || ai?.match_confidence === "medium" || ai?.match_confidence === "low"
+      ? (ai.match_confidence as MatchConfidence)
+      : "";
+  const { confidence, ceilingReason } = resolveConfidence(modelConfidence, analysis.signals);
+  const aiVerification = str(ai?.verification);
 
-  // No AI, or nothing to summarise → heuristic report over whatever we found.
-  if (!isOpenAIConfigured() || !context) {
-    return { report: heuristicReport(input, sources, signals), sources };
+  const website =
+    normaliseUrl(input.website ?? "") ||
+    analysis.sources.find((s) => !/linkedin\.com/i.test(s.url))?.url ||
+    "";
+  const linkedin =
+    analysis.socialLinks.find((l) => l.platform === "LinkedIn")?.url ||
+    analysis.sources.find((s) => /linkedin\.com\/(company|in)/i.test(s.url))?.url ||
+    "";
+
+  return parseResearchReport({
+    overview: str(ai?.overview),
+    industry: str(ai?.industry) || input.industry || "",
+    headquarters: str(ai?.headquarters),
+    company_size: str(ai?.company_size),
+    founded: str(ai?.founded),
+    website,
+    linkedin_url: linkedin,
+    products_services: ai?.products_services,
+    competitors: ai?.competitors,
+    competitor_gaps: ai?.competitor_gaps,
+    recent_news: ai?.recent_news,
+    pain_points: ai?.pain_points,
+    talking_points: ai?.talking_points,
+    discovery_questions: ai?.discovery_questions,
+    brand,
+    web_presence: {
+      pages: analysis.siteMap,
+      ctas: web.ctas,
+      gaps: web.gaps,
+      notes: str(web.notes),
+    },
+    social_links: analysis.socialLinks,
+    match_confidence: confidence,
+    verification: confidence === "low" || !aiVerification ? ceilingReason : aiVerification,
+    generated_by: ai ? "ai" : "basic",
+  });
+}
+
+export async function synthesize(
+  input: ResearchInput,
+  analysisRaw: unknown,
+): Promise<ResearchResult> {
+  const analysis = parseAnalysis(analysisRaw, input);
+
+  const hasContext =
+    Boolean(analysis.homepageContent) ||
+    Boolean(analysis.searchContext) ||
+    analysis.siteMap.length > 0;
+
+  if (!isOpenAIConfigured() || !hasContext) {
+    return {
+      report: assembleReport(input, analysis, null),
+      sources: analysis.sources,
+    };
   }
 
   try {
     const raw = await openaiChatJSON(
       [
         { role: "system", content: SYSTEM },
-        { role: "user", content: userPrompt(input, context, signals) },
+        { role: "user", content: synthPrompt(input, analysis) },
       ],
       { temperature: 0.3, model: MODEL, timeoutMs: 25000 },
     );
     const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const report = parseResearchReport({ ...parsed, generated_by: "ai" });
-
-    // Clamp the model's confidence with what we could actually verify, and
-    // fall back to our own explanation when the model didn't give one.
-    const { confidence, ceilingReason } = resolveConfidence(
-      report.match_confidence,
-      signals,
-    );
-    report.match_confidence = confidence;
-    // A "low" verdict is ours to explain (the mismatch reason); otherwise keep
-    // the model's note, falling back to our reason if it gave none.
-    if (confidence === "low" || !report.verification) {
-      report.verification = ceilingReason;
-    }
-
-    // If the model found a site/linkedin we couldn't, keep it; otherwise
-    // backfill from the given website / scraped sources.
-    if (!report.website) {
-      report.website =
-        normaliseUrl(input.website ?? "") ||
-        sources.find((s) => !/linkedin\.com/i.test(s.url))?.url ||
-        "";
-    }
-    if (!report.linkedin_url) {
-      report.linkedin_url =
-        sources.find((s) => /linkedin\.com\/company/i.test(s.url))?.url || "";
-    }
-    return { report, sources };
+    return { report: assembleReport(input, analysis, parsed), sources: analysis.sources };
   } catch (e) {
     console.error("[lead-research] synthesis failed:", e);
-    return { report: heuristicReport(input, sources, signals), sources };
+    return {
+      report: assembleReport(input, analysis, null),
+      sources: analysis.sources,
+    };
   }
 }
 

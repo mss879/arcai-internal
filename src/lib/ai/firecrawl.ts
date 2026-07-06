@@ -6,10 +6,12 @@ import "server-only";
  * works the moment a `FIRECRAWL_API_KEY` lands in the env, and the
  * key never reaches the browser.
  *
- * We lean on `/search` (Google-quality results with the matching
- * pages scraped to markdown in the same call) instead of scraping
- * LinkedIn/Google result pages ourselves — those block bots, search
- * does not.
+ * We use four endpoints:
+ *   - /search — Google-quality results, optionally scraped to markdown
+ *     (LinkedIn/Google block direct bots; search does not).
+ *   - /scrape — one known URL to markdown + links + (optionally) a full
+ *     `branding` profile (colours, fonts, spacing, logo).
+ *   - /map    — every URL on a site, fast, to read its web presence.
  */
 
 const BASE_URL =
@@ -17,12 +19,14 @@ const BASE_URL =
 
 /**
  * Server-side scrape budget Firecrawl applies per page (ms). Kept short so
- * one slow page can't blow the whole research run past the serverless
- * function's wall-clock limit.
+ * one slow page can't blow a research step past the serverless time limit.
  */
 const SCRAPE_TIMEOUT_MS = 8000;
 /** Hard client-side abort so a hung connection can never stall a run. */
 const FETCH_TIMEOUT_MS = 13000;
+/** Branding extraction runs an LLM on Firecrawl's side — give it longer, but
+ *  kept under the serverless step budget so a brand scrape fits one tick. */
+const BRAND_FETCH_TIMEOUT_MS = 18000;
 
 /** True when a Firecrawl key is configured. */
 export function isFirecrawlConfigured(): boolean {
@@ -35,13 +39,23 @@ function apiKey(): string {
   return key;
 }
 
+/** Firecrawl's raw brand/design-system profile — normalised by the engine. */
+export type FirecrawlBranding = Record<string, unknown>;
+
 /** One search hit / scraped page, normalised for the research engine. */
 export type FirecrawlPage = {
   url: string;
   title: string;
   description: string;
   markdown: string;
+  /** Every link found on the page (used to detect socials + key pages). */
+  links: string[];
+  /** Full brand profile when the scrape requested `branding`, else null. */
+  branding: FirecrawlBranding | null;
 };
+
+/** One entry from a site map. */
+export type FirecrawlLink = { url: string; title: string; description: string };
 
 type RawResult = {
   url?: string;
@@ -49,8 +63,16 @@ type RawResult = {
   description?: string;
   snippet?: string;
   markdown?: string | null;
+  links?: unknown;
+  branding?: unknown;
   metadata?: { sourceURL?: string; title?: string; description?: string };
 };
+
+function strList(x: unknown): string[] {
+  return Array.isArray(x)
+    ? x.filter((v): v is string => typeof v === "string")
+    : [];
+}
 
 function normalise(r: RawResult): FirecrawlPage | null {
   const url = r.url || r.metadata?.sourceURL || "";
@@ -60,6 +82,11 @@ function normalise(r: RawResult): FirecrawlPage | null {
     title: r.title || r.metadata?.title || url,
     description: r.description || r.snippet || r.metadata?.description || "",
     markdown: r.markdown || "",
+    links: strList(r.links),
+    branding:
+      r.branding && typeof r.branding === "object"
+        ? (r.branding as FirecrawlBranding)
+        : null,
   };
 }
 
@@ -134,12 +161,16 @@ export async function firecrawlSearch(
 }
 
 /**
- * Scrape one known URL (the prospect's own website) to markdown.
- * Returns null on failure — same graceful-degradation contract.
+ * Scrape one known URL to markdown + links, optionally with a full brand
+ * profile. Returns null on failure — same graceful-degradation contract.
  */
 export async function firecrawlScrape(
   url: string,
+  opts?: { brand?: boolean },
 ): Promise<FirecrawlPage | null> {
+  const formats: string[] = ["markdown", "links"];
+  if (opts?.brand) formats.push("branding");
+
   let res: Response;
   try {
     res = await fetch(`${BASE_URL}/scrape`, {
@@ -148,12 +179,14 @@ export async function firecrawlScrape(
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey()}`,
       },
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      signal: AbortSignal.timeout(
+        opts?.brand ? BRAND_FETCH_TIMEOUT_MS : FETCH_TIMEOUT_MS,
+      ),
       body: JSON.stringify({
         url,
-        formats: ["markdown"],
+        formats,
         onlyMainContent: true,
-        timeout: SCRAPE_TIMEOUT_MS,
+        timeout: opts?.brand ? BRAND_FETCH_TIMEOUT_MS - 3000 : SCRAPE_TIMEOUT_MS,
       }),
     });
   } catch (e) {
@@ -169,4 +202,52 @@ export async function firecrawlScrape(
   const json = await res.json();
   const data = (json?.data ?? {}) as RawResult;
   return normalise({ ...data, url: data.metadata?.sourceURL || url });
+}
+
+/**
+ * Map a site — a fast listing of its URLs, optionally ordered by a search
+ * term. Used to read a company's web presence (blog, portfolio, careers…)
+ * without scraping every page. Returns [] on failure.
+ */
+export async function firecrawlMap(
+  url: string,
+  opts?: { search?: string; limit?: number },
+): Promise<FirecrawlLink[]> {
+  let res: Response;
+  try {
+    res = await fetch(`${BASE_URL}/map`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey()}`,
+      },
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      body: JSON.stringify({
+        url,
+        ...(opts?.search ? { search: opts.search } : {}),
+        limit: opts?.limit ?? 80,
+      }),
+    });
+  } catch (e) {
+    console.error(`[firecrawl] map errored: ${e instanceof Error ? e.message : e}`);
+    return [];
+  }
+
+  if (!res.ok) {
+    console.error(`[firecrawl] map failed (${res.status}): ${await res.text()}`);
+    return [];
+  }
+
+  const json = await res.json();
+  const links = Array.isArray(json?.links) ? json.links : [];
+  return links
+    .map((l: unknown) => {
+      const o = (l && typeof l === "object" ? l : {}) as Record<string, unknown>;
+      return {
+        url: typeof o.url === "string" ? o.url : "",
+        title: typeof o.title === "string" ? o.title : "",
+        description: typeof o.description === "string" ? o.description : "",
+      };
+    })
+    .filter((l: FirecrawlLink) => l.url);
 }

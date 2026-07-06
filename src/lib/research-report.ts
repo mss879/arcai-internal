@@ -10,6 +10,31 @@
 export type ResearchCompetitor = { name: string; note: string };
 export type ResearchNewsItem = { title: string; summary: string; url: string };
 export type ResearchSource = { url: string; title: string; query: string };
+export type ResearchSocialLink = { platform: string; url: string };
+export type ResearchColor = { name: string; hex: string };
+
+/** The prospect's visual brand system, mostly from Firecrawl's branding scan. */
+export type ResearchBrand = {
+  colors: ResearchColor[];
+  fonts: string[];
+  logo: string;
+  color_scheme: string;
+  spacing: string;
+  /** AI's read of the brand's tone/style (agency perspective). */
+  style_notes: string;
+};
+
+/** The prospect's digital footprint — the raw material for a website pitch. */
+export type ResearchWebPresence = {
+  /** Notable pages the site has (blog, portfolio, careers, shop…). */
+  pages: string[];
+  /** Primary calls-to-action seen on the site. */
+  ctas: string[];
+  /** What's missing / weak vs a modern site (agency angle). */
+  gaps: string[];
+  /** Free-text note on tech, quality, freshness. */
+  notes: string;
+};
 
 /** How confident we are the report is about the intended company. */
 export type MatchConfidence = "high" | "medium" | "low" | "";
@@ -24,10 +49,15 @@ export type ResearchReport = {
   linkedin_url: string;
   products_services: string[];
   competitors: ResearchCompetitor[];
+  /** Specific ways competitors are outperforming this prospect — pitch fuel. */
+  competitor_gaps: string[];
   recent_news: ResearchNewsItem[];
   pain_points: string[];
   talking_points: string[];
   discovery_questions: string[];
+  brand: ResearchBrand;
+  web_presence: ResearchWebPresence;
+  social_links: ResearchSocialLink[];
   /** How sure we are this is the right company (see MatchConfidence). */
   match_confidence: MatchConfidence;
   /** One line explaining the confidence — how identity was (or wasn't) confirmed. */
@@ -45,6 +75,9 @@ function str(x: unknown): string {
 }
 function strArr(x: unknown): string[] {
   return Array.isArray(x) ? x.map((v) => str(v)).filter(Boolean) : [];
+}
+function obj(x: unknown): Record<string, unknown> {
+  return x && typeof x === "object" ? (x as Record<string, unknown>) : {};
 }
 
 function competitors(x: unknown): ResearchCompetitor[] {
@@ -68,9 +101,70 @@ function news(x: unknown): ResearchNewsItem[] {
     .filter((n) => n.title);
 }
 
+/** Accept `#rgb`, `#rrggbb`, or `rgb()/rgba()` — normalise to a display hex-ish string. */
+function color(x: unknown): string {
+  const s = str(x).toLowerCase();
+  if (/^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/.test(s)) return s;
+  if (/^rgba?\(/.test(s)) return s;
+  return "";
+}
+
+function colors(x: unknown): ResearchColor[] {
+  if (!Array.isArray(x)) return [];
+  const seen = new Set<string>();
+  return x
+    .map((c) => {
+      const o = obj(c);
+      return { name: str(o.name), hex: color(o.hex) };
+    })
+    .filter((c) => {
+      if (!c.hex || seen.has(c.hex)) return false;
+      seen.add(c.hex);
+      return true;
+    })
+    .slice(0, 10);
+}
+
+function socials(x: unknown): ResearchSocialLink[] {
+  if (!Array.isArray(x)) return [];
+  const seen = new Set<string>();
+  return x
+    .map((s) => {
+      const o = obj(s);
+      return { platform: str(o.platform), url: str(o.url) };
+    })
+    .filter((s) => {
+      if (!s.url || seen.has(s.url)) return false;
+      seen.add(s.url);
+      return true;
+    });
+}
+
+function brand(x: unknown): ResearchBrand {
+  const b = obj(x);
+  return {
+    colors: colors(b.colors),
+    fonts: strArr(b.fonts).slice(0, 8),
+    logo: str(b.logo),
+    color_scheme: str(b.color_scheme),
+    spacing: str(b.spacing),
+    style_notes: str(b.style_notes),
+  };
+}
+
+function webPresence(x: unknown): ResearchWebPresence {
+  const w = obj(x);
+  return {
+    pages: strArr(w.pages).slice(0, 20),
+    ctas: strArr(w.ctas).slice(0, 8),
+    gaps: strArr(w.gaps),
+    notes: str(w.notes),
+  };
+}
+
 /** Coerce the jsonb column into a well-formed report (missing keys → empty). */
 export function parseResearchReport(x: unknown): ResearchReport {
-  const r = (x && typeof x === "object" ? x : {}) as Record<string, unknown>;
+  const r = obj(x);
   return {
     overview: str(r.overview),
     industry: str(r.industry),
@@ -81,10 +175,14 @@ export function parseResearchReport(x: unknown): ResearchReport {
     linkedin_url: str(r.linkedin_url),
     products_services: strArr(r.products_services),
     competitors: competitors(r.competitors),
+    competitor_gaps: strArr(r.competitor_gaps),
     recent_news: news(r.recent_news),
     pain_points: strArr(r.pain_points),
     talking_points: strArr(r.talking_points),
     discovery_questions: strArr(r.discovery_questions),
+    brand: brand(r.brand),
+    web_presence: webPresence(r.web_presence),
+    social_links: socials(r.social_links),
     match_confidence: confidence(r.match_confidence),
     verification: str(r.verification),
     generated_by: r.generated_by === "basic" ? "basic" : "ai",

@@ -578,8 +578,15 @@ function ResearchCard({
   const [busy, setBusy] = React.useState(false);
 
   const status = research?.status;
-  const running = busy || status === "pending" || status === "running";
+  const running =
+    busy || (!!status && status !== "done" && status !== "error");
   const hasCompany = Boolean(lead.company?.trim());
+  const stepLabel =
+    status === "discovered"
+      ? "Analyzing the website & brand…"
+      : status === "analyzed"
+        ? "Sizing up competitors & writing the dossier…"
+        : `Researching ${research?.company_name ?? "the company"}…`;
 
   async function run() {
     setBusy(true);
@@ -619,9 +626,9 @@ function ResearchCard({
       {!research && (
         <div className="mt-3">
           <p className="text-sm text-slate-500">
-            Auto-research the company across LinkedIn, the web and recent news,
-            then get a call-ready briefing — competitors, pain points and
-            talking points.
+            Build an agency dossier — scrape the company&apos;s brand (colours,
+            fonts, logo), map its site &amp; socials, size up competitors, and
+            get pitch angles for how you&apos;d win the work.
           </p>
           <Button
             className="mt-3"
@@ -639,8 +646,8 @@ function ResearchCard({
       {/* Queued / in progress */}
       {research && running && status !== "done" && (
         <div className="mt-3 flex items-center gap-2 rounded-xl bg-slate-50 px-3 py-2.5 text-sm text-slate-500">
-          <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-slate-300 border-t-primary-500" />
-          Researching {research.company_name}…
+          <span className="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-slate-300 border-t-primary-500" />
+          {stepLabel}
         </div>
       )}
 

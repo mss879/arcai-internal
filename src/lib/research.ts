@@ -2,9 +2,11 @@ import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import type { Database } from "@/lib/database.types";
+import type { Database, LeadResearchStatus } from "@/lib/database.types";
 import {
-  researchCompany,
+  discover,
+  analyzeCompetitor,
+  synthesize,
   isResearchConfigured,
   type ResearchInput,
 } from "@/lib/ai/lead-research";
@@ -13,8 +15,12 @@ type DB = SupabaseClient<Database>;
 
 export type ResearchTickResult = { processed: number; failed: number };
 
-/** Rows stuck in `running` longer than this are assumed dead and retried. */
-const STUCK_AFTER_MS = 5 * 60 * 1000;
+/**
+ * A claimed step's lease. Longer than any single step (~22s), shorter than
+ * the tick interval, so a step abandoned by a killed function is retried
+ * within a couple of ticks rather than being double-processed live.
+ */
+const LOCK_TTL_MS = 90 * 1000;
 
 /**
  * Queue a research report for a lead. Upserts a `pending` row (one per
@@ -39,6 +45,9 @@ export async function queueLeadResearch(
           company_name: company,
           status: "pending",
           error: null,
+          // Reset the pipeline on re-queue so a re-run starts clean.
+          analysis: {},
+          locked_at: null,
           ...(opts.requestedBy ? { requested_by: opts.requestedBy } : {}),
         },
         { onConflict: "lead_id" },
@@ -57,10 +66,10 @@ export async function queueLeadResearch(
 }
 
 /**
- * Queue a report and run it immediately in the same call. Used by the
- * manual "Run research" button and the lead-create hook (inside
- * `after()`). If the run outlives the serverless function's budget the
- * row is left `pending`/`running` for the automation tick to retry, so
+ * Queue a report and run its FIRST step immediately (the homepage brand +
+ * search discovery), so a new lead shows progress at once. The remaining
+ * steps are advanced by the automation tick. If this inline step outlives
+ * the serverless budget the row stays claimable and the tick resumes it —
  * a report is never lost. Never throws.
  */
 export async function startLeadResearch(
@@ -69,12 +78,7 @@ export async function startLeadResearch(
 ): Promise<{ ok: boolean; id?: string }> {
   const queued = await queueLeadResearch(supabase, opts);
   if (!queued.ok || !queued.id) return queued;
-
-  await runResearchRow(supabase, {
-    id: queued.id,
-    lead_id: opts.leadId,
-    company_name: opts.company.trim(),
-  });
+  await advanceResearchRow(supabase, queued.id);
   return queued;
 }
 
@@ -116,34 +120,56 @@ async function researchInputForLead(
   };
 }
 
-/** Outcome of a single run: `done`/`error` did the work, `skipped` lost the claim. */
-export type RunOutcome = "done" | "error" | "skipped";
+/** Outcome of advancing one step. */
+export type StepOutcome = "advanced" | "done" | "error" | "skipped";
+
+/** Non-terminal states the pipeline can be claimed in. */
+const CLAIMABLE: LeadResearchStatus[] = [
+  "pending",
+  "running",
+  "discovered",
+  "analyzed",
+];
 
 /**
- * Run research for a single `lead_research` row end to end: atomically
- * claim it (pending → running), gather + synthesise, then persist the
- * report (or an error). Used by both the inline server action and the
- * tick — the claim is a compare-and-swap so those two callers can never
- * both process the same row (no doubled Firecrawl/OpenAI spend). Returns
- * `skipped` when another worker already owns the row. Never throws.
+ * Advance ONE step of a lead_research row's pipeline
+ * (pending → discovered → analyzed → done). Atomically claims the row with a
+ * short lease (`locked_at`) so the inline run and the tick can never process
+ * the same step twice, then runs exactly one step and releases the lease.
+ * Returns `skipped` when another worker holds the lease. Never throws.
  */
-export async function runResearchRow(
+export async function advanceResearchRow(
   supabase: DB,
-  row: { id: string; lead_id: string; company_name: string },
-): Promise<RunOutcome> {
-  // Atomic claim: only win rows that are pending, previously errored, or a
-  // `running` row that's been stale long enough to be considered dead. The
-  // WHERE is applied in one statement, so exactly one caller flips it.
-  const stuckBefore = new Date(Date.now() - STUCK_AFTER_MS).toISOString();
+  rowId: string,
+): Promise<StepOutcome> {
+  const lockCutoff = new Date(Date.now() - LOCK_TTL_MS).toISOString();
+  // Compare-and-swap: grab the lease only if the row is claimable and its
+  // lease is free or expired. Applied atomically in one statement.
   const { data: claimed } = await supabase
     .from("lead_research")
-    .update({ status: "running" })
-    .eq("id", row.id)
-    .or(
-      `status.eq.pending,status.eq.error,and(status.eq.running,updated_at.lt.${stuckBefore})`,
-    )
-    .select("id");
+    .update({ locked_at: new Date().toISOString() })
+    .eq("id", rowId)
+    .in("status", CLAIMABLE)
+    .or(`locked_at.is.null,locked_at.lt.${lockCutoff}`)
+    .select("id, lead_id, company_name, status, analysis, locked_at");
   if (!claimed?.length) return "skipped";
+  const row = claimed[0];
+  // The exact lease value we hold. Every commit is FENCED on it: if our lease
+  // expired and another worker (or a re-queue) took the row, our write matches
+  // zero rows and no-ops instead of clobbering their state.
+  const token = row.locked_at;
+  if (!token) return "skipped"; // we just set it; guards the type + a freak null
+
+  // Persist a step result only while we still own the lease; throw on a real
+  // DB error so the catch marks the row errored (a fenced-out no-op is fine).
+  const commit = async (patch: Record<string, unknown>) => {
+    const { error } = await supabase
+      .from("lead_research")
+      .update({ ...patch, locked_at: null })
+      .eq("id", rowId)
+      .eq("locked_at", token);
+    if (error) throw new Error(error.message);
+  };
 
   try {
     const input = await researchInputForLead(
@@ -151,47 +177,72 @@ export async function runResearchRow(
       row.lead_id,
       row.company_name,
     );
-    const { report, sources } = await researchCompany(input);
 
-    const { error } = await supabase
-      .from("lead_research")
-      .update({
-        status: "done",
+    // pending/running → discover (homepage brand + site map + searches)
+    if (row.status === "pending" || row.status === "running") {
+      const analysis = await discover(input);
+      await commit({
+        status: "discovered",
+        analysis: analysis as unknown as Record<string, unknown>,
         error: null,
-        report,
-        sources,
         company_name: input.company,
-      })
-      .eq("id", row.id);
-    if (error) {
-      console.error("[research] persist failed:", error.message);
-      return "error";
+      });
+      return "advanced";
     }
-    return "done";
+
+    // discovered → analyze the top competitor
+    if (row.status === "discovered") {
+      const analysis = await analyzeCompetitor(input, row.analysis);
+      await commit({
+        status: "analyzed",
+        analysis: analysis as unknown as Record<string, unknown>,
+      });
+      return "advanced";
+    }
+
+    // analyzed → synthesize the dossier
+    if (row.status === "analyzed") {
+      const { report, sources } = await synthesize(input, row.analysis);
+      await commit({
+        status: "done",
+        report: report as unknown as Record<string, unknown>,
+        sources: sources as unknown as Record<string, unknown>[],
+        error: null,
+      });
+      return "done";
+    }
+
+    // Unknown/terminal — release the lease (fenced).
+    await supabase
+      .from("lead_research")
+      .update({ locked_at: null })
+      .eq("id", rowId)
+      .eq("locked_at", token);
+    return "skipped";
   } catch (e) {
-    console.error("[research] run failed:", e);
+    console.error("[research] step failed:", e);
+    // Fenced: only mark errored if we still hold the lease.
     await supabase
       .from("lead_research")
       .update({
         status: "error",
         error: e instanceof Error ? e.message : "Research failed.",
+        locked_at: null,
       })
-      .eq("id", row.id);
+      .eq("id", rowId)
+      .eq("locked_at", token);
     return "error";
   }
 }
 
 /**
- * Process queued research from the automation tick. Picks up freshly
- * `pending` rows plus any that got stuck in `running` (a serverless
- * function that timed out mid-run) and runs them, letting the atomic
- * claim in `runResearchRow` ensure an inline run and the tick never
- * double-process the same row.
+ * Advance queued research from the automation tick. Each report is a 3-step
+ * pipeline; the tick moves each claimable row forward by ONE step (a step can
+ * take ~20s and shares the tick's budget with SMS/finance/todo work), so a
+ * report completes over a few minute-ticks. `advanceResearchRow`'s lease means
+ * a row an inline run already owns is `skipped`, not double-processed.
  *
- * `limit` defaults to 1: each report can take ~15-20s, and the tick shares
- * a short serverless budget with the SMS/finance/todo work, so it drains
- * one lead per minute-tick. A long-lived worker (the Netlify background
- * function) can pass a larger batch.
+ * `limit` is the number of rows advanced per tick (one step each).
  */
 export async function processPendingResearch(
   supabase: DB,
@@ -200,24 +251,20 @@ export async function processPendingResearch(
   const result: ResearchTickResult = { processed: 0, failed: 0 };
   if (!isResearchConfigured()) return result;
 
-  const stuckBefore = new Date(Date.now() - STUCK_AFTER_MS).toISOString();
-
+  const lockCutoff = new Date(Date.now() - LOCK_TTL_MS).toISOString();
   const { data: rows } = await supabase
     .from("lead_research")
-    .select("id, lead_id, company_name, status, updated_at")
-    .or(`status.eq.pending,and(status.eq.running,updated_at.lt.${stuckBefore})`)
+    .select("id, status, locked_at, updated_at")
+    .in("status", CLAIMABLE)
+    .or(`locked_at.is.null,locked_at.lt.${lockCutoff}`)
     .order("updated_at", { ascending: true })
     .limit(Math.max(1, limit));
 
   if (!rows?.length) return result;
 
-  // `runResearchRow` atomically claims each row, so a row an inline run is
-  // already handling is `skipped` here (not a failure). A row only reaches a
-  // non-terminal state again if a serverless function died mid-run — the
-  // stuck-timeout in the claim then lets exactly one worker retry it.
   for (const row of rows) {
-    const outcome = await runResearchRow(supabase, row);
-    if (outcome === "done") result.processed += 1;
+    const outcome = await advanceResearchRow(supabase, row.id);
+    if (outcome === "done" || outcome === "advanced") result.processed += 1;
     else if (outcome === "error") result.failed += 1;
   }
 

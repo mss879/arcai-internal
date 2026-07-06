@@ -6,13 +6,18 @@ import {
   Building2,
   ExternalLink,
   Globe,
+  LayoutGrid,
   Link2,
   Lightbulb,
   MessageCircleQuestion,
   Newspaper,
+  Palette,
+  Share2,
   ShieldAlert,
   Swords,
+  TrendingUp,
   TriangleAlert,
+  Type,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -21,6 +26,7 @@ import {
   parseResearchReport,
   parseResearchSources,
   type MatchConfidence,
+  type ResearchReport,
 } from "@/lib/research-report";
 import type { LeadResearch } from "@/lib/types";
 
@@ -50,6 +56,170 @@ function Fact({ label, value }: { label: string; value: string }) {
         {label}
       </dt>
       <dd className="mt-0.5 text-sm text-slate-700">{value}</dd>
+    </div>
+  );
+}
+
+/**
+ * Readable-contrast text colour for a swatch. Handles the same colour shapes
+ * the report coercer admits: #rgb / #rrggbb / #rrggbbaa and rgb()/rgba().
+ */
+function readableOn(color: string): string {
+  let r: number;
+  let g: number;
+  let b: number;
+  let code = /^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(color)?.[1] ?? "";
+  const rgb = /^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)/i.exec(color);
+  if (code) {
+    if (code.length === 3) code = code.replace(/(.)/g, "$1$1"); // #abc → aabbcc
+    if (code.length === 8) code = code.slice(0, 6); // drop alpha
+    r = parseInt(code.slice(0, 2), 16);
+    g = parseInt(code.slice(2, 4), 16);
+    b = parseInt(code.slice(4, 6), 16);
+  } else if (rgb) {
+    r = Number(rgb[1]);
+    g = Number(rgb[2]);
+    b = Number(rgb[3]);
+  } else {
+    return "#0f172a";
+  }
+  // Perceived luminance → pick dark or light text.
+  return 0.299 * r + 0.587 * g + 0.114 * b > 150 ? "#0f172a" : "#ffffff";
+}
+
+/** The prospect's visual brand — colour swatches, fonts, logo, personality. */
+function BrandSection({
+  brand,
+}: {
+  brand: ResearchReport["brand"];
+}) {
+  const has =
+    brand.colors.length > 0 ||
+    brand.fonts.length > 0 ||
+    brand.logo ||
+    brand.style_notes;
+  if (!has) return null;
+
+  return (
+    <div className="rounded-xl border border-slate-200/80 bg-white p-3">
+      <SectionTitle icon={<Palette className="h-3.5 w-3.5" />}>
+        Brand system
+      </SectionTitle>
+
+      {brand.colors.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {brand.colors.map((c, i) => (
+            <div
+              key={i}
+              className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-1.5 py-1"
+              title={`${c.name}: ${c.hex}`}
+            >
+              <span
+                className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-[9px] font-bold uppercase"
+                style={{ backgroundColor: c.hex, color: readableOn(c.hex) }}
+              >
+                {c.name.slice(0, 1)}
+              </span>
+              <span className="font-mono text-[11px] text-slate-500">{c.hex}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <dl className="mt-2.5 space-y-1.5 text-sm">
+        {brand.fonts.length > 0 && (
+          <div className="flex gap-2">
+            <dt className="flex shrink-0 items-center gap-1 text-[11px] font-medium uppercase tracking-wide text-slate-400">
+              <Type className="h-3 w-3" /> Fonts
+            </dt>
+            <dd className="min-w-0 break-words text-slate-700">
+              {brand.fonts.join(", ")}
+            </dd>
+          </div>
+        )}
+        {brand.spacing && (
+          <div className="flex gap-2">
+            <dt className="w-16 shrink-0 text-[11px] font-medium uppercase tracking-wide text-slate-400">
+              Spacing
+            </dt>
+            <dd className="min-w-0 break-words text-slate-700">{brand.spacing}</dd>
+          </div>
+        )}
+        {brand.logo && (
+          <div className="flex gap-2">
+            <dt className="w-16 shrink-0 text-[11px] font-medium uppercase tracking-wide text-slate-400">
+              Logo
+            </dt>
+            <dd className="min-w-0">
+              <a
+                href={brand.logo}
+                target="_blank"
+                rel="noreferrer"
+                className="break-all text-xs text-primary-600 hover:underline"
+              >
+                {brand.logo}
+              </a>
+            </dd>
+          </div>
+        )}
+      </dl>
+
+      {brand.style_notes && (
+        <p className="mt-2 break-words text-sm text-slate-600">{brand.style_notes}</p>
+      )}
+    </div>
+  );
+}
+
+/** The prospect's web presence — pages, CTAs, and the agency's gap list. */
+function WebPresenceSection({
+  web,
+}: {
+  web: ResearchReport["web_presence"];
+}) {
+  const has =
+    web.pages.length > 0 ||
+    web.ctas.length > 0 ||
+    web.gaps.length > 0 ||
+    web.notes;
+  if (!has) return null;
+
+  return (
+    <div>
+      <SectionTitle icon={<LayoutGrid className="h-3.5 w-3.5" />}>
+        Web presence
+      </SectionTitle>
+      {web.notes && (
+        <p className="mt-2 break-words text-sm text-slate-600">{web.notes}</p>
+      )}
+      {web.pages.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {web.pages.map((p, i) => (
+            <span
+              key={i}
+              className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-500"
+            >
+              {p}
+            </span>
+          ))}
+        </div>
+      )}
+      {web.ctas.length > 0 && (
+        <p className="mt-2 text-xs text-slate-500">
+          <span className="font-semibold text-slate-600">CTAs:</span>{" "}
+          {web.ctas.join(" · ")}
+        </p>
+      )}
+      {web.gaps.length > 0 && (
+        <ul className="mt-2 space-y-1">
+          {web.gaps.map((g, i) => (
+            <li key={i} className="flex gap-2 break-words text-sm text-slate-700">
+              <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-rose-300" />
+              {g}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
@@ -193,6 +363,35 @@ export function ResearchReportView({
         </dl>
       )}
 
+      {/* Brand system — the agency-facing highlight */}
+      <BrandSection brand={report.brand} />
+
+      {/* Social profiles */}
+      {report.social_links.length > 0 && (
+        <div>
+          <SectionTitle icon={<Share2 className="h-3.5 w-3.5" />}>
+            Social profiles
+          </SectionTitle>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {report.social_links.map((s, i) => (
+              <a
+                key={i}
+                href={s.url}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-600 transition hover:border-slate-300 hover:text-slate-900"
+              >
+                {s.platform}
+                <ExternalLink className="h-3 w-3 text-slate-400" />
+              </a>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Web presence — pages, CTAs, gaps */}
+      <WebPresenceSection web={report.web_presence} />
+
       {/* Products / services */}
       {report.products_services.length > 0 && (
         <div>
@@ -223,6 +422,23 @@ export function ResearchReportView({
               <li key={i} className="break-words text-sm text-slate-700">
                 <span className="font-medium text-slate-900">{c.name}</span>
                 {c.note && <span className="text-slate-500"> — {c.note}</span>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Competitor gaps — how rivals are winning (the pitch) */}
+      {report.competitor_gaps.length > 0 && (
+        <div className="rounded-xl border border-amber-100 bg-amber-50/50 p-3">
+          <SectionTitle icon={<TrendingUp className="h-3.5 w-3.5 text-amber-600" />}>
+            <span className="text-amber-700">How competitors are winning</span>
+          </SectionTitle>
+          <ul className="mt-2 space-y-1.5">
+            {report.competitor_gaps.map((g, i) => (
+              <li key={i} className="flex gap-2 break-words text-sm text-slate-700">
+                <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-amber-400" />
+                {g}
               </li>
             ))}
           </ul>

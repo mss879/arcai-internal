@@ -52,6 +52,9 @@ export type FirecrawlPage = {
   links: string[];
   /** Full brand profile when the scrape requested `branding`, else null. */
   branding: FirecrawlBranding | null;
+  /** Raw page HTML (incl. <head>) when the scrape requested `html` — for SEO
+   *  signal parsing. Uses Firecrawl's `rawHtml` so <head>/<meta> survive. */
+  html: string;
 };
 
 /** One entry from a site map. */
@@ -63,6 +66,8 @@ type RawResult = {
   description?: string;
   snippet?: string;
   markdown?: string | null;
+  html?: string | null;
+  rawHtml?: string | null;
   links?: unknown;
   branding?: unknown;
   metadata?: { sourceURL?: string; title?: string; description?: string };
@@ -87,6 +92,13 @@ function normalise(r: RawResult): FirecrawlPage | null {
       r.branding && typeof r.branding === "object"
         ? (r.branding as FirecrawlBranding)
         : null,
+    // Prefer rawHtml (uncleaned, keeps <head>/<meta>) for SEO parsing.
+    html:
+      typeof r.rawHtml === "string"
+        ? r.rawHtml
+        : typeof r.html === "string"
+          ? r.html
+          : "",
   };
 }
 
@@ -166,10 +178,13 @@ export async function firecrawlSearch(
  */
 export async function firecrawlScrape(
   url: string,
-  opts?: { brand?: boolean },
+  opts?: { brand?: boolean; html?: boolean },
 ): Promise<FirecrawlPage | null> {
   const formats: string[] = ["markdown", "links"];
   if (opts?.brand) formats.push("branding");
+  // rawHtml keeps <head>/<meta>/<script> that the cleaned `html` format and
+  // `onlyMainContent` would strip — required for the SEO scorecard signals.
+  if (opts?.html) formats.push("rawHtml");
 
   let res: Response;
   try {

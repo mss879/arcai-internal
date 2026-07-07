@@ -16,25 +16,41 @@ import {
   type ResearchBrand,
   type ResearchSocialLink,
   type MatchConfidence,
+  type ResearchAudit,
+  type ResearchDomainInfo,
 } from "@/lib/research-report";
+import { runPageSpeed } from "@/lib/ai/pagespeed";
+import { lookupDomainInfo } from "@/lib/ai/domain-info";
+import {
+  analyzeSeo,
+  extractCopyrightYear,
+  buildAudit,
+  EMPTY_SEO,
+  type SeoSignals,
+} from "@/lib/ai/site-audit";
 
 /**
- * Agency-grade prospect research, run as a 3-step pipeline (the orchestration
+ * Agency-grade prospect research, run as a 4-step pipeline (the orchestration
  * in `research.ts` advances one step per tick so each stays inside the
  * serverless time budget):
  *
  *   1. discover()          — scrape the homepage for its BRAND system
  *                            (colours/fonts/logo via Firecrawl branding) +
- *                            links (socials), map the site's pages, and run
- *                            competitor / news / LinkedIn searches.
+ *                            links (socials) + HTML (SEO signals), map the
+ *                            site's pages, and run competitor / news /
+ *                            LinkedIn / reviews searches.
  *   2. analyzeCompetitor() — scrape the top competitor's homepage (brand +
- *                            content) for a real side-by-side.
- *   3. synthesize()        — OpenAI writes the dossier: profile, web presence,
- *                            competitor gaps, brand read, and pitch angles.
+ *                            content) and the prospect's own services/products/
+ *                            about/contact pages for a full offering read.
+ *   3. auditSite()         — Google PageSpeed (mobile Lighthouse) + domain age
+ *                            (RDAP) → the website scorecard.
+ *   4. synthesize()        — OpenAI writes the dossier: profile, web presence,
+ *                            competitor gaps, brand read, key people, contact,
+ *                            reputation, and pitch angles.
  *
  * Every external call degrades gracefully (returns []/null, never throws), and
  * the whole thing yields a useful report even with no OpenAI key — the brand,
- * socials and page map are gathered deterministically.
+ * socials, page map, contact and audit are gathered deterministically.
  */
 
 export type ResearchInput = {
@@ -46,6 +62,14 @@ export type ResearchInput = {
 };
 
 export type ResearchResult = { report: ResearchReport; sources: ResearchSource[] };
+
+/** A real competitor site found via search, before same-field verification. */
+export type ResearchCompetitorCandidate = {
+  name: string;
+  url: string;
+  domain: string;
+  description: string;
+};
 
 /** Signals used to judge whether the research is about the RIGHT company. */
 export type ResearchSignals = {
@@ -62,19 +86,47 @@ export type ResearchAnalysis = {
   socialLinks: ResearchSocialLink[];
   siteMap: string[];
   homepageContent: string;
-  competitorNames: string[];
+  competitorCandidates: ResearchCompetitorCandidate[];
   competitorUrl: string;
   competitorBrand: ResearchBrand | null;
   competitorContent: string;
+  /** A comparison/listicle page that names rivals — deep-read in step 2. */
+  competitorListUrl: string;
+  competitorListContent: string;
+  /** Key internal pages (services/products/about) to deep-read in step 2. */
+  keyPageUrls: string[];
+  /** Concatenated markdown of those key pages — the raw material for a full
+   *  services + product-category list and a richer web-presence read. */
+  keyPagesContent: string;
   searchContext: string;
   sources: ResearchSource[];
   signals: ResearchSignals;
+  // ---- audit / contact / reputation enrichment ----
+  /** On-page SEO signals parsed from the homepage HTML (in `discover`). */
+  seoSignals: SeoSignals;
+  /** Most recent footer copyright year (freshness signal). */
+  copyrightYear: number;
+  /** Deterministically-scraped contact channels (regex, not the model). */
+  contactRaw: { emails: string[]; phones: string[]; whatsapp: string };
+  /** Snippets from a "<company> reviews" search — the model reads reputation. */
+  reputationText: string;
+  /** Website scorecard — computed in the `audit` step. */
+  audit: ResearchAudit | null;
+  /** Domain registration + hosting facts — computed in the `audit` step. */
+  domainInfo: ResearchDomainInfo | null;
 };
 
 const MODEL = process.env.OPENAI_RESEARCH_MODEL || AI_MODELS.chat;
 const MAX_HOMEPAGE_CHARS = 8000;
 const MAX_COMPETITOR_CHARS = 4000;
+const MAX_COMPARE_CHARS = 3500;
 const MAX_SEARCH_CHARS = 8000;
+/** Combined budget for the scraped key internal pages (services/products/about). */
+const MAX_KEY_PAGES_CHARS = 7000;
+/** How many internal pages we deep-read for the offering + presence detail. */
+const MAX_KEY_PAGES = 4;
+/** How many verified competitors we aim to present. */
+const TARGET_COMPETITORS = 5;
 
 const EMPTY_BRAND: ResearchBrand = {
   colors: [],
@@ -261,6 +313,147 @@ function extractSiteMap(
   return pages;
 }
 
+/** Page paths/labels worth deep-reading for the full offering + business detail. */
+const KEY_PAGE_PRIMARY =
+  /(service|product|solution|what-we-do|expertise|capabilit|portfolio|our-work|catalog|catalogue|offering|brand|range)/i;
+/** Contact pages carry emails/phones/address/hours + often the team. */
+const KEY_PAGE_CONTACT =
+  /(contact|reach-us|reach us|get-in-touch|get in touch|connect|enquir|inquir)/i;
+const KEY_PAGE_SECONDARY =
+  /(about|company|who-we-are|overview|profile|team|leadership|management)/i;
+
+/**
+ * Pick the internal pages most likely to describe what the company sells —
+ * services/products first, then about/company — from the site map AND the
+ * homepage's own nav links (so it still works when the map comes back empty).
+ * Returns absolute same-domain URLs, homepage and assets excluded.
+ */
+function pickKeyPageUrls(
+  mapLinks: { url: string; title: string }[],
+  homepageLinks: string[],
+  anchorDomain: string,
+  homepageUrl: string,
+): string[] {
+  const home = homepageUrl.split("#")[0].replace(/\/+$/, "");
+  const seen = new Set<string>();
+  const candidates: { url: string; label: string }[] = [
+    ...mapLinks.map((l) => ({ url: l.url, label: `${l.title} ${l.url}` })),
+    ...homepageLinks.map((u) => ({ url: u, label: u })),
+  ];
+
+  const collect = (re: RegExp, out: string[]) => {
+    for (const c of candidates) {
+      if (out.length >= MAX_KEY_PAGES) break;
+      const norm = (c.url || "").split("#")[0].split("?")[0].replace(/\/+$/, "");
+      if (!norm || norm === home || seen.has(norm)) continue;
+      const host = domainOf(norm);
+      if (anchorDomain && !domainMatches(host, anchorDomain)) continue;
+      let path = "";
+      try {
+        path = new URL(norm).pathname;
+      } catch {
+        continue;
+      }
+      if (path === "/" || path === "") continue;
+      if (/\.(pdf|jpe?g|png|gif|svg|webp|zip|docx?|xlsx?|mp4|css|js)$/i.test(path))
+        continue;
+      if (!re.test(c.label) && !re.test(path)) continue;
+      seen.add(norm);
+      out.push(norm);
+    }
+  };
+
+  const urls: string[] = [];
+  collect(KEY_PAGE_PRIMARY, urls); // offering pages first
+  collect(KEY_PAGE_CONTACT, urls); // then a contact page (emails/phone/address)
+  collect(KEY_PAGE_SECONDARY, urls); // then about/team/company
+  return urls;
+}
+
+// ---- contact extraction (deterministic) --------------------------------------
+
+/** Emails from scraped text — skips image filenames and asset-looking matches. */
+function extractEmails(text: string): string[] {
+  const out = new Set<string>();
+  const re = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) && out.size < 20) {
+    const e = m[0].toLowerCase();
+    if (!/\.(png|jpe?g|gif|svg|webp|css|js)$/i.test(e) && !/@\d+x\./.test(e))
+      out.add(e);
+  }
+  return [...out];
+}
+
+/**
+ * Phone numbers — conservative to avoid capturing order IDs / SKUs / tracking
+ * numbers that merely start with 0. Boundaries (no adjacent digit) plus fixed
+ * shapes: a Sri Lankan 0-number is EXACTLY 10 digits (0 + area/network + 7);
+ * an international number starts with a literal +.
+ */
+function extractPhones(text: string): string[] {
+  const out = new Set<string>();
+  const re =
+    /(?<![\d+])0\d{1,2}[\s-]?\d{3}[\s-]?\d{4}(?![\d])|(?<![\d])\+\d{1,3}[\s-]?\d{1,3}[\s-]?\d{3}[\s-]?\d{3,4}(?![\d])/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) && out.size < 20) {
+    const raw = m[0].replace(/\s+/g, " ").trim();
+    const digits = raw.replace(/\D/g, "");
+    // SL local = 10 digits; international (+cc) = 10-15 with country code.
+    if (raw.startsWith("+") ? digits.length >= 10 && digits.length <= 15 : digits.length === 10)
+      out.add(raw);
+  }
+  return [...out];
+}
+
+/** The first WhatsApp click-to-chat link among scraped links. */
+function extractWhatsapp(links: string[]): string {
+  for (const l of links) {
+    if (/wa\.me\/|api\.whatsapp\.com|chat\.whatsapp\.com/i.test(l)) return l;
+  }
+  return "";
+}
+
+/** Digit-only key that collapses spacing/punctuation + a leading country code. */
+function phoneKey(p: string): string {
+  let d = p.replace(/\D/g, "");
+  if (d.startsWith("0094")) d = `0${d.slice(4)}`;
+  else if (d.startsWith("94") && d.length >= 11) d = `0${d.slice(2)}`;
+  return d;
+}
+
+/**
+ * Merge freshly-scraped contact signals into the accumulating set. Phones are
+ * deduped by their DIGITS (so "+94 11 234 5678" and "+94-11-234-5678" and a
+ * tel: href collapse to one), and `tel:` links are mined as a high-precision
+ * source. Kept at a generous cap so a later contact page isn't crowded out by
+ * the homepage; the report parser trims to the display limit.
+ */
+function mergeContactRaw(
+  into: { emails: string[]; phones: string[]; whatsapp: string },
+  text: string,
+  links: string[],
+): void {
+  const emails = new Map<string, string>();
+  for (const e of [...into.emails, ...extractEmails(text)]) {
+    if (!emails.has(e.toLowerCase())) emails.set(e.toLowerCase(), e);
+  }
+
+  const telLinks = links
+    .filter((l) => /^tel:/i.test(l))
+    .map((l) => l.replace(/^tel:/i, "").trim())
+    .filter((p) => p.replace(/\D/g, "").length >= 9);
+  const phones = new Map<string, string>();
+  for (const p of [...into.phones, ...extractPhones(text), ...telLinks]) {
+    const k = phoneKey(p);
+    if (k.length >= 9 && !phones.has(k)) phones.set(k, p);
+  }
+
+  into.emails = [...emails.values()].slice(0, 10);
+  into.phones = [...phones.values()].slice(0, 10);
+  into.whatsapp = into.whatsapp || extractWhatsapp(links);
+}
+
 function brandToText(label: string, brand: ResearchBrand): string {
   if (!brand.colors.length && !brand.fonts.length && !brand.style_notes) return "";
   const parts = [
@@ -326,10 +519,14 @@ function emptyAnalysis(input: ResearchInput): ResearchAnalysis {
     socialLinks: [],
     siteMap: [],
     homepageContent: "",
-    competitorNames: [],
+    competitorCandidates: [],
     competitorUrl: "",
     competitorBrand: null,
     competitorContent: "",
+    competitorListUrl: "",
+    competitorListContent: "",
+    keyPageUrls: [],
+    keyPagesContent: "",
     searchContext: "",
     sources: [],
     signals: {
@@ -339,6 +536,12 @@ function emptyAnalysis(input: ResearchInput): ResearchAnalysis {
       siteMentionsCompany: false,
       nameSeenElsewhere: false,
     },
+    seoSignals: { ...EMPTY_SEO },
+    copyrightYear: 0,
+    contactRaw: { emails: [], phones: [], whatsapp: "" },
+    reputationText: "",
+    audit: null,
+    domainInfo: null,
   };
 }
 
@@ -355,12 +558,16 @@ export function parseAnalysis(x: unknown, input: ResearchInput): ResearchAnalysi
       : [],
     siteMap: Array.isArray(a.siteMap) ? (a.siteMap as string[]) : [],
     homepageContent: str(a.homepageContent),
-    competitorNames: Array.isArray(a.competitorNames)
-      ? (a.competitorNames as string[])
+    competitorCandidates: Array.isArray(a.competitorCandidates)
+      ? (a.competitorCandidates as ResearchCompetitorCandidate[])
       : [],
     competitorUrl: str(a.competitorUrl),
     competitorBrand: (a.competitorBrand as ResearchBrand | null) ?? null,
     competitorContent: str(a.competitorContent),
+    competitorListUrl: str(a.competitorListUrl),
+    competitorListContent: str(a.competitorListContent),
+    keyPageUrls: Array.isArray(a.keyPageUrls) ? (a.keyPageUrls as string[]) : [],
+    keyPagesContent: str(a.keyPagesContent),
     searchContext: str(a.searchContext),
     sources: Array.isArray(a.sources) ? (a.sources as ResearchSource[]) : [],
     signals: {
@@ -370,20 +577,115 @@ export function parseAnalysis(x: unknown, input: ResearchInput): ResearchAnalysi
       siteMentionsCompany: Boolean(sig.siteMentionsCompany),
       nameSeenElsewhere: Boolean(sig.nameSeenElsewhere),
     },
+    seoSignals: { ...EMPTY_SEO, ...(a.seoSignals as Partial<SeoSignals>) },
+    copyrightYear: typeof a.copyrightYear === "number" ? a.copyrightYear : 0,
+    contactRaw: {
+      emails: Array.isArray(obj(a.contactRaw).emails)
+        ? (obj(a.contactRaw).emails as string[])
+        : [],
+      phones: Array.isArray(obj(a.contactRaw).phones)
+        ? (obj(a.contactRaw).phones as string[])
+        : [],
+      whatsapp: str(obj(a.contactRaw).whatsapp),
+    },
+    reputationText: str(a.reputationText),
+    audit: (a.audit as ResearchAudit | null) ?? null,
+    domainInfo: (a.domainInfo as ResearchDomainInfo | null) ?? null,
   };
 }
 
+// ---- competitor discovery helpers --------------------------------------------
+
+/** Domains that are never a competitor's own site — directories, socials, aggregators. */
+const JUNK_COMPETITOR_DOMAIN =
+  /(?:wikipedia|facebook|instagram|linkedin|youtube|youtu\.be|twitter|x\.com|crunchbase|glassdoor|indeed|yelp|reddit|medium\.com|quora|pinterest|tiktok|clutch\.co|goodfirms|sortlist|designrush|g2\.com|capterra|getapp|trustpilot|yellowpages|yell\.com|tripadvisor|github|gitlab|amazon\.|ebay\.|blogspot|wordpress\.com|wixsite|weebly|google\.|bing\.|duckduckgo|\.gov)/i;
+
+function isJunkCompetitorDomain(domain: string): boolean {
+  return JUNK_COMPETITOR_DOMAIN.test(domain);
+}
+
+/** A rough brand name from a domain: strip TLD, split tokens, title-case. */
+function brandNameFromDomain(domain: string): string {
+  const sld = domain.replace(/^www\./, "").split(".")[0] || "";
+  return sld
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+}
+
+/**
+ * A company title without the tagline after a dash/pipe/colon. Returns "" for a
+ * URL-shaped title (a titleless search hit whose title is the raw URL) so the
+ * caller falls back to a name derived from the domain — never "https".
+ */
+function cleanCompanyTitle(title: string): string {
+  const t = title.trim();
+  if (/^https?:\/\//i.test(t) || /^www\./i.test(t)) return "";
+  return t.replace(/\s*[-–—|:·].*$/, "").trim();
+}
+
+/**
+ * True when two names clearly denote the same company (self-match guard).
+ * Uses a prefix test, not a substring one, so a distinct rival whose name
+ * merely CONTAINS the prospect's (e.g. "Creative Design Studio" vs a prospect
+ * "Design Studio") is NOT wrongly dropped — only "Design Studio Lanka" is.
+ */
+function sameCompany(a: string, b: string): boolean {
+  const x = coreName(a).replace(/\s+/g, "");
+  const y = coreName(b).replace(/\s+/g, "");
+  if (x.length < 4 || y.length < 4) return false;
+  if (x === y) return true;
+  const [short, long] = x.length <= y.length ? [x, y] : [y, x];
+  return short.length >= 5 && long.startsWith(short);
+}
+
+/** Titles/descriptions that read like a list of rivals, not a single company. */
+const COMPARISON_HINT =
+  /\b(vs\.?|versus|alternativ|competitor|top\s+\d|best\s+\d|best\s+\w+\s+(companies|agencies|firms)|leading|companies in|agencies in)\b/i;
+
 // ---- STEP 1: discover --------------------------------------------------------
 
-/** Choose the best competitor URL from search results to deep-dive later. */
-function pickCompetitorUrl(pages: FirecrawlPage[], anchorDomain: string): string {
+/**
+ * Turn competitor/compare search hits into a de-duplicated list of REAL
+ * competitor sites: skips the prospect's own domain and name, directories,
+ * socials and aggregators, and dedupes by domain.
+ */
+function extractCompetitorCandidates(
+  pages: FirecrawlPage[],
+  anchorDomain: string,
+  company: string,
+): ResearchCompetitorCandidate[] {
+  const out: ResearchCompetitorCandidate[] = [];
+  const seen = new Set<string>();
+  for (const p of pages) {
+    const domain = domainOf(p.url);
+    if (!domain) continue;
+    if (anchorDomain && domainMatches(domain, anchorDomain)) continue;
+    if (isJunkCompetitorDomain(domain)) continue;
+    if (seen.has(domain)) continue;
+    const name = cleanCompanyTitle(p.title) || brandNameFromDomain(domain);
+    if (!name) continue;
+    // Drop the prospect itself showing up under its own name or domain.
+    if (
+      sameCompany(name, company) ||
+      sameCompany(brandNameFromDomain(domain), company)
+    )
+      continue;
+    seen.add(domain);
+    out.push({ name, url: p.url, domain, description: p.description });
+    if (out.length >= 8) break;
+  }
+  return out;
+}
+
+/** Pick a page that LISTS competitors (a "top/vs/alternatives" article) to deep-read. */
+function pickComparisonUrl(pages: FirecrawlPage[], anchorDomain: string): string {
   for (const p of pages) {
     const d = domainOf(p.url);
-    if (!d) continue;
-    if (anchorDomain && domainMatches(d, anchorDomain)) continue;
-    if (/wikipedia|facebook|instagram|linkedin|youtube|twitter|x\.com|crunchbase|glassdoor|indeed|yelp|reddit|medium\.com|\.gov/i.test(d))
-      continue;
-    return p.url;
+    if (!d || (anchorDomain && domainMatches(d, anchorDomain))) continue;
+    if (COMPARISON_HINT.test(p.title) || COMPARISON_HINT.test(p.description))
+      return p.url;
   }
   return "";
 }
@@ -397,32 +699,64 @@ export async function discover(input: ResearchInput): Promise<ResearchAnalysis> 
 
   const geo = { location: "Colombo, Western, Sri Lanka", country: "lk" as const };
 
-  const [homepage, mapLinks, competitorPages, newsPages, contactPages] =
-    await Promise.all([
-      siteUrl ? firecrawlScrape(siteUrl, { brand: true }) : Promise.resolve(null),
-      siteUrl
-        ? firecrawlMap(siteUrl, {
-            search: "about services products portfolio work blog case study team contact",
-            limit: 80,
-          })
-        : Promise.resolve([]),
-      firecrawlSearch(`${company} ${loc} competitors alternatives`, {
-        limit: 6,
-        withoutContent: true,
-        ...geo,
-      }),
-      firecrawlSearch(`${company} ${loc} news`, {
-        limit: 5,
-        sources: ["news"],
-        tbs: "qdr:y",
-        withoutContent: true,
-        ...geo,
-      }),
-      firecrawlSearch(
-        `${company} ${input.contactName ? `${input.contactName} ` : ""}${loc} site:linkedin.com`,
-        { limit: 4, withoutContent: true, ...geo },
-      ),
-    ]);
+  // Two complementary competitor angles, run in parallel: a company-anchored
+  // "competitors/alternatives" query, and a field/peer query (uses the lead's
+  // industry when we have it) that surfaces same-sector companies by their own
+  // sites rather than only listicles about this one prospect.
+  const peerQuery = input.industry
+    ? `top ${input.industry} companies in ${loc}`
+    : `companies like ${company} ${loc}`;
+
+  const [
+    homepage,
+    mapLinks,
+    competitorPages,
+    peerPages,
+    newsPages,
+    contactPages,
+    reviewPages,
+  ] = await Promise.all([
+    // Homepage: brand + links + HTML (the HTML powers the SEO scorecard).
+    siteUrl
+      ? firecrawlScrape(siteUrl, { brand: true, html: true })
+      : Promise.resolve(null),
+    siteUrl
+      ? firecrawlMap(siteUrl, {
+          search: "about services products portfolio work blog case study team contact",
+          limit: 80,
+        })
+      : Promise.resolve([]),
+    firecrawlSearch(`${company} ${loc} competitors alternatives vs`, {
+      limit: 8,
+      withoutContent: true,
+      ...geo,
+    }),
+    firecrawlSearch(peerQuery, {
+      limit: 8,
+      withoutContent: true,
+      ...geo,
+    }),
+    firecrawlSearch(`${company} ${loc} news`, {
+      limit: 5,
+      sources: ["news"],
+      tbs: "qdr:y",
+      withoutContent: true,
+      ...geo,
+    }),
+    firecrawlSearch(
+      `${company} ${input.contactName ? `${input.contactName} ` : ""}${loc} site:linkedin.com`,
+      { limit: 4, withoutContent: true, ...geo },
+    ),
+    // Reputation: reviews/ratings snippets for the model to summarise.
+    firecrawlSearch(`${company} ${loc} reviews rating`, {
+      limit: 5,
+      withoutContent: true,
+      ...geo,
+    }),
+  ]);
+
+  // Pool both competitor angles for candidate extraction + the source list.
+  const competitorHits = [...competitorPages, ...peerPages];
 
   // Brand + socials + homepage content from the direct scrape.
   if (homepage) {
@@ -433,13 +767,44 @@ export async function discover(input: ResearchInput): Promise<ResearchAnalysis> 
     analysis.signals.siteMentionsCompany =
       mentionsCompany(homepage.title, company) ||
       mentionsCompany(homepage.markdown, company);
+    // Audit inputs gathered while we hold the HTML (the HTML is NOT persisted).
+    // Use the raw HTML (has <head> + footer) for SEO + copyright; fall back to
+    // markdown for copyright if the HTML format was unavailable.
+    analysis.seoSignals = analyzeSeo(homepage.html);
+    analysis.copyrightYear = extractCopyrightYear(
+      homepage.html || homepage.markdown,
+    );
+    mergeContactRaw(
+      analysis.contactRaw,
+      `${homepage.markdown}\n${homepage.html}`,
+      homepage.links,
+    );
   }
 
-  // Site map → web-presence page list. Also mine it for socials.
-  analysis.siteMap = extractSiteMap(mapLinks, anchorDomain);
+  // Reputation snippets (rating/review sentiment for the model to summarise).
+  analysis.reputationText = reviewPages
+    .map((p) => `- ${p.title}${p.description ? ` — ${p.description}` : ""}`)
+    .join("\n")
+    .slice(0, 2500);
+
+  // Site map → web-presence page list. Fold in the homepage's own nav links so
+  // a company whose map comes back thin still shows a real page list. Also mine
+  // it for socials, and pick the key pages to deep-read for the full offering.
+  const homepageLinks = homepage?.links ?? [];
+  const allSiteLinks = [
+    ...mapLinks,
+    ...homepageLinks.map((u) => ({ url: u, title: "", description: "" })),
+  ];
+  analysis.siteMap = extractSiteMap(allSiteLinks, anchorDomain);
   if (analysis.socialLinks.length === 0) {
     analysis.socialLinks = extractSocials(mapLinks.map((l) => l.url));
   }
+  analysis.keyPageUrls = pickKeyPageUrls(
+    mapLinks,
+    homepageLinks,
+    anchorDomain,
+    homepage?.url ?? siteUrl ?? "",
+  );
 
   // Search context + sources + competitor picks.
   const searchChunks: string[] = [];
@@ -455,23 +820,29 @@ export async function discover(input: ResearchInput): Promise<ResearchAnalysis> 
       }
     }
   };
-  addSources(competitorPages, "Competitor", `${company} competitors`);
+  addSources(competitorHits, "Competitor", `${company} competitors`);
   addSources(newsPages, "News", `${company} news`);
   addSources(contactPages, "LinkedIn", `${company} linkedin`);
+  addSources(reviewPages, "Reviews", `${company} reviews`);
   if (homepage) {
     sources.unshift({ url: homepage.url, title: homepage.title, query: "company website" });
   }
 
   analysis.searchContext = searchChunks.join("\n").slice(0, MAX_SEARCH_CHARS);
   analysis.sources = sources;
-  analysis.competitorUrl = pickCompetitorUrl(competitorPages, anchorDomain);
-  analysis.competitorNames = competitorPages
-    .map((p) => p.title.replace(/\s*[-–|:].*$/, "").trim())
-    .filter(Boolean)
-    .slice(0, 6);
+
+  // Real competitor sites (prospect + junk excluded, deduped by domain), and a
+  // comparison article that names rivals to deep-read for more in step 2.
+  analysis.competitorCandidates = extractCompetitorCandidates(
+    competitorHits,
+    anchorDomain,
+    company,
+  );
+  analysis.competitorUrl = analysis.competitorCandidates[0]?.url ?? "";
+  analysis.competitorListUrl = pickComparisonUrl(competitorHits, anchorDomain);
 
   analysis.signals.nameSeenElsewhere = [
-    ...competitorPages,
+    ...competitorHits,
     ...newsPages,
     ...contactPages,
   ].some((p) => mentionsCompany(p.title, company) || mentionsCompany(p.description, company));
@@ -486,29 +857,126 @@ export async function analyzeCompetitor(
   analysisRaw: unknown,
 ): Promise<ResearchAnalysis> {
   const analysis = parseAnalysis(analysisRaw, input);
-  if (!analysis.competitorUrl) return analysis;
+  const keyUrls = analysis.keyPageUrls.slice(0, MAX_KEY_PAGES);
+  if (!analysis.competitorUrl && !analysis.competitorListUrl && !keyUrls.length)
+    return analysis;
 
-  const page = await firecrawlScrape(analysis.competitorUrl, { brand: true });
+  // All in parallel: brand-scrape the top real competitor for a side-by-side,
+  // read a "top/vs/alternatives" article that names more rivals to verify, and
+  // deep-read the prospect's own services/products/about pages for a full,
+  // accurate offering + web-presence read (not just the homepage teaser).
+  const [page, listPage, ...keyPages] = await Promise.all([
+    analysis.competitorUrl
+      ? firecrawlScrape(analysis.competitorUrl, { brand: true })
+      : Promise.resolve(null),
+    analysis.competitorListUrl
+      ? firecrawlScrape(analysis.competitorListUrl)
+      : Promise.resolve(null),
+    ...keyUrls.map((u) => firecrawlScrape(u)),
+  ]);
+
   if (page) {
     analysis.competitorBrand = normaliseBrand(page.branding);
     analysis.competitorContent = page.markdown.slice(0, MAX_COMPETITOR_CHARS);
   }
+  if (listPage) {
+    analysis.competitorListContent = listPage.markdown.slice(0, MAX_COMPARE_CHARS);
+  }
+  const ownPages = keyPages.filter((p): p is FirecrawlPage =>
+    Boolean(p?.markdown),
+  );
+  analysis.keyPagesContent = ownPages
+    .map((p) => `## ${p.title || p.url}\n${p.markdown}`)
+    .join("\n\n")
+    .slice(0, MAX_KEY_PAGES_CHARS);
+  // Mine the contact/about pages for more emails/phones/WhatsApp.
+  for (const p of ownPages) {
+    mergeContactRaw(analysis.contactRaw, p.markdown, p.links);
+  }
+
   return analysis;
 }
 
-// ---- STEP 3: synthesize the dossier ------------------------------------------
+// ---- STEP 3: audit the website + domain --------------------------------------
+
+/**
+ * Score the prospect's website (Google PageSpeed / Lighthouse) and look up its
+ * domain age + hosting (RDAP + a live HEAD). Combined with the on-page SEO
+ * signals gathered in `discover`, this yields the scorecard. Every call
+ * degrades to null, so a missing PageSpeed key or an RDAP-less TLD just means
+ * fewer sub-scores — never a failed run. No-ops when there's no website.
+ */
+export async function auditSite(
+  input: ResearchInput,
+  analysisRaw: unknown,
+): Promise<ResearchAnalysis> {
+  const analysis = parseAnalysis(analysisRaw, input);
+  const siteUrl = input.website ? normaliseUrl(input.website) : null;
+  if (!siteUrl) return analysis;
+
+  const [psi, domain] = await Promise.all([
+    runPageSpeed(siteUrl),
+    lookupDomainInfo(siteUrl),
+  ]);
+
+  analysis.domainInfo = domain
+    ? {
+        domain: domain.domain,
+        registered: domain.registered,
+        age_years: domain.ageYears,
+        registrar: domain.registrar,
+        hosting: domain.hosting,
+        ssl: domain.ssl,
+      }
+    : null;
+  const ssl = domain?.ssl ?? siteUrl.startsWith("https://");
+  analysis.audit = buildAudit({
+    url: siteUrl,
+    psi,
+    seo: analysis.seoSignals,
+    ssl,
+    ageYears: domain?.ageYears ?? 0,
+    copyrightYear: analysis.copyrightYear,
+  });
+
+  return analysis;
+}
+
+// ---- STEP 4: synthesize the dossier ------------------------------------------
 
 const SYSTEM = `You are a senior strategist at a web-design & digital agency,
 preparing your sales team to pitch a prospect — a company based in Sri Lanka.
 You are given real data scraped from the prospect's website (including its brand
 system), a map of its pages, its social links, competitor and news search
-results, and a scrape of a top competitor. Extract only what the data supports —
-never invent facts, numbers, funding, or people.
+results, a list of candidate competitor SITES, and a scrape of a top competitor.
+Extract only what the data supports — never invent facts, numbers, funding, or
+people.
 
 CRITICAL — verify identity first: only use data that clearly matches the intended
 company (its website domain, Sri Lanka location, named contact). If it doesn't,
 set match_confidence "low", explain in "verification", and leave factual fields
 empty rather than describing a same-named company elsewhere.
+
+COMPETITORS — accuracy over quantity. A valid competitor is a DIFFERENT, real
+company that operates in the SAME field as the prospect (same core products/
+services) and, ideally, the same region (Sri Lanka). For each competitor you
+return, set "same_field" true only when the evidence (its site, the candidate
+list, or the comparison article) shows it is a genuine peer. NEVER list the
+prospect itself, directories/marketplaces (Clutch, GoodFirms, Yelp…), news sites,
+or a same-named business in a different industry. Prefer the candidate sites and
+names found in the comparison article; you may add a well-known Sri Lankan peer
+in the same field only if you are highly confident it is real. Aim for ${TARGET_COMPETITORS}
+genuine same-field competitors — return fewer rather than padding with weak or
+unrelated names.
+
+PEOPLE & CONTACT — from the About/Contact pages and the LinkedIn results, extract
+real decision-makers (founder, owner, CEO, marketing/brand head) with their role
+and LinkedIn URL when present, plus the business's contact address and opening
+hours. Never invent a name or title — only what the data shows.
+
+REPUTATION — if the review search shows a star rating and/or review count, report
+them and summarise the recurring positive and negative themes. If there's no
+review data, leave reputation empty (do not guess a rating).
 
 Think like an agency: assess their web presence and brand, and pinpoint concrete
 ways competitors are outperforming them online — that is the pitch. Return ONLY
@@ -527,6 +995,15 @@ function synthPrompt(input: ResearchInput, analysis: ResearchAnalysis): string {
     ? brandToText("Top competitor", analysis.competitorBrand)
     : "";
 
+  const candidateBlock = analysis.competitorCandidates.length
+    ? analysis.competitorCandidates
+        .map(
+          (c) =>
+            `- ${c.name} — ${c.domain}${c.description ? ` — ${c.description}` : ""}`,
+        )
+        .join("\n")
+    : "(none found — use the comparison article / your own knowledge, same field only)";
+
   return `Intended company: ${input.company} (Sri Lanka)
 ${s.websiteProvided ? `Website: ${input.website}\n` : ""}${input.industry ? `Industry hint: ${input.industry}\n` : ""}${input.contactName ? `Contact: ${input.contactName}\n` : ""}
 ${verifyBlock}
@@ -542,11 +1019,36 @@ ${compBrandBlock}
 === HOMEPAGE CONTENT ===
 ${analysis.homepageContent || "(not available)"}
 
+=== KEY INTERNAL PAGES — services / products / about (their own words) ===
+${analysis.keyPagesContent || "(not scraped)"}
+
 === SEARCH RESULTS (competitors / news / linkedin) ===
 ${analysis.searchContext || "(none)"}
 
+=== CANDIDATE COMPETITOR SITES (real domains from search — verify same field) ===
+${candidateBlock}
+
+=== COMPETITOR COMPARISON ARTICLE (${analysis.competitorListUrl || "n/a"}) ===
+${analysis.competitorListContent || "(not scraped)"}
+
 === TOP COMPETITOR HOMEPAGE (${analysis.competitorUrl || "n/a"}) ===
 ${analysis.competitorContent || "(not scraped)"}
+
+=== CONTACT SIGNALS scraped from the site (deterministic) ===
+Emails: ${analysis.contactRaw.emails.join(", ") || "(none)"}
+Phones: ${analysis.contactRaw.phones.join(", ") || "(none)"}
+WhatsApp: ${analysis.contactRaw.whatsapp || "(none)"}
+
+=== REVIEW / REPUTATION SEARCH RESULTS ===
+${analysis.reputationText || "(none)"}
+
+${
+  analysis.audit
+    ? `=== WEBSITE AUDIT (already measured — reference in talking points) ===
+Overall ${analysis.audit.overall}/100. ${analysis.audit.scores.map((sc) => `${sc.label} ${sc.score}`).join(", ")}
+Issues: ${analysis.audit.issues.slice(0, 8).join("; ") || "none"}`
+    : ""
+}
 
 Return a JSON object with EXACTLY these keys:
 {
@@ -557,16 +1059,19 @@ Return a JSON object with EXACTLY these keys:
   "headquarters": "city, country if known, else ''",
   "company_size": "employee range if known, else ''",
   "founded": "founding year if known, else ''",
-  "products_services": ["their main products/services"],
+  "products_services": ["EVERY distinct service they offer AND each product CATEGORY — comprehensive, not a summary"],
   "web_presence": {
     "ctas": ["primary calls-to-action on their site"],
     "gaps": ["specific weaknesses / things missing vs a modern site — agency angle"],
-    "notes": "1-2 sentences on site quality, tech, freshness"
+    "notes": "3-5 sentences: what the site covers (sections/pages), the depth of their offering, site quality/tech/freshness, and how complete their online presence is"
   },
   "brand_style_notes": "1-2 sentences reading their visual brand's tone/style",
-  "competitors": [{ "name": "Competitor", "note": "one line on how they compete" }],
+  "competitors": [{ "name": "Competitor", "domain": "their website domain or ''", "same_field": true, "note": "one line on how they compete in the SAME field" }],
   "competitor_gaps": ["specific ways competitors are OUTPERFORMING this prospect online (site, brand, content, social, SEO) — the pitch"],
   "recent_news": [{ "title": "headline", "summary": "one sentence", "url": "source url or ''" }],
+  "key_people": [{ "name": "Full Name", "role": "their title", "linkedin_url": "their LinkedIn URL or ''" }],
+  "contact": { "address": "physical address or ''", "hours": "opening hours or ''" },
+  "reputation": { "rating": 0, "reviews": 0, "source": "Google | Facebook | '' ", "summary": "one line on sentiment or ''", "positives": ["recurring praise"], "negatives": ["recurring complaints"] },
   "pain_points": ["business/marketing challenges we could solve"],
   "talking_points": ["specific opening angles for OUR agency's pitch, tied to their brand/site/competitors"],
   "discovery_questions": ["sharp questions to qualify this prospect"]
@@ -574,8 +1079,117 @@ Return a JSON object with EXACTLY these keys:
 
 Guidance:
 - If match_confidence is "low", keep factual fields empty and explain in "verification".
+- products_services: be EXHAUSTIVE — mine the homepage AND the key internal pages and list every service and every product category the company offers (use categories, not individual SKUs/product names). Aim for 6-15 short items (2-6 words each) when the site supports it; never collapse them into one summary line.
+- web_presence.notes: give a genuinely useful read of the business's online footprint, grounded in the pages you were given.
+- competitors: return up to ${TARGET_COMPETITORS} DISTINCT same-field companies, each with same_field true and its domain when known. Drop anything that isn't a genuine peer.
 - competitor_gaps & talking_points: 3-5 each, concrete and specific to THIS prospect, from a web-agency lens.
+- key_people: only real, named individuals with a role; [] if none are evidenced. Never guess.
+- reputation: fill rating/reviews ONLY if the review results show them; else all-empty.
+- talking_points: where useful, tie one or two to the website AUDIT findings above.
 - Keep strings tight; don't restate the raw data verbatim.`;
+}
+
+/** Looks like a real hostname: label(s) + a 2+ letter TLD, no spaces. */
+function isValidHost(host: string): boolean {
+  return /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(host) && /\.[a-z]{2,}$/i.test(host);
+}
+
+/**
+ * A bare domain → a clean https URL (drops scheme, www, path). Returns "" unless
+ * what remains is a real hostname, so a model that answers `domain: "N/A"` /
+ * "unknown" / a company name never yields a `https://N%20A`-style broken link.
+ */
+function domainToUrl(domain: string): string {
+  const d = str(domain)
+    .replace(/^https?:\/\//i, "")
+    .replace(/^www\./i, "")
+    .replace(/[/?#].*$/, "")
+    .trim()
+    .toLowerCase();
+  return isValidHost(d) ? `https://${d}` : "";
+}
+
+/**
+ * The model marked a competitor as NOT same-field. Handles booleans AND the
+ * string/number forms LLMs emit under json_object mode (`"false"`, `"no"`, 0);
+ * a missing/omitted flag is NOT treated as a negative.
+ */
+function saysNotSameField(v: unknown): boolean {
+  if (v === false || v === 0 || v === null) return true;
+  if (typeof v === "string") {
+    const s = v.trim().toLowerCase();
+    return s === "false" || s === "no" || s === "n" || s === "0";
+  }
+  return false;
+}
+
+/**
+ * The final competitor list: the model's SAME-FIELD picks first (each linked to
+ * its site), backfilled with real candidate sites to reach the target. Never the
+ * prospect itself, deduped by name AND site; suppressed on a low-confidence match.
+ */
+function buildCompetitors(
+  input: ResearchInput,
+  analysis: ResearchAnalysis,
+  ai: Record<string, unknown> | null,
+  confidence: MatchConfidence,
+): { name: string; note: string; url: string }[] {
+  // Don't assert competitors when we're not even sure this is the right company.
+  if (confidence === "low") return [];
+
+  const byDomain = new Map(
+    analysis.competitorCandidates.map((c) => [c.domain, c] as const),
+  );
+  const byName = new Map(
+    analysis.competitorCandidates.map((c) => [coreName(c.name), c] as const),
+  );
+  const resolveUrl = (name: string, domain: string): string => {
+    const host = domainOf(domainToUrl(domain));
+    if (host && byDomain.has(host)) return byDomain.get(host)!.url;
+    const cand = byName.get(coreName(name));
+    if (cand) return cand.url;
+    return domainToUrl(domain);
+  };
+
+  const out: { name: string; note: string; url: string }[] = [];
+  const seenKey = new Set<string>();
+  const seenHost = new Set<string>();
+  const push = (name: string, note: string, url: string) => {
+    const clean = str(name);
+    if (!clean || sameCompany(clean, input.company)) return; // never the prospect
+    const key = coreName(clean) || clean.toLowerCase();
+    if (seenKey.has(key)) return;
+    // Same firm under a short brand vs a fuller title (e.g. "Arcade" and
+    // "Arcade Digital Studio"), or two entries that resolve to one site.
+    if (out.some((c) => sameCompany(c.name, clean))) return;
+    const host = domainOf(url);
+    if (host && seenHost.has(host)) return;
+    seenKey.add(key);
+    if (host) seenHost.add(host);
+    out.push({ name: clean, note: str(note), url });
+  };
+
+  // The model's verified same-field competitors first. Only an explicit
+  // negative (false / "false" / "no" / 0) fails the check — a missing flag is
+  // kept, since these were drawn from field-scoped search candidates anyway.
+  const aiComps = Array.isArray(ai?.competitors)
+    ? (ai!.competitors as unknown[])
+    : [];
+  for (const c of aiComps) {
+    const o = obj(c);
+    if (saysNotSameField(o.same_field)) continue;
+    const name = str(o.name);
+    push(name, str(o.note), resolveUrl(name, str(o.domain)));
+    if (out.length >= TARGET_COMPETITORS) break;
+  }
+
+  // Backfill from real, filtered candidate sites so we still reach the target.
+  for (const c of analysis.competitorCandidates) {
+    if (out.length >= TARGET_COMPETITORS) break;
+    push(c.name, c.description, c.url);
+  }
+
+  return out;
 }
 
 /** Build the final report, merging deterministic brand/socials with AI output. */
@@ -607,6 +1221,20 @@ function assembleReport(
     analysis.sources.find((s) => /linkedin\.com\/(company|in)/i.test(s.url))?.url ||
     "";
 
+  // Contact merges deterministic scrapes (emails/phones/WhatsApp) with the
+  // model's read of address + hours. Audit/domain are about the provided site,
+  // so they stand regardless of identity confidence; people + reputation are
+  // identity-bound, so they're withheld on a low-confidence match.
+  const trusted = confidence !== "low";
+  const aiContact = obj(ai?.contact);
+  const contact = {
+    emails: analysis.contactRaw.emails,
+    phones: analysis.contactRaw.phones,
+    whatsapp: analysis.contactRaw.whatsapp,
+    address: trusted ? str(aiContact.address) : "",
+    hours: trusted ? str(aiContact.hours) : "",
+  };
+
   return parseResearchReport({
     overview: str(ai?.overview),
     industry: str(ai?.industry) || input.industry || "",
@@ -616,7 +1244,7 @@ function assembleReport(
     website,
     linkedin_url: linkedin,
     products_services: ai?.products_services,
-    competitors: ai?.competitors,
+    competitors: buildCompetitors(input, analysis, ai, confidence),
     competitor_gaps: ai?.competitor_gaps,
     recent_news: ai?.recent_news,
     pain_points: ai?.pain_points,
@@ -630,6 +1258,11 @@ function assembleReport(
       notes: str(web.notes),
     },
     social_links: analysis.socialLinks,
+    key_people: trusted ? ai?.key_people : [],
+    contact,
+    audit: analysis.audit,
+    reputation: trusted ? ai?.reputation : null,
+    domain_info: analysis.domainInfo,
     match_confidence: confidence,
     verification: confidence === "low" || !aiVerification ? ceilingReason : aiVerification,
     generated_by: ai ? "ai" : "basic",

@@ -7,11 +7,63 @@
  * column with `parseResearchReport` before rendering.
  */
 
-export type ResearchCompetitor = { name: string; note: string };
+export type ResearchCompetitor = { name: string; note: string; url: string };
 export type ResearchNewsItem = { title: string; summary: string; url: string };
 export type ResearchSource = { url: string; title: string; query: string };
 export type ResearchSocialLink = { platform: string; url: string };
 export type ResearchColor = { name: string; hex: string };
+
+/** A decision-maker / key person at the prospect (for outreach). */
+export type ResearchPerson = { name: string; role: string; linkedin_url: string };
+
+/** Ready-to-use contact channels scraped from the site. */
+export type ResearchContact = {
+  emails: string[];
+  phones: string[];
+  /** A https://wa.me/… link when found. */
+  whatsapp: string;
+  address: string;
+  hours: string;
+};
+
+/** One labelled sub-score of the website scorecard (0-100). */
+export type ResearchScore = { label: string; score: number; note: string };
+
+/** The website audit / scorecard — the agency's core pitch fuel. */
+export type ResearchAudit = {
+  /** Overall 0-100. */
+  overall: number;
+  scores: ResearchScore[];
+  /** Concrete failings, phrased as reasons to hire the agency. */
+  issues: string[];
+  /** Lighthouse metrics like "Largest paint — 4.2 s". */
+  metrics: { label: string; value: string }[];
+  /** The exact URL that was measured. */
+  measured_url: string;
+};
+
+/** Google/online reputation summary. */
+export type ResearchReputation = {
+  /** Star rating 0-5 (0 = unknown). */
+  rating: number;
+  /** Number of reviews (0 = unknown). */
+  reviews: number;
+  source: string;
+  summary: string;
+  positives: string[];
+  negatives: string[];
+};
+
+/** Domain registration + hosting facts (from RDAP + live headers). */
+export type ResearchDomainInfo = {
+  domain: string;
+  /** ISO date (YYYY-MM-DD) or "". */
+  registered: string;
+  age_years: number;
+  registrar: string;
+  hosting: string;
+  ssl: boolean;
+};
 
 /** The prospect's visual brand system, mostly from Firecrawl's branding scan. */
 export type ResearchBrand = {
@@ -58,6 +110,16 @@ export type ResearchReport = {
   brand: ResearchBrand;
   web_presence: ResearchWebPresence;
   social_links: ResearchSocialLink[];
+  /** Decision-makers to reach out to. */
+  key_people: ResearchPerson[];
+  /** Ready-to-use contact channels. */
+  contact: ResearchContact;
+  /** Website scorecard/audit — null until the audit step runs. */
+  audit: ResearchAudit | null;
+  /** Online reputation — null when nothing was found. */
+  reputation: ResearchReputation | null;
+  /** Domain registration + hosting facts — null when unknown. */
+  domain_info: ResearchDomainInfo | null;
   /** How sure we are this is the right company (see MatchConfidence). */
   match_confidence: MatchConfidence;
   /** One line explaining the confidence — how identity was (or wasn't) confirmed. */
@@ -80,14 +142,142 @@ function obj(x: unknown): Record<string, unknown> {
   return x && typeof x === "object" ? (x as Record<string, unknown>) : {};
 }
 
+/** Accept only a real, whitespace-free http(s) URL with a dotted host; else ''. */
+function url(x: unknown): string {
+  const s = str(x);
+  if (!/^https?:\/\/[^\s]+$/i.test(s)) return "";
+  try {
+    return /\.[a-z]{2,}/i.test(new URL(s).hostname) ? s : "";
+  } catch {
+    return "";
+  }
+}
+
 function competitors(x: unknown): ResearchCompetitor[] {
   if (!Array.isArray(x)) return [];
   return x
     .map((c) => ({
       name: str((c as Record<string, unknown>)?.name),
       note: str((c as Record<string, unknown>)?.note),
+      url: url((c as Record<string, unknown>)?.url),
     }))
     .filter((c) => c.name);
+}
+
+function num(x: unknown): number {
+  return typeof x === "number" && Number.isFinite(x) ? x : 0;
+}
+
+/** De-duplicated, trimmed, non-empty string list. */
+function dedupeStrArr(x: unknown): string[] {
+  const seen = new Set<string>();
+  return strArr(x).filter((s) => {
+    const k = s.toLowerCase();
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
+function people(x: unknown): ResearchPerson[] {
+  if (!Array.isArray(x)) return [];
+  return x
+    .map((p) => {
+      const o = obj(p);
+      return {
+        name: str(o.name),
+        role: str(o.role),
+        linkedin_url: url(o.linkedin_url),
+      };
+    })
+    .filter((p) => p.name)
+    .slice(0, 8);
+}
+
+function contact(x: unknown): ResearchContact {
+  const o = obj(x);
+  return {
+    emails: dedupeStrArr(o.emails).slice(0, 6),
+    phones: dedupeStrArr(o.phones).slice(0, 6),
+    whatsapp: url(o.whatsapp),
+    address: str(o.address),
+    hours: str(o.hours),
+  };
+}
+
+function metricList(x: unknown): { label: string; value: string }[] {
+  if (!Array.isArray(x)) return [];
+  return x
+    .map((m) => {
+      const o = obj(m);
+      return { label: str(o.label), value: str(o.value) };
+    })
+    .filter((m) => m.label && m.value)
+    .slice(0, 8);
+}
+
+function scoreList(x: unknown): ResearchScore[] {
+  if (!Array.isArray(x)) return [];
+  return x
+    .map((s) => {
+      const o = obj(s);
+      return {
+        label: str(o.label),
+        score: Math.max(0, Math.min(100, Math.round(num(o.score)))),
+        note: str(o.note),
+      };
+    })
+    .filter((s) => s.label)
+    .slice(0, 10);
+}
+
+function audit(x: unknown): ResearchAudit | null {
+  if (!x || typeof x !== "object") return null;
+  const o = obj(x);
+  const scores = scoreList(o.scores);
+  const issues = strArr(o.issues);
+  const overall = Math.max(0, Math.min(100, Math.round(num(o.overall))));
+  if (!scores.length && !issues.length && !overall) return null;
+  return {
+    overall,
+    scores,
+    issues: issues.slice(0, 12),
+    metrics: metricList(o.metrics),
+    measured_url: url(o.measured_url),
+  };
+}
+
+function reputation(x: unknown): ResearchReputation | null {
+  if (!x || typeof x !== "object") return null;
+  const o = obj(x);
+  const rating = Math.max(0, Math.min(5, num(o.rating)));
+  const reviews = Math.max(0, Math.round(num(o.reviews)));
+  const summary = str(o.summary);
+  if (!rating && !reviews && !summary) return null;
+  return {
+    rating,
+    reviews,
+    source: str(o.source),
+    summary,
+    positives: strArr(o.positives).slice(0, 5),
+    negatives: strArr(o.negatives).slice(0, 5),
+  };
+}
+
+function domainInfo(x: unknown): ResearchDomainInfo | null {
+  if (!x || typeof x !== "object") return null;
+  const o = obj(x);
+  const domain = str(o.domain);
+  const registered = str(o.registered);
+  if (!domain && !registered && !str(o.hosting)) return null;
+  return {
+    domain,
+    registered,
+    age_years: Math.max(0, Math.round(num(o.age_years))),
+    registrar: str(o.registrar),
+    hosting: str(o.hosting),
+    ssl: Boolean(o.ssl),
+  };
 }
 
 function news(x: unknown): ResearchNewsItem[] {
@@ -183,6 +373,11 @@ export function parseResearchReport(x: unknown): ResearchReport {
     brand: brand(r.brand),
     web_presence: webPresence(r.web_presence),
     social_links: socials(r.social_links),
+    key_people: people(r.key_people),
+    contact: contact(r.contact),
+    audit: audit(r.audit),
+    reputation: reputation(r.reputation),
+    domain_info: domainInfo(r.domain_info),
     match_confidence: confidence(r.match_confidence),
     verification: str(r.verification),
     generated_by: r.generated_by === "basic" ? "basic" : "ai",

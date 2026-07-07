@@ -38,7 +38,8 @@ const STATUS_META: Record<
   pending: { label: "Queued", className: "bg-slate-100 text-slate-500 ring-slate-200" },
   running: { label: "Researching…", ...INPROGRESS },
   discovered: { label: "Analyzing site…", ...INPROGRESS },
-  analyzed: { label: "Writing dossier…", ...INPROGRESS },
+  analyzed: { label: "Auditing site…", ...INPROGRESS },
+  audited: { label: "Writing dossier…", ...INPROGRESS },
   done: { label: "Ready", className: "bg-emerald-50 text-emerald-600 ring-emerald-200" },
   error: { label: "Failed", className: "bg-rose-50 text-rose-600 ring-rose-200" },
 };

@@ -6,6 +6,7 @@ import type { Database, LeadResearchStatus } from "@/lib/database.types";
 import {
   discover,
   analyzeCompetitor,
+  auditSite,
   synthesize,
   isResearchConfigured,
   type ResearchInput,
@@ -16,11 +17,12 @@ type DB = SupabaseClient<Database>;
 export type ResearchTickResult = { processed: number; failed: number };
 
 /**
- * A claimed step's lease. Longer than any single step (~22s), shorter than
- * the tick interval, so a step abandoned by a killed function is retried
- * within a couple of ticks rather than being double-processed live.
+ * A claimed step's lease. Comfortably longer than any single step (each is
+ * internally capped well under ~30s by the Firecrawl/OpenAI timeouts), yet
+ * short enough that a step abandoned by a killed serverless function is retried
+ * on the very next minute-tick instead of stalling for a minute-plus.
  */
-const LOCK_TTL_MS = 90 * 1000;
+const LOCK_TTL_MS = 45 * 1000;
 
 /**
  * Queue a research report for a lead. Upserts a `pending` row (one per
@@ -78,8 +80,28 @@ export async function startLeadResearch(
 ): Promise<{ ok: boolean; id?: string }> {
   const queued = await queueLeadResearch(supabase, opts);
   if (!queued.ok || !queued.id) return queued;
-  await advanceResearchRow(supabase, queued.id);
+  await drainResearchRow(supabase, queued.id);
   return queued;
+}
+
+/**
+ * Run a research row through the WHOLE pipeline in one background pass, instead
+ * of a single step per minute-tick. Each step is committed and lease-fenced
+ * independently, so if this outlives the serverless budget the tick simply
+ * resumes from wherever it got to — nothing is lost or double-processed. Stops
+ * as soon as a step is `done`, `error`, or `skipped` (another worker has it).
+ */
+export async function drainResearchRow(
+  supabase: DB,
+  rowId: string,
+  maxSteps = 6,
+): Promise<StepOutcome> {
+  let outcome: StepOutcome = "skipped";
+  for (let i = 0; i < maxSteps; i++) {
+    outcome = await advanceResearchRow(supabase, rowId);
+    if (outcome !== "advanced") break;
+  }
+  return outcome;
 }
 
 /** Pull the lead fields that sharpen the searches. */
@@ -129,14 +151,15 @@ const CLAIMABLE: LeadResearchStatus[] = [
   "running",
   "discovered",
   "analyzed",
+  "audited",
 ];
 
 /**
  * Advance ONE step of a lead_research row's pipeline
- * (pending → discovered → analyzed → done). Atomically claims the row with a
- * short lease (`locked_at`) so the inline run and the tick can never process
- * the same step twice, then runs exactly one step and releases the lease.
- * Returns `skipped` when another worker holds the lease. Never throws.
+ * (pending → discovered → analyzed → audited → done). Atomically claims the row
+ * with a short lease (`locked_at`) so the inline run and the tick can never
+ * process the same step twice, then runs exactly one step and releases the
+ * lease. Returns `skipped` when another worker holds the lease. Never throws.
  */
 export async function advanceResearchRow(
   supabase: DB,
@@ -190,7 +213,7 @@ export async function advanceResearchRow(
       return "advanced";
     }
 
-    // discovered → analyze the top competitor
+    // discovered → analyze the top competitor + deep-read own pages
     if (row.status === "discovered") {
       const analysis = await analyzeCompetitor(input, row.analysis);
       await commit({
@@ -200,8 +223,18 @@ export async function advanceResearchRow(
       return "advanced";
     }
 
-    // analyzed → synthesize the dossier
+    // analyzed → audit the website (PageSpeed) + domain (RDAP)
     if (row.status === "analyzed") {
+      const analysis = await auditSite(input, row.analysis);
+      await commit({
+        status: "audited",
+        analysis: analysis as unknown as Record<string, unknown>,
+      });
+      return "advanced";
+    }
+
+    // audited → synthesize the dossier
+    if (row.status === "audited") {
       const { report, sources } = await synthesize(input, row.analysis);
       await commit({
         status: "done",
@@ -236,11 +269,12 @@ export async function advanceResearchRow(
 }
 
 /**
- * Advance queued research from the automation tick. Each report is a 3-step
- * pipeline; the tick moves each claimable row forward by ONE step (a step can
- * take ~20s and shares the tick's budget with SMS/finance/todo work), so a
- * report completes over a few minute-ticks. `advanceResearchRow`'s lease means
- * a row an inline run already owns is `skipped`, not double-processed.
+ * Advance queued research from the automation tick. Each report is a 4-step
+ * pipeline (discover → analyze → audit → synthesize); the tick moves each
+ * claimable row forward by ONE step (a step can take ~20s and shares the tick's
+ * budget with SMS/finance/todo work), so a report completes over a few
+ * minute-ticks. `advanceResearchRow`'s lease means a row an inline run already
+ * owns is `skipped`, not double-processed.
  *
  * `limit` is the number of rows advanced per tick (one step each).
  */

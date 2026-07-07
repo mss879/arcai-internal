@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { after } from "next/server";
 
 import { createClient } from "@/lib/supabase/server";
-import { queueLeadResearch, advanceResearchRow } from "@/lib/research";
+import { queueLeadResearch, drainResearchRow } from "@/lib/research";
 import { isResearchConfigured } from "@/lib/ai/lead-research";
 import type { ActionResult } from "@/lib/types";
 
@@ -57,10 +57,12 @@ export async function requestLeadResearch(
   }
 
   const researchId = queued.id;
-  // Kick off the first pipeline step after the response; the tick advances
-  // the rest, so the click returns immediately and never times out.
+  // Drive the whole pipeline after the response so the click returns instantly
+  // and never times out; if the background pass is cut short the automation
+  // tick resumes it. This finishes a report in ~one pass instead of waiting a
+  // separate minute-tick per step.
   after(async () => {
-    await advanceResearchRow(supabase, researchId);
+    await drainResearchRow(supabase, researchId);
   });
 
   revalidatePath(`/crm/lead/${leadId}`);

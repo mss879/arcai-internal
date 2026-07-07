@@ -585,8 +585,10 @@ function ResearchCard({
     status === "discovered"
       ? "Analyzing the website & brand…"
       : status === "analyzed"
-        ? "Sizing up competitors & writing the dossier…"
-        : `Researching ${research?.company_name ?? "the company"}…`;
+        ? "Auditing the site, competitors & reputation…"
+        : status === "audited"
+          ? "Scoring the site & writing the dossier…"
+          : `Researching ${research?.company_name ?? "the company"}…`;
 
   async function run() {
     setBusy(true);

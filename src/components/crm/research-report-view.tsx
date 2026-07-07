@@ -4,20 +4,30 @@ import * as React from "react";
 import {
   BadgeCheck,
   Building2,
+  Clock,
+  Download,
   ExternalLink,
+  Gauge,
   Globe,
   LayoutGrid,
   Link2,
   Lightbulb,
+  Mail,
+  MapPin,
   MessageCircleQuestion,
   Newspaper,
   Palette,
+  Phone,
+  Server,
   Share2,
   ShieldAlert,
+  Star,
   Swords,
   TrendingUp,
   TriangleAlert,
   Type,
+  Users,
+  Wrench,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -151,14 +161,25 @@ function BrandSection({
               Logo
             </dt>
             <dd className="min-w-0">
-              <a
-                href={brand.logo}
-                target="_blank"
-                rel="noreferrer"
-                className="break-all text-xs text-primary-600 hover:underline"
-              >
-                {brand.logo}
-              </a>
+              <div className="inline-flex flex-col items-start gap-1">
+                <div className="grid place-items-center rounded-lg border border-slate-200 bg-[repeating-conic-gradient(#f1f5f9_0%_25%,#fff_0%_50%)] bg-[length:12px_12px] p-2">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={brand.logo}
+                    alt="Company logo"
+                    className="max-h-16 max-w-[180px] object-contain"
+                  />
+                </div>
+                <a
+                  href={brand.logo}
+                  download
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 text-[11px] font-medium text-primary-600 hover:underline"
+                >
+                  <Download className="h-3 w-3" /> Download logo
+                </a>
+              </div>
             </dd>
           </div>
         )}
@@ -220,6 +241,328 @@ function WebPresenceSection({
           ))}
         </ul>
       )}
+    </div>
+  );
+}
+
+/** Traffic-light colour for a 0-100 score. */
+function scoreTone(score: number): { text: string; bar: string; ring: string } {
+  if (score >= 80)
+    return {
+      text: "text-emerald-600",
+      bar: "bg-emerald-500",
+      ring: "border-emerald-200 bg-emerald-50",
+    };
+  if (score >= 50)
+    return {
+      text: "text-amber-600",
+      bar: "bg-amber-500",
+      ring: "border-amber-200 bg-amber-50",
+    };
+  return {
+    text: "text-rose-600",
+    bar: "bg-rose-500",
+    ring: "border-rose-200 bg-rose-50",
+  };
+}
+
+/**
+ * The website scorecard — an overall 0-100, labelled sub-scores, the domain
+ * facts, and the concrete "what we'd fix" list. This is the agency's pitch.
+ */
+function ScorecardSection({
+  audit,
+  domain,
+}: {
+  audit: ResearchReport["audit"];
+  domain: ResearchReport["domain_info"];
+}) {
+  if (!audit && !domain) return null;
+
+  return (
+    <div className="rounded-xl border border-slate-200/80 bg-white p-3">
+      <SectionTitle icon={<Gauge className="h-3.5 w-3.5" />}>
+        Website scorecard
+      </SectionTitle>
+
+      {audit && (
+        <>
+          <div className="mt-2 flex items-center gap-3">
+            <div
+              className={cn(
+                "grid h-14 w-14 shrink-0 place-items-center rounded-xl border text-lg font-bold",
+                scoreTone(audit.overall).ring,
+                scoreTone(audit.overall).text,
+              )}
+            >
+              {audit.overall}
+            </div>
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-slate-800">
+                {audit.overall >= 80
+                  ? "Solid site"
+                  : audit.overall >= 50
+                    ? "Needs work"
+                    : "Big opportunity"}
+              </p>
+              {audit.measured_url && (
+                <a
+                  href={audit.measured_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="break-all text-xs text-slate-400 hover:underline"
+                >
+                  {audit.measured_url}
+                </a>
+              )}
+            </div>
+          </div>
+
+          {audit.scores.length > 0 && (
+            <div className="mt-3 space-y-2">
+              {audit.scores.map((s, i) => (
+                <div key={i}>
+                  <div className="flex items-baseline justify-between gap-2 text-xs">
+                    <span className="font-medium text-slate-600">{s.label}</span>
+                    <span className={cn("font-semibold", scoreTone(s.score).text)}>
+                      {s.score}
+                    </span>
+                  </div>
+                  <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-100">
+                    <div
+                      className={cn("h-full rounded-full", scoreTone(s.score).bar)}
+                      style={{ width: `${s.score}%` }}
+                    />
+                  </div>
+                  {s.note && (
+                    <p className="mt-0.5 text-[11px] text-slate-400">{s.note}</p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {audit.metrics.length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {audit.metrics.map((m, i) => (
+                <span
+                  key={i}
+                  className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-500"
+                >
+                  {m.label}: <span className="font-medium text-slate-700">{m.value}</span>
+                </span>
+              ))}
+            </div>
+          )}
+
+          {audit.issues.length > 0 && (
+            <div className="mt-3">
+              <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-amber-700">
+                <Wrench className="h-3 w-3" /> What we&apos;d fix
+              </div>
+              <ul className="mt-1.5 space-y-1">
+                {audit.issues.map((g, i) => (
+                  <li
+                    key={i}
+                    className="flex gap-2 break-words text-sm text-slate-700"
+                  >
+                    <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-amber-400" />
+                    {g}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </>
+      )}
+
+      {domain && (
+        <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-slate-100 pt-2.5 text-[11px] text-slate-500">
+          {domain.registered && (
+            <span className="inline-flex items-center gap-1">
+              <Clock className="h-3 w-3 text-slate-400" />
+              Registered {domain.registered}
+              {domain.age_years > 0 && ` · ${domain.age_years} yr`}
+            </span>
+          )}
+          {domain.registrar && (
+            <span className="truncate">{domain.registrar}</span>
+          )}
+          {domain.hosting && (
+            <span className="inline-flex items-center gap-1">
+              <Server className="h-3 w-3 text-slate-400" />
+              {domain.hosting}
+            </span>
+          )}
+          <span
+            className={cn(
+              "inline-flex items-center gap-1 font-medium",
+              domain.ssl ? "text-emerald-600" : "text-rose-600",
+            )}
+          >
+            {domain.ssl ? "HTTPS" : "No HTTPS"}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Google/online reputation — rating, review count, and the recurring themes. */
+function ReputationSection({
+  reputation,
+}: {
+  reputation: ResearchReport["reputation"];
+}) {
+  if (!reputation) return null;
+  const { rating, reviews, source, summary, positives, negatives } = reputation;
+
+  return (
+    <div>
+      <SectionTitle icon={<Star className="h-3.5 w-3.5" />}>Reputation</SectionTitle>
+      {(rating > 0 || reviews > 0) && (
+        <div className="mt-2 flex items-center gap-2">
+          {rating > 0 && (
+            <span className="inline-flex items-center gap-1 rounded-lg bg-amber-50 px-2 py-1 text-sm font-semibold text-amber-700">
+              <Star className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />
+              {rating.toFixed(1)}
+            </span>
+          )}
+          <span className="text-xs text-slate-500">
+            {reviews > 0 && `${reviews} reviews`}
+            {reviews > 0 && source && " · "}
+            {source}
+          </span>
+        </div>
+      )}
+      {summary && <p className="mt-2 break-words text-sm text-slate-600">{summary}</p>}
+      {(positives.length > 0 || negatives.length > 0) && (
+        <div className="mt-2 grid gap-2 sm:grid-cols-2">
+          {positives.length > 0 && (
+            <ul className="space-y-1">
+              {positives.map((p, i) => (
+                <li key={i} className="flex gap-1.5 break-words text-sm text-slate-700">
+                  <span className="text-emerald-500">+</span>
+                  {p}
+                </li>
+              ))}
+            </ul>
+          )}
+          {negatives.length > 0 && (
+            <ul className="space-y-1">
+              {negatives.map((n, i) => (
+                <li key={i} className="flex gap-1.5 break-words text-sm text-slate-700">
+                  <span className="text-rose-500">−</span>
+                  {n}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Ready-to-use contact channels scraped from the site. */
+function ContactSection({ contact }: { contact: ResearchReport["contact"] }) {
+  const has =
+    contact.emails.length > 0 ||
+    contact.phones.length > 0 ||
+    contact.whatsapp ||
+    contact.address ||
+    contact.hours;
+  if (!has) return null;
+
+  return (
+    <div>
+      <SectionTitle icon={<Phone className="h-3.5 w-3.5" />}>Contact</SectionTitle>
+      <div className="mt-2 space-y-1.5 text-sm">
+        {contact.emails.length > 0 && (
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <Mail className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+            {contact.emails.map((e, i) => (
+              <a
+                key={i}
+                href={`mailto:${e}`}
+                className="break-all text-primary-600 hover:underline"
+              >
+                {e}
+              </a>
+            ))}
+          </div>
+        )}
+        {contact.phones.length > 0 && (
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <Phone className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+            {contact.phones.map((p, i) => (
+              <a
+                key={i}
+                href={`tel:${p.replace(/\s+/g, "")}`}
+                className="text-slate-700 hover:underline"
+              >
+                {p}
+              </a>
+            ))}
+          </div>
+        )}
+        {contact.whatsapp && (
+          <div className="flex items-center gap-2">
+            <MessageCircleQuestion className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+            <a
+              href={contact.whatsapp}
+              target="_blank"
+              rel="noreferrer"
+              className="text-emerald-700 hover:underline"
+            >
+              WhatsApp
+            </a>
+          </div>
+        )}
+        {contact.address && (
+          <div className="flex gap-2">
+            <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />
+            <span className="break-words text-slate-600">{contact.address}</span>
+          </div>
+        )}
+        {contact.hours && (
+          <div className="flex gap-2">
+            <Clock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />
+            <span className="break-words text-slate-600">{contact.hours}</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Decision-makers to reach out to, with LinkedIn links. */
+function KeyPeopleSection({ people }: { people: ResearchReport["key_people"] }) {
+  if (!people.length) return null;
+  return (
+    <div>
+      <SectionTitle icon={<Users className="h-3.5 w-3.5" />}>
+        Key people
+      </SectionTitle>
+      <ul className="mt-2 space-y-1.5">
+        {people.map((p, i) => (
+          <li key={i} className="flex flex-wrap items-baseline gap-x-2 text-sm">
+            {p.linkedin_url ? (
+              <a
+                href={p.linkedin_url}
+                target="_blank"
+                rel="noreferrer"
+                className="font-medium text-[#0a66c2] hover:underline"
+              >
+                {p.name}
+              </a>
+            ) : (
+              <span className="font-medium text-slate-900">{p.name}</span>
+            )}
+            {p.role && <span className="text-slate-500">— {p.role}</span>}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -363,6 +706,16 @@ export function ResearchReportView({
         </dl>
       )}
 
+      {/* Website scorecard — the agency's core pitch fuel */}
+      <ScorecardSection audit={report.audit} domain={report.domain_info} />
+
+      {/* Reputation — Google/online rating + themes */}
+      <ReputationSection reputation={report.reputation} />
+
+      {/* Contact + decision-makers — ready-to-use outreach info */}
+      <ContactSection contact={report.contact} />
+      <KeyPeopleSection people={report.key_people} />
+
       {/* Brand system — the agency-facing highlight */}
       <BrandSection brand={report.brand} />
 
@@ -420,7 +773,18 @@ export function ResearchReportView({
           <ul className="mt-2 space-y-1.5">
             {report.competitors.map((c, i) => (
               <li key={i} className="break-words text-sm text-slate-700">
-                <span className="font-medium text-slate-900">{c.name}</span>
+                {c.url ? (
+                  <a
+                    href={c.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="font-medium text-slate-900 underline-offset-2 hover:underline"
+                  >
+                    {c.name}
+                  </a>
+                ) : (
+                  <span className="font-medium text-slate-900">{c.name}</span>
+                )}
                 {c.note && <span className="text-slate-500"> — {c.note}</span>}
               </li>
             ))}

@@ -3,6 +3,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { Database, LeadResearchStatus } from "@/lib/database.types";
+import { IS_SERVERLESS } from "@/lib/runtime";
 import {
   discover,
   analyzeCompetitor,
@@ -292,8 +293,12 @@ export async function advanceResearchRow(
 
     // analyzed (or a legacy 'audited' row) → synthesize the dossier.
     if (row.status === "analyzed" || row.status === "audited") {
-      // Local / non-Netlify: no function timeout, so synthesize inline.
-      if (!process.env.NETLIFY) {
+      // Local dev: no function timeout, so synthesize inline. In the deployed
+      // (serverless) app the long OpenAI call would be killed by the ~26s
+      // function budget, so we offload it to the Background Function instead —
+      // gated on IS_SERVERLESS (NODE_ENV-based), NOT `process.env.NETLIFY`,
+      // which isn't set in the function runtime (see src/lib/runtime.ts).
+      if (!IS_SERVERLESS) {
         const { report, sources } = await synthesize(input, row.analysis);
         await commit({
           status: "done",

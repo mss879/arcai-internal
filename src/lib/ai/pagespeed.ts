@@ -1,7 +1,5 @@
 import "server-only";
 
-import { IS_SERVERLESS } from "@/lib/runtime";
-
 /**
  * Google PageSpeed Insights (Lighthouse) wrapper for the CRM website audit.
  *
@@ -26,7 +24,7 @@ const PSI_URL =
  * PSI call under that: a still-slower site degrades to a "limited" audit rather
  * than getting the whole function killed mid-request.
  */
-const TIMEOUT_MS = IS_SERVERLESS ? 23000 : 60000;
+const TIMEOUT_MS = process.env.NETLIFY ? 23000 : 60000;
 
 /** Normalised Lighthouse result. Category scores are 0-100, or -1 = unknown. */
 export type PageSpeedResult = {

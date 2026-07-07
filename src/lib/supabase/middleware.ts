@@ -15,13 +15,10 @@ const PUBLIC_PREFIXES = [
   "/api/automation/tick",
   "/api/sms/automation/tick",
   "/api/intelligence/digest",
-  // Netlify functions are invoked server-to-server (scheduled tick, and the CRM
-  // research synthesis worker `triggerSynthWorker` POSTs here) with no auth
-  // cookie. The catch-all proxy matcher runs on these paths too, so without this
-  // they get redirected to /login and NEVER execute — which is exactly why
-  // prospect-research synthesis silently hangs in production while it works
-  // locally (local runs synthesis inline, never calling this function). These
-  // carry their own SMS_CRON_SECRET gate.
+  // Netlify functions (the scheduled automation tick) are invoked server-to-
+  // server with no auth cookie. The catch-all proxy matcher runs on these paths
+  // too, so without this they'd be redirected to /login. Harmless to keep even
+  // for internally-invoked scheduled functions.
   "/.netlify/functions",
 ];
 

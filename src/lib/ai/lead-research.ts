@@ -1,6 +1,10 @@
 import "server-only";
 
-import { openaiChatJSON, isOpenAIConfigured } from "@/lib/ai/openai";
+import {
+  openaiChatJSON,
+  isOpenAIConfigured,
+  isReasoningModel,
+} from "@/lib/ai/openai";
 import {
   firecrawlSearch,
   firecrawlScrape,
@@ -1340,6 +1344,134 @@ export async function synthesize(
     // (a present-but-rejected key, wrong model, or timeout looks different).
     const reason = (e instanceof Error ? e.message : "OpenAI request failed.").slice(0, 300);
     return finalizeSynthesis(input, analysis, null, reason);
+  }
+}
+
+// ---- Hosted synthesis via OpenAI background mode -----------------------------
+//
+// The hosted app cannot hold an 80s+ OpenAI call open — serverless functions
+// are capped (~26s) — and the old Netlify Background Function relay returned 202
+// but never wrote its result back, which is exactly why hosted research hung at
+// the synthesis step. Instead we use OpenAI's OWN background mode: kick off the
+// job (returns a job id in ~2s, so it fits any budget), then poll for the result
+// on later ticks / page polls (each a sub-second GET). Same model, same effort,
+// same report — just fetched when ready instead of waited on.
+
+const OPENAI_BASE = process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
+
+export type SynthKickoff =
+  | { jobId: string }
+  | { skip: "no_context" }
+  | { error: string };
+
+/**
+ * Start the dossier synthesis as an OpenAI background job and return its id.
+ * Never throws — returns a reason instead so the caller can finalize a basic
+ * report rather than hang.
+ */
+export async function kickoffBackgroundSynthesis(
+  input: ResearchInput,
+  analysisRaw: unknown,
+): Promise<SynthKickoff> {
+  if (!isOpenAIConfigured()) return { error: "no_key" };
+  const messages = buildSynthMessages(input, analysisRaw);
+  if (!messages) return { skip: "no_context" };
+  const isReasoning = isReasoningModel(MODEL);
+  try {
+    const res = await fetch(`${OPENAI_BASE}/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      },
+      // Only STARTS the job — returns almost immediately with an id.
+      signal: AbortSignal.timeout(30000),
+      body: JSON.stringify({
+        model: MODEL,
+        background: true,
+        input: [
+          { role: "system", content: messages.system },
+          { role: "user", content: messages.user },
+        ],
+        text: { format: { type: "json_object" } },
+        ...(isReasoning
+          ? { reasoning: { effort: REASONING_EFFORT } }
+          : { temperature: 0.3 }),
+      }),
+    });
+    if (!res.ok) {
+      const detail = (await res.text()).slice(0, 300);
+      return { error: `OpenAI ${res.status}: ${detail}` };
+    }
+    const job = (await res.json()) as { id?: unknown };
+    if (typeof job.id !== "string" || !job.id)
+      return { error: "OpenAI returned no job id." };
+    return { jobId: job.id };
+  } catch (e) {
+    return {
+      error: (e instanceof Error
+        ? e.message
+        : "Could not start synthesis."
+      ).slice(0, 300),
+    };
+  }
+}
+
+export type SynthPoll =
+  | { status: "pending" }
+  | { status: "done"; aiRaw: string }
+  | { status: "error"; aiError: string };
+
+/**
+ * Check on an OpenAI background job. Never throws; transient network/HTTP
+ * hiccups read as `pending` so a later poll retries (the caller's give-up
+ * ceiling bounds the total wait).
+ */
+export async function pollBackgroundSynthesis(jobId: string): Promise<SynthPoll> {
+  try {
+    const res = await fetch(`${OPENAI_BASE}/responses/${jobId}`, {
+      headers: { authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+      signal: AbortSignal.timeout(30000),
+    });
+    if (res.status === 404)
+      return {
+        status: "error",
+        aiError: "The AI job expired before it could be read. Re-run to try again.",
+      };
+    if (!res.ok) return { status: "pending" }; // transient — retry next poll
+    const job = (await res.json()) as {
+      status?: string;
+      output_text?: string;
+      output?: { type?: string; content?: { text?: string }[] }[];
+      error?: unknown;
+      incomplete_details?: unknown;
+    };
+    if (job.status === "completed") {
+      let text = typeof job.output_text === "string" ? job.output_text : "";
+      if (!text && Array.isArray(job.output)) {
+        for (const item of job.output) {
+          if (item?.type === "message" && Array.isArray(item.content)) {
+            for (const c of item.content)
+              if (typeof c?.text === "string") text += c.text;
+          }
+        }
+      }
+      if (!text) return { status: "error", aiError: "The AI returned an empty result." };
+      return { status: "done", aiRaw: text };
+    }
+    if (
+      job.status === "failed" ||
+      job.status === "cancelled" ||
+      job.status === "incomplete"
+    ) {
+      const detail = JSON.stringify(
+        job.error ?? job.incomplete_details ?? {},
+      ).slice(0, 200);
+      return { status: "error", aiError: `The AI job ${job.status}: ${detail}` };
+    }
+    return { status: "pending" }; // queued | in_progress
+  } catch {
+    return { status: "pending" };
   }
 }
 

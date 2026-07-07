@@ -7,8 +7,9 @@ import {
   discover,
   analyzeCompetitor,
   synthesize,
-  buildSynthMessages,
   finalizeSynthesis,
+  kickoffBackgroundSynthesis,
+  pollBackgroundSynthesis,
   isResearchConfigured,
   type ResearchInput,
 } from "@/lib/ai/lead-research";
@@ -26,60 +27,15 @@ export type ResearchTickResult = { processed: number; failed: number };
 const LOCK_TTL_MS = 45 * 1000;
 
 /**
- * The slow OpenAI synthesis runs in a Netlify Background Function (15-min
- * budget) so a reasoning model can finish no matter how long it thinks. These
- * bound the wait, timed from `analysis.synthStartedAt` (NOT `updated_at`, which
- * the set_updated_at trigger bumps on every claim):
- *   - after STALE with no worker output, nudge the worker again;
- *   - after GIVEUP, stop waiting and emit a basic report with the reason.
+ * The dossier synthesis runs as an OpenAI *background* job (see
+ * `kickoffBackgroundSynthesis`/`pollBackgroundSynthesis`): the app starts it in
+ * ~2s and polls for the result on later ticks/polls, so no single serverless
+ * call has to stay open for the ~80s the reasoning model takes. GIVEUP bounds
+ * the total wait (timed from `analysis.synthStartedAt`, NOT `updated_at`, which
+ * the set_updated_at trigger bumps on every claim); after it, we stop waiting
+ * and emit a basic report with the reason rather than hang forever.
  */
-// STALE is above the worker's own 12-min OpenAI timeout so a still-running
-// worker is never double-fired; a truly-vanished one is re-nudged after it.
-const SYNTH_STALE_MS = 14 * 60 * 1000;
 const SYNTH_GIVEUP_MS = 22 * 60 * 1000;
-
-/**
- * Fire the Netlify Background Function that performs the OpenAI synthesis for
- * one row. Fire-and-forget: the function returns 202 immediately and writes its
- * result back to the row. Returns false if we couldn't even reach it.
- */
-async function triggerSynthWorker(rowId: string): Promise<boolean> {
-  const base = (process.env.URL || process.env.NEXT_PUBLIC_APP_URL || "")
-    .trim()
-    .replace(/\/+$/, "");
-  if (!base) return false;
-  const secret = process.env.SMS_CRON_SECRET?.trim();
-  try {
-    const res = await fetch(
-      `${base}/.netlify/functions/research-synthesize-background`,
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          ...(secret ? { authorization: `Bearer ${secret}` } : {}),
-        },
-        // Hand the worker everything it needs. It's a SEPARATE esbuild bundle,
-        // so Next's build-time inlining of NEXT_PUBLIC_* never reaches it and
-        // reading its own process.env is unreliable — that is exactly why hosted
-        // synthesis silently hung: the worker couldn't see NEXT_PUBLIC_SUPABASE_URL
-        // and bailed before it could even record an error. This code runs in the
-        // Next server runtime, which HAS all three (the cron tick uses the service
-        // role key right here), so pass them explicitly — the worker then never
-        // depends on its own env scoping again.
-        body: JSON.stringify({
-          id: rowId,
-          supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL || "",
-          serviceKey: process.env.SUPABASE_SERVICE_ROLE_KEY || "",
-          openaiKey: process.env.OPENAI_API_KEY || "",
-        }),
-      },
-    );
-    return res.ok || res.status === 202;
-  } catch (e) {
-    console.error("[research] could not trigger synth worker:", e);
-    return false;
-  }
-}
 
 /**
  * Queue a research report for a lead. Upserts a `pending` row (one per
@@ -305,14 +261,18 @@ export async function advanceResearchRow(
 
     // analyzed (or a legacy 'audited' row) → synthesize the dossier.
     if (row.status === "analyzed" || row.status === "audited") {
-      // Local dev has no function-timeout cap, so synthesize inline. The
-      // deployed (serverless) app would have the long OpenAI call killed by the
-      // ~26s budget, so it offloads to the Background Function instead. Gate on
-      // NODE_ENV — reliably "production" in the deployed build and "development"
-      // under `next dev` — NOT `process.env.NETLIFY`, which is a build-time flag
-      // absent from the function runtime (so it wrongly ran inline in prod and
-      // hung). Kept inline (no shared module) to stay out of the edge bundle.
-      if (process.env.NODE_ENV !== "production") {
+      // Local dev synthesizes inline — no function-timeout cap, fastest feedback,
+      // and it's the path the user relies on. Hosted (serverless) can't hold the
+      // ~80s reasoning call open (~26s budget), so it starts an OpenAI BACKGROUND
+      // job and polls for the result on later ticks — replacing the Netlify
+      // Background Function relay, which returned 202 but never wrote back (the
+      // whole reason hosted research hung here). Set RESEARCH_BG_SYNTH=1 to run
+      // the hosted path locally for testing.
+      const useBackgroundSynth =
+        process.env.NODE_ENV === "production" ||
+        process.env.RESEARCH_BG_SYNTH === "1";
+
+      if (!useBackgroundSynth) {
         const { report, sources } = await synthesize(input, row.analysis);
         await commit({
           status: "done",
@@ -322,64 +282,52 @@ export async function advanceResearchRow(
         });
         return "done";
       }
-      // Netlify: hand the slow OpenAI call to a 15-min Background Function.
-      // Build the prompt here (fast, pure), stash it, and fire the worker.
-      const messages = buildSynthMessages(input, row.analysis);
-      if (!messages) {
-        // Nothing to analyze — finalize a basic report inline (no OpenAI call).
-        const { report, sources } = finalizeSynthesis(input, row.analysis, null);
-        await commit({
-          status: "done",
-          report: report as unknown as Record<string, unknown>,
-          sources: sources as unknown as Record<string, unknown>[],
-          error: null,
-        });
-        return "done";
+
+      const kicked = await kickoffBackgroundSynthesis(input, row.analysis);
+      if ("jobId" in kicked) {
+        const analysis = {
+          ...(row.analysis as Record<string, unknown>),
+          synthJobId: kicked.jobId,
+          synthStartedAt: Date.now(),
+        };
+        await commit({ status: "synthesizing", analysis });
+        return "advanced";
       }
-      const analysis = {
-        ...(row.analysis as Record<string, unknown>),
-        synthPrompt: messages.user,
-        synthSystem: messages.system,
-        synthStartedAt: Date.now(),
-        aiRaw: null,
-        aiError: null,
-      };
-      await commit({ status: "synthesizing", analysis });
-      await triggerSynthWorker(rowId);
-      return "advanced";
+      // Couldn't start (no context / no key / OpenAI error) → finalize a basic
+      // report immediately with the real reason. NEVER leave the row hanging.
+      const reason =
+        "error" in kicked && kicked.error !== "no_key" ? kicked.error : null;
+      const { report, sources } = finalizeSynthesis(
+        input,
+        row.analysis,
+        null,
+        reason,
+      );
+      await commit({
+        status: "done",
+        report: report as unknown as Record<string, unknown>,
+        sources: sources as unknown as Record<string, unknown>[],
+        error: null,
+      });
+      return "done";
     }
 
-    // synthesizing → assemble once the worker has produced output, else wait
-    // (timed from synthStartedAt inside analysis, immune to the updated_at bump).
+    // synthesizing → poll the OpenAI background job; assemble once it completes,
+    // else wait. Timed from synthStartedAt (immune to the updated_at bump).
     if (row.status === "synthesizing") {
       const a = (row.analysis ?? {}) as Record<string, unknown>;
-      const aiRaw = typeof a.aiRaw === "string" ? a.aiRaw : null;
-      const aiError = typeof a.aiError === "string" ? a.aiError : null;
+      const jobId = typeof a.synthJobId === "string" ? a.synthJobId : "";
       const startedAt =
         typeof a.synthStartedAt === "number" ? a.synthStartedAt : 0;
       const ageMs = startedAt ? Date.now() - startedAt : Infinity;
 
-      if (aiRaw || aiError) {
-        const { report, sources } = finalizeSynthesis(
-          input,
-          row.analysis,
-          aiRaw,
-          aiError,
-        );
-        await commit({
-          status: "done",
-          report: report as unknown as Record<string, unknown>,
-          sources: sources as unknown as Record<string, unknown>[],
-          error: null,
-        });
-        return "done";
-      }
+      // Stop waiting after the ceiling → basic report (never hang forever).
       if (ageMs > SYNTH_GIVEUP_MS) {
         const { report, sources } = finalizeSynthesis(
           input,
           row.analysis,
           null,
-          "The AI synthesis worker didn't respond in time. Re-run to try again.",
+          "The AI write-up didn't finish in time. Re-run to try again.",
         );
         await commit({
           status: "done",
@@ -389,16 +337,52 @@ export async function advanceResearchRow(
         });
         return "done";
       }
-      if (ageMs > SYNTH_STALE_MS) {
-        // Worker likely died mid-run — reset the clock and nudge it again.
+
+      // Legacy rows (old Netlify-worker mechanism) carry no job id — start one
+      // now so they self-heal instead of sitting forever.
+      if (!jobId) {
+        const kicked = await kickoffBackgroundSynthesis(input, row.analysis);
+        if ("jobId" in kicked) {
+          await commit({
+            status: "synthesizing",
+            analysis: { ...a, synthJobId: kicked.jobId, synthStartedAt: Date.now() },
+          });
+          return "advanced";
+        }
+        const reason =
+          "error" in kicked && kicked.error !== "no_key" ? kicked.error : null;
+        const { report, sources } = finalizeSynthesis(
+          input,
+          row.analysis,
+          null,
+          reason,
+        );
         await commit({
-          status: "synthesizing",
-          analysis: { ...a, synthStartedAt: Date.now() },
+          status: "done",
+          report: report as unknown as Record<string, unknown>,
+          sources: sources as unknown as Record<string, unknown>[],
+          error: null,
         });
-        await triggerSynthWorker(rowId);
-        return "advanced";
+        return "done";
       }
-      // Still thinking — release the lease and let a later tick check back.
+
+      const poll = await pollBackgroundSynthesis(jobId);
+      if (poll.status === "done" || poll.status === "error") {
+        const { report, sources } = finalizeSynthesis(
+          input,
+          row.analysis,
+          poll.status === "done" ? poll.aiRaw : null,
+          poll.status === "error" ? poll.aiError : null,
+        );
+        await commit({
+          status: "done",
+          report: report as unknown as Record<string, unknown>,
+          sources: sources as unknown as Record<string, unknown>[],
+          error: null,
+        });
+        return "done";
+      }
+      // Still running — release the lease and let a later tick/poll check back.
       await supabase
         .from("lead_research")
         .update({ locked_at: null })

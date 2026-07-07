@@ -42,3 +42,6 @@ next-env.d.ts
 
 # claude
 .claude/
+
+# Local diagnostic/probe scripts (not part of the app)
+zz_*.mjs

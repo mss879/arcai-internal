@@ -19,12 +19,16 @@ const PSI_URL =
  * the audit kept coming back "limited" even with a valid key.
  *
  * Locally there's no function cap, so give it real room (a slow site is worth
- * the wait for accurate performance/accessibility numbers). On Netlify the
- * synchronous audit action is bounded by the ~26s function budget, so keep the
- * PSI call under that: a still-slower site degrades to a "limited" audit rather
- * than getting the whole function killed mid-request.
+ * the wait for accurate performance/accessibility numbers). In the deployed app
+ * the synchronous audit action is bounded by the ~26s function budget, so keep
+ * the PSI call under that: a still-slower site degrades to a "limited" audit
+ * rather than getting the whole function killed mid-request.
+ *
+ * Gate on NODE_ENV (reliably "production" in the deployed build), NOT
+ * `process.env.NETLIFY`, which is a build-time flag not present in the function
+ * runtime.
  */
-const TIMEOUT_MS = process.env.NETLIFY ? 23000 : 60000;
+const TIMEOUT_MS = process.env.NODE_ENV === "production" ? 23000 : 60000;
 
 /** Normalised Lighthouse result. Category scores are 0-100, or -1 = unknown. */
 export type PageSpeedResult = {

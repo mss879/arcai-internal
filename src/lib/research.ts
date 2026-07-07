@@ -292,8 +292,14 @@ export async function advanceResearchRow(
 
     // analyzed (or a legacy 'audited' row) → synthesize the dossier.
     if (row.status === "analyzed" || row.status === "audited") {
-      // Local / non-Netlify: no function timeout, so synthesize inline.
-      if (!process.env.NETLIFY) {
+      // Local dev has no function-timeout cap, so synthesize inline. The
+      // deployed (serverless) app would have the long OpenAI call killed by the
+      // ~26s budget, so it offloads to the Background Function instead. Gate on
+      // NODE_ENV — reliably "production" in the deployed build and "development"
+      // under `next dev` — NOT `process.env.NETLIFY`, which is a build-time flag
+      // absent from the function runtime (so it wrongly ran inline in prod and
+      // hung). Kept inline (no shared module) to stay out of the edge bundle.
+      if (process.env.NODE_ENV !== "production") {
         const { report, sources } = await synthesize(input, row.analysis);
         await commit({
           status: "done",

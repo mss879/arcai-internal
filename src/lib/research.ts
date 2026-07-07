@@ -6,8 +6,9 @@ import type { Database, LeadResearchStatus } from "@/lib/database.types";
 import {
   discover,
   analyzeCompetitor,
-  auditSite,
   synthesize,
+  buildSynthMessages,
+  finalizeSynthesis,
   isResearchConfigured,
   type ResearchInput,
 } from "@/lib/ai/lead-research";
@@ -23,6 +24,49 @@ export type ResearchTickResult = { processed: number; failed: number };
  * on the very next minute-tick instead of stalling for a minute-plus.
  */
 const LOCK_TTL_MS = 45 * 1000;
+
+/**
+ * The slow OpenAI synthesis runs in a Netlify Background Function (15-min
+ * budget) so a reasoning model can finish no matter how long it thinks. These
+ * bound the wait, timed from `analysis.synthStartedAt` (NOT `updated_at`, which
+ * the set_updated_at trigger bumps on every claim):
+ *   - after STALE with no worker output, nudge the worker again;
+ *   - after GIVEUP, stop waiting and emit a basic report with the reason.
+ */
+// STALE is above the worker's own 12-min OpenAI timeout so a still-running
+// worker is never double-fired; a truly-vanished one is re-nudged after it.
+const SYNTH_STALE_MS = 14 * 60 * 1000;
+const SYNTH_GIVEUP_MS = 22 * 60 * 1000;
+
+/**
+ * Fire the Netlify Background Function that performs the OpenAI synthesis for
+ * one row. Fire-and-forget: the function returns 202 immediately and writes its
+ * result back to the row. Returns false if we couldn't even reach it.
+ */
+async function triggerSynthWorker(rowId: string): Promise<boolean> {
+  const base = (process.env.URL || process.env.NEXT_PUBLIC_APP_URL || "")
+    .trim()
+    .replace(/\/+$/, "");
+  if (!base) return false;
+  const secret = process.env.SMS_CRON_SECRET?.trim();
+  try {
+    const res = await fetch(
+      `${base}/.netlify/functions/research-synthesize-background`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(secret ? { authorization: `Bearer ${secret}` } : {}),
+        },
+        body: JSON.stringify({ id: rowId }),
+      },
+    );
+    return res.ok || res.status === 202;
+  } catch (e) {
+    console.error("[research] could not trigger synth worker:", e);
+    return false;
+  }
+}
 
 /**
  * Queue a research report for a lead. Upserts a `pending` row (one per
@@ -151,15 +195,18 @@ const CLAIMABLE: LeadResearchStatus[] = [
   "running",
   "discovered",
   "analyzed",
-  "audited",
+  "audited", // legacy in-flight rows from the old audit step
+  "synthesizing",
 ];
 
 /**
- * Advance ONE step of a lead_research row's pipeline
- * (pending → discovered → analyzed → audited → done). Atomically claims the row
- * with a short lease (`locked_at`) so the inline run and the tick can never
- * process the same step twice, then runs exactly one step and releases the
- * lease. Returns `skipped` when another worker holds the lease. Never throws.
+ * Advance ONE step of a lead_research row's pipeline:
+ *   pending → discovered → analyzed → done          (local: synth inline)
+ *   pending → discovered → analyzed → synthesizing → done  (Netlify: bg worker)
+ * Atomically claims the row with a short lease (`locked_at`) so the inline run
+ * and the tick can never process the same step twice, then runs exactly one step
+ * and releases the lease. Returns `skipped` when another worker holds the lease
+ * (or when a `synthesizing` row is still waiting on the worker). Never throws.
  */
 export async function advanceResearchRow(
   supabase: DB,
@@ -223,26 +270,102 @@ export async function advanceResearchRow(
       return "advanced";
     }
 
-    // analyzed → audit the website (PageSpeed) + domain (RDAP)
-    if (row.status === "analyzed") {
-      const analysis = await auditSite(input, row.analysis);
-      await commit({
-        status: "audited",
-        analysis: analysis as unknown as Record<string, unknown>,
-      });
+    // analyzed (or a legacy 'audited' row) → synthesize the dossier.
+    if (row.status === "analyzed" || row.status === "audited") {
+      // Local / non-Netlify: no function timeout, so synthesize inline.
+      if (!process.env.NETLIFY) {
+        const { report, sources } = await synthesize(input, row.analysis);
+        await commit({
+          status: "done",
+          report: report as unknown as Record<string, unknown>,
+          sources: sources as unknown as Record<string, unknown>[],
+          error: null,
+        });
+        return "done";
+      }
+      // Netlify: hand the slow OpenAI call to a 15-min Background Function.
+      // Build the prompt here (fast, pure), stash it, and fire the worker.
+      const messages = buildSynthMessages(input, row.analysis);
+      if (!messages) {
+        // Nothing to analyze — finalize a basic report inline (no OpenAI call).
+        const { report, sources } = finalizeSynthesis(input, row.analysis, null);
+        await commit({
+          status: "done",
+          report: report as unknown as Record<string, unknown>,
+          sources: sources as unknown as Record<string, unknown>[],
+          error: null,
+        });
+        return "done";
+      }
+      const analysis = {
+        ...(row.analysis as Record<string, unknown>),
+        synthPrompt: messages.user,
+        synthSystem: messages.system,
+        synthStartedAt: Date.now(),
+        aiRaw: null,
+        aiError: null,
+      };
+      await commit({ status: "synthesizing", analysis });
+      await triggerSynthWorker(rowId);
       return "advanced";
     }
 
-    // audited → synthesize the dossier
-    if (row.status === "audited") {
-      const { report, sources } = await synthesize(input, row.analysis);
-      await commit({
-        status: "done",
-        report: report as unknown as Record<string, unknown>,
-        sources: sources as unknown as Record<string, unknown>[],
-        error: null,
-      });
-      return "done";
+    // synthesizing → assemble once the worker has produced output, else wait
+    // (timed from synthStartedAt inside analysis, immune to the updated_at bump).
+    if (row.status === "synthesizing") {
+      const a = (row.analysis ?? {}) as Record<string, unknown>;
+      const aiRaw = typeof a.aiRaw === "string" ? a.aiRaw : null;
+      const aiError = typeof a.aiError === "string" ? a.aiError : null;
+      const startedAt =
+        typeof a.synthStartedAt === "number" ? a.synthStartedAt : 0;
+      const ageMs = startedAt ? Date.now() - startedAt : Infinity;
+
+      if (aiRaw || aiError) {
+        const { report, sources } = finalizeSynthesis(
+          input,
+          row.analysis,
+          aiRaw,
+          aiError,
+        );
+        await commit({
+          status: "done",
+          report: report as unknown as Record<string, unknown>,
+          sources: sources as unknown as Record<string, unknown>[],
+          error: null,
+        });
+        return "done";
+      }
+      if (ageMs > SYNTH_GIVEUP_MS) {
+        const { report, sources } = finalizeSynthesis(
+          input,
+          row.analysis,
+          null,
+          "The AI synthesis worker didn't respond in time. Re-run to try again.",
+        );
+        await commit({
+          status: "done",
+          report: report as unknown as Record<string, unknown>,
+          sources: sources as unknown as Record<string, unknown>[],
+          error: null,
+        });
+        return "done";
+      }
+      if (ageMs > SYNTH_STALE_MS) {
+        // Worker likely died mid-run — reset the clock and nudge it again.
+        await commit({
+          status: "synthesizing",
+          analysis: { ...a, synthStartedAt: Date.now() },
+        });
+        await triggerSynthWorker(rowId);
+        return "advanced";
+      }
+      // Still thinking — release the lease and let a later tick check back.
+      await supabase
+        .from("lead_research")
+        .update({ locked_at: null })
+        .eq("id", rowId)
+        .eq("locked_at", token);
+      return "skipped";
     }
 
     // Unknown/terminal — release the lease (fenced).

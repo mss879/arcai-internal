@@ -5,7 +5,11 @@ import { after } from "next/server";
 
 import { createClient } from "@/lib/supabase/server";
 import { queueLeadResearch, drainResearchRow } from "@/lib/research";
-import { isResearchConfigured } from "@/lib/ai/lead-research";
+import {
+  isResearchConfigured,
+  researchBranding,
+  researchSiteAudit,
+} from "@/lib/ai/lead-research";
 import type { ActionResult } from "@/lib/types";
 
 /**
@@ -66,6 +70,95 @@ export async function requestLeadResearch(
   });
 
   revalidatePath(`/crm/lead/${leadId}`);
+  revalidatePath("/crm/research");
+  return { ok: true };
+}
+
+/**
+ * On-demand: fetch the prospect's brand system (colours/fonts/logo/personality)
+ * and attach it to an existing report. Kept OUT of the initial research so the
+ * first pass is fast and about the company — the report UI shows a "Grab
+ * branding" button that calls this. ~15-20s, fits the serverless budget.
+ */
+export async function grabLeadBranding(
+  researchId: string,
+): Promise<ActionResult> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+
+  const { data: row } = await supabase
+    .from("lead_research")
+    .select("id, lead_id, report")
+    .eq("id", researchId)
+    .maybeSingle();
+  if (!row) return { ok: false, error: "Research report not found." };
+
+  const report = (row.report ?? {}) as Record<string, unknown>;
+  const website = typeof report.website === "string" ? report.website : "";
+  if (!website)
+    return { ok: false, error: "This report has no website to read branding from." };
+
+  const brand = await researchBranding(website);
+  if (!brand)
+    return { ok: false, error: "Couldn't read the site's branding. Try again." };
+
+  const { error } = await supabase
+    .from("lead_research")
+    .update({ report: { ...report, brand } })
+    .eq("id", researchId);
+  if (error) return { ok: false, error: error.message };
+
+  if (row.lead_id) revalidatePath(`/crm/lead/${row.lead_id}`);
+  revalidatePath("/crm/research");
+  return { ok: true };
+}
+
+/**
+ * On-demand: run the website audit (mobile PageSpeed + on-page SEO + domain
+ * age/hosting) and attach the scorecard + domain facts to an existing report.
+ * The report UI shows a "Run website audit" button that calls this.
+ */
+export async function runLeadWebsiteAudit(
+  researchId: string,
+): Promise<ActionResult> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+
+  const { data: row } = await supabase
+    .from("lead_research")
+    .select("id, lead_id, report")
+    .eq("id", researchId)
+    .maybeSingle();
+  if (!row) return { ok: false, error: "Research report not found." };
+
+  const report = (row.report ?? {}) as Record<string, unknown>;
+  const website = typeof report.website === "string" ? report.website : "";
+  if (!website)
+    return { ok: false, error: "This report has no website to audit." };
+
+  const result = await researchSiteAudit(website);
+  if (!result)
+    return { ok: false, error: "Couldn't audit the site. Try again." };
+
+  const { error } = await supabase
+    .from("lead_research")
+    .update({
+      report: {
+        ...report,
+        audit: result.audit,
+        domain_info: result.domain_info,
+      },
+    })
+    .eq("id", researchId);
+  if (error) return { ok: false, error: error.message };
+
+  if (row.lead_id) revalidatePath(`/crm/lead/${row.lead_id}`);
   revalidatePath("/crm/research");
   return { ok: true };
 }

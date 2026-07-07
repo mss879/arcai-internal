@@ -583,11 +583,11 @@ function ResearchCard({
   const hasCompany = Boolean(lead.company?.trim());
   const stepLabel =
     status === "discovered"
-      ? "Analyzing the website & brand…"
+      ? "Reading the website & mapping its pages…"
       : status === "analyzed"
-        ? "Auditing the site, competitors & reputation…"
-        : status === "audited"
-          ? "Scoring the site & writing the dossier…"
+        ? "Sizing up competitors & services…"
+        : status === "synthesizing" || status === "audited"
+          ? "Writing the dossier (deep AI analysis)…"
           : `Researching ${research?.company_name ?? "the company"}…`;
 
   async function run() {

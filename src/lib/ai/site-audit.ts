@@ -140,11 +140,23 @@ export function buildAudit(input: {
 }): ResearchAudit {
   const { url, psi, seo, ssl, ageYears, copyrightYear } = input;
   const scores: ResearchScore[] = [];
-  const push = (label: string, score: number, note: string) => {
-    if (score >= 0) scores.push({ label, score: clamp(score), note });
+  // Each sub-score carries a WEIGHT so the overall reflects real quality:
+  // performance/accessibility dominate; HTTPS/freshness are hygiene, not merit.
+  // A flat average (the old behaviour) let a site score ~90 on freebies alone
+  // (HTTPS + a viewport tag + a current copyright) even when PageSpeed —
+  // the actual performance/accessibility measure — never ran.
+  const weighted: { score: number; weight: number }[] = [];
+  const push = (label: string, score: number, note: string, weight: number) => {
+    if (score < 0) return;
+    const s = clamp(score);
+    scores.push({ label, score: s, note });
+    weighted.push({ score: s, weight });
   };
 
-  // Performance (mobile Lighthouse).
+  // PageSpeed drives the meaningful signals; without it the audit is "limited".
+  const measured: "full" | "limited" = psi ? "full" : "limited";
+
+  // Performance / accessibility / best practices (mobile Lighthouse) — the core.
   if (psi) {
     push(
       "Performance",
@@ -152,21 +164,24 @@ export function buildAudit(input: {
       psi.metrics.find((m) => /largest paint/i.test(m.label))?.value
         ? `Largest paint ${psi.metrics.find((m) => /largest paint/i.test(m.label))!.value}`
         : "Mobile load speed",
+      3,
     );
-    push("Accessibility", psi.accessibility, "Lighthouse accessibility pass");
-    push("Best practices", psi.bestPractices, "Security, console, deprecations");
+    push("Accessibility", psi.accessibility, "Lighthouse accessibility pass", 2);
+    push("Best practices", psi.bestPractices, "Security, console, deprecations", 1.5);
   }
 
-  // Mobile friendliness — viewport + Lighthouse mobile flags.
+  // Mobile friendliness — a viewport tag is table stakes, not a strong pass, so
+  // it only earns a modest base; real mobile flags from Lighthouse pull it down.
   const mobileFlags = psi
     ? psi.failedAudits.filter((a) => /mobile|tap|too small|viewport/i.test(a))
         .length
     : 0;
-  const mobileBase = seo.viewport ? 90 : 30;
+  const mobileBase = seo.viewport ? 72 : 25;
   push(
     "Mobile-friendly",
     Math.max(0, mobileBase - mobileFlags * 20),
     seo.viewport ? "Has a responsive viewport" : "No mobile viewport tag",
+    1.5,
   );
 
   // SEO — blend Lighthouse SEO with our on-page essentials.
@@ -181,29 +196,40 @@ export function buildAudit(input: {
     "SEO",
     seoScore,
     missingSeo.length ? `Missing ${missingSeo.join(", ")}` : "Search essentials present",
+    1.5,
   );
 
-  // Security (HTTPS).
+  // Security (HTTPS) — hygiene: near-universal now, so low weight.
   push(
     "Security",
     ssl ? 100 : 15,
     ssl ? "Served over HTTPS" : "No HTTPS — browsers flag it as insecure",
+    0.5,
   );
 
-  // Freshness (copyright year).
+  // Freshness (copyright year) — hygiene, low weight.
   const fresh = freshnessScore(copyrightYear);
   push(
     "Freshness",
     fresh,
     copyrightYear ? `Footer copyright ${copyrightYear}` : "",
+    0.5,
   );
 
-  const overall = scores.length
-    ? clamp(scores.reduce((s, c) => s + c.score, 0) / scores.length)
+  const totalWeight = weighted.reduce((s, c) => s + c.weight, 0);
+  let overall = totalWeight
+    ? clamp(weighted.reduce((s, c) => s + c.score * c.weight, 0) / totalWeight)
     : 0;
+  // Without PageSpeed we've only measured hygiene, never performance or
+  // accessibility — so the score cannot honestly read as "solid". Cap it.
+  if (measured === "limited") overall = Math.min(overall, 69);
 
   // Concrete issues = pitch fuel.
   const issues: string[] = [];
+  if (measured === "limited")
+    issues.push(
+      "Performance & accessibility couldn't be measured (PageSpeed didn't respond) — add a PAGESPEED_API_KEY for a full, accurate audit.",
+    );
   if (!ssl)
     issues.push("No HTTPS — the site isn't secure and browsers warn visitors.");
   if (!seo.viewport)
@@ -249,5 +275,6 @@ export function buildAudit(input: {
     issues: deduped.slice(0, 12),
     metrics: psi?.metrics ?? [],
     measured_url: url,
+    measured,
   };
 }

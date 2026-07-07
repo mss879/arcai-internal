@@ -40,6 +40,12 @@ export type ResearchAudit = {
   metrics: { label: string; value: string }[];
   /** The exact URL that was measured. */
   measured_url: string;
+  /**
+   * "full" when Google PageSpeed ran (performance + accessibility measured),
+   * "limited" when it couldn't — in which case the overall is capped and must
+   * not read as a confident high score. Defaults to "full" for old reports.
+   */
+  measured: "full" | "limited";
 };
 
 /** Google/online reputation summary. */
@@ -126,6 +132,13 @@ export type ResearchReport = {
   verification: string;
   /** "ai" for OpenAI-written briefings, "basic" for the no-key fallback. */
   generated_by: "ai" | "basic";
+  /**
+   * Why a report is "basic": "no_key" (no OpenAI key), "no_context" (nothing
+   * scraped to analyze), or the raw OpenAI error (present-but-rejected key,
+   * wrong model, timeout). Empty for AI reports. Lets the UI show the real
+   * cause instead of always saying "add a key".
+   */
+  basic_reason: string;
 };
 
 function confidence(x: unknown): MatchConfidence {
@@ -244,6 +257,8 @@ function audit(x: unknown): ResearchAudit | null {
     issues: issues.slice(0, 12),
     metrics: metricList(o.metrics),
     measured_url: url(o.measured_url),
+    // Old reports predate this field; treat them as full so nothing regresses.
+    measured: o.measured === "limited" ? "limited" : "full",
   };
 }
 
@@ -381,6 +396,7 @@ export function parseResearchReport(x: unknown): ResearchReport {
     match_confidence: confidence(r.match_confidence),
     verification: str(r.verification),
     generated_by: r.generated_by === "basic" ? "basic" : "ai",
+    basic_reason: str(r.basic_reason),
   };
 }
 

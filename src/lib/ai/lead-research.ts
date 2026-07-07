@@ -1,6 +1,6 @@
 import "server-only";
 
-import { openaiChatJSON, isOpenAIConfigured, AI_MODELS } from "@/lib/ai/openai";
+import { openaiChatJSON, isOpenAIConfigured } from "@/lib/ai/openai";
 import {
   firecrawlSearch,
   firecrawlScrape,
@@ -30,27 +30,28 @@ import {
 } from "@/lib/ai/site-audit";
 
 /**
- * Agency-grade prospect research, run as a 4-step pipeline (the orchestration
- * in `research.ts` advances one step per tick so each stays inside the
- * serverless time budget):
+ * Agency-grade prospect research. The CORE pipeline focuses on the company,
+ * its services/products, and its competitors:
  *
- *   1. discover()          — scrape the homepage for its BRAND system
- *                            (colours/fonts/logo via Firecrawl branding) +
- *                            links (socials) + HTML (SEO signals), map the
- *                            site's pages, and run competitor / news /
- *                            LinkedIn / reviews searches.
- *   2. analyzeCompetitor() — scrape the top competitor's homepage (brand +
- *                            content) and the prospect's own services/products/
- *                            about/contact pages for a full offering read.
- *   3. auditSite()         — Google PageSpeed (mobile Lighthouse) + domain age
- *                            (RDAP) → the website scorecard.
- *   4. synthesize()        — OpenAI writes the dossier: profile, web presence,
- *                            competitor gaps, brand read, key people, contact,
- *                            reputation, and pitch angles.
+ *   1. discover()          — scrape the homepage (links → socials, HTML → SEO
+ *                            signals, markdown → content), map the site's pages,
+ *                            and run competitor / news / LinkedIn / reviews
+ *                            searches. (Branding is NOT fetched here.)
+ *   2. analyzeCompetitor() — scrape the top competitor's homepage + the
+ *                            prospect's own services/products/about/contact
+ *                            pages for a full offering read.
+ *   3. synthesize()        — OpenAI writes the dossier: profile, web presence,
+ *                            competitor gaps, key people, contact, reputation,
+ *                            and pitch angles.
+ *
+ * Branding and the website audit are DELIBERATELY out of the core pass — they're
+ * fetched on demand via `researchBranding()` / `researchSiteAudit()` (wired to
+ * "Grab branding" / "Run website audit" buttons in the report UI), so the first
+ * pass is fast and about the company rather than its design system.
  *
  * Every external call degrades gracefully (returns []/null, never throws), and
- * the whole thing yields a useful report even with no OpenAI key — the brand,
- * socials, page map, contact and audit are gathered deterministically.
+ * the whole thing yields a useful report even with no OpenAI key — the socials,
+ * page map, and contact are gathered deterministically.
  */
 
 export type ResearchInput = {
@@ -116,7 +117,17 @@ export type ResearchAnalysis = {
   domainInfo: ResearchDomainInfo | null;
 };
 
-const MODEL = process.env.OPENAI_RESEARCH_MODEL || AI_MODELS.chat;
+// Research is the app's most demanding OpenAI job — it reads a whole site and
+// writes a structured dossier — so it defaults to a GPT-5-family reasoning model
+// (quality over speed). gpt-5.4-mini balances cost/latency/quality. Override the
+// model/effort/timeout via env without touching code.
+const MODEL = process.env.OPENAI_RESEARCH_MODEL || "gpt-5.4-mini";
+const REASONING_EFFORT = process.env.OPENAI_RESEARCH_REASONING_EFFORT || "high";
+// Reasoning models think for a while; give them room. In production this runs
+// inside a Netlify Background Function (15-min budget), so the long timeout is
+// safe; local dev has no cap either. (The inline/serverless path degrades to a
+// basic report if a run is cut short rather than retrying forever.)
+const SYNTH_TIMEOUT_MS = Number(process.env.OPENAI_RESEARCH_TIMEOUT_MS) || 600000;
 const MAX_HOMEPAGE_CHARS = 8000;
 const MAX_COMPETITOR_CHARS = 4000;
 const MAX_COMPARE_CHARS = 3500;
@@ -286,6 +297,9 @@ function normaliseBrand(raw: FirecrawlBranding | null): ResearchBrand {
   };
 }
 
+/** Sitemap XML, feeds, and static assets — plumbing, not real pages. */
+const SITE_MAP_JUNK = /\.(xml|json|txt|rss|atom|css|js|map|png|jpe?g|gif|svg|webp|avif|ico|pdf|zip|woff2?|ttf)$/i;
+
 /** Readable page labels from a site map (title, else the path). */
 function extractSiteMap(
   links: { url: string; title: string }[],
@@ -295,20 +309,26 @@ function extractSiteMap(
   const pages: string[] = [];
   for (const l of links) {
     if (anchorDomain && !domainMatches(domainOf(l.url), anchorDomain)) continue;
-    let label = l.title.trim();
-    if (!label) {
-      try {
-        const p = new URL(l.url).pathname.replace(/\/+$/, "");
-        label = p && p !== "" ? p : "Home";
-      } catch {
-        continue;
-      }
+
+    let path = "";
+    try {
+      path = new URL(l.url).pathname.replace(/\/+$/, "");
+    } catch {
+      continue;
     }
-    const key = label.toLowerCase();
+    // Drop sitemap files, feeds, and assets — they aren't browsable pages.
+    if (SITE_MAP_JUNK.test(path) || /sitemap/i.test(path)) continue;
+
+    const label = l.title.trim() || (path || "Home");
+    // Collapse paginated/duplicated detail pages (…-6, …-5, …/2) onto one
+    // entry so a portfolio of 20 near-identical items doesn't flood the list.
+    const key = (path || "home")
+      .toLowerCase()
+      .replace(/[-/]\d+$/, "");
     if (seen.has(key)) continue;
     seen.add(key);
     pages.push(label);
-    if (pages.length >= 30) break;
+    if (pages.length >= 24) break;
   }
   return pages;
 }
@@ -716,9 +736,10 @@ export async function discover(input: ResearchInput): Promise<ResearchAnalysis> 
     contactPages,
     reviewPages,
   ] = await Promise.all([
-    // Homepage: brand + links + HTML (the HTML powers the SEO scorecard).
+    // Homepage: links (socials) + HTML (content + SEO signals). Branding is
+    // fetched separately on demand, so it's intentionally not requested here.
     siteUrl
-      ? firecrawlScrape(siteUrl, { brand: true, html: true })
+      ? firecrawlScrape(siteUrl, { html: true })
       : Promise.resolve(null),
     siteUrl
       ? firecrawlMap(siteUrl, {
@@ -758,9 +779,8 @@ export async function discover(input: ResearchInput): Promise<ResearchAnalysis> 
   // Pool both competitor angles for candidate extraction + the source list.
   const competitorHits = [...competitorPages, ...peerPages];
 
-  // Brand + socials + homepage content from the direct scrape.
+  // Socials + homepage content from the direct scrape. (Brand is on-demand.)
   if (homepage) {
-    analysis.brand = normaliseBrand(homepage.branding);
     analysis.socialLinks = extractSocials(homepage.links);
     analysis.homepageContent = homepage.markdown.slice(0, MAX_HOMEPAGE_CHARS);
     analysis.signals.siteReached = true;
@@ -861,13 +881,14 @@ export async function analyzeCompetitor(
   if (!analysis.competitorUrl && !analysis.competitorListUrl && !keyUrls.length)
     return analysis;
 
-  // All in parallel: brand-scrape the top real competitor for a side-by-side,
+  // All in parallel: read the top real competitor's homepage for a side-by-side,
   // read a "top/vs/alternatives" article that names more rivals to verify, and
   // deep-read the prospect's own services/products/about pages for a full,
   // accurate offering + web-presence read (not just the homepage teaser).
+  // (No brand scrape — branding is an on-demand step now, so this stays fast.)
   const [page, listPage, ...keyPages] = await Promise.all([
     analysis.competitorUrl
-      ? firecrawlScrape(analysis.competitorUrl, { brand: true })
+      ? firecrawlScrape(analysis.competitorUrl)
       : Promise.resolve(null),
     analysis.competitorListUrl
       ? firecrawlScrape(analysis.competitorListUrl)
@@ -876,7 +897,6 @@ export async function analyzeCompetitor(
   ]);
 
   if (page) {
-    analysis.competitorBrand = normaliseBrand(page.branding);
     analysis.competitorContent = page.markdown.slice(0, MAX_COMPETITOR_CHARS);
   }
   if (listPage) {
@@ -897,52 +917,7 @@ export async function analyzeCompetitor(
   return analysis;
 }
 
-// ---- STEP 3: audit the website + domain --------------------------------------
-
-/**
- * Score the prospect's website (Google PageSpeed / Lighthouse) and look up its
- * domain age + hosting (RDAP + a live HEAD). Combined with the on-page SEO
- * signals gathered in `discover`, this yields the scorecard. Every call
- * degrades to null, so a missing PageSpeed key or an RDAP-less TLD just means
- * fewer sub-scores — never a failed run. No-ops when there's no website.
- */
-export async function auditSite(
-  input: ResearchInput,
-  analysisRaw: unknown,
-): Promise<ResearchAnalysis> {
-  const analysis = parseAnalysis(analysisRaw, input);
-  const siteUrl = input.website ? normaliseUrl(input.website) : null;
-  if (!siteUrl) return analysis;
-
-  const [psi, domain] = await Promise.all([
-    runPageSpeed(siteUrl),
-    lookupDomainInfo(siteUrl),
-  ]);
-
-  analysis.domainInfo = domain
-    ? {
-        domain: domain.domain,
-        registered: domain.registered,
-        age_years: domain.ageYears,
-        registrar: domain.registrar,
-        hosting: domain.hosting,
-        ssl: domain.ssl,
-      }
-    : null;
-  const ssl = domain?.ssl ?? siteUrl.startsWith("https://");
-  analysis.audit = buildAudit({
-    url: siteUrl,
-    psi,
-    seo: analysis.seoSignals,
-    ssl,
-    ageYears: domain?.ageYears ?? 0,
-    copyrightYear: analysis.copyrightYear,
-  });
-
-  return analysis;
-}
-
-// ---- STEP 4: synthesize the dossier ------------------------------------------
+// ---- STEP 3: synthesize the dossier ------------------------------------------
 
 const SYSTEM = `You are a senior strategist at a web-design & digital agency,
 preparing your sales team to pitch a prospect — a company based in Sri Lanka.
@@ -1197,6 +1172,7 @@ function assembleReport(
   input: ResearchInput,
   analysis: ResearchAnalysis,
   ai: Record<string, unknown> | null,
+  basicReason?: string,
 ): ResearchReport {
   const web = obj(ai?.web_presence);
   const brand: ResearchBrand = {
@@ -1266,7 +1242,66 @@ function assembleReport(
     match_confidence: confidence,
     verification: confidence === "low" || !aiVerification ? ceilingReason : aiVerification,
     generated_by: ai ? "ai" : "basic",
+    basic_reason: ai ? "" : basicReason || "",
   });
+}
+
+/**
+ * Build the OpenAI messages for synthesis. Pure + fast (no network), so the
+ * background worker can store these strings on the row and make the (slow)
+ * OpenAI call itself. Returns null when there's nothing to analyze — the caller
+ * should then produce a "no_context" basic report.
+ */
+export function buildSynthMessages(
+  input: ResearchInput,
+  analysisRaw: unknown,
+): { system: string; user: string } | null {
+  const analysis = parseAnalysis(analysisRaw, input);
+  const hasContext =
+    Boolean(analysis.homepageContent) ||
+    Boolean(analysis.searchContext) ||
+    analysis.siteMap.length > 0;
+  if (!hasContext) return null;
+  return { system: SYSTEM, user: synthPrompt(input, analysis) };
+}
+
+/**
+ * Turn the model's raw JSON (or a failure reason) into the final report. Used
+ * by the tick once the background worker has stored the model output, and by
+ * the inline `synthesize()` path. `aiRaw` parses → full report; `aiError` →
+ * basic report carrying the real reason; neither → basic ("no_context"/"no_key").
+ */
+export function finalizeSynthesis(
+  input: ResearchInput,
+  analysisRaw: unknown,
+  aiRaw: string | null,
+  aiError?: string | null,
+): ResearchResult {
+  const analysis = parseAnalysis(analysisRaw, input);
+  if (aiRaw) {
+    try {
+      const parsed = JSON.parse(aiRaw) as Record<string, unknown>;
+      return {
+        report: assembleReport(input, analysis, parsed),
+        sources: analysis.sources,
+      };
+    } catch (e) {
+      const reason = (e instanceof Error ? e.message : "Bad AI response.").slice(0, 300);
+      return {
+        report: assembleReport(input, analysis, null, reason),
+        sources: analysis.sources,
+      };
+    }
+  }
+  const reason = aiError
+    ? aiError.slice(0, 300)
+    : isOpenAIConfigured()
+      ? "no_context"
+      : "no_key";
+  return {
+    report: assembleReport(input, analysis, null, reason),
+    sources: analysis.sources,
+  };
 }
 
 export async function synthesize(
@@ -1274,36 +1309,100 @@ export async function synthesize(
   analysisRaw: unknown,
 ): Promise<ResearchResult> {
   const analysis = parseAnalysis(analysisRaw, input);
-
-  const hasContext =
-    Boolean(analysis.homepageContent) ||
-    Boolean(analysis.searchContext) ||
-    analysis.siteMap.length > 0;
-
-  if (!isOpenAIConfigured() || !hasContext) {
+  if (!isOpenAIConfigured()) {
     return {
-      report: assembleReport(input, analysis, null),
+      report: assembleReport(input, analysis, null, "no_key"),
       sources: analysis.sources,
     };
   }
+  const messages = buildSynthMessages(input, analysis);
+  if (!messages) return finalizeSynthesis(input, analysis, null);
 
   try {
     const raw = await openaiChatJSON(
       [
-        { role: "system", content: SYSTEM },
-        { role: "user", content: synthPrompt(input, analysis) },
+        { role: "system", content: messages.system },
+        { role: "user", content: messages.user },
       ],
-      { temperature: 0.3, model: MODEL, timeoutMs: 25000 },
+      {
+        temperature: 0.3,
+        model: MODEL,
+        reasoningEffort: REASONING_EFFORT,
+        timeoutMs: SYNTH_TIMEOUT_MS,
+      },
     );
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    return { report: assembleReport(input, analysis, parsed), sources: analysis.sources };
+    return finalizeSynthesis(input, analysis, raw);
   } catch (e) {
     console.error("[lead-research] synthesis failed:", e);
-    return {
-      report: assembleReport(input, analysis, null),
-      sources: analysis.sources,
-    };
+    // Keep the real reason so the UI can stop falsely blaming a missing key
+    // (a present-but-rejected key, wrong model, or timeout looks different).
+    const reason = (e instanceof Error ? e.message : "OpenAI request failed.").slice(0, 300);
+    return finalizeSynthesis(input, analysis, null, reason);
   }
+}
+
+// ---- On-demand enrichment (branding + website audit buttons) -----------------
+
+/**
+ * On-demand branding: scrape the homepage's brand system (colours/fonts/logo/
+ * spacing/personality via Firecrawl's branding pass). Returns null when the
+ * site is unreachable or shows no discernible branding.
+ */
+export async function researchBranding(
+  siteUrl: string,
+): Promise<ResearchBrand | null> {
+  const url = normaliseUrl(siteUrl);
+  if (!url || !isFirecrawlConfigured()) return null;
+  const page = await firecrawlScrape(url, { brand: true });
+  if (!page) return null;
+  const brand = normaliseBrand(page.branding);
+  const hasBrand =
+    brand.colors.length > 0 ||
+    brand.fonts.length > 0 ||
+    Boolean(brand.logo) ||
+    Boolean(brand.style_notes);
+  return hasBrand ? brand : null;
+}
+
+/**
+ * On-demand website audit: a fresh mobile-Lighthouse (PageSpeed) + on-page SEO
+ * (from the homepage HTML) + domain (RDAP) pass → the scorecard + domain facts.
+ * Returns null when there's no site to measure.
+ */
+export async function researchSiteAudit(
+  siteUrl: string,
+): Promise<{ audit: ResearchAudit; domain_info: ResearchDomainInfo | null } | null> {
+  const url = normaliseUrl(siteUrl);
+  if (!url) return null;
+  const [homepage, psi, domain] = await Promise.all([
+    firecrawlScrape(url, { html: true }),
+    runPageSpeed(url),
+    lookupDomainInfo(url),
+  ]);
+  const seo = homepage ? analyzeSeo(homepage.html) : { ...EMPTY_SEO };
+  const copyrightYear = homepage
+    ? extractCopyrightYear(homepage.html || homepage.markdown)
+    : 0;
+  const ssl = domain?.ssl ?? url.startsWith("https://");
+  const audit = buildAudit({
+    url,
+    psi,
+    seo,
+    ssl,
+    ageYears: domain?.ageYears ?? 0,
+    copyrightYear,
+  });
+  const domain_info: ResearchDomainInfo | null = domain
+    ? {
+        domain: domain.domain,
+        registered: domain.registered,
+        age_years: domain.ageYears,
+        registrar: domain.registrar,
+        hosting: domain.hosting,
+        ssl: domain.ssl,
+      }
+    : null;
+  return { audit, domain_info };
 }
 
 /** True when research can produce anything beyond the cold-start fallback. */

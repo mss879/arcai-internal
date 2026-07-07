@@ -13,8 +13,12 @@ import "server-only";
 const PSI_URL =
   "https://www.googleapis.com/pagespeedonline/v5/runPagespeed";
 
-/** PSI can take a while (it runs a full Lighthouse pass) — keep it bounded. */
-const TIMEOUT_MS = 26000;
+/**
+ * PSI can take a while (it runs a full Lighthouse pass) — keep it bounded below
+ * the ~26s serverless budget so the on-demand audit action can't be killed
+ * mid-request. With a PAGESPEED_API_KEY it typically returns well inside this.
+ */
+const TIMEOUT_MS = 20000;
 
 /** Normalised Lighthouse result. Category scores are 0-100, or -1 = unknown. */
 export type PageSpeedResult = {

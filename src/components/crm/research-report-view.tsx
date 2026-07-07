@@ -12,6 +12,7 @@ import {
   LayoutGrid,
   Link2,
   Lightbulb,
+  Loader2,
   Mail,
   MapPin,
   MessageCircleQuestion,
@@ -30,6 +31,8 @@ import {
   Wrench,
 } from "lucide-react";
 
+import { toast } from "sonner";
+
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import {
@@ -38,7 +41,66 @@ import {
   type MatchConfidence,
   type ResearchReport,
 } from "@/lib/research-report";
+import {
+  grabLeadBranding,
+  runLeadWebsiteAudit,
+} from "@/app/(app)/crm/research/actions";
 import type { LeadResearch } from "@/lib/types";
+
+/**
+ * Explain WHY a report is basic. Only a truly missing key should tell the user
+ * to add one — a present-but-rejected key, an unavailable model, or a timeout
+ * gets the real reason so they fix the right thing.
+ */
+function basicReportMessage(reason: string): string {
+  if (!reason || reason === "no_key")
+    return "Basic report — add an OpenAI key for full analysis";
+  if (reason === "no_context")
+    return "Basic report — not enough website content was found to analyze";
+  return `AI analysis failed — ${reason}. Re-run to try again.`;
+}
+
+/**
+ * An empty-state card with a button that fetches an on-demand section (branding
+ * / website audit) and attaches it to the report. Kept out of the initial pass
+ * so the first report stays fast + focused on the company; the result lands via
+ * realtime sync + router.refresh once the action commits.
+ */
+function OnDemandCard({
+  icon,
+  title,
+  description,
+  cta,
+  action,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  description: string;
+  cta: string;
+  action: () => Promise<{ ok: boolean; error?: string }>;
+}) {
+  const [pending, startTransition] = React.useTransition();
+  return (
+    <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/60 p-3">
+      <SectionTitle icon={icon}>{title}</SectionTitle>
+      <p className="mt-1.5 text-xs text-slate-500">{description}</p>
+      <button
+        type="button"
+        disabled={pending}
+        onClick={() =>
+          startTransition(async () => {
+            const res = await action();
+            if (!res.ok) toast.error(res.error ?? "Something went wrong.");
+          })
+        }
+        className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 transition hover:border-slate-300 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : icon}
+        {pending ? "Working…" : cta}
+      </button>
+    </div>
+  );
+}
 
 /** Section heading with icon, matching the lead-detail card headings. */
 function SectionTitle({
@@ -100,15 +162,26 @@ function readableOn(color: string): string {
 /** The prospect's visual brand — colour swatches, fonts, logo, personality. */
 function BrandSection({
   brand,
+  researchId,
 }: {
   brand: ResearchReport["brand"];
+  researchId: string;
 }) {
   const has =
     brand.colors.length > 0 ||
     brand.fonts.length > 0 ||
     brand.logo ||
     brand.style_notes;
-  if (!has) return null;
+  if (!has)
+    return (
+      <OnDemandCard
+        icon={<Palette className="h-3.5 w-3.5" />}
+        title="Brand system"
+        description="Pull the site's colours, fonts, logo and design personality."
+        cta="Grab branding"
+        action={() => grabLeadBranding(researchId)}
+      />
+    );
 
   return (
     <div className="rounded-xl border border-slate-200/80 bg-white p-3">
@@ -273,11 +346,24 @@ function scoreTone(score: number): { text: string; bar: string; ring: string } {
 function ScorecardSection({
   audit,
   domain,
+  researchId,
 }: {
   audit: ResearchReport["audit"];
   domain: ResearchReport["domain_info"];
+  researchId: string;
 }) {
-  if (!audit && !domain) return null;
+  // Audit + domain facts are fetched together on demand; show the button until
+  // they exist.
+  if (!audit)
+    return (
+      <OnDemandCard
+        icon={<Gauge className="h-3.5 w-3.5" />}
+        title="Website scorecard"
+        description="Run a mobile performance + SEO + domain audit — the agency's pitch fuel."
+        cta="Run website audit"
+        action={() => runLeadWebsiteAudit(researchId)}
+      />
+    );
 
   return (
     <div className="rounded-xl border border-slate-200/80 bg-white p-3">
@@ -298,12 +384,22 @@ function ScorecardSection({
               {audit.overall}
             </div>
             <div className="min-w-0">
-              <p className="text-sm font-semibold text-slate-800">
-                {audit.overall >= 80
-                  ? "Solid site"
-                  : audit.overall >= 50
-                    ? "Needs work"
-                    : "Big opportunity"}
+              <p className="flex flex-wrap items-center gap-1.5 text-sm font-semibold text-slate-800">
+                {audit.overall >= 85
+                  ? "Strong"
+                  : audit.overall >= 70
+                    ? "Decent"
+                    : audit.overall >= 50
+                      ? "Needs work"
+                      : "Big opportunity"}
+                {audit.measured === "limited" && (
+                  <span
+                    className="rounded-md bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700"
+                    title="Google PageSpeed didn't run, so performance & accessibility weren't measured — the score is capped."
+                  >
+                    Limited audit
+                  </span>
+                )}
               </p>
               {audit.measured_url && (
                 <a
@@ -676,7 +772,7 @@ export function ResearchReportView({
         )}
         {report.generated_by === "basic" && (
           <Badge className="block max-w-full whitespace-normal bg-amber-50 text-amber-700 ring-amber-200">
-            Basic report — add an OpenAI key for full analysis
+            {basicReportMessage(report.basic_reason)}
           </Badge>
         )}
       </div>
@@ -707,7 +803,11 @@ export function ResearchReportView({
       )}
 
       {/* Website scorecard — the agency's core pitch fuel */}
-      <ScorecardSection audit={report.audit} domain={report.domain_info} />
+      <ScorecardSection
+        audit={report.audit}
+        domain={report.domain_info}
+        researchId={research.id}
+      />
 
       {/* Reputation — Google/online rating + themes */}
       <ReputationSection reputation={report.reputation} />
@@ -717,7 +817,7 @@ export function ResearchReportView({
       <KeyPeopleSection people={report.key_people} />
 
       {/* Brand system — the agency-facing highlight */}
-      <BrandSection brand={report.brand} />
+      <BrandSection brand={report.brand} researchId={research.id} />
 
       {/* Social profiles */}
       {report.social_links.length > 0 && (

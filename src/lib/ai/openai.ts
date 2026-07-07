@@ -30,6 +30,16 @@ export function isOpenAIConfigured(): boolean {
   return Boolean(process.env.OPENAI_API_KEY);
 }
 
+/**
+ * Reasoning models (o-series + GPT-5 family) behave differently on the Chat
+ * Completions API: they REJECT `temperature`/`top_p` (400 error) and take an
+ * optional `reasoning_effort` instead. Detect them by name so the caller can't
+ * accidentally send a param that fails the whole request.
+ */
+export function isReasoningModel(model: string): boolean {
+  return /^(o\d|gpt-5)/i.test(model.trim());
+}
+
 function apiKey(): string {
   const key = process.env.OPENAI_API_KEY;
   if (!key) throw new Error("OPENAI_API_KEY is not set.");
@@ -102,8 +112,16 @@ export async function openaiChat(
  */
 export async function openaiChatJSON(
   messages: ChatMessage[],
-  opts?: { temperature?: number; model?: string; timeoutMs?: number },
+  opts?: {
+    temperature?: number;
+    model?: string;
+    timeoutMs?: number;
+    /** Only used by reasoning models: minimal | low | medium | high | xhigh. */
+    reasoningEffort?: string;
+  },
 ): Promise<string> {
+  const model = opts?.model || AI_MODELS.chat;
+  const reasoning = isReasoningModel(model);
   const res = await fetch(`${BASE_URL}/chat/completions`, {
     method: "POST",
     headers: {
@@ -114,10 +132,13 @@ export async function openaiChatJSON(
       ? { signal: AbortSignal.timeout(opts.timeoutMs) }
       : {}),
     body: JSON.stringify({
-      model: opts?.model || AI_MODELS.chat,
+      model,
       messages,
-      temperature: opts?.temperature ?? 0.6,
       response_format: { type: "json_object" },
+      // Reasoning models reject temperature; they take reasoning_effort instead.
+      ...(reasoning
+        ? { reasoning_effort: opts?.reasoningEffort || "medium" }
+        : { temperature: opts?.temperature ?? 0.6 }),
     }),
   });
 

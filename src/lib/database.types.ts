@@ -144,6 +144,7 @@ export type LeadResearchStatus =
   | "discovered"
   | "analyzed"
   | "audited"
+  | "synthesizing"
   | "done"
   | "error";
 

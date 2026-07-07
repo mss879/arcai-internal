@@ -66,14 +66,32 @@ const handler = async (req: Request): Promise<Response> => {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   const openaiKey = process.env.OPENAI_API_KEY;
-  if (!supabaseUrl || !serviceKey || !openaiKey) {
-    console.error("[research-synth] missing Supabase or OpenAI env");
-    return new Response("Not configured", { status: 500 });
+
+  // Without Supabase creds we can't even record an error on the row — bail.
+  // (These being present in the FUNCTION runtime is itself the thing to verify
+  // in Netlify: env vars must be scoped to Functions/Runtime, not just Builds.)
+  if (!supabaseUrl || !serviceKey) {
+    console.error(
+      "[research-synth] missing NEXT_PUBLIC_SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY in the function runtime",
+    );
+    return new Response("Not configured (supabase)", { status: 500 });
   }
 
   const supabase = createClient<Database>(supabaseUrl, serviceKey, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
+
+  // Missing OpenAI key is the #1 hosted-only failure. RECORD it on the row so
+  // the UI shows a real reason and the tick finalizes to a basic report —
+  // instead of the report hanging silently until the 22-minute give-up.
+  if (!openaiKey) {
+    console.error("[research-synth] missing OPENAI_API_KEY in the function runtime");
+    await mergeAnalysis(supabase, id, {
+      aiError:
+        "Synthesis worker is missing OPENAI_API_KEY in the Netlify Functions runtime. In Site configuration → Environment variables, add OPENAI_API_KEY and ensure its scope includes Functions (not Builds-only), then redeploy.",
+    });
+    return new Response("Not configured (openai)", { status: 200 });
+  }
 
   const { data: row } = await supabase
     .from("lead_research")

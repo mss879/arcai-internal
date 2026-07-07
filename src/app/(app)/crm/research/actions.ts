@@ -101,9 +101,16 @@ export async function grabLeadBranding(
   if (!website)
     return { ok: false, error: "This report has no website to read branding from." };
 
-  const brand = await researchBranding(website);
-  if (!brand)
-    return { ok: false, error: "Couldn't read the site's branding. Try again." };
+  const result = await researchBranding(website);
+  if (!result.ok)
+    return {
+      ok: false,
+      error:
+        result.reason === "empty"
+          ? "Reached the site, but it exposes no brand system we could read (no colours or fonts detected)."
+          : "Couldn't read the site's branding — it may be slow to load or blocking automated scans. Give it a moment and try again.",
+    };
+  const brand = result.brand;
 
   const { error } = await supabase
     .from("lead_research")

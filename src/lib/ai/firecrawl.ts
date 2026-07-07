@@ -24,9 +24,18 @@ const BASE_URL =
 const SCRAPE_TIMEOUT_MS = 8000;
 /** Hard client-side abort so a hung connection can never stall a run. */
 const FETCH_TIMEOUT_MS = 13000;
-/** Branding extraction runs an LLM on Firecrawl's side — give it longer, but
- *  kept under the serverless step budget so a brand scrape fits one tick. */
-const BRAND_FETCH_TIMEOUT_MS = 18000;
+/**
+ * Branding extraction runs an LLM over the page on Firecrawl's side, and the
+ * prospect homepages we scan are typically slow small-business sites (heavy
+ * WordPress/Wix on shared hosting, far from Firecrawl's servers) — real ones
+ * take 15-20s to load and process. The old 15s page budget made Firecrawl 408
+ * on any such site (that's the "Couldn't read the site's branding" error), so
+ * give the page load real room. Kept under Netlify's ~26s synchronous-function
+ * cap (the CRM pages raise `maxDuration` to match) so the action still returns
+ * a clean error rather than being killed by the platform.
+ */
+const BRAND_SCRAPE_TIMEOUT_MS = 20000; // Firecrawl page-load budget for a brand pass
+const BRAND_FETCH_TIMEOUT_MS = 24000; // client abort — > load + LLM extraction, < platform cap
 
 /** True when a Firecrawl key is configured. */
 export function isFirecrawlConfigured(): boolean {
@@ -201,7 +210,7 @@ export async function firecrawlScrape(
         url,
         formats,
         onlyMainContent: true,
-        timeout: opts?.brand ? BRAND_FETCH_TIMEOUT_MS - 3000 : SCRAPE_TIMEOUT_MS,
+        timeout: opts?.brand ? BRAND_SCRAPE_TIMEOUT_MS : SCRAPE_TIMEOUT_MS,
       }),
     });
   } catch (e) {

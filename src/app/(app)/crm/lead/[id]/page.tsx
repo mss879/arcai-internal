@@ -17,6 +17,14 @@ import { LeadDetail } from "./lead-detail";
 
 export const metadata = { title: "Lead" };
 
+/**
+ * The lead's "Grab branding" / "Run website audit" buttons call server actions
+ * that do synchronous Firecrawl scrapes (a brand pass can take ~20s on a slow
+ * prospect site). Lift the action timeout above the platform's ~10s default so
+ * the scan has room to finish; Netlify clamps this to the account's max.
+ */
+export const maxDuration = 60;
+
 export default async function LeadPage({
   params,
 }: {

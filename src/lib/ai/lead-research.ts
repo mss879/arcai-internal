@@ -1348,20 +1348,31 @@ export async function synthesize(
  * spacing/personality via Firecrawl's branding pass). Returns null when the
  * site is unreachable or shows no discernible branding.
  */
+/**
+ * Why a branding pass produced no brand — lets the UI tell the user whether
+ * retrying is worth it: `unreachable` means the scan failed/timed out (slow or
+ * bot-blocking site — a retry may work), `empty` means the scan succeeded but
+ * the site exposes no discernible brand system (a retry won't change that).
+ */
+export type BrandingOutcome =
+  | { ok: true; brand: ResearchBrand }
+  | { ok: false; reason: "unreachable" | "empty" };
+
 export async function researchBranding(
   siteUrl: string,
-): Promise<ResearchBrand | null> {
+): Promise<BrandingOutcome> {
   const url = normaliseUrl(siteUrl);
-  if (!url || !isFirecrawlConfigured()) return null;
+  if (!url || !isFirecrawlConfigured())
+    return { ok: false, reason: "unreachable" };
   const page = await firecrawlScrape(url, { brand: true });
-  if (!page) return null;
+  if (!page) return { ok: false, reason: "unreachable" };
   const brand = normaliseBrand(page.branding);
   const hasBrand =
     brand.colors.length > 0 ||
     brand.fonts.length > 0 ||
     Boolean(brand.logo) ||
     Boolean(brand.style_notes);
-  return hasBrand ? brand : null;
+  return hasBrand ? { ok: true, brand } : { ok: false, reason: "empty" };
 }
 
 /**

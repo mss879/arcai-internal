@@ -54,25 +54,37 @@ const handler = async (req: Request): Promise<Response> => {
     if (provided !== secret) return new Response("Unauthorized", { status: 401 });
   }
 
-  let id = "";
+  let body: {
+    id?: unknown;
+    supabaseUrl?: unknown;
+    serviceKey?: unknown;
+    openaiKey?: unknown;
+  } = {};
   try {
-    const body = (await req.json()) as { id?: unknown };
-    id = typeof body.id === "string" ? body.id : "";
+    body = (await req.json()) as typeof body;
   } catch {
     // no/invalid body — handled below
   }
+  const id = typeof body.id === "string" ? body.id : "";
   if (!id) return new Response("Missing id", { status: 400 });
 
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  const openaiKey = process.env.OPENAI_API_KEY;
+  // Prefer creds passed by the app; fall back to our own env. This function is
+  // bundled by esbuild (NOT Next), so `NEXT_PUBLIC_*` is never inlined and
+  // reading it from our own runtime env is unreliable — historically it came
+  // back empty, which made this worker bail below BEFORE it could record
+  // anything, so hosted synthesis hung silently. The app (Next server runtime)
+  // always has these, so it now hands them over in the request body.
+  const pick = (v: unknown, envVal: string | undefined) =>
+    (typeof v === "string" && v.trim() ? v.trim() : envVal) || "";
+  const supabaseUrl = pick(body.supabaseUrl, process.env.NEXT_PUBLIC_SUPABASE_URL);
+  const serviceKey = pick(body.serviceKey, process.env.SUPABASE_SERVICE_ROLE_KEY);
+  const openaiKey = pick(body.openaiKey, process.env.OPENAI_API_KEY);
 
-  // Without Supabase creds we can't even record an error on the row — bail.
-  // (These being present in the FUNCTION runtime is itself the thing to verify
-  // in Netlify: env vars must be scoped to Functions/Runtime, not just Builds.)
+  // Only reachable if the app sent no creds AND our own env also lacks them —
+  // then we genuinely cannot connect to record an error. Log loudly.
   if (!supabaseUrl || !serviceKey) {
     console.error(
-      "[research-synth] missing NEXT_PUBLIC_SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY in the function runtime",
+      "[research-synth] no Supabase creds from request body or function env — cannot record status",
     );
     return new Response("Not configured (supabase)", { status: 500 });
   }
@@ -85,10 +97,10 @@ const handler = async (req: Request): Promise<Response> => {
   // the UI shows a real reason and the tick finalizes to a basic report —
   // instead of the report hanging silently until the 22-minute give-up.
   if (!openaiKey) {
-    console.error("[research-synth] missing OPENAI_API_KEY in the function runtime");
+    console.error("[research-synth] no OPENAI_API_KEY from request body or env");
     await mergeAnalysis(supabase, id, {
       aiError:
-        "Synthesis worker is missing OPENAI_API_KEY in the Netlify Functions runtime. In Site configuration → Environment variables, add OPENAI_API_KEY and ensure its scope includes Functions (not Builds-only), then redeploy.",
+        "The AI key (OPENAI_API_KEY) wasn't available when writing the report. Add OPENAI_API_KEY in Netlify → Site configuration → Environment variables and redeploy.",
     });
     return new Response("Not configured (openai)", { status: 200 });
   }

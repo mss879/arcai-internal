@@ -58,7 +58,20 @@ async function triggerSynthWorker(rowId: string): Promise<boolean> {
           "content-type": "application/json",
           ...(secret ? { authorization: `Bearer ${secret}` } : {}),
         },
-        body: JSON.stringify({ id: rowId }),
+        // Hand the worker everything it needs. It's a SEPARATE esbuild bundle,
+        // so Next's build-time inlining of NEXT_PUBLIC_* never reaches it and
+        // reading its own process.env is unreliable — that is exactly why hosted
+        // synthesis silently hung: the worker couldn't see NEXT_PUBLIC_SUPABASE_URL
+        // and bailed before it could even record an error. This code runs in the
+        // Next server runtime, which HAS all three (the cron tick uses the service
+        // role key right here), so pass them explicitly — the worker then never
+        // depends on its own env scoping again.
+        body: JSON.stringify({
+          id: rowId,
+          supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL || "",
+          serviceKey: process.env.SUPABASE_SERVICE_ROLE_KEY || "",
+          openaiKey: process.env.OPENAI_API_KEY || "",
+        }),
       },
     );
     return res.ok || res.status === 202;

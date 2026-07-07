@@ -19,7 +19,7 @@ import {
   type ResearchAudit,
   type ResearchDomainInfo,
 } from "@/lib/research-report";
-import { runPageSpeed } from "@/lib/ai/pagespeed";
+import { runPageSpeed, isPageSpeedConfigured } from "@/lib/ai/pagespeed";
 import { lookupDomainInfo } from "@/lib/ai/domain-info";
 import {
   analyzeSeo,
@@ -1404,6 +1404,7 @@ export async function researchSiteAudit(
     ssl,
     ageYears: domain?.ageYears ?? 0,
     copyrightYear,
+    psiConfigured: isPageSpeedConfigured(),
   });
   const domain_info: ResearchDomainInfo | null = domain
     ? {

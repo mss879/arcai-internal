@@ -137,8 +137,11 @@ export function buildAudit(input: {
   /** Domain age in years (0 = unknown). */
   ageYears: number;
   copyrightYear: number;
+  /** Whether a PAGESPEED_API_KEY is set — shapes the "limited audit" message
+   *  so we don't tell the user to add a key they already have. */
+  psiConfigured?: boolean;
 }): ResearchAudit {
-  const { url, psi, seo, ssl, ageYears, copyrightYear } = input;
+  const { url, psi, seo, ssl, ageYears, copyrightYear, psiConfigured } = input;
   const scores: ResearchScore[] = [];
   // Each sub-score carries a WEIGHT so the overall reflects real quality:
   // performance/accessibility dominate; HTTPS/freshness are hygiene, not merit.
@@ -228,7 +231,9 @@ export function buildAudit(input: {
   const issues: string[] = [];
   if (measured === "limited")
     issues.push(
-      "Performance & accessibility couldn't be measured (PageSpeed didn't respond) — add a PAGESPEED_API_KEY for a full, accurate audit.",
+      psiConfigured
+        ? "Performance & accessibility couldn't be measured — PageSpeed didn't finish in time on this (heavy) site. The rest of the scorecard is accurate; re-run to try the speed test again."
+        : "Performance & accessibility couldn't be measured — add a PAGESPEED_API_KEY for a full, accurate audit.",
     );
   if (!ssl)
     issues.push("No HTTPS — the site isn't secure and browsers warn visitors.");

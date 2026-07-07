@@ -14,11 +14,17 @@ const PSI_URL =
   "https://www.googleapis.com/pagespeedonline/v5/runPagespeed";
 
 /**
- * PSI can take a while (it runs a full Lighthouse pass) — keep it bounded below
- * the ~26s serverless budget so the on-demand audit action can't be killed
- * mid-request. With a PAGESPEED_API_KEY it typically returns well inside this.
+ * PSI runs a FULL mobile Lighthouse pass and routinely takes 30-50s on heavy
+ * (WordPress/LiteSpeed) prospect sites — the old 20s abort was the real reason
+ * the audit kept coming back "limited" even with a valid key.
+ *
+ * Locally there's no function cap, so give it real room (a slow site is worth
+ * the wait for accurate performance/accessibility numbers). On Netlify the
+ * synchronous audit action is bounded by the ~26s function budget, so keep the
+ * PSI call under that: a still-slower site degrades to a "limited" audit rather
+ * than getting the whole function killed mid-request.
  */
-const TIMEOUT_MS = 20000;
+const TIMEOUT_MS = process.env.NETLIFY ? 23000 : 60000;
 
 /** Normalised Lighthouse result. Category scores are 0-100, or -1 = unknown. */
 export type PageSpeedResult = {

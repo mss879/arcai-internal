@@ -53,7 +53,10 @@ import type {
   Quote,
 } from "@/lib/types";
 import { ResearchReportView } from "@/components/crm/research-report-view";
-import { ResearchProgress } from "@/components/crm/research-progress";
+import {
+  ResearchProgress,
+  researchStartedAt,
+} from "@/components/crm/research-progress";
 import { requestLeadResearch } from "../../research/actions";
 import { useDriveResearch } from "../../research/use-drive-research";
 
@@ -647,6 +650,7 @@ function ResearchCard({
       {research && running && status !== "done" && (
         <ResearchProgress
           status={status ?? "pending"}
+          startedAt={researchStartedAt(research)}
           className="mt-3"
         />
       )}

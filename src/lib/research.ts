@@ -91,8 +91,11 @@ export async function queueLeadResearch(
           company_name: company,
           status: "pending",
           error: null,
-          // Reset the pipeline on re-queue so a re-run starts clean.
-          analysis: {},
+          // Reset the pipeline on re-queue so a re-run starts clean. `runStartedAt`
+          // (epoch ms) anchors the UI's elapsed timer to when THIS run began, so
+          // it measures the real duration and survives page refreshes — a re-queue
+          // resets it, which is exactly right for a re-run.
+          analysis: { runStartedAt: Date.now() },
           locked_at: null,
           ...(opts.requestedBy ? { requested_by: opts.requestedBy } : {}),
         },
@@ -230,12 +233,29 @@ export async function advanceResearchRow(
   const token = row.locked_at;
   if (!token) return "skipped"; // we just set it; guards the type + a freak null
 
+  // The run-start stamp is set once at queue time; carry it across each step so
+  // the UI's elapsed timer stays anchored to the real start (every step below
+  // replaces `analysis` wholesale, which would otherwise drop it).
+  const runStartedAt = (
+    row.analysis as unknown as { runStartedAt?: unknown } | null
+  )?.runStartedAt;
+
   // Persist a step result only while we still own the lease; throw on a real
   // DB error so the catch marks the row errored (a fenced-out no-op is fine).
   const commit = async (patch: Record<string, unknown>) => {
+    const merged =
+      patch.analysis && typeof patch.analysis === "object" && runStartedAt != null
+        ? {
+            ...patch,
+            analysis: {
+              ...(patch.analysis as Record<string, unknown>),
+              runStartedAt,
+            },
+          }
+        : patch;
     const { error } = await supabase
       .from("lead_research")
-      .update({ ...patch, locked_at: null })
+      .update({ ...merged, locked_at: null })
       .eq("id", rowId)
       .eq("locked_at", token);
     if (error) throw new Error(error.message);

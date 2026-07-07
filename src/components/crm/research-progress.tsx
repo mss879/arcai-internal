@@ -6,15 +6,28 @@ import { cn } from "@/lib/utils";
 import type { LeadResearch } from "@/lib/types";
 
 /**
+ * The run-start epoch-ms stamped on the row at queue time (`analysis.runStartedAt`),
+ * or null for older in-flight rows that predate it. Lets the timer show the REAL
+ * elapsed time and survive refreshes rather than restarting from the mount.
+ */
+export function researchStartedAt(
+  research: { analysis?: unknown } | null | undefined,
+): number | null {
+  const a = research?.analysis as { runStartedAt?: unknown } | null | undefined;
+  return typeof a?.runStartedAt === "number" ? a.runStartedAt : null;
+}
+
+/**
  * Live progress for an in-progress research report: the current phase, a filling
  * bar, and a ticking elapsed timer — so it's obvious the run is working (and
  * roughly how far along it is), not silently stuck. Render only while the row is
  * NOT done/error.
  *
  * The pipeline is pending/running → discovered → analyzed → synthesizing → done;
- * we collapse that to three human phases. The timer counts from when this client
- * first showed the card, so it resets on reload — that's fine, its job is to show
- * the run is alive, not to be an authoritative stopwatch.
+ * we collapse that to three human phases. The timer counts from `startedAt` (the
+ * server-stored run start) so it shows the REAL elapsed time and survives
+ * refreshes; it only falls back to the mount time for older rows that have no
+ * stored start.
  */
 const PHASES: { label: string; pct: number }[] = [
   { label: "Scanning the web & the company's site", pct: 22 },
@@ -35,21 +48,26 @@ function fmtElapsed(ms: number): string {
 
 export function ResearchProgress({
   status,
+  startedAt = null,
   className,
 }: {
   status: LeadResearch["status"];
+  /** Server-stored run start (epoch ms). Null → fall back to the mount time. */
+  startedAt?: number | null;
   className?: string;
 }) {
   // Elapsed starts at 0 so the first paint is "0:00" on both server and client
-  // (no hydration mismatch); the clock starts and ticks from inside the effect,
-  // keeping render pure (no Date.now()/ref reads during render).
+  // (no hydration mismatch); the effect then anchors to the stored run start and
+  // ticks. Keeping Date.now() out of render satisfies the repo's purity rules.
   const [elapsed, setElapsed] = React.useState(0);
 
   React.useEffect(() => {
-    const start = Date.now();
-    const id = setInterval(() => setElapsed(Date.now() - start), 1000);
+    const start = startedAt ?? Date.now();
+    const update = () => setElapsed(Math.max(0, Date.now() - start));
+    update(); // correct immediately (e.g. to 0:47 on a refresh), no 0:00 flash
+    const id = setInterval(update, 1000);
     return () => clearInterval(id);
-  }, []);
+  }, [startedAt]);
 
   const phase = phaseFor(status);
   const { label, pct } = PHASES[phase];

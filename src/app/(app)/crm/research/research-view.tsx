@@ -20,7 +20,10 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { ResearchReportView } from "@/components/crm/research-report-view";
-import { ResearchProgress } from "@/components/crm/research-progress";
+import {
+  ResearchProgress,
+  researchStartedAt,
+} from "@/components/crm/research-progress";
 import { useRealtimeSyncTables } from "@/hooks/use-realtime-sync";
 import { cn } from "@/lib/utils";
 import type { LeadResearch } from "@/lib/types";
@@ -231,7 +234,10 @@ function ResearchRowCard({
 
       {inProgress && (
         <div className="border-t border-slate-100 px-4 pb-4 pt-3">
-          <ResearchProgress status={row.status} />
+          <ResearchProgress
+            status={row.status}
+            startedAt={researchStartedAt(row)}
+          />
         </div>
       )}
 

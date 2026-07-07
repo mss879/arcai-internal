@@ -167,11 +167,11 @@ function BrandSection({
   brand: ResearchReport["brand"];
   researchId: string;
 }) {
+  // Branding is on-demand: only a real brand SCAN (colours / fonts / logo) counts
+  // as "present". Style notes alone don't — otherwise the model's written read
+  // would hide the button and render a brand section with no colours or logo.
   const has =
-    brand.colors.length > 0 ||
-    brand.fonts.length > 0 ||
-    brand.logo ||
-    brand.style_notes;
+    brand.colors.length > 0 || brand.fonts.length > 0 || Boolean(brand.logo);
   if (!has)
     return (
       <OnDemandCard

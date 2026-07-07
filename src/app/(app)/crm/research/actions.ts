@@ -4,7 +4,11 @@ import { revalidatePath } from "next/cache";
 import { after } from "next/server";
 
 import { createClient } from "@/lib/supabase/server";
-import { queueLeadResearch, drainResearchRow } from "@/lib/research";
+import {
+  queueLeadResearch,
+  drainResearchRow,
+  processPendingResearch,
+} from "@/lib/research";
 import {
   isResearchConfigured,
   researchBranding,
@@ -75,6 +79,36 @@ export async function requestLeadResearch(
 }
 
 /**
+ * Advance any in-progress research by one pipeline step. Research is a multi-step
+ * job (discover → analyze → synthesize); in production a Netlify scheduled
+ * function ticks every minute to move it forward, but LOCAL DEV has no such cron,
+ * so a report can stall after the initial in-process pass — e.g. if the dev
+ * server restarts mid-run, the orphaned row has nothing to resume it.
+ *
+ * The research + lead pages poll this while a report is in progress (see
+ * `useDriveResearch`), which both drives new reports to completion and resumes
+ * any row left mid-flight. Scoped to research only (not the full automation
+ * tick), so it can't stall on unrelated SMS/finance work. Safe to call
+ * concurrently with the inline pass — every step is lease-fenced.
+ */
+export async function advanceResearch(): Promise<{ ok: boolean }> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false };
+
+  try {
+    await processPendingResearch(supabase, 4);
+    return { ok: true };
+  } catch {
+    // Best-effort: the next poll retries. Never surface a throw to the client
+    // (that would render as an "unexpected response" runtime error).
+    return { ok: false };
+  }
+}
+
+/**
  * On-demand: fetch the prospect's brand system (colours/fonts/logo/personality)
  * and attach it to an existing report. Kept OUT of the initial research so the
  * first pass is fast and about the company — the report UI shows a "Grab
@@ -101,22 +135,33 @@ export async function grabLeadBranding(
   if (!website)
     return { ok: false, error: "This report has no website to read branding from." };
 
-  const result = await researchBranding(website);
-  if (!result.ok)
+  try {
+    const result = await researchBranding(website);
+    if (!result.ok)
+      return {
+        ok: false,
+        error:
+          result.reason === "empty"
+            ? "Reached the site, but it exposes no brand system we could read (no colours or fonts detected)."
+            : "Couldn't read the site's branding — it may be slow to load or blocking automated scans. Give it a moment and try again.",
+      };
+    const brand = result.brand;
+
+    const { error } = await supabase
+      .from("lead_research")
+      .update({ report: { ...report, brand } })
+      .eq("id", researchId);
+    if (error) return { ok: false, error: error.message };
+  } catch (e) {
+    // Never let a scrape/network throw bubble out as an "unexpected response".
     return {
       ok: false,
       error:
-        result.reason === "empty"
-          ? "Reached the site, but it exposes no brand system we could read (no colours or fonts detected)."
-          : "Couldn't read the site's branding — it may be slow to load or blocking automated scans. Give it a moment and try again.",
+        e instanceof Error
+          ? `Branding scan failed: ${e.message}`
+          : "Branding scan failed. Try again.",
     };
-  const brand = result.brand;
-
-  const { error } = await supabase
-    .from("lead_research")
-    .update({ report: { ...report, brand } })
-    .eq("id", researchId);
-  if (error) return { ok: false, error: error.message };
+  }
 
   if (row.lead_id) revalidatePath(`/crm/lead/${row.lead_id}`);
   revalidatePath("/crm/research");
@@ -149,21 +194,31 @@ export async function runLeadWebsiteAudit(
   if (!website)
     return { ok: false, error: "This report has no website to audit." };
 
-  const result = await researchSiteAudit(website);
-  if (!result)
-    return { ok: false, error: "Couldn't audit the site. Try again." };
+  try {
+    const result = await researchSiteAudit(website);
+    if (!result)
+      return { ok: false, error: "Couldn't audit the site. Try again." };
 
-  const { error } = await supabase
-    .from("lead_research")
-    .update({
-      report: {
-        ...report,
-        audit: result.audit,
-        domain_info: result.domain_info,
-      },
-    })
-    .eq("id", researchId);
-  if (error) return { ok: false, error: error.message };
+    const { error } = await supabase
+      .from("lead_research")
+      .update({
+        report: {
+          ...report,
+          audit: result.audit,
+          domain_info: result.domain_info,
+        },
+      })
+      .eq("id", researchId);
+    if (error) return { ok: false, error: error.message };
+  } catch (e) {
+    return {
+      ok: false,
+      error:
+        e instanceof Error
+          ? `Website audit failed: ${e.message}`
+          : "Website audit failed. Try again.",
+    };
+  }
 
   if (row.lead_id) revalidatePath(`/crm/lead/${row.lead_id}`);
   revalidatePath("/crm/research");

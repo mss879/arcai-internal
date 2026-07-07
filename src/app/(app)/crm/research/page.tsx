@@ -13,8 +13,17 @@ export const metadata = { title: "Prospect Research" };
  */
 export const maxDuration = 60;
 
-export default async function ResearchPage() {
-  const supabase = await createClient();
+export default async function ResearchPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ lead?: string }>;
+}) {
+  // `?lead=<id>` (from a lead's "Open the full research view" link) auto-opens
+  // that lead's report.
+  const [supabase, { lead: initialLeadId }] = await Promise.all([
+    createClient(),
+    searchParams,
+  ]);
 
   // The FK join is resolved by PostgREST from the real DB constraint; the
   // hand-authored types model no relationships, so we cast (as the lead
@@ -27,5 +36,11 @@ export default async function ResearchPage() {
 
   const rows = (data ?? []) as unknown as ResearchRow[];
 
-  return <ResearchView rows={rows} configured={isResearchConfigured()} />;
+  return (
+    <ResearchView
+      rows={rows}
+      configured={isResearchConfigured()}
+      initialLeadId={initialLeadId ?? null}
+    />
+  );
 }

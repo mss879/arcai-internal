@@ -1175,11 +1175,13 @@ function assembleReport(
   basicReason?: string,
 ): ResearchReport {
   const web = obj(ai?.web_presence);
-  const brand: ResearchBrand = {
-    ...analysis.brand,
-    // Prefer the AI's read of style if the branding scan didn't provide one.
-    style_notes: analysis.brand.style_notes || str(ai?.brand_style_notes),
-  };
+  // Branding (colours / fonts / logo / personality) is a DELIBERATELY on-demand
+  // step — it's fetched only when the user clicks "Grab branding", never in the
+  // initial report. So keep the report's brand exactly as the pipeline has it
+  // (empty here). We do NOT fold in the model's written `brand_style_notes`:
+  // that would make an unbranded report look "branded" and hide the button,
+  // showing a brand section with no colours or logo.
+  const brand: ResearchBrand = analysis.brand;
 
   const modelConfidence: MatchConfidence =
     ai?.match_confidence === "high" || ai?.match_confidence === "medium" || ai?.match_confidence === "low"

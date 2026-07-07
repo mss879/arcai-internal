@@ -169,7 +169,13 @@ export async function firecrawlSearch(
     return [];
   }
 
-  const json = await res.json();
+  let json: { data?: Record<string, unknown> } | null;
+  try {
+    json = await res.json();
+  } catch (e) {
+    console.error(`[firecrawl] search: bad JSON — ${e instanceof Error ? e.message : e}`);
+    return [];
+  }
   // v2 keys results by source type: { data: { web: [...], news: [...] } }
   const data = (json?.data ?? {}) as Record<string, unknown>;
   const raw: RawResult[] = [
@@ -223,7 +229,13 @@ export async function firecrawlScrape(
     return null;
   }
 
-  const json = await res.json();
+  let json: { data?: RawResult } | null;
+  try {
+    json = await res.json();
+  } catch (e) {
+    console.error(`[firecrawl] scrape: bad JSON — ${e instanceof Error ? e.message : e}`);
+    return null;
+  }
   const data = (json?.data ?? {}) as RawResult;
   return normalise({ ...data, url: data.metadata?.sourceURL || url });
 }
@@ -262,7 +274,13 @@ export async function firecrawlMap(
     return [];
   }
 
-  const json = await res.json();
+  let json: { links?: unknown } | null;
+  try {
+    json = await res.json();
+  } catch (e) {
+    console.error(`[firecrawl] map: bad JSON — ${e instanceof Error ? e.message : e}`);
+    return [];
+  }
   const links = Array.isArray(json?.links) ? json.links : [];
   return links
     .map((l: unknown) => {

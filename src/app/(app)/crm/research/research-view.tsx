@@ -20,11 +20,13 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { ResearchReportView } from "@/components/crm/research-report-view";
+import { ResearchProgress } from "@/components/crm/research-progress";
 import { useRealtimeSyncTables } from "@/hooks/use-realtime-sync";
 import { cn } from "@/lib/utils";
 import type { LeadResearch } from "@/lib/types";
 
 import { requestLeadResearch, deleteLeadResearch } from "./actions";
+import { useDriveResearch } from "./use-drive-research";
 
 export type ResearchRow = LeadResearch & {
   lead: { id: string; title: string; company: string | null } | null;
@@ -48,11 +50,19 @@ const STATUS_META: Record<
 export function ResearchView({
   rows,
   configured,
+  initialLeadId = null,
 }: {
   rows: ResearchRow[];
   configured: boolean;
+  /** From `?lead=<id>` — auto-opens that lead's report on load. */
+  initialLeadId?: string | null;
 }) {
   useRealtimeSyncTables(["lead_research"]);
+  // Drive any in-progress report to completion while this page is open (local
+  // dev has no per-minute cron; production also benefits as a faster nudge).
+  useDriveResearch(
+    rows.some((r) => r.status !== "done" && r.status !== "error"),
+  );
   const router = useRouter();
 
   return (
@@ -93,7 +103,15 @@ export function ResearchView({
       ) : (
         <div className="space-y-3">
           {rows.map((row) => (
-            <ResearchRowCard key={row.id} row={row} />
+            <ResearchRowCard
+              key={row.id}
+              row={row}
+              defaultOpen={
+                !!initialLeadId &&
+                row.lead?.id === initialLeadId &&
+                row.status === "done"
+              }
+            />
           ))}
         </div>
       )}
@@ -101,9 +119,15 @@ export function ResearchView({
   );
 }
 
-function ResearchRowCard({ row }: { row: ResearchRow }) {
+function ResearchRowCard({
+  row,
+  defaultOpen = false,
+}: {
+  row: ResearchRow;
+  defaultOpen?: boolean;
+}) {
   const router = useRouter();
-  const [open, setOpen] = React.useState(false);
+  const [open, setOpen] = React.useState(defaultOpen);
   const [busy, setBusy] = React.useState<"run" | "delete" | null>(null);
   const [confirmDelete, setConfirmDelete] = React.useState(false);
 
@@ -204,6 +228,12 @@ function ResearchRowCard({ row }: { row: ResearchRow }) {
           </button>
         </div>
       </div>
+
+      {inProgress && (
+        <div className="border-t border-slate-100 px-4 pb-4 pt-3">
+          <ResearchProgress status={row.status} />
+        </div>
+      )}
 
       {row.status === "error" && (
         <p className="border-t border-slate-100 bg-rose-50/50 px-4 py-2.5 text-sm text-rose-600">

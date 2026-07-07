@@ -7,6 +7,7 @@ import { formatDistanceToNow } from "date-fns";
 import { toast } from "sonner";
 import {
   ArrowLeft,
+  ArrowRight,
   Bot,
   Building2,
   CalendarPlus,
@@ -52,7 +53,9 @@ import type {
   Quote,
 } from "@/lib/types";
 import { ResearchReportView } from "@/components/crm/research-report-view";
+import { ResearchProgress } from "@/components/crm/research-progress";
 import { requestLeadResearch } from "../../research/actions";
+import { useDriveResearch } from "../../research/use-drive-research";
 
 import {
   addLeadActivity,
@@ -581,14 +584,9 @@ function ResearchCard({
   const running =
     busy || (!!status && status !== "done" && status !== "error");
   const hasCompany = Boolean(lead.company?.trim());
-  const stepLabel =
-    status === "discovered"
-      ? "Reading the website & mapping its pages…"
-      : status === "analyzed"
-        ? "Sizing up competitors & services…"
-        : status === "synthesizing" || status === "audited"
-          ? "Writing the dossier (deep AI analysis)…"
-          : `Researching ${research?.company_name ?? "the company"}…`;
+  // Keep the pipeline moving while this card shows an in-progress report — the
+  // parent already subscribes to lead_research realtime for the status flip.
+  useDriveResearch(!!status && status !== "done" && status !== "error");
 
   async function run() {
     setBusy(true);
@@ -645,12 +643,12 @@ function ResearchCard({
         </div>
       )}
 
-      {/* Queued / in progress */}
+      {/* Queued / in progress — live phase + elapsed timer */}
       {research && running && status !== "done" && (
-        <div className="mt-3 flex items-center gap-2 rounded-xl bg-slate-50 px-3 py-2.5 text-sm text-slate-500">
-          <span className="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-slate-300 border-t-primary-500" />
-          {stepLabel}
-        </div>
+        <ResearchProgress
+          status={status ?? "pending"}
+          className="mt-3"
+        />
       )}
 
       {/* Failed */}
@@ -662,7 +660,17 @@ function ResearchCard({
 
       {/* Done */}
       {research && status === "done" && (
-        <div className="mt-3">
+        <div className="mt-3 space-y-3">
+          <Link
+            href={`/crm/research?lead=${lead.id}`}
+            className="flex items-center justify-between gap-2 rounded-xl border border-primary-200 bg-primary-50/60 px-3 py-2 text-sm font-medium text-primary-700 transition hover:bg-primary-50"
+          >
+            <span className="inline-flex items-center gap-1.5">
+              <ScanSearch className="h-4 w-4" />
+              Open the full research view
+            </span>
+            <ArrowRight className="h-4 w-4" />
+          </Link>
           <ResearchReportView research={research} compact />
         </div>
       )}

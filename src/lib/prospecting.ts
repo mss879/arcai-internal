@@ -352,18 +352,28 @@ async function runSearch(supabase: DB, scan: ScanRow): Promise<void> {
   // Enumerate businesses category by category until the cap is met.
   const seen = new Set<string>();
   const businesses: (PlaceBusiness & { category: string })[] = [];
+  let placesError = "";
   if (isPlacesConfigured()) {
     for (const category of categories) {
       if (businesses.length >= scan.max_results) break;
-      const found = await placesSearchAll(
+      const { businesses: found, error } = await placesSearchAll(
         `${category} in ${area}`,
         Math.min(60, scan.max_results - businesses.length),
       );
+      if (error && !placesError) placesError = error;
       for (const b of found) {
         if (seen.has(b.placeId)) continue;
         seen.add(b.placeId);
         businesses.push({ ...b, category });
       }
+    }
+    // An API failure must never masquerade as "this area has no businesses" —
+    // that is exactly what a key that's missing/restricted on the HOST (but
+    // fine locally) looks like. Surface the real reason on the scan instead.
+    if (!businesses.length && placesError) {
+      throw new Error(
+        `Google Places search failed: ${placesError} Check GOOGLE_PLACES_API_KEY in your hosting environment (Netlify → Site configuration → Environment variables — redeploy after changing it) and the key's restrictions in Google Cloud (IP/referrer restrictions block serverless hosts).`,
+      );
     }
   } else {
     // Firecrawl-only fallback: web search can only surface businesses that
@@ -396,6 +406,11 @@ async function runSearch(supabase: DB, scan: ScanRow): Promise<void> {
         });
         if (businesses.length >= scan.max_results) break;
       }
+    }
+    if (!businesses.length) {
+      throw new Error(
+        "Web search found no businesses for this area (GOOGLE_PLACES_API_KEY is not set, so the scan could only use Firecrawl web search — which also can't find businesses that have no website). Add GOOGLE_PLACES_API_KEY to your hosting environment and re-run the scan.",
+      );
     }
   }
 

@@ -79,13 +79,21 @@ export function parsePlacesResponse(json: unknown): {
 /**
  * One text-search page (up to 20 places). Pass the returned nextPageToken to
  * fetch the following page (Google serves at most 3 pages / 60 per query).
+ * `error` carries the failure reason (still never throws) so callers can
+ * distinguish "the area has no businesses" from "the API call failed".
  */
 export async function placesSearchText(
   query: string,
   opts?: { pageToken?: string },
-): Promise<{ businesses: PlaceBusiness[]; nextPageToken: string }> {
+): Promise<{ businesses: PlaceBusiness[]; nextPageToken: string; error?: string }> {
   const key = process.env.GOOGLE_PLACES_API_KEY?.trim();
-  if (!key) return { businesses: [], nextPageToken: "" };
+  if (!key) {
+    return {
+      businesses: [],
+      nextPageToken: "",
+      error: "GOOGLE_PLACES_API_KEY is not set.",
+    };
+  }
 
   try {
     const res = await fetch(PLACES_URL, {
@@ -121,7 +129,11 @@ export async function placesSearchText(
       console.error(
         `[places] searchText HTTP ${res.status}: ${detail.slice(0, 300)}`,
       );
-      return { businesses: [], nextPageToken: "" };
+      return {
+        businesses: [],
+        nextPageToken: "",
+        error: `HTTP ${res.status}${placesErrorHint(detail)}`,
+      };
     }
     return parsePlacesResponse(await res.json().catch(() => null));
   } catch (e) {
@@ -129,24 +141,41 @@ export async function placesSearchText(
       "[places] searchText failed:",
       e instanceof Error ? e.message : e,
     );
-    return { businesses: [], nextPageToken: "" };
+    return {
+      businesses: [],
+      nextPageToken: "",
+      error: e instanceof Error ? e.message : "request failed",
+    };
+  }
+}
+
+/** Pull the human-readable message out of a Places error body, if any. */
+function placesErrorHint(detail: string): string {
+  try {
+    const parsed = JSON.parse(detail) as { error?: { message?: string } };
+    const msg = parsed.error?.message?.trim();
+    return msg ? ` — ${msg.slice(0, 200)}` : "";
+  } catch {
+    return "";
   }
 }
 
 /**
  * All pages for one query, capped at `limit` businesses. "operational only" —
  * closed businesses are dropped here so the pipeline never sees them.
+ * `error` is set when the underlying API call failed (never throws).
  */
 export async function placesSearchAll(
   query: string,
   limit: number,
-): Promise<PlaceBusiness[]> {
+): Promise<{ businesses: PlaceBusiness[]; error?: string }> {
   const out: PlaceBusiness[] = [];
   let pageToken = "";
+  let error: string | undefined;
   for (let page = 0; page < 3 && out.length < limit; page++) {
-    const { businesses, nextPageToken } = await placesSearchText(query, {
-      pageToken: pageToken || undefined,
-    });
+    const { businesses, nextPageToken, error: pageError } =
+      await placesSearchText(query, { pageToken: pageToken || undefined });
+    if (pageError && !error) error = pageError;
     for (const b of businesses) {
       if (b.businessStatus && b.businessStatus !== "OPERATIONAL") continue;
       out.push(b);
@@ -155,5 +184,5 @@ export async function placesSearchAll(
     if (!nextPageToken) break;
     pageToken = nextPageToken;
   }
-  return out;
+  return { businesses: out, error };
 }

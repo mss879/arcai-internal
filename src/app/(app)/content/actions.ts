@@ -19,7 +19,15 @@ import {
   isGeminiConfigured,
   type InlineImage,
 } from "@/lib/ai/gemini";
-import type { ActionResult, ContentGeneration } from "@/lib/types";
+import {
+  processPendingCarousels,
+  startCarouselGeneration,
+} from "@/lib/carousels";
+import type {
+  ActionResult,
+  CarouselSlide,
+  ContentGeneration,
+} from "@/lib/types";
 
 function extFor(mimeType: string): string {
   if (mimeType.includes("jpeg") || mimeType.includes("jpg")) return "jpg";
@@ -251,4 +259,219 @@ export async function deleteGeneration(
 
   revalidatePath("/content");
   return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Carousel planner
+// ---------------------------------------------------------------------------
+
+export type CreateCarouselPostInput = {
+  topic: string;
+  scheduled_for: string;
+  notes: string;
+};
+
+export async function createCarouselPost(
+  input: CreateCarouselPostInput,
+): Promise<ActionResult> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+
+  const topic = input.topic?.trim();
+  if (!topic) return { ok: false, error: "What should the carousel be about?" };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.scheduled_for ?? "")) {
+    return { ok: false, error: "Pick a post date." };
+  }
+
+  const { error } = await supabase.from("carousel_posts").insert({
+    topic,
+    notes: input.notes?.trim() ?? "",
+    scheduled_for: input.scheduled_for,
+  });
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath("/content");
+  return { ok: true };
+}
+
+export async function updateCarouselPost(
+  id: string,
+  input: CreateCarouselPostInput,
+): Promise<ActionResult> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+
+  const topic = input.topic?.trim();
+  if (!topic) return { ok: false, error: "What should the carousel be about?" };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.scheduled_for ?? "")) {
+    return { ok: false, error: "Pick a post date." };
+  }
+
+  // Only a not-yet-generated post can be edited — after that the copy and
+  // designs would no longer match the text.
+  const { error } = await supabase
+    .from("carousel_posts")
+    .update({
+      topic,
+      notes: input.notes?.trim() ?? "",
+      scheduled_for: input.scheduled_for,
+    })
+    .eq("id", id)
+    .eq("status", "planned");
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath("/content");
+  return { ok: true };
+}
+
+export async function deleteCarouselPost(id: string): Promise<ActionResult> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+
+  // Collect the rendered slide files before the cascade wipes the rows.
+  const { data: options } = await supabase
+    .from("carousel_options")
+    .select("slides")
+    .eq("post_id", id);
+  const paths = (options ?? [])
+    .flatMap((o) => (o.slides ?? []) as CarouselSlide[])
+    .map((s) => s.image_path)
+    .filter((p): p is string => Boolean(p));
+
+  const { error } = await supabase
+    .from("carousel_posts")
+    .delete()
+    .eq("id", id);
+  if (error) return { ok: false, error: error.message };
+
+  if (paths.length) {
+    await supabase.storage
+      .from(STORAGE_BUCKETS.carouselSlides)
+      .remove(paths);
+  }
+
+  revalidatePath("/content");
+  return { ok: true };
+}
+
+/** "Generate now" + the retry button: (re)start the pipeline immediately. */
+export async function generateCarouselNow(id: string): Promise<ActionResult> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+
+  const res = await startCarouselGeneration(supabase, id);
+  if (!res.ok) return { ok: false, error: res.error ?? "Couldn't start." };
+
+  revalidatePath("/content");
+  return { ok: true };
+}
+
+/** The review screen's "Use this design". */
+export async function approveCarouselOption(
+  postId: string,
+  optionId: string,
+): Promise<ActionResult> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+
+  const { error } = await supabase
+    .from("carousel_posts")
+    .update({ status: "approved", chosen_option_id: optionId })
+    .eq("id", postId)
+    .in("status", ["ready", "approved"]);
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath("/content");
+  return { ok: true };
+}
+
+/**
+ * Re-render ONE design option (keeps its copy): clears the slide images so
+ * the pipeline picks the option back up as "missing slides".
+ */
+export async function regenerateCarouselOption(
+  optionId: string,
+): Promise<ActionResult> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+
+  const { data: option } = await supabase
+    .from("carousel_options")
+    .select("id, post_id, slides")
+    .eq("id", optionId)
+    .maybeSingle();
+  if (!option) return { ok: false, error: "Design not found." };
+
+  const cleared = ((option.slides ?? []) as CarouselSlide[]).map((s) => ({
+    ...s,
+    image_url: null,
+    image_path: null,
+  }));
+  const { error } = await supabase
+    .from("carousel_options")
+    .update({ slides: cleared })
+    .eq("id", optionId);
+  if (error) return { ok: false, error: error.message };
+
+  // Back into the pipeline. A previously approved choice of THIS design is
+  // stale now — ask for a fresh approval.
+  const { data: post } = await supabase
+    .from("carousel_posts")
+    .select("chosen_option_id")
+    .eq("id", option.post_id)
+    .maybeSingle();
+  const { error: postError } = await supabase
+    .from("carousel_posts")
+    .update({
+      status: "rendering",
+      error: null,
+      analysis: { runStartedAt: Date.now() },
+      locked_at: null,
+      ...(post?.chosen_option_id === optionId
+        ? { chosen_option_id: null }
+        : {}),
+    })
+    .eq("id", option.post_id);
+  if (postError) return { ok: false, error: postError.message };
+
+  revalidatePath("/content");
+  return { ok: true };
+}
+
+/**
+ * Advance any in-progress carousel while the page is open (the local-dev
+ * cron substitute + orphan resumer — same pattern as `advanceProspecting`).
+ * Never throws; the next poll retries.
+ */
+export async function advanceCarousels(): Promise<{ ok: boolean }> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false };
+
+  try {
+    await processPendingCarousels(supabase, 2);
+    return { ok: true };
+  } catch {
+    return { ok: false };
+  }
 }

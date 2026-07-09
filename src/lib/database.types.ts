@@ -68,6 +68,25 @@ export type ProspectCandidateStatus =
 export type MeetingLocationType = "online" | "in_person";
 /** An attendee's answer to the post-meeting "did you attend?" prompt (0043). */
 export type MeetingAttendance = "attended" | "missed";
+/** Carousel calendar post pipeline states (0046). */
+export type CarouselPostStatus =
+  | "planned"
+  | "copywriting"
+  | "rendering"
+  | "ready"
+  | "approved"
+  | "error";
+/**
+ * One slide of a carousel option (0046). Copy fields are written at the
+ * copywriting step; image fields fill in as each slide renders.
+ */
+export type CarouselSlide = {
+  index: number;
+  headline: string;
+  body: string;
+  image_url?: string | null;
+  image_path?: string | null;
+};
 export type SmsStatus = "sent" | "failed";
 export type SmsStepKind = "send_sms" | "wait";
 export type SmsRunStatus = "running" | "completed" | "cancelled" | "failed";
@@ -505,6 +524,62 @@ export type Database = {
           created_at?: Timestamp;
         };
         Update: Partial<Database["public"]["Tables"]["content_generations"]["Insert"]>;
+        Relationships: [];
+      };
+      carousel_posts: {
+        Row: {
+          id: UUID;
+          topic: string;
+          notes: string;
+          scheduled_for: string;
+          status: CarouselPostStatus;
+          caption: string;
+          hashtags: string[];
+          chosen_option_id: UUID | null;
+          analysis: Record<string, unknown>;
+          error: string | null;
+          locked_at: Timestamp | null;
+          created_by: UUID | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          topic: string;
+          notes?: string;
+          scheduled_for: string;
+          status?: CarouselPostStatus;
+          caption?: string;
+          hashtags?: string[];
+          chosen_option_id?: UUID | null;
+          analysis?: Record<string, unknown>;
+          error?: string | null;
+          locked_at?: Timestamp | null;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["carousel_posts"]["Insert"]>;
+        Relationships: [];
+      };
+      carousel_options: {
+        Row: {
+          id: UUID;
+          post_id: UUID;
+          variant: number;
+          concept: string;
+          slides: CarouselSlide[];
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          post_id: UUID;
+          variant: number;
+          concept?: string;
+          slides?: CarouselSlide[];
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["carousel_options"]["Insert"]>;
         Relationships: [];
       };
       website_projects: {

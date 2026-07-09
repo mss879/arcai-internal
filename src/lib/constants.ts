@@ -179,6 +179,7 @@ export const STORAGE_BUCKETS = {
   avatars: "avatars",
   contentReferences: "content-references",
   contentGenerations: "content-generations",
+  carouselSlides: "carousel-slides",
 } as const;
 
 export const SERVICE_TYPE_LABELS: Record<string, string> = {

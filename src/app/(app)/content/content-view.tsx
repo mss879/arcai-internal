@@ -1,30 +1,46 @@
 "use client";
 
 import * as React from "react";
-import { History, Images, Sparkles } from "lucide-react";
+import { CalendarDays, History, Images, Sparkles } from "lucide-react";
 
 import { PageHeader } from "@/components/ui/page-header";
 import { cn } from "@/lib/utils";
-import { useRealtimeSync } from "@/hooks/use-realtime-sync";
-import type { ContentGeneration, ContentReference } from "@/lib/types";
+import { useRealtimeSyncTables } from "@/hooks/use-realtime-sync";
+import type {
+  CarouselOption,
+  CarouselPost,
+  ContentGeneration,
+  ContentReference,
+} from "@/lib/types";
 
 import { GenerateTab } from "./generate-tab";
+import { CalendarTab } from "./calendar-tab";
 import { ReferencesTab } from "./references-tab";
 import { HistoryTab } from "./history-tab";
 
-type Tab = "generate" | "references" | "history";
+type Tab = "generate" | "calendar" | "references" | "history";
 
 export function ContentView({
   references,
   generations,
+  carouselPosts,
+  carouselOptions,
   geminiReady,
+  carouselReady,
 }: {
   references: ContentReference[];
   generations: ContentGeneration[];
+  carouselPosts: CarouselPost[];
+  carouselOptions: CarouselOption[];
   geminiReady: boolean;
+  carouselReady: boolean;
 }) {
-  useRealtimeSync("content_references");
-  useRealtimeSync("content_generations");
+  useRealtimeSyncTables([
+    "content_references",
+    "content_generations",
+    "carousel_posts",
+    "carousel_options",
+  ]);
   const [tab, setTab] = React.useState<Tab>("generate");
 
   return (
@@ -41,6 +57,14 @@ export function ContentView({
           icon={<Sparkles className="h-4 w-4" />}
         >
           Generate
+        </TabButton>
+        <TabButton
+          active={tab === "calendar"}
+          onClick={() => setTab("calendar")}
+          icon={<CalendarDays className="h-4 w-4" />}
+          count={carouselPosts.length}
+        >
+          Calendar
         </TabButton>
         <TabButton
           active={tab === "references"}
@@ -65,6 +89,13 @@ export function ContentView({
           references={references}
           geminiReady={geminiReady}
           onManageReferences={() => setTab("references")}
+        />
+      )}
+      {tab === "calendar" && (
+        <CalendarTab
+          posts={carouselPosts}
+          options={carouselOptions}
+          carouselReady={carouselReady}
         />
       )}
       {tab === "references" && <ReferencesTab references={references} />}

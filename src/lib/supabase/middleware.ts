@@ -27,17 +27,47 @@ function isPublicPath(pathname: string) {
   return PUBLIC_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`));
 }
 
+function isValidUrl(value: string): boolean {
+  try {
+    new URL(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Refreshes the Supabase auth session on every request and guards
  * private routes. If Supabase env vars are not configured yet, it
  * lets requests through so the app can still boot.
  */
 export async function updateSession(request: NextRequest) {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  try {
+    return await refreshAndGuard(request);
+  } catch (e) {
+    // The proxy runs on EVERY request — an unexpected throw here (malformed
+    // env value, transient auth outage, runtime quirk) must degrade to a
+    // pass-through/redirect, never a site-wide "edge function invocation
+    // failed" 502. Private routes fail CLOSED (to /login), public fail open.
+    console.error(
+      "[proxy] session refresh crashed:",
+      e instanceof Error ? `${e.name}: ${e.message}` : e,
+    );
+    if (isPublicPath(request.nextUrl.pathname)) {
+      return NextResponse.next({ request });
+    }
+    const url = request.nextUrl.clone();
+    url.pathname = "/login";
+    return NextResponse.redirect(url);
+  }
+}
 
-  // Not configured yet — don't block the app.
-  if (!supabaseUrl || !supabaseKey) {
+async function refreshAndGuard(request: NextRequest) {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim();
+
+  // Not configured (or a mangled URL value) — don't block the app.
+  if (!supabaseUrl || !supabaseKey || !isValidUrl(supabaseUrl)) {
     return NextResponse.next({ request });
   }
 

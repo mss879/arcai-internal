@@ -36,7 +36,38 @@ export type SmsKind =
   | "payment_reminder"
   | "automation"
   | "promotion"
-  | "todo_reminder";
+  | "todo_reminder"
+  | "meeting_reminder"
+  | "prospecting";
+/** "Find Leads" prospecting scan pipeline (0044). */
+export type ProspectScanStatus =
+  | "pending"
+  | "searching"
+  | "qualifying"
+  | "drafting"
+  | "importing"
+  | "done"
+  | "error";
+export type ProspectVerdict =
+  | "pending"
+  | "no_website"
+  | "facebook_only"
+  | "bad_website"
+  | "broken"
+  | "good_website"
+  | "excluded"
+  | "duplicate"
+  | "unverified";
+export type ProspectCandidateStatus =
+  | "pending"
+  | "qualified"
+  | "skipped"
+  | "imported"
+  | "emailed";
+/** Where a scheduled meeting happens (0042). */
+export type MeetingLocationType = "online" | "in_person";
+/** An attendee's answer to the post-meeting "did you attend?" prompt (0043). */
+export type MeetingAttendance = "attended" | "missed";
 export type SmsStatus = "sent" | "failed";
 export type SmsStepKind = "send_sms" | "wait";
 export type SmsRunStatus = "running" | "completed" | "cancelled" | "failed";
@@ -657,6 +688,160 @@ export type Database = {
         };
         Update: Partial<
           Database["public"]["Tables"]["meeting_bookings"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      meetings: {
+        Row: {
+          id: UUID;
+          title: string;
+          description: string | null;
+          meeting_at: Timestamp;
+          duration_minutes: number;
+          location_type: MeetingLocationType;
+          location: string | null;
+          meeting_url: string | null;
+          reminder_sent_at: Timestamp | null;
+          created_by: UUID | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          title: string;
+          description?: string | null;
+          meeting_at: Timestamp;
+          duration_minutes?: number;
+          location_type?: MeetingLocationType;
+          location?: string | null;
+          meeting_url?: string | null;
+          reminder_sent_at?: Timestamp | null;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["meetings"]["Insert"]>;
+        Relationships: [];
+      };
+      meeting_attendees: {
+        Row: {
+          meeting_id: UUID;
+          user_id: UUID;
+          attendance: MeetingAttendance | null;
+          responded_at: Timestamp | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          meeting_id: UUID;
+          user_id: UUID;
+          attendance?: MeetingAttendance | null;
+          responded_at?: Timestamp | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["meeting_attendees"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      prospect_scans: {
+        Row: {
+          id: UUID;
+          status: ProspectScanStatus;
+          country: string;
+          city: string;
+          categories: string[];
+          max_results: number;
+          min_score: number;
+          fire_automations: boolean;
+          pipeline_id: UUID | null;
+          stage_id: UUID | null;
+          analysis: Record<string, unknown>;
+          found: number;
+          qualified: number;
+          skipped: number;
+          imported: number;
+          error: string | null;
+          locked_at: Timestamp | null;
+          created_by: UUID | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          status?: ProspectScanStatus;
+          country?: string;
+          city: string;
+          categories?: string[];
+          max_results?: number;
+          min_score?: number;
+          fire_automations?: boolean;
+          pipeline_id?: UUID | null;
+          stage_id?: UUID | null;
+          analysis?: Record<string, unknown>;
+          found?: number;
+          qualified?: number;
+          skipped?: number;
+          imported?: number;
+          error?: string | null;
+          locked_at?: Timestamp | null;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["prospect_scans"]["Insert"]>;
+        Relationships: [];
+      };
+      prospect_candidates: {
+        Row: {
+          id: UUID;
+          scan_id: UUID;
+          place_id: string;
+          name: string;
+          category: string;
+          address: string;
+          phone: string;
+          website: string;
+          rating: number | null;
+          rating_count: number;
+          website_verdict: ProspectVerdict;
+          score: number | null;
+          issues: string[];
+          emails: string[];
+          contact_name: string;
+          draft_subject: string;
+          draft_body: string;
+          draft_sms: string;
+          status: ProspectCandidateStatus;
+          reason: string;
+          lead_id: UUID | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          scan_id: UUID;
+          place_id: string;
+          name: string;
+          category?: string;
+          address?: string;
+          phone?: string;
+          website?: string;
+          rating?: number | null;
+          rating_count?: number;
+          website_verdict?: ProspectVerdict;
+          score?: number | null;
+          issues?: string[];
+          emails?: string[];
+          contact_name?: string;
+          draft_subject?: string;
+          draft_body?: string;
+          draft_sms?: string;
+          status?: ProspectCandidateStatus;
+          reason?: string;
+          lead_id?: UUID | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["prospect_candidates"]["Insert"]
         >;
         Relationships: [];
       };

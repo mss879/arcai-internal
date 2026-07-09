@@ -151,9 +151,11 @@ async function researchInputForLead(
     company: lead?.company?.trim() || fallbackCompany,
     website,
     industry,
-    // Default the geography to Sri Lanka — every lead in this workspace is
-    // a Sri Lankan business, which massively disambiguates common names.
-    location: location || "Sri Lanka",
+    // Pass only what we actually know. lead-research's resolveGeo() falls
+    // back to the website's ccTLD (a .com.au prospect researches as
+    // Australian) and only then assumes Sri Lanka, the workspace's home
+    // market — hardcoding it here mislabelled every foreign lead.
+    location,
     contactName: lead?.contact_name ?? null,
   };
 }

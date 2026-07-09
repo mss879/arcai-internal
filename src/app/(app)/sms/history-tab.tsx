@@ -39,6 +39,14 @@ const KIND_META: Record<SmsKind, { label: string; badge: string }> = {
     label: "Task reminder",
     badge: "bg-emerald-50 text-emerald-600 ring-emerald-200",
   },
+  meeting_reminder: {
+    label: "Meeting reminder",
+    badge: "bg-violet-50 text-violet-600 ring-violet-200",
+  },
+  prospecting: {
+    label: "Cold outreach",
+    badge: "bg-sky-50 text-sky-600 ring-sky-200",
+  },
 };
 
 type Filter = "all" | SmsKind | "failed";

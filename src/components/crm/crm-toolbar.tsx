@@ -12,6 +12,7 @@ import {
   Filter,
   ListChecks,
   MoreHorizontal,
+  Radar,
   ScanSearch,
   Search,
   Settings2,
@@ -136,7 +137,7 @@ export function CrmToolbar({
   const set = (patch: Partial<LeadFilters>) => onFilters({ ...filters, ...patch });
 
   const overdueTasks = tasks.filter(
-    (t) => t.due_at && new Date(t.due_at).getTime() < Date.now(),
+    (t) => t.due_at && new Date(t.due_at).getTime() < new Date().getTime(),
   ).length;
 
   function applySegment(segment: CrmSegment) {
@@ -291,6 +292,12 @@ export function CrmToolbar({
             onClick={() => router.push("/crm/companies")}
           >
             Companies
+          </DropdownItem>
+          <DropdownItem
+            icon={<Radar className="h-4 w-4" />}
+            onClick={() => router.push("/crm/prospecting")}
+          >
+            Find leads
           </DropdownItem>
           <DropdownItem
             icon={<ScanSearch className="h-4 w-4" />}
@@ -477,7 +484,9 @@ function TasksModal({
         ) : (
           <div className="max-h-96 space-y-1.5 overflow-y-auto">
             {visible.map((task) => {
-              const overdue = task.due_at && new Date(task.due_at).getTime() < Date.now();
+              const overdue =
+                task.due_at &&
+                new Date(task.due_at).getTime() < new Date().getTime();
               return (
                 <div
                   key={task.id}

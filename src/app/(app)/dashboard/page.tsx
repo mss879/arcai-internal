@@ -26,13 +26,14 @@ import {
 } from "lucide-react";
 
 import { Calendar } from "@/components/dashboard/calendar";
+import { MeetingAttendancePrompt } from "@/components/dashboard/meeting-attendance-prompt";
 import { QuickAddTask } from "@/components/dashboard/quick-add-task";
 import { PRIORITY_META } from "@/lib/constants";
 import { requireProfile } from "@/lib/auth";
 import { getMembers } from "@/lib/data";
 import { createClient } from "@/lib/supabase/server";
 import { cn, formatCurrency, formatTime12 } from "@/lib/utils";
-import type { NotificationLite, Todo } from "@/lib/types";
+import type { Meeting, MeetingWithAttendees, NotificationLite, Todo } from "@/lib/types";
 
 export const metadata = { title: "Dashboard" };
 
@@ -69,6 +70,7 @@ export default async function DashboardPage() {
     projectsCount,
     clientsCount,
     bookingsRes,
+    meetingsRes,
     invoicesRes,
     quotesRes,
     leadsRes,
@@ -87,6 +89,10 @@ export default async function DashboardPage() {
       .eq("status", "confirmed")
       .order("booking_date", { ascending: true })
       .order("start_time", { ascending: true }),
+    supabase
+      .from("meetings")
+      .select("*, attendees:meeting_attendees(user_id, attendance)")
+      .order("meeting_at", { ascending: true }),
     supabase.from("invoices").select("invoice_date, grand_total, stamp"),
     supabase.from("quotes").select("status, grand_total, invoice_id"),
     supabase
@@ -124,6 +130,35 @@ export default async function DashboardPage() {
   const upcomingBookings = bookings
     .filter((b) => b.booking_date >= today)
     .slice(0, 6);
+
+  // Scheduled team meetings (0042) — flatten the attendee join to id arrays
+  // the calendar can prefill an edit with.
+  const meetingsRaw = (meetingsRes.data ?? []) as unknown as (Meeting & {
+    attendees: { user_id: string; attendance: string | null }[] | null;
+  })[];
+  const toWithAttendees = ({
+    attendees,
+    ...m
+  }: (typeof meetingsRaw)[number]): MeetingWithAttendees => ({
+    ...m,
+    attendee_ids: (attendees ?? []).map((a) => a.user_id),
+  });
+  const meetings: MeetingWithAttendees[] = meetingsRaw.map(toWithAttendees);
+
+  // Meetings I was assigned to that have already ended and I haven't answered
+  // the "did you attend?" prompt for (0043).
+  const nowMs = new Date().getTime();
+  const pastUnansweredMeetings: MeetingWithAttendees[] = meetingsRaw
+    .filter((m) => {
+      const endMs =
+        new Date(m.meeting_at).getTime() +
+        (m.duration_minutes ?? 60) * 60_000;
+      if (endMs >= nowMs) return false;
+      return (m.attendees ?? []).some(
+        (a) => a.user_id === profile.id && a.attendance == null,
+      );
+    })
+    .map(toWithAttendees);
 
   // ---- Money & pipeline analytics --------------------------------
   const invoices = (invoicesRes.data ?? []) as {
@@ -313,6 +348,12 @@ export default async function DashboardPage() {
 
   return (
     <div className="space-y-6">
+      {/* Post-meeting "did you attend?" prompt for meetings that have ended */}
+      <MeetingAttendancePrompt
+        meetings={pastUnansweredMeetings}
+        members={members}
+      />
+
       {/* Hero */}
       <div
         className="animate-rise-in relative overflow-hidden rounded-2xl gradient-primary p-6 shadow-[var(--shadow-lift)] ring-1 ring-white/20 sm:p-8"
@@ -347,7 +388,12 @@ export default async function DashboardPage() {
 
       {/* Calendar — front and centre */}
       <div className="animate-rise-in" style={rise(90)}>
-        <Calendar todos={todos} members={members} bookings={bookings} />
+        <Calendar
+          todos={todos}
+          members={members}
+          bookings={bookings}
+          meetings={meetings}
+        />
       </div>
 
       {/* Stats */}

@@ -40,6 +40,10 @@ export type Commission = Tables["commissions"]["Row"];
 export type Resource = Tables["resources"]["Row"];
 export type MeetingLink = Tables["meeting_links"]["Row"];
 export type MeetingBooking = Tables["meeting_bookings"]["Row"];
+export type Meeting = Tables["meetings"]["Row"];
+export type MeetingAttendee = Tables["meeting_attendees"]["Row"];
+/** A scheduled meeting plus the ids of its assigned members. */
+export type MeetingWithAttendees = Meeting & { attendee_ids: string[] };
 export type Pipeline = Tables["pipelines"]["Row"];
 export type PipelineStage = Tables["pipeline_stages"]["Row"];
 export type Lead = Tables["leads"]["Row"];
@@ -78,6 +82,8 @@ export type CompetitorEntry = Tables["competitor_entries"]["Row"];
 export type AdEntry = Tables["ad_entries"]["Row"];
 export type VisitorEvent = Tables["visitor_events"]["Row"];
 export type LeadResearch = Tables["lead_research"]["Row"];
+export type ProspectScan = Tables["prospect_scans"]["Row"];
+export type ProspectCandidate = Tables["prospect_candidates"]["Row"];
 
 export type {
   UserRole,
@@ -91,6 +97,8 @@ export type {
   ResourceKind,
   InviteStatus,
   BookingStatus,
+  MeetingLocationType,
+  MeetingAttendance,
   NotificationType,
   SmsKind,
   SmsStatus,
@@ -113,6 +121,9 @@ export type {
   ExpenseCategory,
   ChurnSeverity,
   ChurnStatus,
+  ProspectScanStatus,
+  ProspectVerdict,
+  ProspectCandidateStatus,
   CompetitorEntryKind,
   AdPlatform,
   VisitorEventKind,

@@ -15,12 +15,23 @@ import {
   startOfWeek,
   subMonths,
 } from "date-fns";
-import { ChevronLeft, ChevronRight, Plus, Clock } from "lucide-react";
+import {
+  CalendarClock,
+  ChevronLeft,
+  ChevronRight,
+  Clock,
+  ListChecks,
+  MapPin,
+  Plus,
+  Video,
+} from "lucide-react";
 
+import { MeetingFormModal } from "@/components/dashboard/meeting-form-modal";
 import { TodoFormModal } from "@/components/todos/todo-form-modal";
+import { Modal } from "@/components/ui/modal";
 import { PRIORITY_META } from "@/lib/constants";
 import { cn, formatTime12 } from "@/lib/utils";
-import type { MemberLite, Todo } from "@/lib/types";
+import type { MemberLite, MeetingWithAttendees, Todo } from "@/lib/types";
 import { useRealtimeSyncTables } from "@/hooks/use-realtime-sync";
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -35,11 +46,13 @@ type CalendarBooking = {
 
 type DayEvent =
   | { id: string; type: "todo"; data: Todo; time: Date | null }
-  | { id: string; type: "booking"; data: CalendarBooking; time: Date };
+  | { id: string; type: "booking"; data: CalendarBooking; time: Date }
+  | { id: string; type: "meeting"; data: MeetingWithAttendees; time: Date };
 
 /** Small status dot colour for the compact (mobile) day view. */
 function dotClass(event: DayEvent): string {
   if (event.type === "booking") return "bg-cyan-500";
+  if (event.type === "meeting") return "bg-violet-500";
   const t = event.data;
   if (t.status === "done") return "bg-slate-400";
   if (t.status === "in_progress") return "bg-amber-500";
@@ -50,18 +63,28 @@ export function Calendar({
   todos,
   members,
   bookings = [],
+  meetings = [],
 }: {
   todos: Todo[];
   members: MemberLite[];
   bookings?: CalendarBooking[];
+  meetings?: MeetingWithAttendees[];
 }) {
-  useRealtimeSyncTables(["todos", "meeting_bookings"]);
+  useRealtimeSyncTables(["todos", "meeting_bookings", "meetings"]);
 
   const today = React.useMemo(() => startOfDay(new Date()), []);
   const [month, setMonth] = React.useState(() => new Date());
   const [selected, setSelected] = React.useState(() => startOfDay(new Date()));
   const [editing, setEditing] = React.useState<Todo | null>(null);
-  const [creating, setCreating] = React.useState<string | null>(null);
+  // The "+" opens a small chooser first; picking then opens a form. Each of
+  // these holds the default start time (ISO) for whichever thing is created.
+  const [chooser, setChooser] = React.useState<string | null>(null);
+  const [creatingTodo, setCreatingTodo] = React.useState<string | null>(null);
+  const [creatingMeeting, setCreatingMeeting] = React.useState<string | null>(
+    null,
+  );
+  const [editingMeeting, setEditingMeeting] =
+    React.useState<MeetingWithAttendees | null>(null);
 
   const days = React.useMemo(() => {
     const start = startOfWeek(startOfMonth(month));
@@ -92,11 +115,23 @@ export function Calendar({
     return map;
   }, [bookings]);
 
+  const meetingsByDay = React.useMemo(() => {
+    const map = new Map<string, MeetingWithAttendees[]>();
+    for (const m of meetings) {
+      const key = format(new Date(m.meeting_at), "yyyy-MM-dd");
+      const arr = map.get(key) ?? [];
+      arr.push(m);
+      map.set(key, arr);
+    }
+    return map;
+  }, [meetings]);
+
   // Sorted events for a given yyyy-MM-dd key (shared by the grid and agenda).
   const eventsForKey = React.useCallback(
     (key: string): DayEvent[] => {
       const items = byDay.get(key) ?? [];
       const dayBookings = bookingsByDay.get(key) ?? [];
+      const dayMeetings = meetingsByDay.get(key) ?? [];
       return [
         ...items.map(
           (t): DayEvent => ({
@@ -114,6 +149,14 @@ export function Calendar({
             time: new Date(`${b.booking_date}T${b.start_time}:00`),
           }),
         ),
+        ...dayMeetings.map(
+          (m): DayEvent => ({
+            id: m.id,
+            type: "meeting",
+            data: m,
+            time: new Date(m.meeting_at),
+          }),
+        ),
       ].sort((a, b) => {
         const aDone = a.type === "todo" && a.data.status === "done";
         const bDone = b.type === "todo" && b.data.status === "done";
@@ -124,13 +167,13 @@ export function Calendar({
         return a.time.getTime() - b.time.getTime();
       });
     },
-    [byDay, bookingsByDay],
+    [byDay, bookingsByDay, meetingsByDay],
   );
 
   function openCreate(day: Date) {
     const at = new Date(day);
     at.setHours(9, 0, 0, 0);
-    setCreating(at.toISOString());
+    setChooser(at.toISOString());
   }
 
   const selectedEvents = eventsForKey(format(selected, "yyyy-MM-dd"));
@@ -231,7 +274,7 @@ export function Calendar({
                       openCreate(day);
                     }}
                     className="hidden h-5 w-5 place-items-center rounded-md text-slate-400 opacity-0 transition hover:bg-primary-500/20 hover:text-primary-800 group-hover:opacity-100 sm:grid"
-                    aria-label="Add task"
+                    aria-label="Add task or meeting"
                   >
                     <Plus className="h-3.5 w-3.5" />
                   </button>
@@ -283,6 +326,25 @@ export function Calendar({
                           )}
                         />
                         <span className="truncate">{t.title}</span>
+                      </button>
+                    );
+                  } else if (event.type === "meeting") {
+                    const m = event.data;
+                    const Icon = m.location_type === "online" ? Video : MapPin;
+                    return (
+                      <button
+                        key={m.id}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setEditingMeeting(m);
+                        }}
+                        title={`${format(event.time, "h:mm a")} · ${m.title}`}
+                        className="flex w-full items-center gap-1.5 rounded-lg bg-violet-500/10 border border-violet-500/20 px-1.5 py-0.5 text-left text-[11px] font-bold text-violet-950 truncate shadow-xs transition hover:brightness-95 cursor-pointer"
+                      >
+                        <Icon className="h-3.5 w-3.5 shrink-0 text-violet-700" />
+                        <span className="truncate">
+                          {format(event.time, "h:mm a")} {m.title}
+                        </span>
                       </button>
                     );
                   } else {
@@ -360,6 +422,22 @@ export function Calendar({
                   </button>
                 );
               }
+              if (event.type === "meeting") {
+                const m = event.data;
+                const Icon = m.location_type === "online" ? Video : MapPin;
+                return (
+                  <button
+                    key={m.id}
+                    onClick={() => setEditingMeeting(m)}
+                    className="flex w-full items-center gap-2 rounded-xl border border-violet-500/25 bg-violet-500/10 px-3 py-2 text-left text-sm font-semibold text-violet-950 transition active:scale-[0.99]"
+                  >
+                    <Icon className="h-4 w-4 shrink-0 text-violet-700" />
+                    <span className="min-w-0 flex-1 break-words">
+                      {format(event.time, "h:mm a")} · {m.title}
+                    </span>
+                  </button>
+                );
+              }
               const b = event.data;
               return (
                 <div
@@ -378,15 +456,70 @@ export function Calendar({
         )}
       </div>
 
+      {/* "+" chooser — To-do or Meeting */}
+      <Modal
+        open={!!chooser}
+        onClose={() => setChooser(null)}
+        title="Add to your calendar"
+        description="Pick what you'd like to schedule."
+        size="sm"
+      >
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <button
+            type="button"
+            onClick={() => {
+              setCreatingTodo(chooser);
+              setChooser(null);
+            }}
+            className="group flex flex-col items-start gap-2 rounded-2xl border border-slate-200 p-4 text-left transition hover:border-primary-300 hover:bg-primary-50/60"
+          >
+            <span className="grid h-11 w-11 place-items-center rounded-xl bg-primary-500/10 text-primary-600 transition group-hover:scale-105">
+              <ListChecks className="h-5 w-5" />
+            </span>
+            <span className="text-sm font-bold text-slate-800">To-do</span>
+            <span className="text-xs text-slate-500">
+              A task with a due date and an assignee.
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setCreatingMeeting(chooser);
+              setChooser(null);
+            }}
+            className="group flex flex-col items-start gap-2 rounded-2xl border border-slate-200 p-4 text-left transition hover:border-violet-300 hover:bg-violet-50/60"
+          >
+            <span className="grid h-11 w-11 place-items-center rounded-xl bg-violet-500/10 text-violet-600 transition group-hover:scale-105">
+              <CalendarClock className="h-5 w-5" />
+            </span>
+            <span className="text-sm font-bold text-slate-800">Meeting</span>
+            <span className="text-xs text-slate-500">
+              A timed meeting, online or in person, with SMS reminders.
+            </span>
+          </button>
+        </div>
+      </Modal>
+
       <TodoFormModal
-        open={!!editing || !!creating}
+        open={!!editing || !!creatingTodo}
         onClose={() => {
           setEditing(null);
-          setCreating(null);
+          setCreatingTodo(null);
         }}
         members={members}
         todo={editing}
-        defaultDue={creating}
+        defaultDue={creatingTodo}
+      />
+
+      <MeetingFormModal
+        open={!!creatingMeeting || !!editingMeeting}
+        onClose={() => {
+          setCreatingMeeting(null);
+          setEditingMeeting(null);
+        }}
+        members={members}
+        meeting={editingMeeting}
+        defaultAt={creatingMeeting}
       />
     </div>
   );

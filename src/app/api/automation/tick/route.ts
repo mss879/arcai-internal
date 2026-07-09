@@ -8,7 +8,9 @@ import {
 import { processFinanceReminders } from "@/lib/finance";
 import { processDueSmsRuns } from "@/lib/sms-automation";
 import { processTodoReminders } from "@/lib/todo-reminders";
+import { processMeetingReminders } from "@/lib/meeting-reminders";
 import { processPendingResearch } from "@/lib/research";
+import { processPendingProspectScans } from "@/lib/prospecting";
 import { isSmsConfigured } from "@/lib/sms";
 
 /**
@@ -46,7 +48,9 @@ export async function GET(request: Request) {
     const automation = await processDueAutomationRuns(supabase);
     const finance = await processFinanceReminders(supabase);
     const todos = await processTodoReminders(supabase);
+    const meetings = await processMeetingReminders(supabase);
     const research = await processPendingResearch(supabase);
+    const prospecting = await processPendingProspectScans(supabase);
     const sms = isSmsConfigured()
       ? await processDueSmsRuns(supabase)
       : { processed: 0, sent: 0, failed: 0 };
@@ -58,7 +62,9 @@ export async function GET(request: Request) {
       sms,
       finance,
       todos,
+      meetings,
       research,
+      prospecting,
     });
   } catch (e) {
     return NextResponse.json(

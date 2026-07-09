@@ -82,6 +82,209 @@ export function analyzeSeo(html: string): SeoSignals {
   };
 }
 
+// ---- structured data (schema.org JSON-LD + OpenGraph) --------------------------
+
+/**
+ * Machine-readable facts a site publishes about itself. Highest
+ * precision-per-cost data in the whole research pipeline: no extra network
+ * call (mined from the homepage HTML we already fetched for the SEO signals)
+ * and written by the business itself.
+ */
+export type StructuredFacts = {
+  /** name / legalName / alternateName / og:site_name — deduped. */
+  names: string[];
+  description: string;
+  /** One formatted postal address (street, locality, region, postcode, country). */
+  address: string;
+  phones: string[];
+  emails: string[];
+  foundingDate: string;
+  founders: string[];
+  openingHours: string;
+  /** Social/profile URLs from `sameAs`. */
+  sameAs: string[];
+};
+
+export const EMPTY_FACTS: StructuredFacts = {
+  names: [],
+  description: "",
+  address: "",
+  phones: [],
+  emails: [],
+  foundingDate: "",
+  founders: [],
+  openingHours: "",
+  sameAs: [],
+};
+
+/** True when the extraction found anything worth telling the model about. */
+export function hasStructuredFacts(f: StructuredFacts): boolean {
+  return Boolean(
+    f.names.length ||
+      f.address ||
+      f.phones.length ||
+      f.emails.length ||
+      f.foundingDate ||
+      f.founders.length ||
+      f.openingHours ||
+      f.sameAs.length,
+  );
+}
+
+type JsonNode = Record<string, unknown>;
+
+function asArray(x: unknown): unknown[] {
+  return Array.isArray(x) ? x : x != null ? [x] : [];
+}
+
+function nodeStr(x: unknown): string {
+  return typeof x === "string" ? x.trim() : "";
+}
+
+/** A person-ish node (or plain string) → their name. */
+function personName(x: unknown): string {
+  if (typeof x === "string") return x.trim();
+  if (x && typeof x === "object") return nodeStr((x as JsonNode).name);
+  return "";
+}
+
+/** A PostalAddress node (or plain string) → one formatted line. */
+function formatAddress(x: unknown): string {
+  if (typeof x === "string") return x.trim();
+  if (!x || typeof x !== "object") return "";
+  const a = x as JsonNode;
+  return [
+    nodeStr(a.streetAddress),
+    nodeStr(a.addressLocality),
+    nodeStr(a.addressRegion),
+    nodeStr(a.postalCode),
+    nodeStr(a.addressCountry) ||
+      nodeStr((a.addressCountry as JsonNode | undefined)?.name),
+  ]
+    .filter(Boolean)
+    .join(", ");
+}
+
+/** @type values that describe the business itself (not articles/breadcrumbs). */
+const ORG_TYPE =
+  /(Organization|LocalBusiness|Corporation|Company|Store|Restaurant|Hotel|Agency|Dentist|Physician|Attorney|Service)$/i;
+
+function isOrgNode(node: JsonNode): boolean {
+  return asArray(node["@type"]).some((t) => typeof t === "string" && ORG_TYPE.test(t));
+}
+
+/**
+ * Mine schema.org JSON-LD (plus OpenGraph basics) from a homepage's raw HTML.
+ * Walks every <script type="application/ld+json"> block — including @graph
+ * wrappers and arrays — and folds all Organization/LocalBusiness-ish nodes
+ * into one fact sheet. Never throws; malformed JSON blocks are skipped.
+ */
+export function extractStructuredFacts(html: string): StructuredFacts {
+  const facts: StructuredFacts = {
+    ...EMPTY_FACTS,
+    names: [],
+    phones: [],
+    emails: [],
+    founders: [],
+    sameAs: [],
+  };
+  if (!html || typeof html !== "string") return facts;
+
+  const names = new Set<string>();
+  const phones = new Set<string>();
+  const emails = new Set<string>();
+  const founders = new Set<string>();
+  const sameAs = new Set<string>();
+
+  const fold = (node: JsonNode) => {
+    for (const key of ["name", "legalName", "alternateName"] as const) {
+      const v = nodeStr(node[key]);
+      if (v) names.add(v);
+    }
+    if (!facts.description) facts.description = nodeStr(node.description).slice(0, 300);
+    if (!facts.address) {
+      for (const a of asArray(node.address)) {
+        const line = formatAddress(a);
+        if (line) {
+          facts.address = line;
+          break;
+        }
+      }
+    }
+    for (const t of asArray(node.telephone)) {
+      const v = nodeStr(t);
+      if (v) phones.add(v);
+    }
+    for (const e of asArray(node.email)) {
+      const v = nodeStr(e).replace(/^mailto:/i, "");
+      if (v) emails.add(v);
+    }
+    if (!facts.foundingDate) facts.foundingDate = nodeStr(node.foundingDate);
+    for (const f of [...asArray(node.founder), ...asArray(node.founders)]) {
+      const v = personName(f);
+      if (v) founders.add(v);
+    }
+    if (!facts.openingHours) {
+      facts.openingHours = asArray(node.openingHours)
+        .map(nodeStr)
+        .filter(Boolean)
+        .join("; ")
+        .slice(0, 200);
+    }
+    for (const s of asArray(node.sameAs)) {
+      const v = nodeStr(s);
+      if (/^https?:\/\//i.test(v)) sameAs.add(v);
+    }
+  };
+
+  const scriptRe =
+    /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  let m: RegExpExecArray | null;
+  let blocks = 0;
+  while ((m = scriptRe.exec(html)) && blocks < 12) {
+    blocks += 1;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(m[1]);
+    } catch {
+      continue;
+    }
+    // A block may be a node, an array of nodes, or a wrapper with @graph.
+    const roots = asArray(parsed);
+    for (const root of roots) {
+      if (!root || typeof root !== "object") continue;
+      const nodes = [root as JsonNode, ...asArray((root as JsonNode)["@graph"])];
+      for (const n of nodes) {
+        if (n && typeof n === "object" && isOrgNode(n as JsonNode)) {
+          fold(n as JsonNode);
+        }
+      }
+    }
+  }
+
+  // OpenGraph basics as a fallback identity signal (head lives up top).
+  const head = html.slice(0, 200_000);
+  const ogName =
+    /<meta[^>]+property=["']og:site_name["'][^>]*content=["']([^"']+)["']/i.exec(
+      head,
+    )?.[1] ?? "";
+  if (ogName.trim()) names.add(ogName.trim());
+  if (!facts.description) {
+    const ogDesc =
+      /<meta[^>]+property=["']og:description["'][^>]*content=["']([^"']+)["']/i.exec(
+        head,
+      )?.[1] ?? "";
+    facts.description = ogDesc.trim().slice(0, 300);
+  }
+
+  facts.names = [...names].slice(0, 4);
+  facts.phones = [...phones].slice(0, 6);
+  facts.emails = [...emails].slice(0, 6);
+  facts.founders = [...founders].slice(0, 6);
+  facts.sameAs = [...sameAs].slice(0, 10);
+  return facts;
+}
+
 /** Pull the most recent 4-digit copyright year from footer-ish text. */
 export function extractCopyrightYear(text: string): number {
   if (!text) return 0;
@@ -99,6 +302,67 @@ export function extractCopyrightYear(text: string): number {
 // ---- scorecard math ----------------------------------------------------------
 
 const clamp = (n: number) => Math.max(0, Math.min(100, Math.round(n)));
+
+// ---- quick site verdict (prospecting) ------------------------------------------
+
+/**
+ * Fast, deterministic 0-100 quality read from ONE homepage scrape — no
+ * PageSpeed, so the prospecting agent can grade 40+ sites per scan in
+ * seconds without quota. Weighted toward the signals that make a site read
+ * as amateur/dated to a visitor (and that a web agency actually fixes):
+ * mobile viewport, HTTPS, search essentials, content depth, freshness.
+ *
+ * Not comparable to `buildAudit`'s Lighthouse-backed overall — this is a
+ * triage score. Returns the score plus pitch-ready issue lines.
+ */
+export function quickSiteVerdict(input: {
+  seo: SeoSignals;
+  https: boolean;
+  copyrightYear: number;
+  /** Length of the homepage markdown — a thin-content signal. */
+  contentChars: number;
+}): { score: number; issues: string[] } {
+  const { seo, https, copyrightYear, contentChars } = input;
+  const yearGap = copyrightYear
+    ? new Date().getFullYear() - copyrightYear
+    : -1; // unknown
+
+  let score = 0;
+  score += seo.viewport ? 22 : 0;
+  score += https ? 14 : 0;
+  score += seo.title ? 8 : 0;
+  score += seo.metaDescription ? 10 : 0;
+  score += seo.h1 ? 6 : 0;
+  score += seo.openGraph ? 8 : 0;
+  score += seo.schema ? 8 : 0;
+  score += seo.canonical ? 4 : 0;
+  score += seo.favicon ? 4 : 0;
+  score += contentChars >= 1500 ? 8 : contentChars >= 500 ? 4 : 0;
+  // Freshness: unknown copyright isn't punished as hard as a stale one.
+  score += yearGap < 0 ? 4 : yearGap <= 2 ? 8 : yearGap <= 4 ? 4 : 0;
+
+  const issues: string[] = [];
+  if (!seo.viewport)
+    issues.push("Not mobile-friendly — the layout doesn't adapt to phones.");
+  if (!https)
+    issues.push("No HTTPS — browsers mark the site as Not Secure.");
+  if (!seo.title) issues.push("Missing page title — invisible in search results.");
+  if (!seo.metaDescription)
+    issues.push("No meta description — weak, unclickable Google snippets.");
+  if (!seo.h1) issues.push("No clear headline (H1) on the homepage.");
+  if (!seo.openGraph)
+    issues.push("No social preview tags — shared links show nothing.");
+  if (!seo.schema)
+    issues.push("No structured data — misses Google rich results.");
+  if (contentChars < 500)
+    issues.push("Very thin homepage content — little for visitors or Google.");
+  if (yearGap >= 3)
+    issues.push(`Footer still says © ${copyrightYear} — looks unmaintained.`);
+  if (seo.imgTotal > 3 && seo.imgWithAlt / seo.imgTotal < 0.5)
+    issues.push("Most images lack alt text (SEO + accessibility).");
+
+  return { score: clamp(score), issues };
+}
 
 /** Fraction (0-100) of the on-page SEO essentials that are present. */
 function onPageSeoScore(seo: SeoSignals): number {

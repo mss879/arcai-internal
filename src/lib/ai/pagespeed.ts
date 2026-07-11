@@ -40,6 +40,8 @@ export type PageSpeedResult = {
   metrics: { label: string; value: string }[];
   /** Concrete Lighthouse failures, phrased as agency talking points. */
   failedAudits: string[];
+  /** Lighthouse's final full-page screenshot as a data: URI, when present. */
+  screenshot: string | null;
 };
 
 /** PSI works keyless; this just says whether we raised the quota. */
@@ -127,8 +129,14 @@ export async function runPageSpeed(url: string): Promise<PageSpeedResult | null>
   if (!lh) return null;
   const audits = (lh.audits ?? {}) as Record<
     string,
-    { displayValue?: unknown; score?: unknown }
+    { displayValue?: unknown; score?: unknown; details?: { data?: unknown } }
   >;
+
+  // Lighthouse ships a final full-page screenshot as a base64 data: URI —
+  // the showcase builder uses it as the "before" shot.
+  const shot = audits["final-screenshot"]?.details?.data;
+  const screenshot =
+    typeof shot === "string" && shot.startsWith("data:image") ? shot : null;
 
   const metrics: { label: string; value: string }[] = [];
   for (const [id, label] of Object.entries(METRIC_LABELS)) {
@@ -152,5 +160,6 @@ export async function runPageSpeed(url: string): Promise<PageSpeedResult | null>
     bestPractices: scoreOf(lh, "best-practices"),
     metrics,
     failedAudits: failedAudits.slice(0, 10),
+    screenshot,
   };
 }

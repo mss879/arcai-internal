@@ -164,6 +164,14 @@ export type WaMessageStatus =
   | "failed";
 export type WaSentBy = "agent" | "team" | "automation" | "keyword";
 export type WaMatchType = "exact" | "contains" | "starts_with";
+/** Live sales showcase pipeline (0049). */
+export type WaShowcaseStatus =
+  | "pending"
+  | "rendering"
+  | "ready"
+  | "sent"
+  | "error";
+export type WaVoiceReplies = "off" | "match";
 export type AutomationRunStatus =
   | "running"
   | "completed"
@@ -1994,6 +2002,7 @@ export type Database = {
           stage_id: UUID | null;
           lead_source: string;
           allowed_tools: string[];
+          voice_replies: WaVoiceReplies;
           updated_at: Timestamp;
         };
         Insert: {
@@ -2009,6 +2018,7 @@ export type Database = {
           stage_id?: UUID | null;
           lead_source?: string;
           allowed_tools?: string[];
+          voice_replies?: WaVoiceReplies;
           updated_at?: Timestamp;
         };
         Update: Partial<
@@ -2071,6 +2081,108 @@ export type Database = {
         };
         Update: Partial<
           Database["public"]["Tables"]["wa_agent_logs"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      wa_showcases: {
+        Row: {
+          id: UUID;
+          token: string;
+          contact_id: UUID;
+          lead_id: UUID | null;
+          status: WaShowcaseStatus;
+          config: Record<string, unknown>;
+          payload: Record<string, unknown>;
+          before_image_url: string | null;
+          mockup_image_url: string | null;
+          error: string | null;
+          attempts: number;
+          locked_at: Timestamp | null;
+          viewed_at: Timestamp | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          token?: string;
+          contact_id: UUID;
+          lead_id?: UUID | null;
+          status?: WaShowcaseStatus;
+          config?: Record<string, unknown>;
+          payload?: Record<string, unknown>;
+          before_image_url?: string | null;
+          mockup_image_url?: string | null;
+          error?: string | null;
+          attempts?: number;
+          locked_at?: Timestamp | null;
+          viewed_at?: Timestamp | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["wa_showcases"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      prospect_scan_schedules: {
+        Row: {
+          id: UUID;
+          label: string;
+          area: string;
+          category: string;
+          threshold: number;
+          max_results: number;
+          cadence_days: number;
+          next_run_at: Timestamp;
+          auto_outreach: boolean;
+          template_name: string | null;
+          template_lang: string;
+          is_active: boolean;
+          last_scan_id: UUID | null;
+          created_by: UUID | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          label?: string;
+          area: string;
+          category: string;
+          threshold?: number;
+          max_results?: number;
+          cadence_days?: number;
+          next_run_at?: Timestamp;
+          auto_outreach?: boolean;
+          template_name?: string | null;
+          template_lang?: string;
+          is_active?: boolean;
+          last_scan_id?: UUID | null;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["prospect_scan_schedules"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      wa_coaching: {
+        Row: {
+          id: UUID;
+          week_start: string;
+          stats: Record<string, unknown>;
+          notes: string;
+          is_active: boolean;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          week_start: string;
+          stats?: Record<string, unknown>;
+          notes?: string;
+          is_active?: boolean;
+          created_at?: Timestamp;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["wa_coaching"]["Insert"]
         >;
         Relationships: [];
       };

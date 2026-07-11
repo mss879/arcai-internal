@@ -31,6 +31,7 @@ type WaWebhookMessage = {
     button_reply?: { title?: string };
     list_reply?: { title?: string };
   };
+  audio?: { id?: string; mime_type?: string; voice?: boolean };
 };
 
 type WaWebhookValue = {
@@ -139,7 +140,16 @@ async function handleMessages(supabase: DB, value: WaWebhookValue): Promise<void
     const profileName =
       value.contacts?.find((c) => c.wa_id === message.from)?.profile?.name ?? null;
 
-    const body = extractBody(message);
+    // Voice notes: transcribe so the agent can chat with voice-first customers.
+    let body = extractBody(message);
+    let isVoice = false;
+    if (message.type === "audio" && message.audio?.id) {
+      const transcript = await transcribeVoiceNote(message.audio.id);
+      if (transcript) {
+        body = transcript;
+        isVoice = true;
+      }
+    }
     const now = new Date().toISOString();
 
     // Find-or-create the contact.
@@ -167,8 +177,9 @@ async function handleMessages(supabase: DB, value: WaWebhookValue): Promise<void
           wa_message_id: message.id ?? null,
           direction: "in",
           message_type: message.type ?? "text",
-          body,
+          body: isVoice ? `🎤 ${body}` : body,
           status: "received",
+          ...(isVoice ? { meta: { voice: true } } : {}),
         },
         { onConflict: "wa_message_id", ignoreDuplicates: true },
       )
@@ -192,11 +203,34 @@ async function handleMessages(supabase: DB, value: WaWebhookValue): Promise<void
 
     if (message.id) void markWhatsAppRead(message.id);
 
-    // Only text-like content goes to the rules + agent.
-    const textual = ["text", "button", "interactive"].includes(message.type ?? "text");
+    // Only text-like content (incl. transcribed voice) goes to the rules + agent.
+    const textual =
+      ["text", "button", "interactive"].includes(message.type ?? "text") || isVoice;
     if (body && textual) {
-      await handleInboundWaMessage(supabase, contact, body, message.id ?? null);
+      await handleInboundWaMessage(supabase, contact, body, message.id ?? null, {
+        voice: isVoice,
+      });
     }
+  }
+}
+
+/** Download + Whisper-transcribe a voice note. Null on any failure. */
+async function transcribeVoiceNote(mediaId: string): Promise<string | null> {
+  try {
+    const { downloadWaMedia } = await import("@/lib/whatsapp");
+    const media = await downloadWaMedia(mediaId);
+    if (!media.ok) return null;
+    const { isOpenAIConfigured, openaiTranscribe } = await import("@/lib/ai/openai");
+    if (!isOpenAIConfigured()) return null;
+    const ext = media.mimeType.includes("mpeg") ? "mp3" : "ogg";
+    const text = await openaiTranscribe(
+      new Blob([new Uint8Array(media.data)], { type: media.mimeType }),
+      `voice.${ext}`,
+    );
+    return text.trim() || null;
+  } catch (e) {
+    console.error("[whatsapp] voice transcription failed:", e);
+    return null;
   }
 }
 

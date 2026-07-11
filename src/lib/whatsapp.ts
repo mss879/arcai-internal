@@ -150,6 +150,64 @@ export async function sendWhatsAppText(opts: {
 }
 
 /**
+ * Send an image message (public URL) with an optional caption. Same 24h
+ * window rules as free-form text.
+ */
+export async function sendWhatsAppImage(opts: {
+  to: string;
+  link: string;
+  caption?: string;
+}): Promise<WaSendResult> {
+  const link = opts.link.trim();
+  if (!/^https?:\/\//.test(link)) {
+    return { ok: false, error: "Image link must be a public http(s) URL." };
+  }
+  return postMessages({
+    to: opts.to,
+    type: "image",
+    image: {
+      link,
+      ...(opts.caption?.trim() ? { caption: opts.caption.trim().slice(0, 1024) } : {}),
+    },
+  });
+}
+
+/**
+ * Send an interactive CTA message: optional image header, body text and a
+ * single tappable button that opens a URL — the link itself stays hidden
+ * (much cleaner than a raw URL in the text). 24h window rules apply.
+ */
+export async function sendWhatsAppCtaUrl(opts: {
+  to: string;
+  bodyText: string;
+  buttonText: string;
+  url: string;
+  imageLink?: string;
+}): Promise<WaSendResult> {
+  if (!/^https?:\/\//.test(opts.url.trim())) {
+    return { ok: false, error: "CTA needs a public http(s) URL." };
+  }
+  return postMessages({
+    to: opts.to,
+    type: "interactive",
+    interactive: {
+      type: "cta_url",
+      ...(opts.imageLink
+        ? { header: { type: "image", image: { link: opts.imageLink } } }
+        : {}),
+      body: { text: opts.bodyText.trim().slice(0, 1024) },
+      action: {
+        name: "cta_url",
+        parameters: {
+          display_text: opts.buttonText.trim().slice(0, 20) || "Open",
+          url: opts.url.trim(),
+        },
+      },
+    },
+  });
+}
+
+/**
  * Send a pre-approved template (required outside the 24h window).
  * `bodyParams` fill the template's {{1}}, {{2}}… body placeholders.
  */
@@ -179,6 +237,69 @@ export async function sendWhatsAppTemplate(opts: {
         : {}),
     },
   });
+}
+
+/**
+ * Send an audio message (public URL) — WhatsApp renders it like a voice note.
+ * Same 24h window rules as free-form text.
+ */
+export async function sendWhatsAppAudio(opts: {
+  to: string;
+  link: string;
+}): Promise<WaSendResult> {
+  const link = opts.link.trim();
+  if (!/^https?:\/\//.test(link)) {
+    return { ok: false, error: "Audio link must be a public http(s) URL." };
+  }
+  return postMessages({ to: opts.to, type: "audio", audio: { link } });
+}
+
+export type WaMediaDownload =
+  | { ok: true; data: Buffer; mimeType: string }
+  | { ok: false; error: string };
+
+/**
+ * Download an inbound media attachment (voice note, image…): resolve the
+ * media id to its short-lived CDN URL, then fetch the bytes with the token.
+ */
+export async function downloadWaMedia(mediaId: string): Promise<WaMediaDownload> {
+  if (!isWhatsAppConfigured()) {
+    return { ok: false, error: "WhatsApp isn't configured." };
+  }
+  try {
+    const metaRes = await fetch(`${GRAPH_BASE}/${apiVersion()}/${mediaId}`, {
+      headers: { Authorization: `Bearer ${accessToken()}` },
+      cache: "no-store",
+      signal: AbortSignal.timeout(10_000),
+    });
+    const meta = (await metaRes.json().catch(() => null)) as {
+      url?: string;
+      mime_type?: string;
+      error?: { message?: string };
+    } | null;
+    if (!metaRes.ok || !meta?.url) {
+      return { ok: false, error: meta?.error?.message ?? "Could not resolve the media URL." };
+    }
+
+    const fileRes = await fetch(meta.url, {
+      headers: { Authorization: `Bearer ${accessToken()}` },
+      cache: "no-store",
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!fileRes.ok) {
+      return { ok: false, error: `Media download failed (HTTP ${fileRes.status}).` };
+    }
+    return {
+      ok: true,
+      data: Buffer.from(await fileRes.arrayBuffer()),
+      mimeType: meta.mime_type || fileRes.headers.get("content-type") || "application/octet-stream",
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      error: e instanceof Error ? e.message : "Media download failed.",
+    };
+  }
 }
 
 /** Mark an inbound message as read (blue ticks). Best-effort, never throws. */

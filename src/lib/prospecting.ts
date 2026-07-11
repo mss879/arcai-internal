@@ -1055,6 +1055,8 @@ async function runImport(supabase: DB, scan: ScanRow): Promise<number> {
 
   const cityTag = scan.city.trim();
   const createdLeads: LeadRow[] = [];
+  // Candidate context per lead — the cold first-touch template's variables.
+  const candidateByLead = new Map<string, CandidateRow>();
 
   for (const c of candidates) {
     const { data: lead, error } = await supabase
@@ -1085,6 +1087,7 @@ async function runImport(supabase: DB, scan: ScanRow): Promise<number> {
       continue;
     }
     createdLeads.push(lead as LeadRow);
+    candidateByLead.set(lead.id, c);
 
     await supabase.from("prospect_candidates").update({
       status: "imported",
@@ -1104,9 +1107,18 @@ async function runImport(supabase: DB, scan: ScanRow): Promise<number> {
 
   if (scan.fire_automations) {
     for (const lead of createdLeads) {
+      const c = candidateByLead.get(lead.id);
       await fireAutomationTrigger(supabase, {
         trigger: "lead_created",
         lead,
+        // Cold first-touch template variables: {{business}}, {{audit_score}},
+        // {{top_issue}}, {{city}} all render from this context.
+        payload: {
+          business: lead.company ?? lead.title,
+          audit_score: c?.score != null ? String(c.score) : "",
+          top_issue: c?.issues?.[0] ?? "",
+          city: cityTag,
+        },
         triggerKey: `${lead.id}:created`,
       });
     }
@@ -1344,4 +1356,72 @@ async function runRecheckBatch(
   }
 
   return ids.slice(QUALIFY_BATCH);
+}
+
+// ---------------------------------------------------------------------------
+// Recurring scan schedules (0049) — the hunter-closer's discovery cadence
+// ---------------------------------------------------------------------------
+
+/**
+ * Launch a prospect scan for every due, active schedule. Called from the
+ * automation tick. Claiming is fenced on next_run_at (compare-and-swap), so
+ * overlapping ticks can never double-launch the same occurrence. The scan
+ * itself then runs through the normal pending → … → done pipeline; when
+ * auto_outreach is on, the scan fires lead_created automations on import —
+ * which is what sends the cold first-touch WhatsApp template.
+ */
+export async function processDueProspectSchedules(supabase: DB): Promise<number> {
+  const { data: due } = await supabase
+    .from("prospect_scan_schedules")
+    .select("*")
+    .eq("is_active", true)
+    .lte("next_run_at", new Date().toISOString())
+    .limit(3);
+  if (!due?.length) return 0;
+
+  let started = 0;
+  for (const schedule of due) {
+    // Claim this occurrence: bump next_run_at first, fenced on its old value.
+    const next = new Date(
+      Date.now() + Math.max(1, schedule.cadence_days) * 86400_000,
+    ).toISOString();
+    const { data: claimed } = await supabase
+      .from("prospect_scan_schedules")
+      .update({ next_run_at: next })
+      .eq("id", schedule.id)
+      .eq("next_run_at", schedule.next_run_at)
+      .select("id");
+    if (!claimed?.length) continue;
+
+    const categories = schedule.category
+      .split(",")
+      .map((c) => c.trim())
+      .filter(Boolean)
+      .slice(0, 12);
+    const { data: scan, error } = await supabase
+      .from("prospect_scans")
+      .insert({
+        country: "Sri Lanka",
+        city: schedule.area,
+        categories: categories.length ? categories : [schedule.category],
+        max_results: Math.min(Math.max(schedule.max_results, 5), 120),
+        min_score: Math.min(Math.max(schedule.threshold, 20), 90),
+        fire_automations: schedule.auto_outreach,
+        analysis: { runStartedAt: Date.now(), schedule_id: schedule.id },
+        created_by: schedule.created_by,
+      })
+      .select("id")
+      .single();
+    if (error || !scan) {
+      console.error("[prospecting] scheduled scan launch failed:", error?.message);
+      continue;
+    }
+
+    await supabase
+      .from("prospect_scan_schedules")
+      .update({ last_scan_id: scan.id })
+      .eq("id", schedule.id);
+    started += 1;
+  }
+  return started;
 }

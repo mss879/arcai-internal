@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { generateWeeklyDigest } from "@/lib/intelligence";
 import { sendPushToUser } from "@/lib/push";
+import { analyzeWaSalesWeek } from "@/lib/wa-coaching";
 
 /**
  * Weekly digest cron. Schedule for Monday mornings, e.g. 8am Colombo:
@@ -28,6 +29,14 @@ export async function GET(request: Request) {
     const supabase = createAdminClient();
     const { content, stats } = await generateWeeklyDigest(supabase);
 
+    // Self-improving playbook: distil the last fortnight's WhatsApp
+    // conversations into coaching the agent applies from its next reply.
+    // Never blocks the digest itself.
+    const coaching = await analyzeWaSalesWeek(supabase).catch((e) => {
+      console.error("[digest] coaching analysis failed:", e);
+      return { ok: false as const };
+    });
+
     const firstLine = content.split("\n").find((l) => l.trim()) ?? "Your weekly digest is ready.";
     const { data: profiles } = await supabase.from("profiles").select("id");
     for (const p of profiles ?? []) {
@@ -46,7 +55,11 @@ export async function GET(request: Request) {
       });
     }
 
-    return NextResponse.json({ ok: true, week_start: stats.week_start });
+    return NextResponse.json({
+      ok: true,
+      week_start: stats.week_start,
+      coaching: coaching.ok,
+    });
   } catch (e) {
     return NextResponse.json(
       { error: e instanceof Error ? e.message : "Digest failed." },

@@ -64,6 +64,9 @@ export type WaMessage = Tables["wa_messages"]["Row"];
 export type WaAgentConfig = Tables["wa_agent_config"]["Row"];
 export type WaKeywordRule = Tables["wa_keyword_rules"]["Row"];
 export type WaAgentLog = Tables["wa_agent_logs"]["Row"];
+export type WaShowcase = Tables["wa_showcases"]["Row"];
+export type ProspectScanSchedule = Tables["prospect_scan_schedules"]["Row"];
+export type WaCoaching = Tables["wa_coaching"]["Row"];
 export type SmsWorkflow = Tables["sms_workflows"]["Row"];
 export type SmsWorkflowStep = Tables["sms_workflow_steps"]["Row"];
 export type SmsWorkflowRun = Tables["sms_workflow_runs"]["Row"];
@@ -141,6 +144,8 @@ export type {
   WaMessageStatus,
   WaSentBy,
   WaMatchType,
+  WaShowcaseStatus,
+  WaVoiceReplies,
 } from "@/lib/database.types";
 
 /** A todo joined with the profile it's assigned to. */

@@ -310,3 +310,69 @@ export async function deleteProspectScan(scanId: string): Promise<ActionResult> 
   revalidatePath("/crm/prospecting");
   return { ok: true };
 }
+
+// ---- recurring scan schedules (0049) ---------------------------------------
+
+export type ScheduleInput = {
+  id?: string;
+  label: string;
+  area: string;
+  category: string;
+  threshold: number;
+  max_results: number;
+  cadence_days: number;
+  auto_outreach: boolean;
+  template_name: string;
+  template_lang: string;
+  is_active: boolean;
+};
+
+export async function saveScheduleAction(
+  input: ScheduleInput,
+): Promise<ActionResult> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  if (!input.area.trim() || !input.category.trim()) {
+    return { ok: false, error: "Area and category are required." };
+  }
+  if (input.auto_outreach && !input.template_name.trim()) {
+    return {
+      ok: false,
+      error: "Auto-outreach needs an approved Meta template name.",
+    };
+  }
+
+  const row = {
+    label: input.label.trim() || `${input.category.trim()} — ${input.area.trim()}`,
+    area: input.area.trim(),
+    category: input.category.trim(),
+    threshold: Math.min(Math.max(Math.round(input.threshold) || 60, 20), 90),
+    max_results: Math.min(Math.max(Math.round(input.max_results) || 40, 5), 120),
+    cadence_days: Math.min(Math.max(Math.round(input.cadence_days) || 7, 1), 90),
+    auto_outreach: Boolean(input.auto_outreach),
+    template_name: input.template_name.trim() || null,
+    template_lang: input.template_lang.trim() || "en",
+    is_active: Boolean(input.is_active),
+  };
+
+  const { error } = input.id
+    ? await supabase.from("prospect_scan_schedules").update(row).eq("id", input.id)
+    : await supabase.from("prospect_scan_schedules").insert(row);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath("/crm/prospecting");
+  return { ok: true };
+}
+
+export async function deleteScheduleAction(id: string): Promise<ActionResult> {
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("prospect_scan_schedules")
+    .delete()
+    .eq("id", id);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath("/crm/prospecting");
+  return { ok: true };
+}

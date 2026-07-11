@@ -1,0 +1,166 @@
+import "server-only";
+
+import type { SupabaseClient } from "@supabase/supabase-js";
+
+import type { Database } from "@/lib/database.types";
+import { isOpenAIConfigured, openaiChatJSON } from "@/lib/ai/openai";
+import { currentWeekStart } from "@/lib/intelligence";
+
+type DB = SupabaseClient<Database>;
+
+/**
+ * The self-improving playbook: once a week (from the digest cron) this reads
+ * the WhatsApp agent's own conversations — what got replies, where people
+ * ghosted, which deals were won or lost — and distils 5-8 coaching bullets.
+ * The newest active row is injected straight into the agent's system prompt,
+ * so the agent literally gets better at selling every week.
+ */
+
+const LOOKBACK_DAYS = 14;
+const GHOST_AFTER_MS = 48 * 3600_000;
+
+type ConversationDigest = {
+  name: string;
+  outcome: string;
+  inbound: number;
+  outbound: number;
+  ghosted: boolean;
+  last_agent_message: string;
+};
+
+export async function analyzeWaSalesWeek(
+  supabase: DB,
+): Promise<{ ok: boolean; notes?: string }> {
+  if (!isOpenAIConfigured()) return { ok: false };
+
+  const since = new Date(Date.now() - LOOKBACK_DAYS * 86400_000).toISOString();
+
+  const [{ data: contacts }, { data: messages }, { data: logs }] = await Promise.all([
+    supabase
+      .from("wa_contacts")
+      .select("id, display_name, profile_name, lead_id")
+      .limit(200),
+    supabase
+      .from("wa_messages")
+      .select("contact_id, direction, body, sent_by, created_at")
+      .gte("created_at", since)
+      .order("created_at", { ascending: true })
+      .limit(2000),
+    supabase
+      .from("wa_agent_logs")
+      .select("tool, ok")
+      .gte("created_at", since)
+      .limit(1000),
+  ]);
+  if (!messages?.length) return { ok: false };
+
+  const leadIds = (contacts ?? []).map((c) => c.lead_id).filter(Boolean) as string[];
+  const { data: leads } = leadIds.length
+    ? await supabase.from("leads").select("id, status, value").in("id", leadIds)
+    : { data: [] as { id: string; status: string; value: number | null }[] };
+  const leadById = new Map((leads ?? []).map((l) => [l.id, l]));
+
+  // Per-conversation digests + full tails of ghosted threads for the coach.
+  const byContact = new Map<string, typeof messages>();
+  for (const m of messages) {
+    const list = byContact.get(m.contact_id) ?? [];
+    list.push(m);
+    byContact.set(m.contact_id, list);
+  }
+
+  const digests: ConversationDigest[] = [];
+  const ghostTails: string[] = [];
+  for (const contact of contacts ?? []) {
+    const thread = byContact.get(contact.id);
+    if (!thread?.length) continue;
+    const last = thread[thread.length - 1];
+    const ghosted =
+      last.direction === "out" &&
+      Date.now() - new Date(last.created_at).getTime() > GHOST_AFTER_MS;
+    const lead = contact.lead_id ? leadById.get(contact.lead_id) : null;
+    const lastAgent = [...thread].reverse().find((m) => m.direction === "out");
+    digests.push({
+      name: contact.display_name || contact.profile_name || "unknown",
+      outcome: lead ? `${lead.status}${lead.value ? ` (Rs ${lead.value})` : ""}` : "no lead",
+      inbound: thread.filter((m) => m.direction === "in").length,
+      outbound: thread.filter((m) => m.direction === "out").length,
+      ghosted,
+      last_agent_message: (lastAgent?.body ?? "").slice(0, 180),
+    });
+    if (ghosted && ghostTails.length < 5) {
+      ghostTails.push(
+        thread
+          .slice(-6)
+          .map((m) => `${m.direction === "in" ? "CUSTOMER" : "AGENT"}: ${m.body.slice(0, 200)}`)
+          .join("\n"),
+      );
+    }
+  }
+  if (!digests.length) return { ok: false };
+
+  const toolUse: Record<string, number> = {};
+  for (const log of logs ?? []) {
+    toolUse[log.tool] = (toolUse[log.tool] ?? 0) + 1;
+  }
+  const stats = {
+    lookback_days: LOOKBACK_DAYS,
+    conversations: digests.length,
+    ghosted: digests.filter((d) => d.ghosted).length,
+    won: digests.filter((d) => d.outcome.startsWith("won")).length,
+    lost: digests.filter((d) => d.outcome.startsWith("lost")).length,
+    tool_use: toolUse,
+  };
+
+  const raw = await openaiChatJSON(
+    [
+      {
+        role: "system",
+        content:
+          "You are a ruthless but constructive WhatsApp sales coach. You analyze an AI sales agent's real conversations and produce concrete behavioural coaching the agent will follow next week. Focus on MESSAGING BEHAVIOUR: message length, question quality, when to push vs when to give space, what preceded ghosting, what preceded wins. Never suggest changing prices or inventing offers. Output ONLY JSON.",
+      },
+      {
+        role: "user",
+        content: `Stats: ${JSON.stringify(stats)}
+
+Per-conversation digests:
+${JSON.stringify(digests.slice(0, 40))}
+
+Last messages of ghosted threads (what the agent said right before silence):
+${ghostTails.join("\n---\n") || "(none)"}
+
+Return JSON: { "notes": ["...", "..."] } — 5 to 8 short, specific coaching bullets (max ~22 words each) the agent should apply next week. Base every bullet on the evidence above, not generic sales advice.`,
+      },
+    ],
+    { temperature: 0.4, timeoutMs: 60_000 },
+  );
+
+  let notes: string[] = [];
+  try {
+    const parsed = JSON.parse(raw) as { notes?: unknown };
+    if (Array.isArray(parsed.notes)) {
+      notes = parsed.notes
+        .map((n) => String(n).trim())
+        .filter(Boolean)
+        .slice(0, 8);
+    }
+  } catch {
+    return { ok: false };
+  }
+  if (!notes.length) return { ok: false };
+
+  const bullets = notes.map((n) => `- ${n}`).join("\n");
+  const { error } = await supabase.from("wa_coaching").upsert(
+    {
+      week_start: currentWeekStart(),
+      stats: stats as unknown as Record<string, unknown>,
+      notes: bullets,
+      is_active: true,
+    },
+    { onConflict: "week_start" },
+  );
+  if (error) {
+    console.error("[wa-coaching] save failed:", error.message);
+    return { ok: false };
+  }
+  return { ok: true, notes: bullets };
+}

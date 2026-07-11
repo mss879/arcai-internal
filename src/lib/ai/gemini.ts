@@ -45,6 +45,8 @@ export type GenerateImageInput = {
   references: InlineImage[];
   aspectRatio: AspectRatio;
   imageSize: ImageQuality;
+  /** Explicit model id override; defaults to GEMINI_IMAGE_MODEL. */
+  model?: string;
 };
 
 type Part =
@@ -66,7 +68,7 @@ export async function generateImage(
   }
 
   const res = await fetch(
-    `${BASE_URL}/models/${GEMINI_IMAGE_MODEL}:generateContent`,
+    `${BASE_URL}/models/${input.model?.trim() || GEMINI_IMAGE_MODEL}:generateContent`,
     {
       method: "POST",
       headers: {

@@ -30,6 +30,7 @@ import {
 } from "@/lib/proposal";
 import { sendPushToUser } from "@/lib/push";
 import { queueLeadResearch } from "@/lib/research";
+import { queueWaShowcase } from "@/lib/wa-showcase";
 import { WA_TOOL_CATALOG } from "@/lib/wa-tools-catalog";
 import { formatWaPhone, sendWhatsAppText } from "@/lib/whatsapp";
 
@@ -132,6 +133,7 @@ export async function handleInboundWaMessage(
   contact: WaContact,
   messageBody: string,
   waMessageId: string | null,
+  opts?: { voice?: boolean },
 ): Promise<void> {
   try {
     const config = await getWaAgentConfig(supabase);
@@ -159,7 +161,7 @@ export async function handleInboundWaMessage(
     if (!config.enabled || !contact.agent_enabled) return;
     if (!isOpenAIConfigured()) return;
 
-    await runWaAgent(supabase, contact, config);
+    await runWaAgent(supabase, contact, config, { voice: opts?.voice });
   } catch (e) {
     console.error("[wa-agent] inbound handling failed:", e);
   }
@@ -272,6 +274,7 @@ async function runWaAgent(
   supabase: DB,
   contact: WaContact,
   config: WaConfig,
+  opts?: { voice?: boolean },
 ): Promise<void> {
   const { data: history } = await supabase
     .from("wa_messages")
@@ -339,9 +342,68 @@ async function runWaAgent(
 
     const text = (reply.content ?? "").trim();
     if (text) {
+      // Voice-first customers get a voice note back (config-gated); any
+      // failure degrades to the plain text send.
+      if (opts?.voice && config.voice_replies === "match") {
+        const spoke = await sendVoiceReply(supabase, contact, text);
+        if (spoke) return;
+      }
       await sendAndLogWa(supabase, { contact, body: text, sentBy: "agent" });
     }
     return;
+  }
+}
+
+/** TTS the reply, upload it and send it as a WhatsApp voice note. */
+async function sendVoiceReply(
+  supabase: DB,
+  contact: WaContact,
+  text: string,
+): Promise<boolean> {
+  try {
+    const { openaiSpeech } = await import("@/lib/ai/openai");
+    const { sendWhatsAppAudio } = await import("@/lib/whatsapp");
+    const { STORAGE_BUCKETS } = await import("@/lib/constants");
+
+    // Strip emoji/markup — they read terribly out loud.
+    const spoken = text.replace(/[*_~]|[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, "").trim();
+    if (!spoken) return false;
+
+    const audio = await openaiSpeech(spoken);
+    const path = `voice/${contact.id}/${Date.now()}.mp3`;
+    const { error: uploadError } = await supabase.storage
+      .from(STORAGE_BUCKETS.waMedia)
+      .upload(path, Buffer.from(audio), { contentType: "audio/mpeg", upsert: true });
+    if (uploadError) return false;
+    const { data: pub } = supabase.storage
+      .from(STORAGE_BUCKETS.waMedia)
+      .getPublicUrl(path);
+
+    const sent = await sendWhatsAppAudio({ to: contact.wa_id, link: pub.publicUrl });
+    if (!sent.ok) return false;
+
+    await supabase.from("wa_messages").insert({
+      contact_id: contact.id,
+      wa_message_id: sent.waMessageId,
+      direction: "out",
+      message_type: "audio",
+      body: `🎤 ${text}`,
+      status: "sent",
+      sent_by: "agent",
+      meta: { voice: true, audio_url: pub.publicUrl },
+    });
+    await supabase
+      .from("wa_contacts")
+      .update({
+        last_message_at: new Date().toISOString(),
+        last_message_preview: `🎤 ${text.slice(0, 150)}`,
+        last_direction: "out",
+      })
+      .eq("id", contact.id);
+    return true;
+  } catch (e) {
+    console.error("[wa-agent] voice reply failed:", e);
+    return false;
   }
 }
 
@@ -382,6 +444,7 @@ THE MOMENT you learn their name (and again when you learn company/email), call s
 - The moment they share the URL, call BOTH audit_website AND research_contact (same turn, before replying).
 - Then reply like someone who literally just opened their site on their phone: compliment one genuine thing, then casually drop the 1-2 issues that hurt most — lead with the real Google PageSpeed number when it's bad ("ran your site through Google's speed test while we were chatting — 34/100 on mobile 😬, people are leaving before it even loads"). Sound like an expert who noticed, not a report.
 - Deep research on their business runs SILENTLY in the background. NEVER say you're researching, "looking into", or "preparing a report" on them — the magic is that a few minutes later you just naturally KNOW things (their services, reputation, competitors) and drop them into conversation like you've known their industry for years.
+- THE CLOSER: once the audit has run and they're engaged (asking questions, discussing problems), call send_showcase — a page with their scores AND a redesign concept of THEIR OWN site arrives in this chat automatically. Tease it, don't spoil it: "actually — give me a few minutes, I want to show you something 😄". One per contact; don't re-send.
 - Then bridge to the fix: what we'd do, the package that fits (knowledge base), and a call — send_booking_link.
 
 IF THEY DON'T HAVE A WEBSITE:
@@ -424,13 +487,15 @@ CLOSING PLAYS:
   if (contact.lead_id) {
     const { data: lead } = await supabase
       .from("leads")
-      .select("title, value, status, score, notes, tags")
+      .select("title, value, status, score, notes, tags, source, company, company_website")
       .eq("id", contact.lead_id)
       .maybeSingle();
     if (lead) {
       parts.push(
         `Linked CRM lead: ${JSON.stringify({
           title: lead.title,
+          company: lead.company,
+          website: lead.company_website,
           value: lead.value,
           status: lead.status,
           score: lead.score,
@@ -438,7 +503,26 @@ CLOSING PLAYS:
           notes: (lead.notes ?? "").slice(0, 500),
         })}`,
       );
+      if (lead.source === "prospecting") {
+        parts.push(
+          `COLD-OUTREACH CONTEXT: WE contacted THEM first — they're replying to our cold WhatsApp about their website. So: don't greet like an inbound stranger, don't ask what their business is (you already know — see the lead notes and research), and don't re-ask for basics. Acknowledge why we reached out, be effortlessly specific about their site's issues, and get to value in your first reply. Slightly warmer, zero pressure — they didn't ask for this conversation, earn it.`,
+        );
+      }
     }
+  }
+
+  // Lessons the coaching analyzer learned from past won/lost conversations.
+  const { data: coaching } = await supabase
+    .from("wa_coaching")
+    .select("notes")
+    .eq("is_active", true)
+    .order("week_start", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (coaching?.notes?.trim()) {
+    parts.push(
+      `LESSONS FROM YOUR OWN PAST DEALS (auto-learned weekly — apply them unless they conflict with the pricing rules):\n${coaching.notes.trim()}`,
+    );
   }
 
   return parts.join("\n\n");
@@ -470,6 +554,9 @@ function buildToolSchemas(allowed: Set<string>): ToolSchema[] {
     audit_website: fn("audit_website", "Instantly audit a website (seconds): mobile-friendliness, HTTPS, SEO basics, freshness. Returns concrete issues you can mention naturally in conversation. Call this the moment they share their website URL.", {
       website: { type: "string", description: "The website URL or domain, e.g. nimalbakery.lk" },
     }, ["website"]),
+    send_showcase: fn("send_showcase", "Queue the live showcase: a personalized page with their audit scores AND an AI redesign concept of their own homepage, delivered automatically into this chat as one image message with a link. Use after the audit has run and interest is real — it's your strongest closing move.", {
+      website: { type: "string", description: "Their website URL (defaults to the lead's saved website)." },
+    }),
     update_lead: fn("update_lead", "Update the linked CRM lead: deal value, score and/or a qualification note.", {
       value: { type: "number", description: "Estimated deal value in LKR." },
       score: { type: "string", enum: ["hot", "warm", "cold"], description: "How promising this lead feels." },
@@ -559,6 +646,8 @@ async function executeWaTool(
         return await toolGetResearch(supabase, contact);
       case "audit_website":
         return await toolAuditWebsite(supabase, contact, args);
+      case "send_showcase":
+        return await toolSendShowcase(supabase, contact, args);
       case "update_lead":
         return await toolUpdateLead(supabase, contact, args);
       case "create_task":
@@ -999,6 +1088,47 @@ async function toolAuditWebsite(
       (verdict.issues.length
         ? "Pick the 2 issues a business owner FEELS most (mobile, Not Secure, dead-slow, looks outdated) and mention them casually like you just browsed the site — never dump the whole list. Compliment one genuine thing first."
         : "The site is technically decent — compliment it, then sell growth instead: more leads, better Google ranking, automation. The deep research report (get_research) will find more angles."),
+  };
+}
+
+// ---- live showcase -----------------------------------------------------------
+
+async function toolSendShowcase(
+  supabase: DB,
+  contact: WaContact,
+  args: Record<string, unknown>,
+): Promise<WaToolOutcome> {
+  let website = String(args.website ?? "").trim();
+  let business = contact.display_name || contact.profile_name || "";
+
+  if (contact.lead_id) {
+    const { data: lead } = await supabase
+      .from("leads")
+      .select("company, company_website, contact_name")
+      .eq("id", contact.lead_id)
+      .maybeSingle();
+    website = website || lead?.company_website?.trim() || "";
+    business = lead?.company?.trim() || business || lead?.contact_name?.trim() || "";
+  }
+  if (!website) {
+    return {
+      ok: false,
+      result: "No website on file — ask for their website URL first (or run audit_website with it).",
+    };
+  }
+
+  const queued = await queueWaShowcase(supabase, {
+    contactId: contact.id,
+    leadId: contact.lead_id,
+    url: website,
+    business: business || "their business",
+  });
+  if (!queued.ok) return { ok: false, result: queued.error ?? "Could not queue the showcase." };
+
+  return {
+    ok: true,
+    result:
+      "Showcase queued — it builds in the background and arrives in this chat automatically as ONE image message with a link (audit + redesign concept together). Tell them you're putting something together they'll want to see, then keep the conversation going. Do NOT promise an exact time and do NOT describe the contents piece by piece.",
   };
 }
 

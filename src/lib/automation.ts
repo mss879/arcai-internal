@@ -911,11 +911,16 @@ async function executeStep(
         return { ok: false, detail: "WhatsApp step has no message." };
 
       // Template = deliverable outside the 24h window; free text otherwise.
+      // template_params fill {{1}}, {{2}}… in order; each renders {{tokens}}
+      // first, so "{{business}}" or "{{audit_score}}" work as variables.
+      const bodyParams = (Array.isArray(cfg.template_params) ? cfg.template_params : [])
+        .map((p) => renderTokens(String(p ?? ""), run, lead).trim());
       const sent = templateName
         ? await sendWhatsAppTemplate({
             to: phone.value,
             template: templateName,
             language: String(cfg.template_lang ?? "").trim() || "en",
+            bodyParams: bodyParams.some(Boolean) ? bodyParams : undefined,
           })
         : await sendWhatsAppText({ to: phone.value, body: message });
 

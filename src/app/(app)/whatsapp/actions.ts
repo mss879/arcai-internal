@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import { createClient } from "@/lib/supabase/server";
-import type { ActionResult, WaMatchType } from "@/lib/types";
+import type { ActionResult, WaMatchType, WaVoiceReplies } from "@/lib/types";
 import { linkWaContactToCrm, sendAndLogWa } from "@/lib/wa-agent";
 import { WA_TOOL_CATALOG } from "@/lib/wa-tools-catalog";
 import { isWhatsAppConfigured } from "@/lib/whatsapp";
@@ -100,6 +100,7 @@ export type WaConfigInput = {
   stage_id: string | null;
   lead_source: string;
   allowed_tools: string[];
+  voice_replies?: WaVoiceReplies;
 };
 
 export async function saveWaConfigAction(
@@ -130,6 +131,9 @@ export async function saveWaConfigAction(
         stage_id: input.stage_id || null,
         lead_source: input.lead_source.trim() || "whatsapp",
         allowed_tools: allowed,
+        ...(input.voice_replies === "off" || input.voice_replies === "match"
+          ? { voice_replies: input.voice_replies }
+          : {}),
       },
       { onConflict: "id" },
     );
@@ -179,6 +183,20 @@ export async function saveKeywordRuleAction(
 export async function deleteKeywordRuleAction(id: string): Promise<ActionResult> {
   const supabase = await createClient();
   const { error } = await supabase.from("wa_keyword_rules").delete().eq("id", id);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath("/whatsapp");
+  return { ok: true };
+}
+
+export async function toggleCoachingAction(
+  id: string,
+  isActive: boolean,
+): Promise<ActionResult> {
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("wa_coaching")
+    .update({ is_active: isActive })
+    .eq("id", id);
   if (error) return { ok: false, error: error.message };
   revalidatePath("/whatsapp");
   return { ok: true };

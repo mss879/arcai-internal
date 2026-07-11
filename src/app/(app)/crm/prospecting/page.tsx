@@ -2,7 +2,11 @@ import { createClient } from "@/lib/supabase/server";
 import { isPlacesConfigured } from "@/lib/ai/places";
 import { isProspectingConfigured } from "@/lib/prospecting";
 import { isSmsConfigured } from "@/lib/sms";
-import type { ProspectCandidate, ProspectScan } from "@/lib/types";
+import type {
+  ProspectCandidate,
+  ProspectScan,
+  ProspectScanSchedule,
+} from "@/lib/types";
 
 import { ProspectingView, type PipelineOption } from "./prospecting-view";
 
@@ -45,13 +49,18 @@ export default async function ProspectingPage({
   }
 
   // Destination pipelines for the launcher.
-  const [{ data: pipelines }, { data: stages }] = await Promise.all([
-    supabase.from("pipelines").select("id, name, position").order("position"),
-    supabase
-      .from("pipeline_stages")
-      .select("id, pipeline_id, name, position")
-      .order("position"),
-  ]);
+  const [{ data: pipelines }, { data: stages }, { data: schedules }] =
+    await Promise.all([
+      supabase.from("pipelines").select("id, name, position").order("position"),
+      supabase
+        .from("pipeline_stages")
+        .select("id, pipeline_id, name, position")
+        .order("position"),
+      supabase
+        .from("prospect_scan_schedules")
+        .select("*")
+        .order("created_at", { ascending: false }),
+    ]);
   const pipelineOptions: PipelineOption[] = (pipelines ?? []).map((p) => ({
     id: p.id,
     name: p.name,
@@ -66,6 +75,7 @@ export default async function ProspectingPage({
       selectedId={selectedId}
       candidates={candidates}
       pipelines={pipelineOptions}
+      schedules={(schedules ?? []) as ProspectScanSchedule[]}
       configured={isProspectingConfigured()}
       placesConfigured={isPlacesConfigured()}
       smsConfigured={isSmsConfigured()}

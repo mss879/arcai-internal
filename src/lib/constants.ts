@@ -180,6 +180,8 @@ export const STORAGE_BUCKETS = {
   contentReferences: "content-references",
   contentGenerations: "content-generations",
   carouselSlides: "carousel-slides",
+  waShowcases: "wa-showcases",
+  waMedia: "wa-media",
 } as const;
 
 export const SERVICE_TYPE_LABELS: Record<string, string> = {

@@ -216,6 +216,43 @@ export const AUTOMATION_RECIPES: AutomationRecipe[] = [
     ],
   },
   {
+    id: "cold-prospect-first-touch",
+    name: "Cold prospect first touch (WhatsApp)",
+    description:
+      "The hunter-closer's opening move: a Find Leads prospect lands in the CRM → they instantly get your approved WhatsApp template quoting their own audit result. When they reply, the AI agent takes over already knowing their business. Requires a Meta-approved template — set its name in the step before activating.",
+    emoji: "🎯",
+    trigger: "lead_created",
+    trigger_config: {},
+    conditions: [{ field: "source", op: "eq", value: "prospecting" }],
+    steps: [
+      {
+        kind: "send_whatsapp",
+        config: {
+          template_name: "site_audit_intro",
+          template_lang: "en",
+          template_params: ["{{business}}", "{{audit_score}}"],
+          message:
+            "Hi! We run ARC AI, a web agency in Colombo. We came across {{business}} and ran a quick check on your website — it scored {{audit_score}}/100 on Google's test. Mind if I share what's holding it back?",
+        },
+      },
+      {
+        kind: "notify",
+        config: {
+          user_id: "all",
+          title: "Cold outreach sent 🎯",
+          body: "First-touch WhatsApp sent to {{business}} (audit {{audit_score}}/100).",
+        },
+      },
+      {
+        kind: "create_task",
+        config: {
+          title: "No reply from {{business}}? Follow up the cold outreach",
+          due_in_days: 3,
+        },
+      },
+    ],
+  },
+  {
     id: "whatsapp-lead-warming",
     name: "WhatsApp lead warming",
     description:

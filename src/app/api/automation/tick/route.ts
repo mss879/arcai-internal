@@ -10,8 +10,12 @@ import { processDueSmsRuns } from "@/lib/sms-automation";
 import { processTodoReminders } from "@/lib/todo-reminders";
 import { processMeetingReminders } from "@/lib/meeting-reminders";
 import { processPendingResearch } from "@/lib/research";
-import { processPendingProspectScans } from "@/lib/prospecting";
+import {
+  processDueProspectSchedules,
+  processPendingProspectScans,
+} from "@/lib/prospecting";
 import { processPendingCarousels } from "@/lib/carousels";
+import { processPendingWaShowcases } from "@/lib/wa-showcase";
 import { isSmsConfigured } from "@/lib/sms";
 
 /**
@@ -53,8 +57,10 @@ export async function GET(request: Request) {
     const todos = await processTodoReminders(supabase);
     const meetings = await processMeetingReminders(supabase);
     const research = await processPendingResearch(supabase);
+    const schedules = await processDueProspectSchedules(supabase);
     const prospecting = await processPendingProspectScans(supabase);
     const carousels = await processPendingCarousels(supabase);
+    const showcases = await processPendingWaShowcases(supabase);
     const sms = isSmsConfigured()
       ? await processDueSmsRuns(supabase)
       : { processed: 0, sent: 0, failed: 0 };
@@ -68,8 +74,10 @@ export async function GET(request: Request) {
       todos,
       meetings,
       research,
+      schedules,
       prospecting,
       carousels,
+      showcases,
     });
   } catch (e) {
     return NextResponse.json(

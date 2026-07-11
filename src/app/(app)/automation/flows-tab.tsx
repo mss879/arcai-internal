@@ -847,10 +847,29 @@ function StepNode({
                 placeholder="Template language, e.g. en"
               />
             </div>
+            {Boolean(cfg.template_name) && (
+              <Input
+                value={
+                  Array.isArray(cfg.template_params)
+                    ? (cfg.template_params as string[]).join(", ")
+                    : ""
+                }
+                onChange={(e) =>
+                  onChange({
+                    template_params: e.target.value
+                      .split(",")
+                      .map((p) => p.trim())
+                      .filter(Boolean),
+                  })
+                }
+                placeholder={"Template variables in order, comma-separated — e.g. {{name}}, {{audit_score}}"}
+              />
+            )}
             <p className="text-[11px] leading-4 text-slate-400">
               WhatsApp only delivers free text within 24h of the contact&apos;s last
               message. Set an approved template name to reach colder contacts —
-              when set, the template is sent instead of the message above.
+              when set, the template is sent instead of the message above, and the
+              variables fill its {"{{1}}, {{2}}"}… placeholders in order.
             </p>
           </>
         )}

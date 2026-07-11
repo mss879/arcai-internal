@@ -6,6 +6,7 @@ import type {
   PipelineStage,
   WaAgentConfig,
   WaAgentLog,
+  WaCoaching,
   WaContact,
   WaKeywordRule,
   WaMessage,
@@ -28,6 +29,7 @@ export default async function WhatsappPage() {
     pipelinesRes,
     stagesRes,
     automationsRes,
+    coachingRes,
   ] = await Promise.all([
     supabase
       .from("wa_contacts")
@@ -53,6 +55,12 @@ export default async function WhatsappPage() {
     supabase.from("pipelines").select("*").order("position").order("created_at"),
     supabase.from("pipeline_stages").select("*").order("position"),
     supabase.from("automations").select("*").order("created_at", { ascending: false }),
+    supabase
+      .from("wa_coaching")
+      .select("*")
+      .order("week_start", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
   ]);
 
   return (
@@ -65,6 +73,7 @@ export default async function WhatsappPage() {
       pipelines={(pipelinesRes.data ?? []) as Pipeline[]}
       stages={(stagesRes.data ?? []) as PipelineStage[]}
       automations={(automationsRes.data ?? []) as Automation[]}
+      coaching={(coachingRes.data as WaCoaching | null) ?? null}
       waReady={isWhatsAppConfigured()}
       aiReady={isOpenAIConfigured()}
       appBaseUrl={process.env.NEXT_PUBLIC_APP_URL ?? ""}

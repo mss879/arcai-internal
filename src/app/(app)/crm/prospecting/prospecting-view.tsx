@@ -31,6 +31,7 @@ import { cn } from "@/lib/utils";
 import type {
   ProspectCandidate,
   ProspectScan,
+  ProspectScanSchedule,
   ProspectScanStatus,
 } from "@/lib/types";
 
@@ -42,6 +43,7 @@ import {
   sendProspectSms,
   startProspectScan,
 } from "./actions";
+import { SchedulesCard } from "./schedules-card";
 import { useDriveProspecting } from "./use-drive-prospecting";
 
 export type PipelineOption = {
@@ -145,6 +147,7 @@ export function ProspectingView({
   selectedId,
   candidates,
   pipelines,
+  schedules,
   configured,
   placesConfigured,
   smsConfigured,
@@ -154,6 +157,7 @@ export function ProspectingView({
   selectedId: string | null;
   candidates: ProspectCandidate[];
   pipelines: PipelineOption[];
+  schedules: ProspectScanSchedule[];
   configured: boolean;
   placesConfigured: boolean;
   smsConfigured: boolean;
@@ -191,6 +195,8 @@ export function ProspectingView({
       )}
 
       <Launcher pipelines={pipelines} configured={configured} />
+
+      <SchedulesCard schedules={schedules} />
 
       {scans.length > 0 && (
         <ScanList scans={scans} selectedId={selectedId} />

@@ -10,6 +10,7 @@ import {
   type ToolSchema,
 } from "@/lib/ai/openai";
 import { generateProposalContent } from "@/lib/ai/proposal";
+import { runPageSpeed } from "@/lib/ai/pagespeed";
 import {
   analyzeSeo,
   extractCopyrightYear,
@@ -28,7 +29,7 @@ import {
   type ProposalSelection,
 } from "@/lib/proposal";
 import { sendPushToUser } from "@/lib/push";
-import { startLeadResearch } from "@/lib/research";
+import { queueLeadResearch } from "@/lib/research";
 import { WA_TOOL_CATALOG } from "@/lib/wa-tools-catalog";
 import { formatWaPhone, sendWhatsAppText } from "@/lib/whatsapp";
 
@@ -364,6 +365,7 @@ async function buildSystemPrompt(
 - Like a sharp, friendly human on WhatsApp — warm, confident, a little playful. Use contractions ("I'll", "that's"), natural fillers ("ah nice", "got it", "to be honest"), and the occasional emoji 👍 — but never more than one per message.
 - SHORT messages. 1-3 sentences, like real texting. Never send walls of text or bullet lists longer than 3 items. ONE exception: when presenting a package (see PRICING PLAYBOOK) you may send one structured message of up to ~10 short lines with *bold* prices and line breaks.
 - Mirror their energy and language — casual if they're casual, formal if they're formal; reply in English, Sinhala or Tamil, whichever they use.
+- WhatsApp does NOT render markdown. NEVER write [text](url) links or # headers — paste the bare URL on its own line. Only *single asterisks* for bold and _underscores_ for italics work.
 - BANNED: "As an AI", "I understand your concern", "Certainly!", "How may I assist you today", "I apologize for any inconvenience" — anything that smells like a call center or a bot. If someone directly asks if you're a bot, be honest and light: you're Arc, the agency's digital assistant, and a teammate can jump in anytime.
 - NEVER invent prices, discounts or delivery dates. Quote ONLY what's in the knowledge base; anything else → "let me get the team to confirm that."`,
     `YOUR MISSION — learn everything, lead everything. You always hold the upper hand in the conversation: you ask the questions, you steer, and every message you send ends with exactly ONE question or a clear next step. Never leave a reply hanging with nothing to answer.
@@ -378,8 +380,8 @@ INFO CHECKLIST (collect in this order, one at a time, weaving it into natural ch
 THE MOMENT you learn their name (and again when you learn company/email), call save_contact. Log every meaningful detail they share with update_lead (note). Buying signals — asking prices, timelines, "can you do X" — mark the lead hot with update_lead.`,
     `IF THEY HAVE A WEBSITE:
 - The moment they share the URL, call BOTH audit_website AND research_contact (same turn, before replying).
-- Then reply like someone who literally just opened their site on their phone: compliment one genuine thing, then casually drop the 1-2 issues that hurt most ("just had a look — site's taking ages to load on mobile, and Google's basically ignoring your pages, no descriptions set 😬"). Sound like an expert who noticed, not a report.
-- A message or two later, call get_research — once it's ready, reference their actual business like you did your homework: what they sell, their area, their competition. You want them thinking "these people already know my business better than my current web guy."
+- Then reply like someone who literally just opened their site on their phone: compliment one genuine thing, then casually drop the 1-2 issues that hurt most — lead with the real Google PageSpeed number when it's bad ("ran your site through Google's speed test while we were chatting — 34/100 on mobile 😬, people are leaving before it even loads"). Sound like an expert who noticed, not a report.
+- Deep research on their business runs SILENTLY in the background. NEVER say you're researching, "looking into", or "preparing a report" on them — the magic is that a few minutes later you just naturally KNOW things (their services, reputation, competitors) and drop them into conversation like you've known their industry for years.
 - Then bridge to the fix: what we'd do, the package that fits (knowledge base), and a call — send_booking_link.
 
 IF THEY DON'T HAVE A WEBSITE:
@@ -858,7 +860,7 @@ async function toolResearchContact(
     .update({ company, ...(website ? { company_website: website } : {}) })
     .eq("id", contact.lead_id);
 
-  const started = await startLeadResearch(supabase, {
+  const started = await queueLeadResearch(supabase, {
     leadId: contact.lead_id,
     company,
     requestedBy: null,
@@ -867,7 +869,7 @@ async function toolResearchContact(
     ? {
         ok: true,
         result:
-          "Research started — it takes a few minutes. Keep chatting; call get_research later (e.g. on the customer's next message).",
+          "Research is running SILENTLY in the background. NEVER tell the customer you're researching them or mention reports — just reply naturally now (use the audit results if you have them, or keep qualifying). When the research finishes, you'll automatically get to send a follow-up that shows off what you learned.",
       }
     : { ok: false, result: "Could not start research." };
 }
@@ -883,7 +885,7 @@ async function toolGetResearch(supabase: DB, contact: WaContact): Promise<WaTool
   if (research.status !== "done") {
     return {
       ok: true,
-      result: `Research status: ${research.status}${research.error ? ` (${research.error})` : ""}. Not ready yet.`,
+      result: `Research status: ${research.status}${research.error ? ` (${research.error})` : ""}. Not ready yet — do NOT mention any research to the customer; keep the conversation moving naturally.`,
     };
   }
   const raw = JSON.stringify(research.report ?? {});
@@ -943,6 +945,26 @@ async function toolAuditWebsite(
     contentChars: text.length,
   });
 
+  // Real Lighthouse numbers sharpen the pitch, but the webhook reply can't
+  // wait forever — race PSI against a hard cap and degrade gracefully. The
+  // background research pass runs the full-budget Lighthouse audit anyway.
+  const psi = await Promise.race([
+    runPageSpeed(probe.finalUrl),
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), 12_000)),
+  ]).catch(() => null);
+
+  if (psi) {
+    if (psi.performance >= 0 && psi.performance < 60) {
+      const paint = psi.metrics.find((m) => /largest paint/i.test(m.label));
+      verdict.issues.unshift(
+        `Google PageSpeed score is ${psi.performance}/100 on mobile${paint ? ` (${paint.label.toLowerCase()}: ${paint.value})` : ""} — visitors are leaving before it loads.`,
+      );
+    }
+    for (const audit of psi.failedAudits.slice(0, 3)) {
+      if (!verdict.issues.includes(audit)) verdict.issues.push(audit);
+    }
+  }
+
   // Anchor the audit onto the CRM lead so the team sees it too.
   if (contact.lead_id) {
     await supabase
@@ -961,6 +983,13 @@ async function toolAuditWebsite(
   const summary = {
     url: probe.finalUrl,
     score: verdict.score,
+    lighthouse: psi
+      ? {
+          performance: psi.performance,
+          seo: psi.seo,
+          accessibility: psi.accessibility,
+        }
+      : "pending — full scores arrive with the background research",
     issues: verdict.issues,
   };
   return {
@@ -1091,6 +1120,89 @@ async function toolCreateProposal(
     ok: true,
     result: `Draft proposal created (${money(pricing.oneTimeTotal)} one-time). The team will review and send it — tell the customer it's on the way, and do NOT promise a delivery date or discounts.`,
   };
+}
+
+// ---- research-complete follow-up -------------------------------------------
+
+/**
+ * Fired by the research pipeline the moment a lead's deep-research report
+ * lands. If that lead came from WhatsApp (and the agent is still on for the
+ * conversation), the agent sends ONE unprompted follow-up that casually
+ * shows it now knows the customer's business inside-out — without ever
+ * mentioning that any "research" happened.
+ */
+export async function sendWaResearchFollowup(
+  supabase: DB,
+  researchId: string,
+): Promise<void> {
+  try {
+    const { data: research } = await supabase
+      .from("lead_research")
+      .select("id, lead_id, company_name, status, report")
+      .eq("id", researchId)
+      .maybeSingle();
+    if (!research || research.status !== "done" || !research.lead_id) return;
+
+    const { data: contact } = await supabase
+      .from("wa_contacts")
+      .select("*")
+      .eq("lead_id", research.lead_id)
+      .maybeSingle();
+    if (!contact || !contact.agent_enabled) return;
+
+    const config = await getWaAgentConfig(supabase);
+    if (!config.enabled || !isOpenAIConfigured()) return;
+
+    // One follow-up per research run, even if two workers see "done".
+    const { data: already } = await supabase
+      .from("wa_agent_logs")
+      .select("id")
+      .eq("contact_id", contact.id)
+      .eq("tool", "research_followup")
+      .eq("args->>research_id", researchId)
+      .limit(1);
+    if (already?.length) return;
+    await supabase.from("wa_agent_logs").insert({
+      contact_id: contact.id,
+      tool: "research_followup",
+      args: { research_id: researchId, company: research.company_name },
+      ok: true,
+      result: "Post-research follow-up message",
+    });
+
+    const { data: history } = await supabase
+      .from("wa_messages")
+      .select("direction, body")
+      .eq("contact_id", contact.id)
+      .order("created_at", { ascending: false })
+      .limit(HISTORY_MESSAGES);
+    const thread: ChatMessage[] = (history ?? [])
+      .reverse()
+      .filter((m) => m.body.trim())
+      .map((m) => ({
+        role: m.direction === "in" ? ("user" as const) : ("assistant" as const),
+        content: m.body,
+      }));
+
+    const briefing = JSON.stringify(research.report ?? {}).slice(0, 4500);
+    const messages: ChatMessage[] = [
+      { role: "system", content: await buildSystemPrompt(supabase, contact, config) },
+      ...thread,
+      {
+        role: "system",
+        content: `Your homework on ${research.company_name} just landed (the customer knows nothing about it):\n${briefing}\n\nSend ONE short, natural follow-up message now — like a consultant who's genuinely been thinking about their business since the last message. Casually show you know your stuff: reference 1-2 REAL specifics from the briefing (what they do, their market/reputation/competitors, or a concrete website problem) and connect it to how we'd help. NEVER mention research, reports, audits or tools — you just know. Human voice, max 3-4 sentences, end with exactly one question or next step.`,
+      },
+    ];
+
+    const model = process.env.OPENAI_WHATSAPP_MODEL?.trim() || undefined;
+    const reply = await openaiChat(messages, undefined, { model });
+    const text = (reply.content ?? "").trim();
+    if (text) {
+      await sendAndLogWa(supabase, { contact, body: text, sentBy: "agent" });
+    }
+  } catch (e) {
+    console.error("[wa-agent] research follow-up failed:", e);
+  }
 }
 
 // ---- manual CRM link (used by the inbox UI's "Add to CRM" button) ----------

@@ -117,7 +117,22 @@ export async function drainResearchRow(
     outcome = await advanceResearchRow(supabase, rowId);
     if (outcome !== "advanced") break;
   }
+  if (outcome === "done") await fireWaFollowup(supabase, rowId);
   return outcome;
+}
+
+/**
+ * A finished report on a WhatsApp-born lead triggers the agent's unprompted
+ * "I know your business now" follow-up message. Dynamic import breaks the
+ * research ↔ wa-agent cycle; failures never disturb the pipeline.
+ */
+async function fireWaFollowup(supabase: DB, researchId: string): Promise<void> {
+  try {
+    const { sendWaResearchFollowup } = await import("@/lib/wa-agent");
+    await sendWaResearchFollowup(supabase, researchId);
+  } catch (e) {
+    console.error("[research] WhatsApp follow-up failed:", e);
+  }
 }
 
 /** Pull the lead fields that sharpen the searches. */
@@ -446,6 +461,7 @@ export async function processPendingResearch(
 
   for (const row of rows) {
     const outcome = await advanceResearchRow(supabase, row.id);
+    if (outcome === "done") await fireWaFollowup(supabase, row.id);
     if (outcome === "done" || outcome === "advanced") result.processed += 1;
     else if (outcome === "error") result.failed += 1;
   }

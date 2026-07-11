@@ -375,6 +375,7 @@ export function useVoiceChat(): VoiceChat {
             toNumber: sms.to_number,
             message: sms.message,
             clientId: sms.client_id,
+            leadId: sms.lead_id,
             clientName: sms.client_name,
             kind: sms.kind,
             invoiceId: sms.invoice_id,

@@ -524,14 +524,14 @@ export const ASSISTANT_TOOLS: ToolSchema[] = [
     function: {
       name: "prepare_sms",
       description:
-        "Prepare a text message (SMS) to a client's phone and show the user a confirmation with the recipient and the exact message. Use for 'text …', 'send an SMS', 'message their phone', including SMS payment reminders. IMPORTANT: this does NOT send the SMS. The user must tap the Send button on the confirmation card — never say the text has been sent. Find the client by name via client_query (their saved phone is used automatically), or pass an explicit phone number the user dictates.",
+        "Prepare a text message (SMS) to a client's phone and show the user a confirmation with the recipient and the exact message. Use for 'text …', 'send an SMS', 'message their phone', including SMS payment reminders. IMPORTANT: this does NOT send the SMS. The user must tap the Send button on the confirmation card — never say the text has been sent. Find the recipient by name via client_query — saved clients are checked first, then CRM pipeline leads — and their saved phone number is used automatically. Or pass an explicit phone number the user dictates.",
       parameters: {
         type: "object",
         properties: {
           client_query: {
             type: "string",
             description:
-              "Client name or company used to find their saved phone number. Omit if the user dictated a raw number instead.",
+              "Client, CRM lead or company name used to find their saved phone number. Omit if the user dictated a raw number instead.",
           },
           phone: {
             type: "string",
@@ -1562,10 +1562,20 @@ export async function executeTool(
       if (!rawMessage)
         return { content: { ok: false, error: "Need the message text to send." } };
 
-      // Resolve the recipient: a named client (their saved phone) and/or an
-      // explicitly dictated number. The number the user dictates wins.
+      // Resolve the recipient: a named client (their saved phone), falling
+      // back to the CRM pipeline (a lead's contact_phone) when no client
+      // matches, and/or an explicitly dictated number. The number the user
+      // dictates wins.
       const clientQuery = String(args.client_query ?? "").trim();
+      const dictatedPhone = String(args.phone ?? "").trim();
       let client: { id: string; name: string; phone: string | null } | null = null;
+      let lead: {
+        id: string;
+        title: string;
+        contact_name: string | null;
+        contact_phone: string | null;
+        client_id: string | null;
+      } | null = null;
       if (clientQuery) {
         const term = `%${clientQuery}%`;
         const { data: matches } = await supabase
@@ -1573,35 +1583,60 @@ export async function executeTool(
           .select("id, name, phone")
           .or(`name.ilike.${term},company.ilike.${term}`)
           .limit(2);
-        if (!matches?.length)
-          return {
-            content: { ok: false, error: `No client matching "${clientQuery}".` },
-          };
-        if (matches.length > 1)
+        if ((matches?.length ?? 0) > 1)
           return {
             content: {
               ok: false,
               error: `More than one client matches "${clientQuery}". Be more specific.`,
-              candidates: matches.map((m) => m.name),
+              candidates: matches!.map((m) => m.name),
             },
           };
-        client = matches[0];
+        client = matches?.[0] ?? null;
+
+        // Not a saved client (or one without a phone): try the CRM pipeline.
+        if (!client || (!client.phone && !dictatedPhone)) {
+          const { data: leads } = await supabase
+            .from("leads")
+            .select("id, title, contact_name, contact_phone, client_id")
+            .or(
+              `title.ilike.${term},company.ilike.${term},contact_name.ilike.${term}`,
+            )
+            .is("deleted_at", null)
+            .limit(2);
+          if ((leads?.length ?? 0) > 1)
+            return {
+              content: {
+                ok: false,
+                error: `More than one CRM lead matches "${clientQuery}". Be more specific.`,
+                candidates: leads!.map((l) => l.contact_name || l.title),
+              },
+            };
+          lead = leads?.[0] ?? null;
+        }
+        if (!client && !lead)
+          return {
+            content: {
+              ok: false,
+              error: `No client or CRM lead matching "${clientQuery}".`,
+            },
+          };
       }
 
-      const rawPhone = String(args.phone ?? "").trim() || client?.phone || "";
+      const recipientName = client?.name || lead?.contact_name || lead?.title || "";
+      const rawPhone = dictatedPhone || client?.phone || lead?.contact_phone || "";
       if (!rawPhone)
         return {
           content: {
             ok: false,
-            error: client
-              ? `${client.name} has no phone number saved. Ask the user for the number.`
+            error: recipientName
+              ? `${recipientName} has no phone number saved in Contacts or the CRM. Ask the user for the number.`
               : "Need a client name or a phone number to text.",
           },
         };
       const phone = normalizePhone(rawPhone);
       if (!phone.ok) return { content: { ok: false, error: phone.error } };
 
-      const message = personalizeMessage(rawMessage, client?.name ?? "").trim();
+      const message = personalizeMessage(rawMessage, recipientName).trim();
       if (message.length > SMS_MAX_LENGTH)
         return {
           content: {
@@ -1634,8 +1669,9 @@ export async function executeTool(
       const sms: SmsCardData = {
         to_number: phone.value,
         to_display: formatPhone(phone.value),
-        client_id: client?.id ?? null,
-        client_name: client?.name ?? "",
+        client_id: client?.id ?? lead?.client_id ?? null,
+        lead_id: lead?.id ?? null,
+        client_name: recipientName,
         message,
         kind: args.kind === "payment_reminder" ? "payment_reminder" : "custom",
         invoice_id: invoiceId,

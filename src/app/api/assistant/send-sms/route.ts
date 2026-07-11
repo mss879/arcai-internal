@@ -25,6 +25,7 @@ export async function POST(request: Request) {
     toNumber?: unknown;
     message?: unknown;
     clientId?: unknown;
+    leadId?: unknown;
     clientName?: unknown;
     kind?: unknown;
     invoiceId?: unknown;
@@ -53,6 +54,8 @@ export async function POST(request: Request) {
 
   const clientName = String(body?.clientName ?? "").trim();
   const kind = body?.kind === "payment_reminder" ? "payment_reminder" : "custom";
+  const leadId =
+    typeof body?.leadId === "string" && body.leadId ? body.leadId : null;
 
   const result = await sendSms({
     to: phone.value,
@@ -65,6 +68,7 @@ export async function POST(request: Request) {
     to_number: phone.value,
     message,
     client_id: typeof body?.clientId === "string" && body.clientId ? body.clientId : null,
+    lead_id: leadId,
     client_name: clientName,
     kind,
     status: result.ok ? "sent" : "failed",
@@ -74,6 +78,20 @@ export async function POST(request: Request) {
     segments: countSmsSegments(message),
   });
   revalidatePath("/sms");
+
+  // When the recipient came from the CRM, put the text on the lead's timeline.
+  if (leadId) {
+    await supabase.from("lead_activities").insert({
+      lead_id: leadId,
+      kind: "sms",
+      title: result.ok
+        ? "SMS sent via voice assistant"
+        : "SMS failed via voice assistant",
+      body: message,
+      meta: { to_number: phone.value, kind, status: result.ok ? "sent" : "failed" },
+    });
+    revalidatePath(`/crm/lead/${leadId}`);
+  }
 
   if (!result.ok) {
     return NextResponse.json(

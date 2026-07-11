@@ -41,6 +41,8 @@ export type SmsCardData = {
   /** Pretty-printed number for display, e.g. +94 71 234 5678. */
   to_display: string;
   client_id: string | null;
+  /** CRM lead the number came from, when the name matched a lead instead of a saved client. */
+  lead_id: string | null;
   client_name: string;
   /** The final message text exactly as it will be sent. */
   message: string;

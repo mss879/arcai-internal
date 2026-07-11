@@ -164,9 +164,10 @@ export type WaMessageStatus =
   | "failed";
 export type WaSentBy = "agent" | "team" | "automation" | "keyword";
 export type WaMatchType = "exact" | "contains" | "starts_with";
-/** Live sales showcase pipeline (0049). */
+/** Live sales showcase pipeline (0049; `reporting` added in 0050). */
 export type WaShowcaseStatus =
   | "pending"
+  | "reporting"
   | "rendering"
   | "ready"
   | "sent"
@@ -2095,6 +2096,7 @@ export type Database = {
           payload: Record<string, unknown>;
           before_image_url: string | null;
           mockup_image_url: string | null;
+          report_pdf_url: string | null;
           error: string | null;
           attempts: number;
           locked_at: Timestamp | null;
@@ -2112,6 +2114,7 @@ export type Database = {
           payload?: Record<string, unknown>;
           before_image_url?: string | null;
           mockup_image_url?: string | null;
+          report_pdf_url?: string | null;
           error?: string | null;
           attempts?: number;
           locked_at?: Timestamp | null;

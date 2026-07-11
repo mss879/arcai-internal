@@ -221,6 +221,16 @@ export default async function ShowcasePage({
                 📅 Book a free call
               </a>
             )}
+            {row.report_pdf_url && (
+              <a
+                href={row.report_pdf_url}
+                target="_blank"
+                rel="noreferrer"
+                className="rounded-xl border border-white/60 px-6 py-3 text-sm font-semibold text-white transition hover:bg-white/10"
+              >
+                📄 Full audit report (PDF)
+              </a>
+            )}
           </div>
         </section>
 

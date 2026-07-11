@@ -9,11 +9,22 @@ import {
   isGeminiConfigured,
   type InlineImage,
 } from "@/lib/ai/gemini";
-import { runPageSpeed } from "@/lib/ai/pagespeed";
+import { runPageSpeed, type PageSpeedResult } from "@/lib/ai/pagespeed";
+import { analyzeSeo } from "@/lib/ai/site-audit";
+import { probeSite } from "@/lib/ai/site-probe";
 import { appLink } from "@/lib/app-url";
+import {
+  renderAuditReportPdf,
+  type OnPageCheck,
+  type StrategyReadings,
+} from "@/lib/audit-pdf";
 import { STORAGE_BUCKETS } from "@/lib/constants";
 import { sendPushToUser } from "@/lib/push";
-import { sendWhatsAppImage, sendWhatsAppText } from "@/lib/whatsapp";
+import {
+  sendWhatsAppDocument,
+  sendWhatsAppImage,
+  sendWhatsAppText,
+} from "@/lib/whatsapp";
 
 type DB = SupabaseClient<Database>;
 type ShowcaseRow = Database["public"]["Tables"]["wa_showcases"]["Row"];
@@ -42,6 +53,7 @@ const MOCKUP_MODELS = ["gemini-3.1-flash-image", "gemini-3.1-flash-image-preview
 
 const CLAIMABLE: Database["public"]["Tables"]["wa_showcases"]["Row"]["status"][] = [
   "pending",
+  "reporting",
   "rendering",
   "ready",
 ];
@@ -60,6 +72,10 @@ export type ShowcasePayload = {
   summary: string;
   whatsapp_number: string | null;
   booking_url: string | null;
+  /** Full Lighthouse readings for the PDF report (0050). */
+  mobile?: StrategyReadings | null;
+  desktop?: StrategyReadings | null;
+  on_page?: OnPageCheck[];
 };
 
 // ---------------------------------------------------------------------------
@@ -154,9 +170,21 @@ async function advanceWaShowcase(supabase: DB, id: string): Promise<StepOutcome>
     if (row.status === "pending") {
       const { payload, beforeUrl } = await gatherShowcase(supabase, row);
       await commit({
-        status: "rendering",
+        status: "reporting",
         payload: payload as unknown as Record<string, unknown>,
         before_image_url: beforeUrl,
+        error: null,
+        attempts: 0,
+      });
+      return "advanced";
+    }
+
+    if (row.status === "reporting") {
+      const { payload, pdfUrl } = await buildAuditReport(supabase, row);
+      await commit({
+        status: "rendering",
+        payload: payload as unknown as Record<string, unknown>,
+        report_pdf_url: pdfUrl,
         error: null,
         attempts: 0,
       });
@@ -263,7 +291,8 @@ async function gatherShowcase(
     }
   }
 
-  // Real Lighthouse pass — scores + the "before" screenshot.
+  // Real Lighthouse pass (mobile) — scores, full readings for the PDF, and
+  // the "before" screenshot.
   let beforeUrl: string | null = null;
   const psi = await runPageSpeed(url);
   if (psi) {
@@ -271,6 +300,7 @@ async function gatherShowcase(
     if (psi.seo >= 0) payload.scores.seo = psi.seo;
     if (psi.accessibility >= 0) payload.scores.accessibility = psi.accessibility;
     if (psi.bestPractices >= 0) payload.scores.best_practices = psi.bestPractices;
+    payload.mobile = toReadings(psi);
     for (const audit of psi.failedAudits.slice(0, 4)) {
       if (!payload.issues.includes(audit)) payload.issues.push(audit);
     }
@@ -317,8 +347,91 @@ async function businessWaNumber(): Promise<string | null> {
   }
 }
 
+function toReadings(psi: PageSpeedResult): StrategyReadings {
+  return {
+    performance: psi.performance,
+    seo: psi.seo,
+    accessibility: psi.accessibility,
+    best_practices: psi.bestPractices,
+    metrics: psi.metrics,
+    failed_audits: psi.failedAudits,
+  };
+}
+
 // ---------------------------------------------------------------------------
-// Step 2 — the Nano Banana 2 redesign mockup
+// Step 2 — the detailed PDF audit report (mobile + desktop + on-page)
+// ---------------------------------------------------------------------------
+
+async function buildAuditReport(
+  supabase: DB,
+  row: ShowcaseRow,
+): Promise<{ payload: ShowcasePayload; pdfUrl: string | null }> {
+  const payload = (row.payload ?? {}) as ShowcasePayload;
+  const url = payload.url;
+  if (!url) return { payload, pdfUrl: null };
+
+  // Desktop Lighthouse — capped so the deployed tick step never blows its
+  // serverless budget; locally there's room to let slow sites finish. The
+  // report degrades to mobile-only rather than stalling.
+  const desktopCap = process.env.NODE_ENV === "production" ? 18_000 : 50_000;
+  const desktop = await Promise.race([
+    runPageSpeed(url, "desktop"),
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), desktopCap)),
+  ]).catch(() => null);
+  if (desktop) payload.desktop = toReadings(desktop);
+
+  // On-page SEO essentials from one homepage read.
+  try {
+    const probe = await probeSite(url);
+    if (probe.html) {
+      const seo = analyzeSeo(probe.html);
+      const altOk = seo.imgTotal <= 3 || seo.imgWithAlt / seo.imgTotal >= 0.5;
+      payload.on_page = [
+        { label: "Page title", pass: Boolean(seo.title), note: "What Google shows as your headline in search results." },
+        { label: "Meta description", pass: Boolean(seo.metaDescription), note: "The snippet under your Google result — missing = fewer clicks." },
+        { label: "Main headline (H1)", pass: Boolean(seo.h1), note: "Tells visitors and Google what the page is about." },
+        { label: "Mobile viewport", pass: Boolean(seo.viewport), note: "Without it the layout breaks on phones." },
+        { label: "Social preview tags", pass: Boolean(seo.openGraph), note: "Shared links show an image + title instead of nothing." },
+        { label: "Structured data", pass: Boolean(seo.schema), note: "Unlocks rich Google results (stars, info panels)." },
+        { label: "Canonical URL", pass: Boolean(seo.canonical), note: "Stops Google splitting your ranking across duplicate URLs." },
+        { label: "Favicon", pass: Boolean(seo.favicon), note: "The little logo in browser tabs and search results." },
+        { label: "Image alt text", pass: altOk, note: "Helps Google read your images and screen-reader users browse." },
+      ];
+    }
+  } catch {
+    // On-page checks are a bonus — the report works without them.
+  }
+
+  // Render + upload the branded PDF. A PDF failure must never sink the
+  // showcase — the delivery step simply skips the attachment.
+  try {
+    const pdf = await renderAuditReportPdf({
+      business: payload.business || "Your business",
+      url,
+      dateISO: new Date().toISOString().slice(0, 10),
+      mobile: payload.mobile ?? null,
+      desktop: payload.desktop ?? null,
+      onPage: payload.on_page ?? [],
+      otherIssues: payload.issues ?? [],
+      summary: payload.summary || undefined,
+    });
+    const path = `${row.id}/audit-report.pdf`;
+    const { error } = await supabase.storage
+      .from(STORAGE_BUCKETS.waShowcases)
+      .upload(path, pdf, { contentType: "application/pdf", upsert: true });
+    if (error) throw new Error(error.message);
+    const { data } = supabase.storage
+      .from(STORAGE_BUCKETS.waShowcases)
+      .getPublicUrl(path);
+    return { payload, pdfUrl: data.publicUrl };
+  } catch (e) {
+    console.error("[wa-showcase] PDF report failed:", e);
+    return { payload, pdfUrl: null };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Step 3 — the Nano Banana 2 redesign mockup
 // ---------------------------------------------------------------------------
 
 async function renderMockup(supabase: DB, row: ShowcaseRow): Promise<string | null> {
@@ -424,8 +537,8 @@ async function deliverShowcase(supabase: DB, row: ShowcaseRow): Promise<void> {
     .join(", and ");
 
   const caption = row.mockup_image_url
-    ? `${firstName}, had a quick play with what ${payload.business ?? "your"} site could look like 👆${punch ? `\n\n${punch} — this concept fixes all of that.` : ""}\n\nWant me to walk you through what we'd change?`
-    : `${firstName}, took a proper look at your site.${punch ? ` ${punch}.` : ""} Want me to walk you through what we'd fix?`;
+    ? `${firstName}, had a quick play with what ${payload.business ?? "your"} site could look like 👆${punch ? `\n\n${punch} — this concept fixes all of that.` : ""}${row.report_pdf_url ? "\n\nFull audit report of your current site coming right up 👇" : "\n\nWant me to walk you through what we'd change?"}`
+    : `${firstName}, took a proper look at your site.${punch ? ` ${punch}.` : ""}${row.report_pdf_url ? " Your full audit report is coming right up 👇" : " Want me to walk you through what we'd fix?"}`;
 
   const sent = row.mockup_image_url
     ? await sendWhatsAppImage({
@@ -435,6 +548,23 @@ async function deliverShowcase(supabase: DB, row: ShowcaseRow): Promise<void> {
       })
     : await sendWhatsAppText({ to: contact.wa_id, body: caption });
   if (!sent.ok) throw new Error(sent.error);
+
+  // The detailed PDF audit report follows as an attachment. Best-effort:
+  // a document hiccup must not fail the whole (already sent) delivery.
+  let pdfMessageId: string | null = null;
+  let pdfCaption: string | null = null;
+  if (row.report_pdf_url) {
+    const filename = `${(payload.business ?? "Website").replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "-")}-Website-Audit.pdf`;
+    pdfCaption = `This is the full audit report of your current website — every reading we took (speed, SEO, accessibility, on both mobile and desktop) and everything holding it back. Want me to walk you through what we'd change?`;
+    const doc = await sendWhatsAppDocument({
+      to: contact.wa_id,
+      link: row.report_pdf_url,
+      filename,
+      caption: pdfCaption,
+    });
+    if (doc.ok) pdfMessageId = doc.waMessageId;
+    else console.error("[wa-showcase] PDF delivery failed:", doc.error);
+  }
 
   // Internal-only page link for the team's records.
   const pageUrl = appLink(`/showcase/${row.token}`) ?? `/showcase/${row.token}`;
@@ -451,11 +581,23 @@ async function deliverShowcase(supabase: DB, row: ShowcaseRow): Promise<void> {
       ? { image_url: row.mockup_image_url, showcase_token: row.token }
       : { showcase_token: row.token },
   });
+  if (pdfMessageId && pdfCaption) {
+    await supabase.from("wa_messages").insert({
+      contact_id: contact.id,
+      wa_message_id: pdfMessageId,
+      direction: "out",
+      message_type: "document",
+      body: `📄 ${pdfCaption}`,
+      status: "sent",
+      sent_by: "agent",
+      meta: { document_url: row.report_pdf_url, showcase_token: row.token },
+    });
+  }
   await supabase
     .from("wa_contacts")
     .update({
       last_message_at: new Date().toISOString(),
-      last_message_preview: caption.slice(0, 160),
+      last_message_preview: (pdfCaption && pdfMessageId ? `📄 ${pdfCaption}` : caption).slice(0, 160),
       last_direction: "out",
     })
     .eq("id", contact.id);

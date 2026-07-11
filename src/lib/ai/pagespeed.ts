@@ -93,8 +93,11 @@ function scoreOf(lh: Record<string, unknown>, key: string): number {
  * Run a mobile Lighthouse pass on one URL. Mobile is what matters for a Sri
  * Lankan audience and is Google's own ranking basis. Returns null on failure.
  */
-export async function runPageSpeed(url: string): Promise<PageSpeedResult | null> {
-  const params = new URLSearchParams({ url, strategy: "mobile" });
+export async function runPageSpeed(
+  url: string,
+  strategy: "mobile" | "desktop" = "mobile",
+): Promise<PageSpeedResult | null> {
+  const params = new URLSearchParams({ url, strategy });
   for (const c of ["performance", "seo", "accessibility", "best-practices"]) {
     params.append("category", c);
   }

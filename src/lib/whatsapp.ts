@@ -240,6 +240,31 @@ export async function sendWhatsAppTemplate(opts: {
 }
 
 /**
+ * Send a document message (public URL) — renders as a file attachment with
+ * the given filename (e.g. an audit-report PDF). Same 24h window rules.
+ */
+export async function sendWhatsAppDocument(opts: {
+  to: string;
+  link: string;
+  filename: string;
+  caption?: string;
+}): Promise<WaSendResult> {
+  const link = opts.link.trim();
+  if (!/^https?:\/\//.test(link)) {
+    return { ok: false, error: "Document link must be a public http(s) URL." };
+  }
+  return postMessages({
+    to: opts.to,
+    type: "document",
+    document: {
+      link,
+      filename: opts.filename.trim().slice(0, 240) || "document.pdf",
+      ...(opts.caption?.trim() ? { caption: opts.caption.trim().slice(0, 1024) } : {}),
+    },
+  });
+}
+
+/**
  * Send an audio message (public URL) — WhatsApp renders it like a voice note.
  * Same 24h window rules as free-form text.
  */

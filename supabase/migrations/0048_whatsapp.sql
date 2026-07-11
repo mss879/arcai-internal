@@ -97,8 +97,8 @@ create table if not exists public.wa_agent_config (
   -- Exact tool keys the agent may call (see src/lib/wa-tools-catalog.ts).
   allowed_tools    text[] not null default array[
     'save_contact', 'get_context', 'research_contact', 'get_research',
-    'update_lead', 'create_task', 'schedule_followup', 'send_booking_link',
-    'create_proposal', 'notify_team', 'handoff_human'
+    'audit_website', 'update_lead', 'create_task', 'schedule_followup',
+    'send_booking_link', 'create_proposal', 'notify_team', 'handoff_human'
   ],
   updated_at       timestamptz not null default now()
 );

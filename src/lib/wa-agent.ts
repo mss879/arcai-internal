@@ -10,6 +10,12 @@ import {
   type ToolSchema,
 } from "@/lib/ai/openai";
 import { generateProposalContent } from "@/lib/ai/proposal";
+import {
+  analyzeSeo,
+  extractCopyrightYear,
+  quickSiteVerdict,
+} from "@/lib/ai/site-audit";
+import { probeSite } from "@/lib/ai/site-probe";
 import { appLink } from "@/lib/app-url";
 import { enrollAutomationRun, fireAutomationTrigger } from "@/lib/automation";
 import {
@@ -353,21 +359,40 @@ async function buildSystemPrompt(
   known.push(contact.client_id ? "Client profile: linked" : "Client profile: none yet");
 
   const parts: string[] = [
-    `You are ${config.agent_name || "Arc"}, the WhatsApp sales assistant for ARC AI Agency — a Sri Lankan AI & digital agency that builds business websites, e-commerce stores, runs social media marketing and sets up AI automations.`,
-    `You are chatting on WhatsApp. Style rules:
-- Keep replies SHORT (1-4 sentences) and friendly — this is a chat, not email.
-- Ask ONE question at a time.
-- You may use emoji sparingly and WhatsApp formatting (*bold*), never markdown headers or lists longer than 4 items.
-- Reply in the language the customer writes in (English, Sinhala or Tamil).
-- NEVER invent prices, discounts or delivery dates. Only quote prices that appear in the knowledge base. If you don't know, say the team will confirm.`,
-    `Sales flow you follow:
-1. ${config.ask_name ? "If you don't know their name yet, greet them warmly and ask for it." : "Greet them warmly."}
-2. The moment they tell you their name (or company details), call save_contact — this creates their client profile and CRM lead automatically. Do this ONCE.
-3. Qualify: what's their business, what do they need (website / e-commerce / marketing / AI), timeline and budget feel.
-4. If they name their business or website, use research_contact to learn about them, then tailor your pitch with get_research.
-5. Offer a quick call — use send_booking_link when they're interested.
-6. When they're serious and you have their requirements, use create_proposal to draft a proposal; tell them the team will send it shortly.
-7. If they ask for a human, get frustrated, or discuss anything sensitive — call handoff_human.`,
+    `You are ${config.agent_name || "Arc"}, a sales consultant at ARC AI Agency — a Sri Lankan AI & digital agency that builds business websites, e-commerce stores, runs social media marketing and sets up AI automations. You're chatting with a potential customer on WhatsApp.`,
+    `HOW YOU SOUND (this matters more than anything):
+- Like a sharp, friendly human on WhatsApp — warm, confident, a little playful. Use contractions ("I'll", "that's"), natural fillers ("ah nice", "got it", "to be honest"), and the occasional emoji 👍 — but never more than one per message.
+- SHORT messages. 1-3 sentences, like real texting. Never send walls of text or bullet lists longer than 3 items.
+- Mirror their energy and language — casual if they're casual, formal if they're formal; reply in English, Sinhala or Tamil, whichever they use.
+- BANNED: "As an AI", "I understand your concern", "Certainly!", "How may I assist you today", "I apologize for any inconvenience" — anything that smells like a call center or a bot. If someone directly asks if you're a bot, be honest and light: you're Arc, the agency's digital assistant, and a teammate can jump in anytime.
+- NEVER invent prices, discounts or delivery dates. Quote ONLY what's in the knowledge base; anything else → "let me get the team to confirm that."`,
+    `YOUR MISSION — learn everything, lead everything. You always hold the upper hand in the conversation: you ask the questions, you steer, and every message you send ends with exactly ONE question or a clear next step. Never leave a reply hanging with nothing to answer.
+
+INFO CHECKLIST (collect in this order, one at a time, weaving it into natural chat — never interrogate):
+1. Their NAME — always first. ${config.ask_name ? "Don't discuss anything substantial until you have it." : ""}
+2. Their COMPANY / business name and what they do.
+3. Their WEBSITE — always ask "do you have a website at the moment?" once you know the business.
+4. What they need, their timeline, and a feel for budget.
+5. Their email, and confirm this WhatsApp number is the best contact — slip these in naturally mid-conversation, e.g. when offering to send something.
+
+THE MOMENT you learn their name (and again when you learn company/email), call save_contact. Log every meaningful detail they share with update_lead (note). Buying signals — asking prices, timelines, "can you do X" — mark the lead hot with update_lead.`,
+    `IF THEY HAVE A WEBSITE:
+- The moment they share the URL, call BOTH audit_website AND research_contact (same turn, before replying).
+- Then reply like someone who literally just opened their site on their phone: compliment one genuine thing, then casually drop the 1-2 issues that hurt most ("just had a look — site's taking ages to load on mobile, and Google's basically ignoring your pages, no descriptions set 😬"). Sound like an expert who noticed, not a report.
+- A message or two later, call get_research — once it's ready, reference their actual business like you did your homework: what they sell, their area, their competition. You want them thinking "these people already know my business better than my current web guy."
+- Then bridge to the fix: what we'd do, the package that fits (knowledge base), and a call — send_booking_link.
+
+IF THEY DON'T HAVE A WEBSITE:
+- Totally fine — "actually easier, we start clean 😄". Ask what kind of site they're picturing: business site or online store?
+- Then gather: what the business does, must-have features, any sites they like, timeline.
+- Give them the fitting package + price straight from the knowledge base, frame it around THEIR goals ("for a bakery doing deliveries, the Growth package makes sense because…").
+- Still call research_contact with their business name — reviews and Facebook pages often exist without a website.
+
+CLOSING PLAYS:
+- Momentum: offer something concrete and fast — "I can have a plan and exact quote to you today."
+- When they're warm: send_booking_link for a quick call. When they're serious and you have requirements: create_proposal and tell them it's on the way.
+- If they go quiet after pricing, don't chase with discounts — schedule_followup (2 days) and close warmly.
+- Human wanted, frustration, or anything sensitive → handoff_human immediately.`,
     `What you already know about this contact:\n${known.join("\n")}`,
   ];
 
@@ -426,6 +451,9 @@ function buildToolSchemas(allowed: Set<string>): ToolSchema[] {
       website: { type: "string", description: "Their website URL, if known." },
     }, ["company"]),
     get_research: fn("get_research", "Fetch the research briefing for this contact's business (call research_contact first).", {}),
+    audit_website: fn("audit_website", "Instantly audit a website (seconds): mobile-friendliness, HTTPS, SEO basics, freshness. Returns concrete issues you can mention naturally in conversation. Call this the moment they share their website URL.", {
+      website: { type: "string", description: "The website URL or domain, e.g. nimalbakery.lk" },
+    }, ["website"]),
     update_lead: fn("update_lead", "Update the linked CRM lead: deal value, score and/or a qualification note.", {
       value: { type: "number", description: "Estimated deal value in LKR." },
       score: { type: "string", enum: ["hot", "warm", "cold"], description: "How promising this lead feels." },
@@ -513,6 +541,8 @@ async function executeWaTool(
         return await toolResearchContact(supabase, contact, config, args);
       case "get_research":
         return await toolGetResearch(supabase, contact);
+      case "audit_website":
+        return await toolAuditWebsite(supabase, contact, args);
       case "update_lead":
         return await toolUpdateLead(supabase, contact, args);
       case "create_task":
@@ -846,6 +876,86 @@ async function toolGetResearch(supabase: DB, contact: WaContact): Promise<WaTool
   return {
     ok: true,
     result: `Research briefing (JSON, may be truncated):\n${raw.slice(0, 3500)}`,
+  };
+}
+
+// ---- instant website audit --------------------------------------------------
+
+/**
+ * One-scrape audit (the Find Leads triage engine): probes the URL, reads the
+ * homepage and grades mobile/HTTPS/SEO/freshness in a few seconds — fast
+ * enough to run inside the webhook reply. The deep Lighthouse scorecard
+ * arrives later via the background research pipeline (get_research).
+ */
+async function toolAuditWebsite(
+  supabase: DB,
+  contact: WaContact,
+  args: Record<string, unknown>,
+): Promise<WaToolOutcome> {
+  const website = String(args.website ?? "").trim();
+  if (!website) return { ok: false, result: "A website URL is required." };
+
+  const probe = await probeSite(website);
+
+  if (probe.verdict === "down") {
+    return {
+      ok: true,
+      result: `The site doesn't load at all (nothing answered at ${website}). That IS the headline issue — visitors and Google see a dead site. Mention it gently and pivot to how quickly we could get a proper site live.`,
+    };
+  }
+  if (probe.verdict === "erroring") {
+    return {
+      ok: true,
+      result: `The site is answering with server errors (HTTP ${probe.status}) — visitors currently see an error page. That's the headline issue; pivot to fixing/rebuilding it.`,
+    };
+  }
+  if (!probe.html) {
+    return {
+      ok: true,
+      result: `The site is up but couldn't be read (HTTP ${probe.status}, likely bot protection). Don't claim specific issues — say you had a quick look and would love to run a full audit, then keep qualifying. Deep research may still get through.`,
+    };
+  }
+
+  const seo = analyzeSeo(probe.html);
+  const text = probe.html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ");
+  const verdict = quickSiteVerdict({
+    seo,
+    https: probe.finalUrl.startsWith("https://"),
+    copyrightYear: extractCopyrightYear(text),
+    contentChars: text.length,
+  });
+
+  // Anchor the audit onto the CRM lead so the team sees it too.
+  if (contact.lead_id) {
+    await supabase
+      .from("leads")
+      .update({ company_website: probe.finalUrl })
+      .eq("id", contact.lead_id);
+    await supabase.from("lead_activities").insert({
+      lead_id: contact.lead_id,
+      kind: "note",
+      title: `Website audit — ${verdict.score}/100`,
+      body: verdict.issues.length ? verdict.issues.join("\n") : "No major issues found.",
+      actor_id: null,
+    });
+  }
+
+  const summary = {
+    url: probe.finalUrl,
+    score: verdict.score,
+    issues: verdict.issues,
+  };
+  return {
+    ok: true,
+    result:
+      `${JSON.stringify(summary)}\n` +
+      (verdict.issues.length
+        ? "Pick the 2 issues a business owner FEELS most (mobile, Not Secure, dead-slow, looks outdated) and mention them casually like you just browsed the site — never dump the whole list. Compliment one genuine thing first."
+        : "The site is technically decent — compliment it, then sell growth instead: more leads, better Google ranking, automation. The deep research report (get_research) will find more angles."),
   };
 }
 

@@ -37,6 +37,13 @@ export const WA_TOOL_CATALOG: WaToolMeta[] = [
     kind: "write",
   },
   {
+    key: "audit_website",
+    label: "Instant website audit",
+    description:
+      "Live-checks the contact's website in seconds — mobile-friendliness, HTTPS, SEO basics, freshness — so the agent can talk about their site's real issues mid-conversation.",
+    kind: "read",
+  },
+  {
     key: "get_research",
     label: "Read research briefing",
     description:

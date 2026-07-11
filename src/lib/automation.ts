@@ -104,6 +104,14 @@ function matchesTriggerConfig(automation: Automation, event: TriggerEvent): bool
       );
     case "webhook":
       return !cfg.endpoint_id || cfg.endpoint_id === event.payload?.endpoint_id;
+    case "wa_message_received": {
+      // Optional keyword filter — "any WhatsApp message containing X".
+      const keyword = String(cfg.keyword ?? "").trim().toLowerCase();
+      if (!keyword) return true;
+      return String(event.payload?.message ?? "")
+        .toLowerCase()
+        .includes(keyword);
+    }
     default:
       return true;
   }
@@ -881,6 +889,91 @@ async function executeStep(
         });
       }
       return { ok: true, detail: `AI → ${saveTo}` };
+    }
+
+    case "send_whatsapp": {
+      const {
+        isWhatsAppConfigured,
+        normalizeWaPhone,
+        sendWhatsAppTemplate,
+        sendWhatsAppText,
+      } = await import("@/lib/whatsapp");
+      if (!isWhatsAppConfigured())
+        return { ok: false, detail: "WhatsApp isn't configured (WHATSAPP_ACCESS_TOKEN / WHATSAPP_PHONE_NUMBER_ID)." };
+
+      const raw = run.subject_phone ?? "";
+      const phone = normalizeWaPhone(raw);
+      if (!phone.ok) return { ok: false, detail: `No valid phone (${raw || "empty"}).` };
+
+      const templateName = String(cfg.template_name ?? "").trim();
+      const message = renderTokens(String(cfg.message ?? ""), run, lead).trim();
+      if (!templateName && !message)
+        return { ok: false, detail: "WhatsApp step has no message." };
+
+      // Template = deliverable outside the 24h window; free text otherwise.
+      const sent = templateName
+        ? await sendWhatsAppTemplate({
+            to: phone.value,
+            template: templateName,
+            language: String(cfg.template_lang ?? "").trim() || "en",
+          })
+        : await sendWhatsAppText({ to: phone.value, body: message });
+
+      // Log the send into the WhatsApp inbox thread (create the contact if new).
+      let { data: contact } = await supabase
+        .from("wa_contacts")
+        .select("id, wa_id")
+        .eq("wa_id", phone.value)
+        .maybeSingle();
+      if (!contact) {
+        const { data: created } = await supabase
+          .from("wa_contacts")
+          .upsert(
+            {
+              wa_id: phone.value,
+              display_name: run.subject_name || null,
+              lead_id: run.lead_id,
+              client_id: run.client_id,
+            },
+            { onConflict: "wa_id" },
+          )
+          .select("id, wa_id")
+          .single();
+        contact = created;
+      }
+      if (contact) {
+        const bodyText = templateName ? `[template: ${templateName}]` : message;
+        await supabase.from("wa_messages").insert({
+          contact_id: contact.id,
+          wa_message_id: sent.ok ? sent.waMessageId : null,
+          direction: "out",
+          body: bodyText,
+          status: sent.ok ? "sent" : "failed",
+          error: sent.ok ? null : sent.error,
+          sent_by: "automation",
+        });
+        await supabase
+          .from("wa_contacts")
+          .update({
+            last_message_at: new Date().toISOString(),
+            last_message_preview: bodyText.slice(0, 160),
+            last_direction: "out",
+          })
+          .eq("id", contact.id);
+      }
+
+      if (run.lead_id) {
+        await supabase.from("lead_activities").insert({
+          lead_id: run.lead_id,
+          kind: "automation",
+          title: sent.ok ? "Automated WhatsApp sent" : "Automated WhatsApp failed",
+          body: templateName ? `Template "${templateName}"` : message,
+          actor_id: null,
+        });
+      }
+      return sent.ok
+        ? { ok: true, detail: `WhatsApp to +${phone.value}` }
+        : { ok: false, detail: sent.error };
     }
 
     case "enroll_sms_workflow": {

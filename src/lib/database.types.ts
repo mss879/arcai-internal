@@ -136,7 +136,8 @@ export type AutomationTrigger =
   | "cheque_due"
   | "quote_accepted"
   | "client_created"
-  | "webhook";
+  | "webhook"
+  | "wa_message_received";
 export type AutomationStepKind =
   | "send_sms"
   | "send_email"
@@ -151,7 +152,18 @@ export type AutomationStepKind =
   | "webhook"
   | "ai_agent"
   | "enroll_sms_workflow"
-  | "wait";
+  | "wait"
+  | "send_whatsapp";
+/** WhatsApp system (0048). */
+export type WaDirection = "in" | "out";
+export type WaMessageStatus =
+  | "received"
+  | "sent"
+  | "delivered"
+  | "read"
+  | "failed";
+export type WaSentBy = "agent" | "team" | "automation" | "keyword";
+export type WaMatchType = "exact" | "contains" | "starts_with";
 export type AutomationRunStatus =
   | "running"
   | "completed"
@@ -1183,6 +1195,7 @@ export type Database = {
           error: string | null;
           invoice_id: UUID | null;
           workflow_id: UUID | null;
+          lead_id: UUID | null;
           segments: number;
           created_by: UUID | null;
           created_at: Timestamp;
@@ -1198,6 +1211,7 @@ export type Database = {
           error?: string | null;
           invoice_id?: UUID | null;
           workflow_id?: UUID | null;
+          lead_id?: UUID | null;
           segments?: number;
           created_by?: UUID | null;
           created_at?: Timestamp;
@@ -1893,6 +1907,170 @@ export type Database = {
         };
         Update: Partial<
           Database["public"]["Tables"]["lead_research"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      wa_contacts: {
+        Row: {
+          id: UUID;
+          wa_id: string;
+          profile_name: string | null;
+          display_name: string | null;
+          lead_id: UUID | null;
+          client_id: UUID | null;
+          agent_enabled: boolean;
+          needs_attention: boolean;
+          unread: number;
+          last_message_at: Timestamp | null;
+          last_message_preview: string | null;
+          last_direction: WaDirection | null;
+          last_inbound_at: Timestamp | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          wa_id: string;
+          profile_name?: string | null;
+          display_name?: string | null;
+          lead_id?: UUID | null;
+          client_id?: UUID | null;
+          agent_enabled?: boolean;
+          needs_attention?: boolean;
+          unread?: number;
+          last_message_at?: Timestamp | null;
+          last_message_preview?: string | null;
+          last_direction?: WaDirection | null;
+          last_inbound_at?: Timestamp | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["wa_contacts"]["Insert"]>;
+        Relationships: [];
+      };
+      wa_messages: {
+        Row: {
+          id: UUID;
+          contact_id: UUID;
+          wa_message_id: string | null;
+          direction: WaDirection;
+          message_type: string;
+          body: string;
+          status: WaMessageStatus;
+          error: string | null;
+          sent_by: WaSentBy | null;
+          author_id: UUID | null;
+          meta: Record<string, unknown>;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          contact_id: UUID;
+          wa_message_id?: string | null;
+          direction: WaDirection;
+          message_type?: string;
+          body?: string;
+          status?: WaMessageStatus;
+          error?: string | null;
+          sent_by?: WaSentBy | null;
+          author_id?: UUID | null;
+          meta?: Record<string, unknown>;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["wa_messages"]["Insert"]>;
+        Relationships: [];
+      };
+      wa_agent_config: {
+        Row: {
+          id: number;
+          enabled: boolean;
+          agent_name: string;
+          greeting: string;
+          persona: string;
+          knowledge: string;
+          ask_name: boolean;
+          auto_create_lead: boolean;
+          pipeline_id: UUID | null;
+          stage_id: UUID | null;
+          lead_source: string;
+          allowed_tools: string[];
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: number;
+          enabled?: boolean;
+          agent_name?: string;
+          greeting?: string;
+          persona?: string;
+          knowledge?: string;
+          ask_name?: boolean;
+          auto_create_lead?: boolean;
+          pipeline_id?: UUID | null;
+          stage_id?: UUID | null;
+          lead_source?: string;
+          allowed_tools?: string[];
+          updated_at?: Timestamp;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["wa_agent_config"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      wa_keyword_rules: {
+        Row: {
+          id: UUID;
+          keyword: string;
+          match_type: WaMatchType;
+          reply: string | null;
+          add_tag: string | null;
+          notify_team: boolean;
+          handoff: boolean;
+          automation_id: UUID | null;
+          is_active: boolean;
+          hits: number;
+          position: number;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          keyword: string;
+          match_type?: WaMatchType;
+          reply?: string | null;
+          add_tag?: string | null;
+          notify_team?: boolean;
+          handoff?: boolean;
+          automation_id?: UUID | null;
+          is_active?: boolean;
+          hits?: number;
+          position?: number;
+          created_at?: Timestamp;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["wa_keyword_rules"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      wa_agent_logs: {
+        Row: {
+          id: UUID;
+          contact_id: UUID | null;
+          tool: string;
+          args: Record<string, unknown>;
+          ok: boolean;
+          result: string | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          contact_id?: UUID | null;
+          tool: string;
+          args?: Record<string, unknown>;
+          ok?: boolean;
+          result?: string | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["wa_agent_logs"]["Insert"]
         >;
         Relationships: [];
       };

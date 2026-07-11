@@ -59,6 +59,11 @@ export type CarouselPost = Tables["carousel_posts"]["Row"];
 export type CarouselOption = Tables["carousel_options"]["Row"];
 export type WebsiteProject = Tables["website_projects"]["Row"];
 export type SmsMessage = Tables["sms_messages"]["Row"];
+export type WaContact = Tables["wa_contacts"]["Row"];
+export type WaMessage = Tables["wa_messages"]["Row"];
+export type WaAgentConfig = Tables["wa_agent_config"]["Row"];
+export type WaKeywordRule = Tables["wa_keyword_rules"]["Row"];
+export type WaAgentLog = Tables["wa_agent_logs"]["Row"];
 export type SmsWorkflow = Tables["sms_workflows"]["Row"];
 export type SmsWorkflowStep = Tables["sms_workflow_steps"]["Row"];
 export type SmsWorkflowRun = Tables["sms_workflow_runs"]["Row"];
@@ -132,6 +137,10 @@ export type {
   AdPlatform,
   VisitorEventKind,
   LeadResearchStatus,
+  WaDirection,
+  WaMessageStatus,
+  WaSentBy,
+  WaMatchType,
 } from "@/lib/database.types";
 
 /** A todo joined with the profile it's assigned to. */

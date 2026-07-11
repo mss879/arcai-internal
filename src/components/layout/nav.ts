@@ -10,6 +10,7 @@ import {
   Landmark,
   LayoutDashboard,
   ListChecks,
+  MessageCircle,
   MessageSquareText,
   ScrollText,
   ShieldCheck,
@@ -40,6 +41,7 @@ export const NAV: NavItem[] = [
   { label: "Invoices & Quotes", href: "/invoices", icon: FileText },
   { label: "Proposals", href: "/proposals", icon: ScrollText },
   { label: "SMS", href: "/sms", icon: MessageSquareText },
+  { label: "WhatsApp", href: "/whatsapp", icon: MessageCircle },
   { label: "Content Studio", href: "/content", icon: Sparkles },
   { label: "Resources", href: "/resources", icon: FolderOpen },
 ];

@@ -57,6 +57,7 @@ type DraftCondition = { field: string; op: string; value: string };
 
 const STEP_KINDS: AutomationStepKind[] = [
   "send_sms",
+  "send_whatsapp",
   "send_email",
   "wait",
   "create_task",
@@ -521,6 +522,14 @@ function TriggerNode({
           />
         )}
 
+        {trigger === "wa_message_received" && (
+          <Input
+            defaultValue={String(cfg.keyword ?? "")}
+            onBlur={(e) => onConfigChange({ keyword: e.target.value.trim() || undefined })}
+            placeholder="Keyword filter (blank = every message)"
+          />
+        )}
+
         {(trigger === "lead_inactive" || trigger === "invoice_unpaid") && (
           <NumberConfig
             label={trigger === "lead_inactive" ? "days of inactivity" : "days after sending"}
@@ -814,6 +823,35 @@ function StepNode({
               placeholder={"Hi {{name}}, welcome to ARC AI! ..."}
             />
             <TokenRow onInsert={(t) => onChange({ message: `${String(cfg.message ?? "")}${t}` })} />
+          </>
+        )}
+
+        {draft.kind === "send_whatsapp" && (
+          <>
+            <Textarea
+              value={String(cfg.message ?? "")}
+              onChange={(e) => onChange({ message: e.target.value })}
+              rows={3}
+              placeholder={"Hi {{name}}, thanks for chatting with ARC AI! ..."}
+            />
+            <TokenRow onInsert={(t) => onChange({ message: `${String(cfg.message ?? "")}${t}` })} />
+            <div className="grid gap-2 sm:grid-cols-2">
+              <Input
+                value={String(cfg.template_name ?? "")}
+                onChange={(e) => onChange({ template_name: e.target.value.trim() || undefined })}
+                placeholder="Template name (for contacts silent >24h)"
+              />
+              <Input
+                value={String(cfg.template_lang ?? "")}
+                onChange={(e) => onChange({ template_lang: e.target.value.trim() || undefined })}
+                placeholder="Template language, e.g. en"
+              />
+            </div>
+            <p className="text-[11px] leading-4 text-slate-400">
+              WhatsApp only delivers free text within 24h of the contact&apos;s last
+              message. Set an approved template name to reach colder contacts —
+              when set, the template is sent instead of the message above.
+            </p>
           </>
         )}
 

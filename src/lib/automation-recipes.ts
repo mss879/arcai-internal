@@ -216,6 +216,89 @@ export const AUTOMATION_RECIPES: AutomationRecipe[] = [
     ],
   },
   {
+    id: "whatsapp-lead-warming",
+    name: "WhatsApp lead warming",
+    description:
+      "A WhatsApp lead that goes quiet for 3 days gets a friendly nudge on WhatsApp and the team gets a follow-up task — keeps every chat-lead warm automatically.",
+    emoji: "💬",
+    trigger: "lead_inactive",
+    trigger_config: { days: 3 },
+    conditions: [{ field: "source", op: "eq", value: "whatsapp" }],
+    steps: [
+      {
+        kind: "send_whatsapp",
+        config: {
+          message:
+            "Hi {{name}} 👋 just checking in from ARC AI — still keen on getting your project moving? Happy to answer any questions right here. 🙂",
+        },
+      },
+      { kind: "add_tag", config: { tag: "warming" } },
+      {
+        kind: "create_task",
+        config: {
+          title: "Follow up WhatsApp lead: {{full_name}}",
+          notes: "No activity for 3 days — warming message sent automatically on WhatsApp.",
+          due_in_days: 1,
+        },
+      },
+    ],
+  },
+  {
+    id: "whatsapp-payment-reminder",
+    name: "WhatsApp payment reminder",
+    description:
+      "Three days after an invoice goes unpaid, the client gets a polite WhatsApp reminder (plus the usual email) — WhatsApp gets read far more than email.",
+    emoji: "🧾",
+    trigger: "invoice_unpaid",
+    trigger_config: { days: 3 },
+    conditions: [],
+    steps: [
+      {
+        kind: "send_whatsapp",
+        config: {
+          message:
+            "Hi {{name}}, a gentle reminder from ARC AI — invoice {{invoice_number}} ({{amount}}) is still awaiting payment. If you've already paid, please ignore this. Any questions, just reply here 🙏",
+        },
+      },
+      {
+        kind: "notify",
+        config: {
+          user_id: "all",
+          title: "WhatsApp invoice reminder sent",
+          body: "Invoice {{invoice_number}} ({{amount}}) unpaid after 3 days — reminder sent on WhatsApp.",
+        },
+      },
+    ],
+  },
+  {
+    id: "whatsapp-pricing-alert",
+    name: "WhatsApp buying-signal alert",
+    description:
+      'Someone types "price", "cost" or "quotation" on WhatsApp → the lead is marked hot and the whole team is pinged to jump in while intent is high.',
+    emoji: "🔔",
+    trigger: "wa_message_received",
+    trigger_config: { keyword: "price" },
+    conditions: [],
+    steps: [
+      { kind: "update_score", config: { score: "hot" } },
+      {
+        kind: "notify",
+        config: {
+          user_id: "all",
+          title: "WhatsApp buying signal 🔥",
+          body: "{{full_name}} asked about pricing on WhatsApp — jump into the chat!",
+        },
+      },
+      {
+        kind: "create_task",
+        config: {
+          title: "Close {{full_name}} — asked for pricing on WhatsApp",
+          due_in_days: 1,
+        },
+      },
+    ],
+  },
+  {
     id: "closing-date-nudge",
     name: "Closing date approaching",
     description:

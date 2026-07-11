@@ -15,6 +15,10 @@ const PUBLIC_PREFIXES = [
   "/api/automation/tick",
   "/api/sms/automation/tick",
   "/api/intelligence/digest",
+  // Meta's WhatsApp Cloud API webhook — must be reachable by Meta's servers.
+  // The route guards itself: GET needs the verify token, POST needs a valid
+  // X-Hub-Signature-256 signature from WHATSAPP_APP_SECRET.
+  "/api/whatsapp/webhook",
   // Netlify functions (the scheduled automation tick) are invoked server-to-
   // server with no auth cookie. The catch-all proxy matcher runs on these paths
   // too, so without this they'd be redirected to /login. Harmless to keep even

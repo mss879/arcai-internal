@@ -77,7 +77,9 @@ export type ToolSchema = {
 export async function openaiChat(
   messages: ChatMessage[],
   tools?: ToolSchema[],
+  opts?: { model?: string },
 ): Promise<ChatMessage> {
+  const model = opts?.model?.trim() || AI_MODELS.chat;
   const res = await fetch(`${BASE_URL}/chat/completions`, {
     method: "POST",
     headers: {
@@ -85,10 +87,11 @@ export async function openaiChat(
       Authorization: `Bearer ${apiKey()}`,
     },
     body: JSON.stringify({
-      model: AI_MODELS.chat,
+      model,
       messages,
-      // Keep it factual/deterministic — this assistant must not improvise data.
-      temperature: 0,
+      // Keep it factual/deterministic — this assistant must not improvise
+      // data. (Reasoning models reject temperature — omit it for them.)
+      ...(isReasoningModel(model) ? {} : { temperature: 0 }),
       ...(tools && tools.length ? { tools, tool_choice: "auto" } : {}),
     }),
   });

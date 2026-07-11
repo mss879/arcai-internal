@@ -64,6 +64,11 @@ export const TRIGGER_META: Record<
     label: "Webhook received",
     description: "An inbound webhook endpoint (Zapier/Make/custom) fires.",
   },
+  wa_message_received: {
+    label: "WhatsApp message received",
+    description:
+      "An inbound WhatsApp message arrives. Add a keyword in the trigger config to only fire on messages containing it.",
+  },
 };
 
 export const STEP_META: Record<
@@ -134,6 +139,12 @@ export const STEP_META: Record<
     label: "Enroll in SMS drip",
     description: "Start an SMS-page workflow for the contact.",
     tone: "bg-cyan-500",
+  },
+  send_whatsapp: {
+    label: "Send WhatsApp",
+    description:
+      "Message the contact on WhatsApp. Set a template name for contacts who haven't replied in 24h.",
+    tone: "bg-green-600",
   },
   wait: {
     label: "Wait",

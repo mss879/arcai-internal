@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 
+import { fireAutomationTrigger } from "@/lib/automation";
 import { createClient } from "@/lib/supabase/server";
 import type { ActionResult } from "@/lib/types";
 import type {
@@ -78,7 +79,7 @@ export async function setInstallmentPaid(
       paid_at: paid ? new Date().toISOString() : null,
     })
     .eq("id", id)
-    .select("plan_id")
+    .select("plan_id, seq, amount")
     .single();
   if (error) return { ok: false, error: error.message };
 
@@ -93,6 +94,39 @@ export async function setInstallmentPaid(
       .from("payment_plans")
       .update({ status: allPaid ? "completed" : "active" })
       .eq("id", inst.plan_id);
+  }
+
+  // Money landed → fire the payment_received automations (e.g. the
+  // "Deposit received 🚀" kickoff when seq = 1). trigger_key dedupes, so
+  // toggling paid → unpaid → paid never spams the customer.
+  if (paid && inst) {
+    const { data: plan } = await supabase
+      .from("payment_plans")
+      .select("*")
+      .eq("id", inst.plan_id)
+      .maybeSingle();
+    if (plan) {
+      const lead = plan.lead_id
+        ? (await supabase.from("leads").select("*").eq("id", plan.lead_id).maybeSingle()).data
+        : null;
+      await fireAutomationTrigger(supabase, {
+        trigger: "payment_received",
+        lead,
+        client: plan.client_id
+          ? { id: plan.client_id, name: plan.contact_name, phone: plan.phone }
+          : null,
+        payload: {
+          name: plan.contact_name,
+          phone: plan.phone,
+          amount: `${plan.currency} ${Number(inst.amount).toLocaleString()}`,
+          seq: inst.seq,
+          plan_title: plan.title,
+          total: Number(plan.total) || 0,
+          total_amount: `${plan.currency} ${Number(plan.total).toLocaleString()}`,
+        },
+        triggerKey: `${id}:paid`,
+      });
+    }
   }
 
   revalidatePath("/finance");

@@ -93,6 +93,13 @@ export const WA_TOOL_CATALOG: WaToolMeta[] = [
     kind: "write",
   },
   {
+    key: "send_quote",
+    label: "Send signable quote (the closer)",
+    description:
+      "When the customer agrees to a package, creates a real e-sign quotation (catalog prices only) and delivers the signing link into the chat. Their signature fires the deal-close automation — invoice, payment details, deposit task.",
+    kind: "write",
+  },
+  {
     key: "notify_team",
     label: "Notify the team",
     description:

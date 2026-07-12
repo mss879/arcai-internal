@@ -112,6 +112,9 @@ function matchesTriggerConfig(automation: Automation, event: TriggerEvent): bool
         .toLowerCase()
         .includes(keyword);
     }
+    case "payment_received":
+      // Optional installment filter — seq 1 = "the deposit landed".
+      return !cfg.seq || Number(event.payload?.seq ?? 0) === Number(cfg.seq);
     default:
       return true;
   }
@@ -236,7 +239,7 @@ async function enrollRun(
     .select("*")
     .eq("automation_id", automation.id)
     .order("position", { ascending: true });
-  await advanceRun(supabase, run, steps ?? []);
+  await advanceRun(supabase, run, steps ?? [], automation.trigger);
 }
 
 // ---------------------------------------------------------------------------
@@ -266,7 +269,10 @@ export async function processDueAutomationRuns(
 
   const automationIds = Array.from(new Set(dueRuns.map((r) => r.automation_id)));
   const [{ data: automations }, { data: allSteps }] = await Promise.all([
-    supabase.from("automations").select("id, is_active").in("id", automationIds),
+    supabase
+      .from("automations")
+      .select("id, is_active, trigger")
+      .in("id", automationIds),
     supabase
       .from("automation_steps")
       .select("*")
@@ -276,6 +282,9 @@ export async function processDueAutomationRuns(
 
   const activeIds = new Set(
     (automations ?? []).filter((a) => a.is_active).map((a) => a.id),
+  );
+  const triggerById = new Map(
+    (automations ?? []).map((a) => [a.id, a.trigger]),
   );
   const stepsByAutomation = new Map<string, Step[]>();
   for (const step of allSteps ?? []) {
@@ -291,6 +300,7 @@ export async function processDueAutomationRuns(
       supabase,
       run,
       stepsByAutomation.get(run.automation_id) ?? [],
+      triggerById.get(run.automation_id) ?? null,
     );
     if (!ok) result.failed++;
   }
@@ -521,11 +531,33 @@ export function renderTokens(
   return out;
 }
 
+/** Nudge-class = the automation fires on a timer, not on a customer action.
+ * Cold outreach (a prospected lead's first touch) is unprompted too. */
+function isNudgeTrigger(
+  trigger: string | null,
+  lead: { source?: string | null } | null,
+): boolean {
+  if (!trigger) return false;
+  if (
+    ["lead_inactive", "invoice_unpaid", "installment_due", "cheque_due", "date_reached"].includes(
+      trigger,
+    )
+  ) {
+    return true;
+  }
+  return trigger === "lead_created" && lead?.source === "prospecting";
+}
+
 /**
  * Execute steps from run.step_index until a wait pushes the run forward,
  * a step fails, or the run completes. Returns false when the run failed.
  */
-async function advanceRun(supabase: DB, run: Run, steps: Step[]): Promise<boolean> {
+async function advanceRun(
+  supabase: DB,
+  run: Run,
+  steps: Step[],
+  trigger: string | null = null,
+): Promise<boolean> {
   let index = run.step_index;
   const log = Array.isArray(run.log) ? [...run.log] : [];
 
@@ -550,6 +582,31 @@ async function advanceRun(supabase: DB, run: Run, steps: Step[]): Promise<boolea
 
     const step = steps[index];
     const cfg = (step.config ?? {}) as Record<string, unknown>;
+
+    // Quiet hours: nudge-class WhatsApp sends (inactivity chases, unpaid
+    // reminders, cold outreach) wait for morning. Event-response sends
+    // (quote signed, payment received, inbound message) go out immediately
+    // whatever the hour — the customer is actively in the flow.
+    if (step.kind === "send_whatsapp" && isNudgeTrigger(trigger, lead)) {
+      const { getWaAgentConfig, isQuietHours, nextQuietHoursEnd } =
+        await import("@/lib/wa-agent");
+      const waConfig = await getWaAgentConfig(supabase);
+      if (isQuietHours(waConfig)) {
+        const resume = nextQuietHoursEnd(waConfig).toISOString();
+        log.push({
+          step: "send_whatsapp",
+          at: new Date().toISOString(),
+          ok: true,
+          detail: `Deferred to ${resume} — quiet hours`,
+        });
+        // Step index stays put: the run resumes at this exact send.
+        await supabase
+          .from("automation_runs")
+          .update({ next_run_at: resume, log })
+          .eq("id", run.id);
+        return true;
+      }
+    }
 
     if (step.kind === "wait") {
       const minutes = Math.max(0, Number(cfg.minutes ?? 0));
@@ -997,6 +1054,137 @@ async function executeStep(
       return error
         ? { ok: false, detail: error.message }
         : { ok: true, detail: "Enrolled in SMS workflow" };
+    }
+
+    case "convert_quote_to_invoice": {
+      const ctx = (run.context ?? {}) as Record<string, unknown>;
+      const quoteId = String(ctx.quote_id ?? "");
+      if (!quoteId)
+        return { ok: false, detail: "No quote_id in the trigger context (fired by an old quote link?)." };
+      const { data: quote } = await supabase
+        .from("quotes")
+        .select("*")
+        .eq("id", quoteId)
+        .maybeSingle();
+      if (!quote) return { ok: false, detail: "Quote not found." };
+      if (quote.invoice_id)
+        return { ok: true, detail: "Quote is already invoiced — skipped." };
+
+      // Same numbering style the AI invoice tool uses (#00201, #00202…).
+      const { count } = await supabase
+        .from("invoices")
+        .select("*", { count: "exact", head: true });
+      const invoiceNumber = "#" + String(200 + (count ?? 0) + 1).padStart(5, "0");
+      const grandTotal = Number(quote.grand_total) || 0;
+      const deposit = Math.round(grandTotal / 2);
+      const today = new Date().toISOString().slice(0, 10);
+
+      const { data: invoice, error } = await supabase
+        .from("invoices")
+        .insert({
+          invoice_number: invoiceNumber,
+          invoice_date: today,
+          bill_to_name: quote.customer_name,
+          bill_to_details: [quote.customer_phone, quote.customer_email]
+            .filter(Boolean)
+            .join("\n"),
+          items: quote.items,
+          grand_total: grandTotal,
+          due_today: deposit,
+          created_by: null,
+        })
+        .select("id")
+        .single();
+      if (error || !invoice)
+        return { ok: false, detail: error?.message ?? "Invoice insert failed." };
+
+      await supabase.from("quotes").update({ invoice_id: invoice.id }).eq("id", quoteId);
+
+      // Payment plan (deposit + balance) so the money is trackable in
+      // Finance — and marking the deposit paid fires `payment_received`.
+      const { data: plan } = await supabase
+        .from("payment_plans")
+        .insert({
+          title: quote.title || `Quote ${quote.quote_number}`,
+          client_id: quote.client_id,
+          lead_id: quote.lead_id,
+          invoice_id: invoice.id,
+          contact_name: quote.customer_name,
+          phone: quote.customer_phone,
+          total: grandTotal,
+          currency: quote.currency,
+          notes: `Created automatically from accepted quote ${quote.quote_number}.`,
+          created_by: null,
+        })
+        .select("id")
+        .single();
+      if (plan) {
+        await supabase.from("payment_installments").insert([
+          { plan_id: plan.id, seq: 1, amount: deposit, due_date: today },
+          {
+            plan_id: plan.id,
+            seq: 2,
+            amount: grandTotal - deposit,
+            due_date: new Date(Date.now() + 30 * 24 * 3600_000).toISOString().slice(0, 10),
+          },
+        ]);
+      }
+
+      // Expose the results to later steps' {{tokens}}.
+      const fmt = (n: number) => `${quote.currency} ${n.toLocaleString()}`;
+      const newContext = {
+        ...ctx,
+        invoice_number: invoiceNumber,
+        deposit_amount: fmt(deposit),
+        balance_amount: fmt(grandTotal - deposit),
+        total_amount: fmt(grandTotal),
+      };
+      await supabase
+        .from("automation_runs")
+        .update({ context: newContext })
+        .eq("id", run.id);
+      run.context = newContext;
+
+      if (run.lead_id) {
+        await supabase.from("lead_activities").insert({
+          lead_id: run.lead_id,
+          kind: "automation",
+          title: `Quote ${quote.quote_number} → invoice ${invoiceNumber}`,
+          body: `Total ${fmt(grandTotal)}, deposit ${fmt(deposit)} due now. Payment plan created.`,
+          actor_id: null,
+        });
+      }
+      return { ok: true, detail: `Invoice ${invoiceNumber} + payment plan created` };
+    }
+
+    case "create_project": {
+      const ctx = (run.context ?? {}) as Record<string, unknown>;
+      const name =
+        renderTokens(String(cfg.name ?? ""), run, lead).trim() ||
+        String(ctx.plan_title ?? "").trim() ||
+        `${run.subject_name || "New client"} — Website project`;
+      const budget = Number(String(ctx.total ?? "")) || lead?.value || null;
+      const { error } = await supabase.from("projects").insert({
+        name,
+        description: `Created automatically when the deposit landed${run.subject_name ? ` — client: ${run.subject_name}` : ""}.`,
+        client_id: run.client_id,
+        status: "planning",
+        budget,
+        currency: "LKR",
+        start_date: new Date().toISOString().slice(0, 10),
+        created_by: null,
+      });
+      if (error) return { ok: false, detail: error.message };
+      if (run.lead_id) {
+        await supabase.from("lead_activities").insert({
+          lead_id: run.lead_id,
+          kind: "automation",
+          title: `Project "${name}" created`,
+          body: "Kickoff project created automatically after the deposit was received.",
+          actor_id: null,
+        });
+      }
+      return { ok: true, detail: `Project "${name}"` };
     }
 
     default:

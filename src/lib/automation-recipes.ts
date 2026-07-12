@@ -2,6 +2,7 @@ import type {
   AutomationStepKind,
   AutomationTrigger,
 } from "@/lib/database.types";
+import { INVOICE_BANK } from "@/lib/invoice";
 
 /**
  * One-click automation templates. Installing a recipe copies its trigger +
@@ -211,6 +212,99 @@ export const AUTOMATION_RECIPES: AutomationRecipe[] = [
         config: {
           message:
             "Hi {{name}}, thank you for accepting our proposal! We're excited to get started. Our team will send the invoice and kick-off details shortly. — ARC AI",
+        },
+      },
+    ],
+  },
+  {
+    id: "whatsapp-deal-close",
+    name: "WhatsApp deal close 💰",
+    description:
+      "The agent's quote gets e-signed → it instantly becomes a real invoice + deposit/balance payment plan, the customer receives the bank transfer details on WhatsApp, the team celebrates and a deposit-chase task is created. The full money moment, zero humans needed.",
+    emoji: "💰",
+    trigger: "quote_accepted",
+    trigger_config: {},
+    conditions: [],
+    steps: [
+      { kind: "convert_quote_to_invoice", config: {} },
+      {
+        kind: "send_whatsapp",
+        config: {
+          message: `Thank you {{name}}! 🎉 That's confirmed — invoice {{invoice_number}} is ready.\nTo kick things off, the deposit is {{deposit_amount}}:\nBank: ${INVOICE_BANK.bankName}\nAccount name: ${INVOICE_BANK.accountName}\nAccount no: ${INVOICE_BANK.accountNumber}\nBranch: ${INVOICE_BANK.branch}\nSend the slip here once it's done and we'll get started right away 🚀`,
+        },
+      },
+      {
+        kind: "notify",
+        config: {
+          user_id: "all",
+          title: "Deal closed on WhatsApp 💰",
+          body: "{{full_name}} signed {{quote_number}} ({{amount}}) — invoice {{invoice_number}} + payment details already sent in the chat.",
+        },
+      },
+      {
+        kind: "create_task",
+        config: {
+          title: "Confirm deposit received — {{full_name}}",
+          notes:
+            "Quote {{quote_number}} was signed; deposit {{deposit_amount}} of {{total_amount}}. The moment the money lands, mark installment 1 paid in Finance — that fires the kickoff automation.",
+          due_in_days: 1,
+        },
+      },
+    ],
+  },
+  {
+    id: "quote-opened-alert",
+    name: "Quote opened 👀",
+    description:
+      "The instant a client opens a quote's signing link, the whole team knows — the hottest moment in the deal. (The WhatsApp agent also nudges them automatically a few minutes later.)",
+    emoji: "👀",
+    trigger: "quote_viewed",
+    trigger_config: {},
+    conditions: [],
+    steps: [
+      {
+        kind: "notify",
+        config: {
+          user_id: "all",
+          title: "Quote opened 👀",
+          body: "{{full_name}} is looking at quote {{quote_number}} ({{amount}}) right now.",
+        },
+      },
+    ],
+  },
+  {
+    id: "deposit-kickoff",
+    name: "Deposit received 🚀",
+    description:
+      "The deposit installment is marked paid in Finance → the customer gets a warm kickoff message on WhatsApp, a project is created automatically and the team gets the kickoff task. Deal → cash → delivery, hands-free.",
+    emoji: "🚀",
+    trigger: "payment_received",
+    trigger_config: { seq: 1 },
+    conditions: [],
+    steps: [
+      {
+        kind: "send_whatsapp",
+        config: {
+          message:
+            "Payment received {{name}} — thank you! 🎉 Your project is officially underway. Our team is being briefed right now and you'll hear from us within one working day with the kickoff plan. Exciting times ahead 🚀",
+        },
+      },
+      { kind: "create_project", config: {} },
+      {
+        kind: "create_task",
+        config: {
+          title: "Kick off {{full_name}}'s project",
+          notes:
+            "Deposit {{amount}} received (plan: {{plan_title}}). Project created automatically — brief the team and send the kickoff plan.",
+          due_in_days: 1,
+        },
+      },
+      {
+        kind: "notify",
+        config: {
+          user_id: "all",
+          title: "Deposit received 🚀",
+          body: "{{full_name}} paid {{amount}} — project created, kickoff task assigned.",
         },
       },
     ],

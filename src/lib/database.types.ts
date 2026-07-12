@@ -137,7 +137,9 @@ export type AutomationTrigger =
   | "quote_accepted"
   | "client_created"
   | "webhook"
-  | "wa_message_received";
+  | "wa_message_received"
+  | "quote_viewed"
+  | "payment_received";
 export type AutomationStepKind =
   | "send_sms"
   | "send_email"
@@ -153,7 +155,9 @@ export type AutomationStepKind =
   | "ai_agent"
   | "enroll_sms_workflow"
   | "wait"
-  | "send_whatsapp";
+  | "send_whatsapp"
+  | "convert_quote_to_invoice"
+  | "create_project";
 /** WhatsApp system (0048). */
 export type WaDirection = "in" | "out";
 export type WaMessageStatus =
@@ -1934,6 +1938,10 @@ export type Database = {
           last_message_preview: string | null;
           last_direction: WaDirection | null;
           last_inbound_at: Timestamp | null;
+          followup_stage: number;
+          next_followup_at: Timestamp | null;
+          do_not_contact: boolean;
+          agent_due_at: Timestamp | null;
           created_at: Timestamp;
           updated_at: Timestamp;
         };
@@ -1951,6 +1959,10 @@ export type Database = {
           last_message_preview?: string | null;
           last_direction?: WaDirection | null;
           last_inbound_at?: Timestamp | null;
+          followup_stage?: number;
+          next_followup_at?: Timestamp | null;
+          do_not_contact?: boolean;
+          agent_due_at?: Timestamp | null;
           created_at?: Timestamp;
           updated_at?: Timestamp;
         };
@@ -2004,6 +2016,14 @@ export type Database = {
           lead_source: string;
           allowed_tools: string[];
           voice_replies: WaVoiceReplies;
+          followups_enabled: boolean;
+          followup_template_name: string | null;
+          followup_template_lang: string;
+          max_autonomous_discount_pct: number;
+          quiet_hours_enabled: boolean;
+          quiet_hours_start: number;
+          quiet_hours_end: number;
+          timezone: string;
           updated_at: Timestamp;
         };
         Insert: {
@@ -2020,6 +2040,14 @@ export type Database = {
           lead_source?: string;
           allowed_tools?: string[];
           voice_replies?: WaVoiceReplies;
+          followups_enabled?: boolean;
+          followup_template_name?: string | null;
+          followup_template_lang?: string;
+          max_autonomous_discount_pct?: number;
+          quiet_hours_enabled?: boolean;
+          quiet_hours_start?: number;
+          quiet_hours_end?: number;
+          timezone?: string;
           updated_at?: Timestamp;
         };
         Update: Partial<

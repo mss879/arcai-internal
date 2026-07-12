@@ -56,6 +56,15 @@ export const TRIGGER_META: Record<
     label: "Quote accepted",
     description: "A client e-signs a quotation via its share link.",
   },
+  quote_viewed: {
+    label: "Quote opened",
+    description: "A client opens a quotation's share link for the first time.",
+  },
+  payment_received: {
+    label: "Payment received",
+    description:
+      "A payment-plan installment is marked paid. Set seq = 1 in the trigger config to fire only when the deposit lands.",
+  },
   client_created: {
     label: "Client created",
     description: "A new client record is added to the workspace.",
@@ -145,6 +154,17 @@ export const STEP_META: Record<
     description:
       "Message the contact on WhatsApp. Set a template name for contacts who haven't replied in 24h.",
     tone: "bg-green-600",
+  },
+  convert_quote_to_invoice: {
+    label: "Quote → invoice",
+    description:
+      "Turn the run's accepted quote into a real invoice plus a deposit/balance payment plan.",
+    tone: "bg-lime-600",
+  },
+  create_project: {
+    label: "Create project",
+    description: "Spin up a project for the client (e.g. the moment the deposit lands).",
+    tone: "bg-purple-600",
   },
   wait: {
     label: "Wait",

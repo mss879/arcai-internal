@@ -2,7 +2,7 @@ import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import type { Database, WaSentBy } from "@/lib/database.types";
+import type { Database, InvoiceItem, WaSentBy } from "@/lib/database.types";
 import {
   isOpenAIConfigured,
   openaiChat,
@@ -32,7 +32,12 @@ import { sendPushToUser } from "@/lib/push";
 import { queueLeadResearch } from "@/lib/research";
 import { queueWaShowcase } from "@/lib/wa-showcase";
 import { WA_TOOL_CATALOG } from "@/lib/wa-tools-catalog";
-import { formatWaPhone, sendWhatsAppText } from "@/lib/whatsapp";
+import {
+  formatWaPhone,
+  markWhatsAppRead,
+  sendWhatsAppTemplate,
+  sendWhatsAppText,
+} from "@/lib/whatsapp";
 
 type DB = SupabaseClient<Database>;
 type WaContact = Database["public"]["Tables"]["wa_contacts"]["Row"];
@@ -45,8 +50,12 @@ type WaConfig = Database["public"]["Tables"]["wa_agent_config"]["Row"];
  *   1. keyword rules run first (instant replies, tags, handoff, automations)
  *   2. the `wa_message_received` automation trigger fires (CRM automations)
  *   3. unless a rule replied/handed off — and the agent is enabled both
- *      globally and for this contact — the AI agent answers, using ONLY
- *      the tools ticked in wa_agent_config.allowed_tools.
+ *      globally and for this contact — an agent run is QUEUED
+ *      (wa_contacts.agent_due_at). The automation tick drains due runs, so
+ *      a burst of messages collapses into ONE reply (each message pushes
+ *      the timer) and long runs (site audits, tool rounds) can't be killed
+ *      by the webhook's serverless budget. The agent answers 24/7; the
+ *      instant blue-ticks + typing indicator bridge the short queue delay.
  *
  * Every tool invocation is written to wa_agent_logs so the team can audit
  * exactly what the agent did and when.
@@ -54,6 +63,16 @@ type WaConfig = Database["public"]["Tables"]["wa_agent_config"]["Row"];
 
 const MAX_TOOL_ROUNDS = 5;
 const HISTORY_MESSAGES = 30;
+
+/** Debounce: each inbound message pushes the queued agent run this far out,
+ * so a burst of texts gets ONE reply covering all of them. */
+const AGENT_DEBOUNCE_SECONDS = 20;
+/** Lease: a claimed agent run that dies mid-flight (tick killed) retries
+ * after this long instead of losing the reply. */
+const AGENT_LEASE_MINUTES = 3;
+/** Agent runs per tick — each can take ~20s+ (audit + tool rounds), so the
+ * tick must stay inside its own serverless budget. */
+const MAX_AGENT_RUNS_PER_TICK = 2;
 
 // ---------------------------------------------------------------------------
 // Config
@@ -117,6 +136,13 @@ export async function sendAndLogWa(
     })
     .eq("id", opts.contact.id);
 
+  // The agent's own outbound messages anchor the autonomous follow-up
+  // cadence — the first unanswered agent message starts the clock. Team
+  // manual sends never touch the schedule.
+  if (sent.ok && opts.sentBy === "agent") {
+    await scheduleNextFollowup(supabase, opts.contact.id);
+  }
+
   return sent.ok ? { ok: true } : { ok: false, error: sent.error };
 }
 
@@ -125,21 +151,36 @@ export async function sendAndLogWa(
 // ---------------------------------------------------------------------------
 
 /**
- * Handle one stored inbound message end-to-end. Never throws — a broken
- * agent must not make the webhook fail (Meta would retry / disable it).
+ * Handle one stored inbound message: keyword rules + automation triggers run
+ * instantly, then an agent run is queued (debounced). Never throws — a
+ * broken agent must not make the webhook fail (Meta would retry / disable it).
  */
 export async function handleInboundWaMessage(
   supabase: DB,
   contact: WaContact,
   messageBody: string,
   waMessageId: string | null,
-  opts?: { voice?: boolean },
+  opts?: { skipRules?: boolean },
 ): Promise<void> {
   try {
+    // Opted-out contacts get total silence from every automated path —
+    // only the team can message them (or lift the flag in the inbox).
+    if (contact.do_not_contact) {
+      await supabase
+        .from("wa_contacts")
+        .update({ needs_attention: true })
+        .eq("id", contact.id);
+      return;
+    }
+
     const config = await getWaAgentConfig(supabase);
 
     // 1. Keyword rules — instant, deterministic, run before the AI.
-    const suppressAgent = await runKeywordRules(supabase, contact, messageBody);
+    // (Skipped for media messages: an AI image description mentioning a
+    // rule keyword must not fire a canned reply.)
+    const suppressAgent = opts?.skipRules
+      ? false
+      : await runKeywordRules(supabase, contact, messageBody);
 
     // 2. CRM automations listening for WhatsApp messages.
     const lead = contact.lead_id
@@ -156,12 +197,29 @@ export async function handleInboundWaMessage(
       triggerKey: waMessageId ? `wa:${waMessageId}` : undefined,
     });
 
-    // 3. The AI agent.
-    if (suppressAgent) return;
+    // 3. The AI agent — queued, never run inside the webhook. Each message
+    // pushes the timer, so a burst of texts collapses into ONE reply and a
+    // long run (site audit + tool rounds) can't be cut off by the webhook's
+    // serverless budget. processDueWaAgentRuns (the tick) drains the queue.
+    if (suppressAgent) {
+      // A rule already replied or handed off — cancel any queued run.
+      await supabase
+        .from("wa_contacts")
+        .update({ agent_due_at: null })
+        .eq("id", contact.id);
+      return;
+    }
     if (!config.enabled || !contact.agent_enabled) return;
     if (!isOpenAIConfigured()) return;
 
-    await runWaAgent(supabase, contact, config, { voice: opts?.voice });
+    await supabase
+      .from("wa_contacts")
+      .update({
+        agent_due_at: new Date(
+          Date.now() + AGENT_DEBOUNCE_SECONDS * 1000,
+        ).toISOString(),
+      })
+      .eq("id", contact.id);
   } catch (e) {
     console.error("[wa-agent] inbound handling failed:", e);
   }
@@ -468,10 +526,16 @@ PRICING PLAYBOOK (follow this EXACTLY whenever budget or packages come up):
   And for *Rs 130,000* the *Growth* adds a lead dashboard + 15 pages — that's what most growing businesses pick. Want me to put a proper plan together for you?"
 
 CLOSING PLAYS:
-- Momentum: offer something concrete and fast — "I can have a plan and exact quote to you today."
-- When they're warm: send_booking_link for a quick call. When they're serious and you have requirements: create_proposal and tell them it's on the way.
-- If they go quiet after pricing, don't chase with discounts — schedule_followup (2 days) and close warmly.
+- Momentum: offer something concrete and fast — "I can have the formal quote right here in this chat in a minute."
+- When they're warm: send_booking_link for a quick call. When they're serious and you have requirements but no clear yes yet: create_proposal and tell them it's on the way.
+- THE MONEY MOMENT: the instant they clearly agree on a package and price ("okay let's do it", "go ahead with Growth") → call send_quote immediately — strike while it's hot. It creates a real signable quotation and delivers the link into this chat by itself. Right after, send ONE short human message: they can open it and sign right on their phone, and the moment they sign we get started. NEVER paste the link again yourself.
+- After they sign, everything is automatic — the invoice and payment details arrive in this chat on their own. Your job then: congratulate them warmly and set delivery expectations from the knowledge base.
+- DISCOUNTS: you have ZERO discount authority unless the team granted a limit (send_quote enforces it). Use it at most once per deal, only on a genuine price objection, always framed as a "if you confirm this week" incentive. Never open with a discount.
+- If they go quiet after pricing, DON'T chase with discounts — the follow-up system re-engages them automatically; use schedule_followup only when a HUMAN teammate needs to act.
 - Human wanted, frustration, or anything sensitive → handoff_human immediately.`,
+    `IMAGES & PAYMENT SLIPS:
+- Photos and files the customer sends appear in the chat as 📷/📄 lines with a short description — that's you seeing them. React to their content naturally; NEVER say you can't view images.
+- Bank slip / payment receipt: thank them warmly, tell them accounts is confirming it and the confirmation will land right here in this chat — do NOT declare the payment verified yourself, and do NOT re-ask for a slip they already sent. If it's the deposit, remind them the project kicks off the moment it's confirmed.`,
     `What you already know about this contact:\n${known.join("\n")}`,
   ];
 
@@ -509,6 +573,30 @@ CLOSING PLAYS:
         );
       }
     }
+  }
+
+  // Photos & files never age out of the agent's memory, even after the
+  // 30-message history window scrolls past them.
+  const { data: mediaMsgs } = await supabase
+    .from("wa_messages")
+    .select("body, message_type, created_at, meta")
+    .eq("contact_id", contact.id)
+    .eq("direction", "in")
+    .in("message_type", ["image", "document"])
+    .order("created_at", { ascending: false })
+    .limit(5);
+  if (mediaMsgs?.length) {
+    const lines = [...mediaMsgs].reverse().map((m) => {
+      const meta = (m.meta ?? {}) as {
+        kind?: string;
+        slip?: Record<string, unknown> | null;
+      };
+      const slip = meta.slip ? ` (slip details: ${JSON.stringify(meta.slip)})` : "";
+      return `${m.created_at.slice(0, 10)} [${meta.kind || m.message_type}] ${m.body.slice(0, 200)}${slip}`;
+    });
+    parts.push(
+      `IMAGES & FILES THE CUSTOMER HAS SENT (you saw these when they arrived — recall them naturally when relevant):\n${lines.join("\n")}`,
+    );
   }
 
   // Lessons the coaching analyzer learned from past won/lost conversations.
@@ -590,6 +678,35 @@ function buildToolSchemas(allowed: Set<string>): ToolSchema[] {
       },
       project_name: { type: "string", description: "Short project name, e.g. 'Nimal Bakery Website'." },
     }, ["business_description", "project_type"]),
+    send_quote: fn("send_quote", "THE CLOSER. Create a real, signable quotation for the package the customer just AGREED to and deliver the e-sign link into this chat automatically. Only call when they clearly said yes to a specific package/price — never to test the waters.", {
+      project_type: { type: "string", enum: ["business", "ecommerce"], description: "Website type they agreed to." },
+      tier: {
+        type: "string",
+        enum: ["starter", "launch", "growth", "scale"],
+        description: "Business-website package tier (only when project_type=business; default growth).",
+      },
+      platform: {
+        type: "string",
+        enum: ["shopify", "custom"],
+        description: "E-commerce platform (only when project_type=ecommerce; default custom).",
+      },
+      custom_items: {
+        type: "array",
+        description: "Extra agreed line items — ONLY add-ons priced in the knowledge base that the customer explicitly agreed to. Never invent items or prices.",
+        items: {
+          type: "object",
+          properties: {
+            name: { type: "string", description: "Line item label." },
+            price: { type: "number", description: "Price in LKR, exactly as priced in the knowledge base." },
+          },
+          required: ["name", "price"],
+        },
+      },
+      discount: {
+        type: "number",
+        description: "Discount in LKR — only after a genuine price objection. Automatically capped at the team's discount authority; 0 or omitted = no discount.",
+      },
+    }, ["project_type"]),
     notify_team: fn("notify_team", "Send an urgent in-app + push notification to the whole team.", {
       title: { type: "string" },
       body: { type: "string" },
@@ -716,6 +833,8 @@ async function executeWaTool(
       }
       case "create_proposal":
         return await toolCreateProposal(supabase, contact, args);
+      case "send_quote":
+        return await toolSendQuote(supabase, contact, config, args);
       default:
         return { ok: false, result: `Unknown tool "${name}".` };
     }
@@ -1252,6 +1371,195 @@ async function toolCreateProposal(
   };
 }
 
+// ---- send_quote: the closing room -------------------------------------------
+
+/**
+ * The money moment. Builds a real e-sign quotation from the agreed package
+ * (catalog prices only — the agent can't invent numbers), delivers the
+ * /q/<token> signing link straight into the chat, and marks the lead hot.
+ * Signing it fires the `quote_accepted` automation (invoice + payment
+ * details + deposit task) with zero human involvement.
+ */
+async function toolSendQuote(
+  supabase: DB,
+  contact: WaContact,
+  config: WaConfig,
+  args: Record<string, unknown>,
+): Promise<WaToolOutcome> {
+  const customerName = contact.display_name;
+  if (!customerName)
+    return { ok: false, result: "Capture the contact's name first (save_contact)." };
+
+  const appBase = appLink("");
+  if (appBase === null)
+    return {
+      ok: false,
+      result:
+        "NEXT_PUBLIC_APP_URL isn't configured, so a signable link can't be built. Tell the customer the team will send the formal quote shortly.",
+    };
+
+  // One live quote at a time — nudge them to the pending one instead of
+  // stacking duplicates when the model calls this twice.
+  if (contact.lead_id) {
+    const { data: pending } = await supabase
+      .from("quotes")
+      .select("quote_number, share_token, grand_total, status")
+      .eq("lead_id", contact.lead_id)
+      .in("status", ["sent", "viewed"])
+      .gte("created_at", new Date(Date.now() - 24 * 3600_000).toISOString())
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (pending) {
+      return {
+        ok: true,
+        result: `Quote ${pending.quote_number} (${money(Number(pending.grand_total))}) is already awaiting their signature${pending.status === "viewed" ? " — they've opened it" : ""}. Don't create another; nudge them to sign the one in this chat. Only re-share the link if they say they lost it: ${appLink(`/q/${pending.share_token}`)}`,
+      };
+    }
+  }
+
+  // Same deterministic pricing as create_proposal — catalog only.
+  const selection: ProposalSelection = {
+    ...defaultSelection(),
+    type: args.project_type === "ecommerce" ? "ecommerce" : "business",
+  };
+  const tier = String(args.tier ?? "");
+  if (["starter", "launch", "growth", "scale"].includes(tier)) {
+    selection.tier = tier as ProposalSelection["tier"];
+  }
+  const platform = String(args.platform ?? "");
+  if (["shopify", "custom"].includes(platform)) {
+    selection.platform = platform as ProposalSelection["platform"];
+  }
+  for (const raw of Array.isArray(args.custom_items) ? args.custom_items : []) {
+    const item = raw as { name?: unknown; price?: unknown };
+    const label = String(item?.name ?? "").trim();
+    const price = Number(item?.price);
+    if (label && Number.isFinite(price) && price > 0) {
+      selection.customFeatures.push({ name: label, price: Math.round(price) });
+    }
+  }
+
+  const pricing = buildPricing(selection);
+  const items: InvoiceItem[] = pricing.lineItems.map((l) => ({
+    item: l.label,
+    description: "",
+    qty: "1",
+    rate: String(l.amount),
+    total: l.amount,
+  }));
+  const subtotal = pricing.oneTimeTotal;
+
+  // Discount authority: clamp to the team's configured limit, once per deal.
+  let discount = Math.max(0, Math.round(Number(args.discount) || 0));
+  let discountNote = "";
+  if (discount > 0) {
+    const maxDiscount = Math.floor(
+      (subtotal * Math.max(0, config.max_autonomous_discount_pct ?? 0)) / 100,
+    );
+    if (maxDiscount <= 0) {
+      discount = 0;
+      discountNote = " The team granted you NO discount authority — the quote was sent at full price; don't promise any discount.";
+    } else {
+      if (contact.lead_id) {
+        const { data: discounted } = await supabase
+          .from("quotes")
+          .select("id")
+          .eq("lead_id", contact.lead_id)
+          .gt("discount", 0)
+          .limit(1);
+        if (discounted?.length) {
+          discount = 0;
+          discountNote = " A discounted quote already exists for this deal — no second discount allowed; the quote was sent at full price.";
+        }
+      }
+      if (discount > maxDiscount) {
+        discount = maxDiscount;
+        discountNote = ` Discount was capped at your authority limit (${money(maxDiscount)}).`;
+      }
+    }
+  }
+  const grandTotal = Math.max(0, subtotal - discount);
+
+  // Q-YYYY-NNN, continuing the workspace's numbering.
+  const { count } = await supabase
+    .from("quotes")
+    .select("*", { count: "exact", head: true });
+  const quoteNumber = `Q-${new Date().getFullYear()}-${String((count ?? 0) + 1).padStart(3, "0")}`;
+  const validUntil = new Date(Date.now() + 7 * 24 * 3600_000).toISOString().slice(0, 10);
+
+  let customerEmail: string | null = null;
+  if (contact.client_id) {
+    const { data: client } = await supabase
+      .from("clients")
+      .select("email")
+      .eq("id", contact.client_id)
+      .maybeSingle();
+    customerEmail = client?.email ?? null;
+  }
+
+  const { data: quote, error } = await supabase
+    .from("quotes")
+    .insert({
+      quote_number: quoteNumber,
+      title: selectionSummary(selection),
+      customer_name: customerName,
+      customer_email: customerEmail,
+      customer_phone: formatWaPhone(contact.wa_id),
+      lead_id: contact.lead_id,
+      client_id: contact.client_id,
+      items,
+      subtotal,
+      discount,
+      tax_rate: 0,
+      tax_amount: 0,
+      grand_total: grandTotal,
+      currency: "LKR",
+      valid_until: validUntil,
+      terms: "50% deposit to start, balance on delivery.",
+      status: "sent",
+      sent_at: new Date().toISOString(),
+      created_by: null,
+    })
+    .select("share_token")
+    .single();
+  if (error || !quote) {
+    return { ok: false, result: error?.message ?? "Could not create the quote." };
+  }
+
+  if (contact.lead_id) {
+    await supabase
+      .from("leads")
+      .update({ value: grandTotal, score: "hot", score_reason: "Agreed to a package — quote sent" })
+      .eq("id", contact.lead_id);
+  }
+
+  const link = appLink(`/q/${quote.share_token}`)!;
+  const firstName = customerName.split(/\s+/)[0] || "there";
+  const sent = await sendAndLogWa(supabase, {
+    contact,
+    body: `${firstName}, here's your formal quotation ${quoteNumber} — *${money(grandTotal)}*${discount > 0 ? ` (${money(discount)} off applied)` : ""} ✍️\nYou can review and sign it right on your phone 👇\n${link}\nValid until ${validUntil}.`,
+    sentBy: "agent",
+  });
+  if (!sent.ok) {
+    return {
+      ok: false,
+      result: `Quote ${quoteNumber} was created but the WhatsApp send failed (${sent.error ?? "unknown"}). Apologize briefly and say the quote is on its way.`,
+    };
+  }
+
+  await notifyEveryone(supabase, {
+    title: "Agent sent a signable quote ✍️",
+    body: `${customerName} — ${quoteNumber} (${money(grandTotal)}). Waiting for their signature.`,
+    link: contact.lead_id ? `/crm/lead/${contact.lead_id}` : "/invoices?tab=quotes",
+  });
+
+  return {
+    ok: true,
+    result: `Quote ${quoteNumber} (${money(grandTotal)} total) was created and the signing link is ALREADY delivered in this chat.${discountNote} Now send ONE short human message: they can open it and sign right on their phone, and the moment they sign we get started. Do NOT paste the link again.`,
+  };
+}
+
 // ---- research-complete follow-up -------------------------------------------
 
 /**
@@ -1332,6 +1640,688 @@ export async function sendWaResearchFollowup(
     }
   } catch (e) {
     console.error("[wa-agent] research follow-up failed:", e);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The agent-run queue — inbound replies, drained by the automation tick
+// ---------------------------------------------------------------------------
+
+/**
+ * Run every due queued agent reply. Called by the automation tick every
+ * minute; the webhook arms `agent_due_at` per inbound message (debounced),
+ * so one run answers a whole burst with full history.
+ */
+export async function processDueWaAgentRuns(
+  supabase: DB,
+): Promise<{ processed: number; replied: number; skipped: number }> {
+  const out = { processed: 0, replied: 0, skipped: 0 };
+  try {
+    if (!isOpenAIConfigured()) return out;
+    const config = await getWaAgentConfig(supabase);
+
+    const { data: due } = await supabase
+      .from("wa_contacts")
+      .select("*")
+      .not("agent_due_at", "is", null)
+      .lte("agent_due_at", new Date().toISOString())
+      .order("agent_due_at")
+      .limit(MAX_AGENT_RUNS_PER_TICK);
+
+    for (const contact of due ?? []) {
+      out.processed++;
+
+      // Lease, don't clear — if this tick dies mid-run the reply isn't
+      // lost: the lease expires and the next tick retries. A retry after a
+      // successful send is a no-op thanks to the last_direction guard below
+      // (sendAndLogWa flips it to "out").
+      const lease = new Date(
+        Date.now() + AGENT_LEASE_MINUTES * 60_000,
+      ).toISOString();
+      const { data: claimed } = await supabase
+        .from("wa_contacts")
+        .update({ agent_due_at: lease })
+        .eq("id", contact.id)
+        .eq("agent_due_at", contact.agent_due_at!)
+        .select("id");
+      // A fresh message re-armed the debounce (or another worker claimed it).
+      if (!claimed?.length) continue;
+
+      const release = () =>
+        supabase
+          .from("wa_contacts")
+          .update({ agent_due_at: null })
+          .eq("id", contact.id)
+          .eq("agent_due_at", lease);
+
+      if (
+        !config.enabled ||
+        !contact.agent_enabled ||
+        contact.do_not_contact ||
+        contact.last_direction !== "in"
+      ) {
+        out.skipped++;
+        await release();
+        continue;
+      }
+
+      // Voice-first customers get a voice note back — mirror what they
+      // sent last. Also refresh "typing…" for the compose window (the
+      // webhook's indicator may have expired by now).
+      const { data: latest } = await supabase
+        .from("wa_messages")
+        .select("wa_message_id, meta")
+        .eq("contact_id", contact.id)
+        .eq("direction", "in")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      const voice = Boolean(
+        (latest?.meta as { voice?: boolean } | null)?.voice,
+      );
+      if (latest?.wa_message_id) void markWhatsAppRead(latest.wa_message_id);
+
+      try {
+        await runWaAgent(supabase, contact, config, { voice });
+        out.replied++;
+      } finally {
+        await release();
+      }
+    }
+  } catch (e) {
+    console.error("[wa-agent] agent-run queue failed:", e);
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Quiet hours — the agent never sleeps, but its NUDGES wait for morning
+// ---------------------------------------------------------------------------
+
+/** The hour (0-23) in the workspace's configured timezone. */
+function hourInTimezone(timezone: string, at: Date): number {
+  try {
+    return (
+      Number(
+        new Intl.DateTimeFormat("en-US", {
+          timeZone: timezone,
+          hour: "numeric",
+          hour12: false,
+        }).format(at),
+      ) % 24
+    );
+  } catch {
+    // Bad timezone string — degrade to UTC rather than crash a send loop.
+    return at.getUTCHours();
+  }
+}
+
+/**
+ * True while agent-INITIATED nudges (follow-up touches, cold outreach,
+ * automation reminders) should hold. Replies to customer messages ignore
+ * this completely — the agent answers 24/7.
+ */
+export function isQuietHours(config: WaConfig, at = new Date()): boolean {
+  if (!config.quiet_hours_enabled) return false;
+  const start = ((Number(config.quiet_hours_start) % 24) + 24) % 24;
+  const end = ((Number(config.quiet_hours_end) % 24) + 24) % 24;
+  if (start === end) return false;
+  const hour = hourInTimezone(config.timezone || "Asia/Colombo", at);
+  // 21 → 9 wraps midnight; 1 → 5 doesn't.
+  return start < end ? hour >= start && hour < end : hour >= start || hour < end;
+}
+
+/** When the current quiet window ends — deferred nudges resume then. */
+export function nextQuietHoursEnd(config: WaConfig, from = new Date()): Date {
+  const t = new Date(from);
+  // Walk hour boundaries until the window closes — timezone- and DST-proof
+  // without a date library, at most 24 steps.
+  for (let i = 0; i < 25 && isQuietHours(config, t); i++) {
+    t.setMinutes(0, 0, 0);
+    t.setTime(t.getTime() + 3600_000);
+  }
+  // Jitter so a night's deferred nudges don't all fire at the same minute.
+  t.setTime(t.getTime() + Math.floor(Math.random() * 40) * 60_000);
+  return t;
+}
+
+/** True when the lead opened a quote's signing page within the last hour —
+ * they're awake and reading it, so the hot nudge beats quiet hours. */
+async function hasRecentQuoteView(
+  supabase: DB,
+  leadId: string | null,
+): Promise<boolean> {
+  if (!leadId) return false;
+  const { data } = await supabase
+    .from("quotes")
+    .select("id")
+    .eq("lead_id", leadId)
+    .gte("viewed_at", new Date(Date.now() - 3600_000).toISOString())
+    .limit(1);
+  return Boolean(data?.length);
+}
+
+// ---------------------------------------------------------------------------
+// The follow-up brain — the agent chases its own quiet deals
+// ---------------------------------------------------------------------------
+
+/**
+ * Autonomous multi-touch cadence, anchored to the agent's last outbound
+ * message and cleared instantly by any inbound reply:
+ *
+ *   touch 1 after 48h — soft nudge
+ *   touch 2 after another 72h — fresh angle (a voice note when the voice
+ *                                pipeline is on: nearly impossible to ignore)
+ *   touch 3 after another 120h — graceful breakup, lead scored cold
+ *
+ * Inside Meta's 24h window the agent composes each touch itself with full
+ * conversation + deal context. Outside it, the configured approved template
+ * is sent instead — or, with no template, a human task is created and the
+ * cadence ends.
+ */
+const FOLLOWUP_DELAY_HOURS: Record<number, number> = { 0: 48, 1: 72, 2: 120 };
+const MAX_FOLLOWUP_TOUCHES = 3;
+const MAX_FOLLOWUPS_PER_TICK = 4;
+
+/** Arm the next touch after an agent send — never overwrites an earlier one. */
+async function scheduleNextFollowup(supabase: DB, contactId: string): Promise<void> {
+  const { data: c } = await supabase
+    .from("wa_contacts")
+    .select("followup_stage, next_followup_at, do_not_contact")
+    .eq("id", contactId)
+    .maybeSingle();
+  if (!c || c.next_followup_at || c.do_not_contact) return;
+  const hours = FOLLOWUP_DELAY_HOURS[c.followup_stage ?? 0];
+  if (!hours) return; // all touches sent — the cadence is over
+  await supabase
+    .from("wa_contacts")
+    .update({
+      next_followup_at: new Date(Date.now() + hours * 3600_000).toISOString(),
+    })
+    .eq("id", contactId);
+}
+
+/** Called by the automation tick — sends every due follow-up touch. */
+export async function processDueWaFollowups(
+  supabase: DB,
+): Promise<{ processed: number; sent: number; skipped: number }> {
+  const out = { processed: 0, sent: 0, skipped: 0 };
+  try {
+    const config = await getWaAgentConfig(supabase);
+    if (!config.enabled || !config.followups_enabled) return out;
+
+    const { data: due } = await supabase
+      .from("wa_contacts")
+      .select("*")
+      .not("next_followup_at", "is", null)
+      .lte("next_followup_at", new Date().toISOString())
+      .order("next_followup_at")
+      .limit(MAX_FOLLOWUPS_PER_TICK);
+
+    for (const contact of due ?? []) {
+      out.processed++;
+
+      // Quiet hours: nudges wait for morning (the agent still answers
+      // customers 24/7 — this only time-shifts self-initiated touches).
+      // Exception: they opened the quote within the last hour (the /q
+      // page's hot nudge) — they're awake and reading it right now.
+      if (isQuietHours(config)) {
+        const hot = await hasRecentQuoteView(supabase, contact.lead_id);
+        if (!hot) {
+          const resume = nextQuietHoursEnd(config).toISOString();
+          // Compare-and-set: if they replied meanwhile (which clears the
+          // schedule), don't re-arm a morning nudge over it.
+          const { data: deferred } = await supabase
+            .from("wa_contacts")
+            .update({ next_followup_at: resume })
+            .eq("id", contact.id)
+            .eq("next_followup_at", contact.next_followup_at!)
+            .select("id");
+          if (deferred?.length) {
+            out.skipped++;
+            await logFollowup(
+              supabase,
+              contact.id,
+              (contact.followup_stage ?? 0) + 1,
+              true,
+              `Deferred to ${resume} — quiet hours`,
+            );
+          }
+          continue;
+        }
+      }
+
+      // Claim first — a crash beyond this point must never double-send.
+      await supabase
+        .from("wa_contacts")
+        .update({ next_followup_at: null })
+        .eq("id", contact.id);
+
+      const skip = await followupSkipReason(supabase, contact);
+      if (skip) {
+        out.skipped++;
+        await logFollowup(supabase, contact.id, contact.followup_stage, true, `Skipped: ${skip}`);
+        continue;
+      }
+
+      const touch = (contact.followup_stage ?? 0) + 1;
+      const withinWindow =
+        !!contact.last_inbound_at &&
+        Date.now() - new Date(contact.last_inbound_at).getTime() < 24 * 3600_000;
+
+      if (withinWindow && isOpenAIConfigured()) {
+        // Bump the stage BEFORE sending so sendAndLogWa arms the next
+        // touch with the right gap.
+        await supabase
+          .from("wa_contacts")
+          .update({ followup_stage: touch })
+          .eq("id", contact.id);
+        contact.followup_stage = touch;
+
+        const sent = await sendFollowupTouch(supabase, contact, config, touch);
+        if (sent) out.sent++;
+        await logFollowup(
+          supabase,
+          contact.id,
+          touch,
+          sent,
+          sent ? `Touch ${touch}/${MAX_FOLLOWUP_TOUCHES} sent` : `Touch ${touch} — nothing was sent`,
+        );
+        if (sent && touch >= MAX_FOLLOWUP_TOUCHES) await coolDownLead(supabase, contact);
+      } else if (config.followup_template_name?.trim()) {
+        // Outside the free-form window → the approved template.
+        const template = config.followup_template_name.trim();
+        const sent = await sendWhatsAppTemplate({
+          to: contact.wa_id,
+          template,
+          language: config.followup_template_lang?.trim() || "en",
+        });
+        await supabase.from("wa_messages").insert({
+          contact_id: contact.id,
+          wa_message_id: sent.ok ? sent.waMessageId : null,
+          direction: "out",
+          body: `[template: ${template}]`,
+          status: sent.ok ? "sent" : "failed",
+          error: sent.ok ? null : sent.error,
+          sent_by: "agent",
+        });
+        if (sent.ok) {
+          out.sent++;
+          const nextHours = FOLLOWUP_DELAY_HOURS[touch];
+          await supabase
+            .from("wa_contacts")
+            .update({
+              followup_stage: touch,
+              next_followup_at: nextHours
+                ? new Date(Date.now() + nextHours * 3600_000).toISOString()
+                : null,
+              last_message_at: new Date().toISOString(),
+              last_message_preview: `[template: ${template}]`,
+              last_direction: "out",
+            })
+            .eq("id", contact.id);
+          if (touch >= MAX_FOLLOWUP_TOUCHES) await coolDownLead(supabase, contact);
+        }
+        await logFollowup(
+          supabase,
+          contact.id,
+          touch,
+          sent.ok,
+          sent.ok ? `Touch ${touch} sent as template "${template}"` : `Template send failed: ${sent.error}`,
+        );
+      } else {
+        // Outside the window and no template — a human has to take it.
+        out.skipped++;
+        await supabase.from("crm_tasks").insert({
+          lead_id: contact.lead_id,
+          title: `Re-engage ${contact.display_name || formatWaPhone(contact.wa_id)} — WhatsApp gone quiet`,
+          notes:
+            "The 24h WhatsApp window closed and no approved follow-up template is configured, so the agent can't chase this deal itself. Call them or send a template manually.",
+          due_at: new Date(Date.now() + 24 * 3600_000).toISOString(),
+          created_by: null,
+        });
+        await logFollowup(
+          supabase,
+          contact.id,
+          touch,
+          true,
+          "Outside the 24h window with no follow-up template — handed to the team, cadence stopped.",
+        );
+      }
+    }
+  } catch (e) {
+    console.error("[wa-agent] follow-up processing failed:", e);
+  }
+  return out;
+}
+
+/** Why a due follow-up must NOT be sent — or null when it's good to go. */
+async function followupSkipReason(
+  supabase: DB,
+  contact: WaContact,
+): Promise<string | null> {
+  if (contact.do_not_contact) return "contact opted out";
+  if (!contact.agent_enabled) return "agent is paused for this chat";
+  if (contact.needs_attention) return "chat is flagged for a human";
+  if ((contact.followup_stage ?? 0) >= MAX_FOLLOWUP_TOUCHES) return "cadence already complete";
+  if (contact.last_direction !== "out") return "they already replied";
+  if (contact.lead_id) {
+    const { data: lead } = await supabase
+      .from("leads")
+      .select("status")
+      .eq("id", contact.lead_id)
+      .maybeSingle();
+    if (lead && lead.status !== "open") return `deal is already ${lead.status}`;
+  }
+  return null;
+}
+
+/** Compose + send one AI follow-up touch (touch 2 goes out as a voice note). */
+async function sendFollowupTouch(
+  supabase: DB,
+  contact: WaContact,
+  config: WaConfig,
+  touch: number,
+): Promise<boolean> {
+  // Deal state sharpens the nudge: is a signable quote sitting unsigned?
+  let quoteLine = "";
+  if (contact.lead_id) {
+    const { data: q } = await supabase
+      .from("quotes")
+      .select("quote_number, status, grand_total, currency, valid_until, viewed_at")
+      .eq("lead_id", contact.lead_id)
+      .in("status", ["sent", "viewed"])
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (q) {
+      const justViewed =
+        !!q.viewed_at && Date.now() - new Date(q.viewed_at).getTime() < 3600_000;
+      quoteLine = `\nDEAL STATE: quote ${q.quote_number} (${q.currency} ${Number(q.grand_total).toLocaleString()}) is awaiting their signature${q.status === "viewed" ? " — they HAVE opened it" : " — not opened yet"}${justViewed ? ". They were looking at it just minutes ago — this is a hot moment, reference it naturally and invite questions" : ""}${q.valid_until ? `; it's valid until ${q.valid_until}` : ""}.`;
+    }
+  }
+
+  const nudge =
+    touch >= MAX_FOLLOWUP_TOUCHES
+      ? `The customer went quiet after your last message. This is follow-up touch 3 of 3 — the graceful breakup. Send ONE warm, zero-pressure goodbye: you get that now might not be the right time, the door stays open, they can pick this up whenever they're ready. No question at the end this time, no guilt. Max 2-3 sentences.${quoteLine}`
+      : `The customer went quiet after your last message. This is follow-up touch ${touch} of 3. Send ONE short, casual re-engagement message with a FRESH angle — never "just following up": reference something concrete you know about their business or website (from the chat, the audit, or your background knowledge) and tie it to a reason to act${touch === 1 ? ". Keep it light and helpful" : ". Add gentle urgency or a new benefit they haven't heard yet"}. Human voice, max 3 sentences, end with exactly one easy question or next step.${quoteLine}`;
+
+  const { data: history } = await supabase
+    .from("wa_messages")
+    .select("direction, body")
+    .eq("contact_id", contact.id)
+    .order("created_at", { ascending: false })
+    .limit(HISTORY_MESSAGES);
+  const thread: ChatMessage[] = (history ?? [])
+    .reverse()
+    .filter((m) => m.body.trim())
+    .map((m) => ({
+      role: m.direction === "in" ? ("user" as const) : ("assistant" as const),
+      content: m.body,
+    }));
+
+  const messages: ChatMessage[] = [
+    { role: "system", content: await buildSystemPrompt(supabase, contact, config) },
+    ...thread,
+    { role: "system", content: nudge },
+  ];
+
+  const model = process.env.OPENAI_WHATSAPP_MODEL?.trim() || undefined;
+  let text = "";
+  try {
+    const reply = await openaiChat(messages, undefined, { model });
+    text = (reply.content ?? "").trim();
+  } catch (e) {
+    console.error("[wa-agent] follow-up compose failed:", e);
+    return false;
+  }
+  if (!text) return false;
+
+  // Touch 2 lands as a voice note when the voice pipeline is on — a voice
+  // message from "a real person" gets heard. Falls back to plain text.
+  if (touch === 2 && config.voice_replies === "match") {
+    const spoke = await sendVoiceReply(supabase, contact, text);
+    if (spoke) {
+      await scheduleNextFollowup(supabase, contact.id);
+      return true;
+    }
+  }
+  const sent = await sendAndLogWa(supabase, { contact, body: text, sentBy: "agent" });
+  return sent.ok;
+}
+
+/** After the breakup touch: score the lead cold and note why. */
+async function coolDownLead(supabase: DB, contact: WaContact): Promise<void> {
+  if (!contact.lead_id) return;
+  await supabase
+    .from("leads")
+    .update({ score: "cold", score_reason: "No response after 3 automated follow-ups" })
+    .eq("id", contact.lead_id);
+  await supabase.from("lead_activities").insert({
+    lead_id: contact.lead_id,
+    kind: "note",
+    title: "Follow-up cadence complete — breakup sent",
+    body: "The agent sent all 3 follow-up touches with no reply. Lead scored cold.",
+    actor_id: null,
+  });
+}
+
+async function logFollowup(
+  supabase: DB,
+  contactId: string,
+  touch: number,
+  ok: boolean,
+  result: string,
+): Promise<void> {
+  await supabase.from("wa_agent_logs").insert({
+    contact_id: contactId,
+    tool: "followup",
+    args: { touch },
+    ok,
+    result,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Opt-out hardening — "stop" means stop, instantly and forever
+// ---------------------------------------------------------------------------
+
+const OPT_OUT_PHRASES = [
+  "stop",
+  "unsubscribe",
+  "opt out",
+  "don't message",
+  "dont message",
+  "stop messaging",
+  "not interested",
+  "no longer interested",
+  "remove me",
+  "leave me alone",
+  "එපා", // Sinhala: "no / don't"
+  "අවශ්‍ය නැහැ", // Sinhala: "not needed"
+  "වුවමනා නැහැ",
+  "வேண்டாம்", // Tamil: "don't want"
+];
+
+/** True when a short inbound message reads as "stop contacting me". */
+export function detectWaOptOut(body: string): boolean {
+  const text = body.trim().toLowerCase();
+  // Real opt-outs are short; long messages mentioning "stop" are conversation.
+  if (!text || text.length > 80) return false;
+  return OPT_OUT_PHRASES.some(
+    (p) => text === p || (p.length > 4 && text.includes(p)),
+  );
+}
+
+/**
+ * Flag the contact do-not-contact, kill the cadence, close the lead and say
+ * one polite goodbye. Every automated send path checks the flag afterwards;
+ * this protects the number's Meta quality rating (blocks hurt it badly).
+ */
+export async function handleWaOptOut(supabase: DB, contact: WaContact): Promise<void> {
+  await supabase
+    .from("wa_contacts")
+    .update({
+      do_not_contact: true,
+      followup_stage: 0,
+      next_followup_at: null,
+      agent_due_at: null,
+    })
+    .eq("id", contact.id);
+  contact.do_not_contact = true;
+
+  if (contact.lead_id) {
+    await supabase
+      .from("leads")
+      .update({ status: "lost", score: "cold", score_reason: "Opted out on WhatsApp" })
+      .eq("id", contact.lead_id);
+    await supabase.from("lead_activities").insert({
+      lead_id: contact.lead_id,
+      kind: "note",
+      title: "Opted out on WhatsApp",
+      body: "The contact asked not to be messaged. All automated WhatsApp messaging is now blocked for them; the team can still write manually.",
+      actor_id: null,
+    });
+  }
+
+  // One polite goodbye — they just messaged us, so the window is open.
+  await sendAndLogWa(supabase, {
+    contact,
+    body: "No problem at all — we won't message you again. If you ever change your mind, just drop us a text here anytime 👍",
+    sentBy: "keyword",
+  });
+  await notifyEveryone(supabase, {
+    title: "WhatsApp opt-out",
+    body: `${contact.display_name || contact.profile_name || formatWaPhone(contact.wa_id)} asked not to be contacted — automated messaging stopped, lead closed as lost.`,
+    link: "/whatsapp",
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Payment slips — the money-moment watcher (vision-classified inbound media)
+// ---------------------------------------------------------------------------
+
+export type InboundSlipInfo = {
+  /** The 📷/📄 body line already stored on the message. */
+  description: string;
+  mediaUrl: string | null;
+  slip?: {
+    amount?: number | null;
+    currency?: string | null;
+    date?: string | null;
+    bank?: string | null;
+    reference?: string | null;
+  } | null;
+  /** For images/documents that only MIGHT be a slip: stay silent unless an
+   * unpaid installment is actually waiting for this contact. */
+  requirePendingInstallment?: boolean;
+};
+
+/**
+ * A customer sent what looks like a payment slip. NEVER marks anything as
+ * paid — money is verified by a human: the team gets an urgent task + push
+ * with the slip, and marking the installment paid in Finance fires the
+ * payment_received kickoff automation exactly as before.
+ */
+export async function handleInboundPaymentSlip(
+  supabase: DB,
+  contact: WaContact,
+  info: InboundSlipInfo,
+): Promise<void> {
+  try {
+    // The pending installment this slip most likely pays.
+    let pending: { seq: number; amount: number; planTitle: string; currency: string } | null =
+      null;
+    if (contact.lead_id || contact.client_id) {
+      const ors: string[] = [];
+      if (contact.lead_id) ors.push(`lead_id.eq.${contact.lead_id}`);
+      if (contact.client_id) ors.push(`client_id.eq.${contact.client_id}`);
+      const { data: plans } = await supabase
+        .from("payment_plans")
+        .select("id, title, currency")
+        .or(ors.join(","))
+        .order("created_at", { ascending: false })
+        .limit(5);
+      if (plans?.length) {
+        const byId = new Map(plans.map((p) => [p.id, p]));
+        const { data: inst } = await supabase
+          .from("payment_installments")
+          .select("seq, amount, plan_id")
+          .in("plan_id", plans.map((p) => p.id))
+          .eq("status", "pending")
+          .order("seq")
+          .limit(1);
+        const first = inst?.[0];
+        if (first) {
+          const plan = byId.get(first.plan_id);
+          pending = {
+            seq: first.seq,
+            amount: Number(first.amount),
+            planTitle: plan?.title ?? "payment plan",
+            currency: plan?.currency ?? "LKR",
+          };
+        }
+      }
+    }
+    if (info.requirePendingInstallment && !pending) return;
+
+    const name =
+      contact.display_name || contact.profile_name || formatWaPhone(contact.wa_id);
+    const extracted = info.slip
+      ? Object.entries(info.slip)
+          .filter(([, v]) => v != null && v !== "")
+          .map(([k, v]) => `${k}: ${v}`)
+          .join(", ")
+      : "";
+
+    const expectLine = pending
+      ? `Expected: installment ${pending.seq} of "${pending.planTitle}" — ${pending.currency} ${pending.amount.toLocaleString()}.`
+      : "No pending installment found in Finance — double-check what this payment is for.";
+
+    await supabase.from("crm_tasks").insert({
+      lead_id: contact.lead_id,
+      title: `Verify payment slip — ${name}`,
+      notes: [
+        info.description,
+        extracted ? `Slip reads: ${extracted}.` : null,
+        expectLine,
+        info.mediaUrl ? `Slip: ${info.mediaUrl}` : "See the WhatsApp chat for the attachment.",
+        "Once the money is confirmed, mark the installment paid in Finance — that fires the kickoff automation and messages the customer automatically.",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      due_at: new Date(Date.now() + 4 * 3600_000).toISOString(),
+      created_by: null,
+    });
+
+    await notifyEveryone(supabase, {
+      title: "💰 Payment slip received",
+      body: `${name}${extracted ? ` — ${extracted}` : ""}${pending ? ` (installment ${pending.seq}: ${pending.currency} ${pending.amount.toLocaleString()})` : ""}`,
+      link: "/whatsapp",
+    });
+
+    if (contact.lead_id) {
+      await supabase.from("lead_activities").insert({
+        lead_id: contact.lead_id,
+        kind: "note",
+        title: "Payment slip received on WhatsApp",
+        body: [info.description, extracted ? `Slip reads: ${extracted}` : null, info.mediaUrl]
+          .filter(Boolean)
+          .join("\n"),
+        actor_id: null,
+      });
+    }
+
+    // Audit trail alongside the agent's tool calls.
+    await supabase.from("wa_agent_logs").insert({
+      contact_id: contact.id,
+      tool: "payment_slip",
+      args: (info.slip ?? {}) as Record<string, unknown>,
+      ok: true,
+      result: `Slip flagged for verification. ${expectLine}`.slice(0, 500),
+    });
+  } catch (e) {
+    console.error("[wa-agent] payment slip handling failed:", e);
   }
 }
 

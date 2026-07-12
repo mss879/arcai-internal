@@ -16,6 +16,7 @@ import {
 } from "@/lib/prospecting";
 import { processPendingCarousels } from "@/lib/carousels";
 import { processPendingWaShowcases } from "@/lib/wa-showcase";
+import { processDueWaAgentRuns, processDueWaFollowups } from "@/lib/wa-agent";
 import { isSmsConfigured } from "@/lib/sms";
 
 /**
@@ -31,6 +32,9 @@ import { isSmsConfigured } from "@/lib/sms";
  *     that got stuck when a serverless run timed out mid-report)
  *   - generates carousel designs for upcoming content-calendar posts
  *     (kicks off 3 days ahead, one copy/slide step per tick)
+ *   - drains queued WhatsApp agent replies (the webhook only arms a
+ *     debounced timer, so bursts get one reply and long runs never race
+ *     the webhook's budget) and the agent's follow-up cadence
  *
  * Point a scheduler at it every minute:  GET /api/automation/tick
  * If SMS_CRON_SECRET is set, pass it as `Authorization: Bearer <secret>`
@@ -61,6 +65,10 @@ export async function GET(request: Request) {
     const prospecting = await processPendingProspectScans(supabase);
     const carousels = await processPendingCarousels(supabase);
     const showcases = await processPendingWaShowcases(supabase);
+    // Queued inbound replies first — answering a live customer beats nudging
+    // a quiet one.
+    const agentRuns = await processDueWaAgentRuns(supabase);
+    const followups = await processDueWaFollowups(supabase);
     const sms = isSmsConfigured()
       ? await processDueSmsRuns(supabase)
       : { processed: 0, sent: 0, failed: 0 };
@@ -78,6 +86,8 @@ export async function GET(request: Request) {
       prospecting,
       carousels,
       showcases,
+      agentRuns,
+      followups,
     });
   } catch (e) {
     return NextResponse.json(

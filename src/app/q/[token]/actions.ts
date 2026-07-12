@@ -80,6 +80,7 @@ export async function acceptQuote(input: {
       name: quote.customer_name,
       phone: quote.customer_phone,
       email: quote.customer_email,
+      quote_id: quote.id,
       quote_number: quote.quote_number,
       amount: `${quote.currency} ${Number(quote.grand_total).toLocaleString()}`,
     },

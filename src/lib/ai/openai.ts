@@ -156,6 +156,58 @@ export async function openaiChatJSON(
   return content as string;
 }
 
+// ---- Vision (image -> structured JSON) ------------------------------------
+
+/**
+ * Ask a vision-capable model to analyze one image and answer with a strict
+ * JSON object. Standalone on purpose — the plain-string ChatMessage type
+ * used everywhere else stays untouched. The image can be a public URL or a
+ * data: URI. Model override via OPENAI_VISION_MODEL (the default chat model
+ * gpt-4o-mini is vision-capable).
+ */
+export async function openaiVisionJSON(
+  imageUrl: string,
+  prompt: string,
+  opts?: { model?: string; timeoutMs?: number },
+): Promise<string> {
+  const model =
+    opts?.model?.trim() ||
+    process.env.OPENAI_VISION_MODEL?.trim() ||
+    AI_MODELS.chat;
+  const res = await fetch(`${BASE_URL}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey()}`,
+    },
+    signal: AbortSignal.timeout(opts?.timeoutMs ?? 30_000),
+    body: JSON.stringify({
+      model,
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: prompt },
+            { type: "image_url", image_url: { url: imageUrl } },
+          ],
+        },
+      ],
+      response_format: { type: "json_object" },
+      ...(isReasoningModel(model) ? {} : { temperature: 0 }),
+    }),
+  });
+
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(`OpenAI vision failed (${res.status}): ${detail}`);
+  }
+
+  const json = await res.json();
+  const content = json?.choices?.[0]?.message?.content;
+  if (!content) throw new Error("OpenAI vision returned no content.");
+  return content as string;
+}
+
 // ---- Transcription (speech -> text) --------------------------------------
 
 export async function openaiTranscribe(

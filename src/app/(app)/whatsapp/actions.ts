@@ -73,6 +73,24 @@ export async function toggleContactAgentAction(
   return { ok: true };
 }
 
+/** Lift (or set) the do-not-contact flag from the inbox thread header. */
+export async function setContactOptOutAction(
+  contactId: string,
+  optedOut: boolean,
+): Promise<ActionResult> {
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("wa_contacts")
+    .update({
+      do_not_contact: optedOut,
+      ...(optedOut ? { followup_stage: 0, next_followup_at: null } : {}),
+    })
+    .eq("id", contactId);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath("/whatsapp");
+  return { ok: true };
+}
+
 export async function linkContactToCrmAction(
   contactId: string,
 ): Promise<ActionResult> {
@@ -101,6 +119,14 @@ export type WaConfigInput = {
   lead_source: string;
   allowed_tools: string[];
   voice_replies?: WaVoiceReplies;
+  followups_enabled?: boolean;
+  followup_template_name?: string;
+  followup_template_lang?: string;
+  max_autonomous_discount_pct?: number;
+  quiet_hours_enabled?: boolean;
+  quiet_hours_start?: number;
+  quiet_hours_end?: number;
+  timezone?: string;
 };
 
 export async function saveWaConfigAction(
@@ -133,6 +159,45 @@ export async function saveWaConfigAction(
         allowed_tools: allowed,
         ...(input.voice_replies === "off" || input.voice_replies === "match"
           ? { voice_replies: input.voice_replies }
+          : {}),
+        ...(input.followups_enabled != null
+          ? { followups_enabled: Boolean(input.followups_enabled) }
+          : {}),
+        ...(input.followup_template_name != null
+          ? { followup_template_name: input.followup_template_name.trim() || null }
+          : {}),
+        ...(input.followup_template_lang != null
+          ? { followup_template_lang: input.followup_template_lang.trim() || "en" }
+          : {}),
+        ...(input.max_autonomous_discount_pct != null
+          ? {
+              max_autonomous_discount_pct: Math.min(
+                50,
+                Math.max(0, Math.round(Number(input.max_autonomous_discount_pct) || 0)),
+              ),
+            }
+          : {}),
+        ...(input.quiet_hours_enabled != null
+          ? { quiet_hours_enabled: Boolean(input.quiet_hours_enabled) }
+          : {}),
+        ...(input.quiet_hours_start != null
+          ? {
+              quiet_hours_start: Math.min(
+                23,
+                Math.max(0, Math.round(Number(input.quiet_hours_start) || 0)),
+              ),
+            }
+          : {}),
+        ...(input.quiet_hours_end != null
+          ? {
+              quiet_hours_end: Math.min(
+                23,
+                Math.max(0, Math.round(Number(input.quiet_hours_end) || 0)),
+              ),
+            }
+          : {}),
+        ...(input.timezone != null
+          ? { timezone: input.timezone.trim() || "Asia/Colombo" }
           : {}),
       },
       { onConflict: "id" },

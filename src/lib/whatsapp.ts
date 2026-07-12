@@ -327,11 +327,20 @@ export async function downloadWaMedia(mediaId: string): Promise<WaMediaDownload>
   }
 }
 
-/** Mark an inbound message as read (blue ticks). Best-effort, never throws. */
-export async function markWhatsAppRead(waMessageId: string): Promise<void> {
+/**
+ * Mark an inbound message as read (blue ticks) and, by default, show the
+ * "typing…" indicator — it holds for up to 25s or until we send a message,
+ * which bridges the queued agent's reply delay. If Meta rejects the combined
+ * payload (older API version), fall back to the plain read receipt.
+ * Best-effort, never throws.
+ */
+export async function markWhatsAppRead(
+  waMessageId: string,
+  opts?: { typing?: boolean },
+): Promise<void> {
   if (!isWhatsAppConfigured() || !waMessageId) return;
-  try {
-    await fetch(`${GRAPH_BASE}/${apiVersion()}/${phoneNumberId()}/messages`, {
+  const post = (payload: Record<string, unknown>) =>
+    fetch(`${GRAPH_BASE}/${apiVersion()}/${phoneNumberId()}/messages`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -341,10 +350,19 @@ export async function markWhatsAppRead(waMessageId: string): Promise<void> {
         messaging_product: "whatsapp",
         status: "read",
         message_id: waMessageId,
+        ...payload,
       }),
       cache: "no-store",
       signal: AbortSignal.timeout(8_000),
     });
+  try {
+    if (opts?.typing !== false) {
+      const res = await post({ typing_indicator: { type: "text" } });
+      if (res.ok) return;
+      await post({});
+      return;
+    }
+    await post({});
   } catch {
     // Read receipts are cosmetic — never let them break message handling.
   }

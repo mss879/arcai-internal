@@ -29,6 +29,7 @@ import {
   type ProposalSelection,
 } from "@/lib/proposal";
 import { sendPushToUser } from "@/lib/push";
+import { checkEmail } from "@/lib/email-check";
 import { queueLeadResearch } from "@/lib/research";
 import { queueWaShowcase } from "@/lib/wa-showcase";
 import { WA_TOOL_CATALOG } from "@/lib/wa-tools-catalog";
@@ -498,7 +499,12 @@ INFO CHECKLIST (collect in this order, one at a time, weaving it into natural ch
 4. What they need, their timeline, and a feel for budget.
 5. Their email, and confirm this WhatsApp number is the best contact — slip these in naturally mid-conversation, e.g. when offering to send something.
 
-THE MOMENT you learn their name (and again when you learn company/email), call save_contact. Log every meaningful detail they share with update_lead (note). Buying signals — asking prices, timelines, "can you do X" — mark the lead hot with update_lead.`,
+THE MOMENT you have a plausibly-real name (and again when you learn company/email), call save_contact. Log every meaningful detail they share with update_lead (note). Buying signals — asking prices, timelines, "can you do X" — mark the lead hot with update_lead.`,
+    `SANITY-CHECK WHAT THEY GIVE YOU (use common sense — you're a sharp human, not a form that swallows anything):
+- NAMES: if the "name" is obviously not real — a fictional character (Batman, Superman), a celebrity, a placeholder ("test", "asdf", "N/A", "idk"), an insult, or clearly a joke — DON'T earnestly accept it or save it. Play along warmly for ONE beat, then ask for their real name: "haha Batman 😄 what's your actual name though, so I know who I'm chatting with?" Only call save_contact once the name is plausibly real.
+- EMAILS: you actually send quotes and invoices to their email, so it has to work. If it's an obvious placeholder (test@test.com, a@a.com), matches a joke name (batman@…), or looks malformed/misspelled, don't save it — ask them to confirm it, framed around value: "I'll fire the quote over to that email — mind double-checking it's right?" The system also checks emails automatically; if save_contact tells you an email looks dead, ask them for a better one before moving on.
+- PHONE NUMBERS: the WhatsApp number they're messaging from is already real, so just confirm it's the best contact. If they volunteer another number that's obviously fake (1234567890, all the same digit), double-check it.
+- DON'T over-police: plenty of real names and emails look unusual, especially in Sinhala/Tamil. When you're genuinely unsure, accept it — and never derail the sale over a detail; if they insist or brush it off, keep the conversation moving.`,
     `IF THEY HAVE A WEBSITE:
 - The moment they share the URL, call BOTH audit_website AND research_contact (same turn, before replying).
 - Then reply like someone who literally just opened their site on their phone: compliment one genuine thing, then casually drop the 1-2 issues that hurt most — lead with the real Google PageSpeed number when it's bad ("ran your site through Google's speed test while we were chatting — 34/100 on mobile 😬, people are leaving before it even loads"). Sound like an expert who noticed, not a report.
@@ -858,10 +864,25 @@ async function toolSaveContact(
   const name = String(args.name ?? "").trim();
   if (!name) return { ok: false, result: "A name is required." };
   const company = String(args.company ?? "").trim() || null;
-  const email = String(args.email ?? "").trim() || null;
+  const rawEmail = String(args.email ?? "").trim() || null;
   const city = String(args.city ?? "").trim() || null;
   const interest = String(args.service_interest ?? "").trim() || null;
   const phonePretty = formatWaPhone(contact.wa_id);
+
+  // Don't let an obviously-fake / undeliverable email into the CRM — we send
+  // quotes and invoices there. checkEmail does format + placeholder + MX checks.
+  let email = rawEmail;
+  let emailNote = "";
+  if (rawEmail) {
+    const check = await checkEmail(rawEmail);
+    if (!check.ok) {
+      email = null;
+      emailNote =
+        check.reason === "no-mx"
+          ? ` NOTE: the email "${rawEmail}" doesn't look deliverable (its domain can't receive mail), so it was NOT saved — ask the customer to double-check their email before sending anything there.`
+          : ` NOTE: the email "${rawEmail}" looks fake or invalid, so it was NOT saved — ask the customer for a real email before sending anything there.`;
+    }
+  }
 
   const done: string[] = [];
 
@@ -957,7 +978,7 @@ async function toolSaveContact(
 
   return {
     ok: true,
-    result: `Saved: ${done.join(", ") || "nothing new"}. Continue the conversation naturally — don't mention CRM records.`,
+    result: `Saved: ${done.join(", ") || "nothing new"}.${emailNote} Continue the conversation naturally — don't mention CRM records.`,
   };
 }
 

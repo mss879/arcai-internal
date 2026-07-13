@@ -1,4 +1,5 @@
 import {
+  BadgeDollarSign,
   BrainCircuit,
   CalendarClock,
   CreditCard,
@@ -40,6 +41,7 @@ export const NAV: NavItem[] = [
   { label: "Payments", href: "/payments", icon: CreditCard },
   { label: "Invoices & Quotes", href: "/invoices", icon: FileText },
   { label: "Proposals", href: "/proposals", icon: ScrollText },
+  { label: "Pricing", href: "/pricing", icon: BadgeDollarSign },
   { label: "SMS", href: "/sms", icon: MessageSquareText },
   { label: "WhatsApp", href: "/whatsapp", icon: MessageCircle },
   { label: "Content Studio", href: "/content", icon: Sparkles },

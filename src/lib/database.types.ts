@@ -2055,6 +2055,24 @@ export type Database = {
         >;
         Relationships: [];
       };
+      pricing_config: {
+        Row: {
+          id: number;
+          overrides: Record<string, number>;
+          updated_at: Timestamp;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: number;
+          overrides?: Record<string, number>;
+          updated_at?: Timestamp;
+          created_at?: Timestamp;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["pricing_config"]["Insert"]
+        >;
+        Relationships: [];
+      };
       wa_keyword_rules: {
         Row: {
           id: UUID;

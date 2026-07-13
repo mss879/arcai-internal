@@ -245,3 +245,71 @@ export async function sendInvoiceEmail(opts: {
     return { sent: false, error: e instanceof Error ? e.message : "send failed" };
   }
 }
+
+// ---- Pricing email -------------------------------------------------------
+
+/**
+ * Email the current pricing as a branded PDF attachment. The PDF is rendered
+ * lazily (heavy react-pdf) only when pricing is actually emailed. Used by the
+ * /pricing "Send pricing" button.
+ */
+export async function sendPricingEmail(opts: {
+  to: string | string[];
+  overrides?: Record<string, number>;
+  message?: string;
+}): Promise<SendResult> {
+  const resend = getResend();
+  if (!resend) return { sent: false, error: "RESEND_API_KEY not configured" };
+
+  let pdf: Buffer;
+  try {
+    const { renderPricingPdf } = await import("@/lib/pricing-pdf");
+    const dateLabel = new Date().toLocaleDateString("en-GB", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    });
+    pdf = await renderPricingPdf({ overrides: opts.overrides ?? {}, dateLabel });
+  } catch (e) {
+    return {
+      sent: false,
+      error: e instanceof Error ? e.message : "Could not render the pricing PDF.",
+    };
+  }
+
+  const custom = opts.message?.trim();
+  const lead = custom
+    ? custom
+        .split(/\n+/)
+        .filter((l) => l.trim())
+        .map(
+          (line) =>
+            `<p style="margin:0 0 12px;color:#334155;font-size:15px;line-height:1.6;">${esc(line)}</p>`,
+        )
+        .join("")
+    : `<p style="margin:0 0 14px;color:#475569;font-size:15px;line-height:1.6;">Hi, here's our current services &amp; pricing — the full breakdown is attached as a PDF.</p>`;
+
+  const body = `
+    ${lead}
+    <p style="margin:0 0 14px;color:#475569;font-size:14px;line-height:1.6;">
+      Our full services &amp; pricing are attached as a PDF.
+    </p>
+    <p style="margin:0;color:#94a3b8;font-size:13px;">
+      Any questions? Just reply to this email or contact ${esc(INVOICE_COMPANY.email)}.
+    </p>
+  `;
+
+  try {
+    const { error } = await resend.emails.send({
+      from: FROM,
+      to: opts.to,
+      subject: "ARC AI — Services & Pricing",
+      html: shell("Our pricing", body),
+      attachments: [{ filename: "ARC-AI-Pricing.pdf", content: pdf }],
+    });
+    if (error) return { sent: false, error: error.message };
+    return { sent: true };
+  } catch (e) {
+    return { sent: false, error: e instanceof Error ? e.message : "send failed" };
+  }
+}

@@ -19,6 +19,10 @@ const PUBLIC_PREFIXES = [
   // The route guards itself: GET needs the verify token, POST needs a valid
   // X-Hub-Signature-256 signature from WHATSAPP_APP_SECRET.
   "/api/whatsapp/webhook",
+  // Resend email webhooks (bounces/complaints) — must be reachable by Resend's
+  // servers. The route guards itself: POST needs a valid Svix signature from
+  // RESEND_WEBHOOK_SECRET.
+  "/api/webhooks",
   // Public prospect showcase pages (unguessable token, like /q).
   "/showcase",
   // Netlify functions (the scheduled automation tick) are invoked server-to-

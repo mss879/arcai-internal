@@ -65,8 +65,9 @@ const MAX_TOOL_ROUNDS = 5;
 const HISTORY_MESSAGES = 30;
 
 /** Debounce: each inbound message pushes the queued agent run this far out,
- * so a burst of texts gets ONE reply covering all of them. */
-const AGENT_DEBOUNCE_SECONDS = 20;
+ * so a burst of texts gets ONE reply covering all of them. Kept short so the
+ * agent feels responsive — the typing indicator covers the gap. */
+const AGENT_DEBOUNCE_SECONDS = 8;
 /** Lease: a claimed agent run that dies mid-flight (tick killed) retries
  * after this long instead of losing the reply. */
 const AGENT_LEASE_MINUTES = 3;

@@ -301,12 +301,17 @@ function InboxTab({
     if (!selected || !draft.trim() || sending) return;
     setSending(true);
     const body = draft.trim();
+    const wasAiOn = selected.agent_enabled;
     setDraft("");
     const res = await sendWaMessageAction(selected.id, body);
     setSending(false);
     if (!res.ok) {
       setDraft(body);
       toast.error(res.error);
+    } else if (wasAiOn) {
+      // Sending from the inbox hands the chat to the team — surface the
+      // auto-pause once so they know to flip the AI back on when done.
+      toast.success("AI paused — you're handling this chat. Turn it back on when you're done.");
     }
   }
 

@@ -148,6 +148,19 @@ export async function sendAndLogWa(
     await scheduleNextFollowup(supabase, opts.contact.id);
   }
 
+  // A human just replied from the inbox → hand the chat to the team: pause
+  // the AI so it can't answer over them, and drop any reply already queued.
+  // The AI stays off (also halting the autonomous follow-up/promise cadence,
+  // which both skip when agent_enabled is false) until a teammate flips it
+  // back on with the per-chat toggle. The inbox reflects this live via the
+  // wa_contacts realtime sync.
+  if (sent.ok && opts.sentBy === "team") {
+    await supabase
+      .from("wa_contacts")
+      .update({ agent_enabled: false, agent_due_at: null })
+      .eq("id", opts.contact.id);
+  }
+
   return sent.ok ? { ok: true } : { ok: false, error: sent.error };
 }
 

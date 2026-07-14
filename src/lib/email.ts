@@ -4,6 +4,7 @@ import { Resend } from "resend";
 
 import { INVOICE_COMPANY } from "@/lib/invoice";
 import type { InvoiceEmailData } from "@/lib/invoice-pdf";
+import type { NoticePdfData as NoticeEmailData } from "@/lib/notice-pdf";
 
 const FROM = process.env.RESEND_FROM_EMAIL || "ARC AI <onboarding@resend.dev>";
 
@@ -252,6 +253,80 @@ export async function sendInvoiceEmail(opts: {
         : `Invoice ${opts.invoice.invoice_number} from ${INVOICE_COMPANY.name}`,
       html: shell(customMessage ? "Payment reminder" : "Your invoice", body),
       attachments: [{ filename: `Invoice-${safeNumber}.pdf`, content: pdf }],
+    });
+    if (error) return { sent: false, error: error.message };
+    return { sent: true };
+  } catch (e) {
+    return { sent: false, error: e instanceof Error ? e.message : "send failed" };
+  }
+}
+
+// ---- Notice email --------------------------------------------------------
+
+/**
+ * Email a notice to one or more recipients as a PDF attachment matching the
+ * in-app notice template. Mirrors sendInvoiceEmail: the PDF is the payload and
+ * the HTML body is a short cover note. The notice's own subject drives the
+ * email subject, so the client sees what it's about before opening the PDF.
+ */
+export async function sendNoticeEmail(opts: {
+  to: string | string[];
+  notice: NoticeEmailData;
+  message?: string;
+}): Promise<SendResult> {
+  const resend = getResend();
+  if (!resend) return { sent: false, error: "RESEND_API_KEY not configured" };
+
+  // Render lazily so the heavy react-pdf dependency only loads when a notice
+  // is actually emailed — not on invite/credential emails.
+  let pdf: Buffer;
+  try {
+    const { renderNoticePdf } = await import("@/lib/notice-pdf");
+    pdf = await renderNoticePdf(opts.notice);
+  } catch (e) {
+    return {
+      sent: false,
+      error: e instanceof Error ? e.message : "Could not render the notice PDF.",
+    };
+  }
+
+  const name = opts.notice.to_name?.trim();
+  const safeNumber =
+    opts.notice.notice_number.replace(/[^a-zA-Z0-9-]/g, "") || "notice";
+  const customMessage = opts.message?.trim();
+  const subject = opts.notice.subject?.trim();
+
+  // The custom message (if any) becomes the cover note; otherwise a plain
+  // "here is a notice" line. Newlines in the message become paragraphs.
+  const lead = customMessage
+    ? customMessage
+        .split(/\n+/)
+        .map(
+          (line) =>
+            `<p style="margin:0 0 12px;color:#334155;font-size:15px;line-height:1.6;">${esc(line)}</p>`,
+        )
+        .join("")
+    : `<p style="margin:0 0 14px;color:#475569;font-size:15px;line-height:1.6;">Hi${name ? ` ${esc(name)}` : ""}, please find a notice from ${esc(INVOICE_COMPANY.name)} attached.</p>`;
+
+  const body = `
+    ${lead}
+    <p style="margin:0 0 14px;color:#475569;font-size:14px;line-height:1.6;">
+      The full notice is attached as a PDF.
+    </p>
+    <p style="margin:0;color:#94a3b8;font-size:13px;">
+      Any questions? Just reply to this email or contact ${esc(INVOICE_COMPANY.email)}.
+    </p>
+  `;
+
+  try {
+    const { error } = await resend.emails.send({
+      from: FROM,
+      to: opts.to,
+      subject: subject
+        ? `${subject} — Notice ${opts.notice.notice_number} from ${INVOICE_COMPANY.name}`
+        : `Notice ${opts.notice.notice_number} from ${INVOICE_COMPANY.name}`,
+      html: shell(subject || "A notice for you", body),
+      attachments: [{ filename: `Notice-${safeNumber}.pdf`, content: pdf }],
     });
     if (error) return { sent: false, error: error.message };
     return { sent: true };

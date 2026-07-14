@@ -493,6 +493,38 @@ export type Database = {
         Update: Partial<Database["public"]["Tables"]["invoices"]["Insert"]>;
         Relationships: [];
       };
+      notices: {
+        Row: {
+          id: UUID;
+          notice_number: string;
+          notice_date: string;
+          to_name: string;
+          to_details: string;
+          subject: string;
+          body: string;
+          source_input: string;
+          recipient_email: string | null;
+          sent_at: Timestamp | null;
+          created_by: UUID | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          notice_number: string;
+          notice_date: string;
+          to_name?: string;
+          to_details?: string;
+          subject?: string;
+          body?: string;
+          source_input?: string;
+          recipient_email?: string | null;
+          sent_at?: Timestamp | null;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["notices"]["Insert"]>;
+        Relationships: [];
+      };
       proposals: {
         Row: {
           id: UUID;

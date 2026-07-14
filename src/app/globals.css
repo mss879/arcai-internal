@@ -245,17 +245,18 @@ body {
   }
 }
 
-/* ---------- Invoice generator ---------- */
+/* ---------- Invoice + notice generators ---------- */
 
-/* Giant "INVOICE" wordmark — scales on screen, fixed for print. */
+/* Giant "INVOICE" / "NOTICE" wordmark — scales on screen, fixed for print. */
 .invoice-wordmark {
   font-size: clamp(2.75rem, 13vw, 7rem);
   line-height: 0.9;
   letter-spacing: -0.05em;
 }
 
-/* When printing, show ONLY the invoice document at full page width and
-   hide the app chrome (sidebar, topbar, the form, buttons). */
+/* When printing, show ONLY the document at full page width and hide the app
+   chrome (sidebar, topbar, the form, buttons). Notices print through the same
+   rules as invoices — they share a letterhead, so they share the page setup. */
 @media print {
   body {
     background: #fff !important;
@@ -267,10 +268,13 @@ body {
     visibility: hidden !important;
   }
   #invoice-print,
-  #invoice-print * {
+  #invoice-print *,
+  #notice-print,
+  #notice-print * {
     visibility: visible !important;
   }
-  #invoice-print {
+  #invoice-print,
+  #notice-print {
     position: absolute !important;
     left: 0 !important;
     top: 0 !important;
@@ -284,7 +288,8 @@ body {
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }
-  #invoice-print .invoice-wordmark {
+  #invoice-print .invoice-wordmark,
+  #notice-print .invoice-wordmark {
     font-size: 7rem;
   }
   @page {

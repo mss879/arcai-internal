@@ -29,6 +29,8 @@ import {
   type ProposalSelection,
 } from "@/lib/proposal";
 import { sendPushToUser } from "@/lib/push";
+import { isSmsConfigured, sendSms } from "@/lib/sms";
+import { countSmsSegments, normalizePhone, SMS_MAX_LENGTH } from "@/lib/sms-utils";
 import { checkEmail } from "@/lib/email-check";
 import { queueLeadResearch } from "@/lib/research";
 import { queueWaShowcase } from "@/lib/wa-showcase";
@@ -294,10 +296,17 @@ async function runKeywordRules(
     }
 
     if (rule.notify_team || rule.handoff) {
+      const who =
+        contact.display_name || contact.profile_name || formatWaPhone(contact.wa_id);
       await notifyEveryone(supabase, {
         title: rule.handoff ? "WhatsApp — human takeover needed" : "WhatsApp keyword matched",
-        body: `${contact.display_name || contact.profile_name || formatWaPhone(contact.wa_id)}: "${messageBody.slice(0, 120)}"`,
+        body: `${who}: "${messageBody.slice(0, 120)}"`,
         link: "/whatsapp",
+        // Only the human-takeover case texts the team — routine keyword
+        // matches stay in-app to avoid SMS noise.
+        sms: rule.handoff
+          ? `ARCON: WhatsApp customer ${who} (${formatWaPhone(contact.wa_id)}) needs a human. AI is paused — open the inbox to take over.`
+          : null,
       });
     }
 
@@ -566,7 +575,7 @@ CLOSING PLAYS:
 - After they sign, everything is automatic — the invoice and payment details arrive in this chat on their own. Your job then: congratulate them warmly and set delivery expectations from the knowledge base.
 - DISCOUNTS: you have ZERO discount authority unless the team granted a limit (send_quote enforces it). Use it at most once per deal, only on a genuine price objection, always framed as a "if you confirm this week" incentive. Never open with a discount.
 - If they go quiet after pricing, DON'T chase with discounts — the follow-up system re-engages them automatically; use schedule_followup only when a HUMAN teammate needs to act.
-- Human wanted, frustration, or anything sensitive → handoff_human immediately.`,
+- HUMAN WANTED = STOP SELLING: the moment they ask to reach a person in ANY form — "speak to someone", "talk to a real person / a human", "in person", "is there a human?", "can someone from your team call me", "I'd rather deal with a person" — that is NOT a send_booking_link or scheduling moment. Call handoff_human immediately (it pauses you and alerts the team), then send ONE short line saying a teammate will jump into this chat shortly — and STOP. Do not ask for a time, do not keep selling. Same for real frustration, complaints, refunds, legal/contract issues or anything sensitive.`,
     `PROMISES — never let a commitment slip:
 - The moment the customer names a time or future event — "call me Monday", "I'll talk to my partner tonight", "salary comes on the 25th", "message me next week" — call schedule_promise in that SAME turn, then acknowledge it naturally in your reply ("perfect, I'll check in with you Monday 👍"). The system messages them for you at exactly that moment.
 - Also schedule one when they promise to DO something ("I'll send the logo tomorrow") — so you can gently nudge if it doesn't arrive.
@@ -938,10 +947,14 @@ async function executeWaTool(
       case "notify_team": {
         const title = String(args.title ?? "").trim();
         if (!title) return { ok: false, result: "Notification needs a title." };
+        const detail = String(args.body ?? "").trim();
+        const who =
+          contact.display_name || contact.profile_name || formatWaPhone(contact.wa_id);
         const count = await notifyEveryone(supabase, {
           title: `WhatsApp: ${title}`,
-          body: String(args.body ?? "").trim() || null,
+          body: detail || null,
           link: "/whatsapp",
+          sms: `ARCON — WhatsApp (${who}): ${title}${detail ? `. ${detail}` : ""}. Open the inbox.`,
         });
         return { ok: true, result: `Notified ${count} team member(s).` };
       }
@@ -951,11 +964,17 @@ async function executeWaTool(
           .update({ agent_enabled: false, needs_attention: true })
           .eq("id", contact.id);
         contact.agent_enabled = false;
-        await notifyEveryone(supabase, {
-          title: "WhatsApp — human takeover needed",
-          body: `${contact.display_name || contact.profile_name || formatWaPhone(contact.wa_id)} — ${String(args.reason ?? "").slice(0, 140)}`,
-          link: "/whatsapp",
-        });
+        {
+          const who =
+            contact.display_name || contact.profile_name || formatWaPhone(contact.wa_id);
+          const reason = String(args.reason ?? "").slice(0, 140);
+          await notifyEveryone(supabase, {
+            title: "WhatsApp — human takeover needed",
+            body: `${who} — ${reason}`,
+            link: "/whatsapp",
+            sms: `ARCON: WhatsApp customer ${who} (${formatWaPhone(contact.wa_id)}) needs a human${reason ? ` — ${reason}` : ""}. AI is paused — open the inbox to take over.`,
+          });
+        }
         return {
           ok: true,
           result:
@@ -2992,9 +3011,41 @@ export async function linkWaContactToCrm(
 
 async function notifyEveryone(
   supabase: DB,
-  opts: { title: string; body: string | null; link: string },
+  opts: { title: string; body: string | null; link: string; sms?: string | null },
 ): Promise<number> {
-  const { data: profiles } = await supabase.from("profiles").select("id");
+  const { data: profiles } = await supabase
+    .from("profiles")
+    .select("id, phone, full_name");
+
+  // Urgent alerts (human takeover, notify_team) ALSO go out as SMS — an
+  // in-app/push notification can sit unseen for hours, but a text lands on the
+  // phone. Recipients: every teammate with a number on file, plus any extra
+  // numbers in TEAM_ALERT_PHONE (comma/space separated) for an ops mobile that
+  // isn't a login. Deduped, and never sent for routine (sms-less) notifies.
+  const smsText = opts.sms?.trim().slice(0, SMS_MAX_LENGTH) || null;
+  const smsReady = Boolean(smsText) && isSmsConfigured();
+  const smsSeen = new Set<string>();
+  const sendAlertSms = async (rawPhone: string, name: string) => {
+    const phone = normalizePhone(rawPhone);
+    if (!phone.ok || smsSeen.has(phone.value)) return;
+    smsSeen.add(phone.value);
+    const sent = await sendSms({
+      to: phone.value,
+      message: smsText!,
+      contactName: name || undefined,
+    });
+    await supabase.from("sms_messages").insert({
+      to_number: phone.value,
+      message: smsText!,
+      client_name: name,
+      kind: "team_alert",
+      status: sent.ok ? "sent" : "failed",
+      error: sent.ok ? null : sent.error,
+      segments: countSmsSegments(smsText!),
+      created_by: null,
+    });
+  };
+
   for (const p of profiles ?? []) {
     await supabase.from("notifications").insert({
       user_id: p.id,
@@ -3009,6 +3060,16 @@ async function notifyEveryone(
       body: opts.body || opts.title,
       link: opts.link,
     });
+    if (smsReady && p.phone) await sendAlertSms(p.phone, p.full_name ?? "");
   }
+
+  if (smsReady) {
+    const extra = (process.env.TEAM_ALERT_PHONE ?? "")
+      .split(/[,\s]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    for (const num of extra) await sendAlertSms(num, "Team");
+  }
+
   return profiles?.length ?? 0;
 }

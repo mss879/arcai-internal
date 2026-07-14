@@ -47,6 +47,10 @@ const KIND_META: Record<SmsKind, { label: string; badge: string }> = {
     label: "Cold outreach",
     badge: "bg-sky-50 text-sky-600 ring-sky-200",
   },
+  team_alert: {
+    label: "Team alert",
+    badge: "bg-rose-50 text-rose-600 ring-rose-200",
+  },
 };
 
 type Filter = "all" | SmsKind | "failed";

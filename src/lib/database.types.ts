@@ -38,7 +38,8 @@ export type SmsKind =
   | "promotion"
   | "todo_reminder"
   | "meeting_reminder"
-  | "prospecting";
+  | "prospecting"
+  | "team_alert";
 /** "Find Leads" prospecting scan pipeline (0044). */
 export type ProspectScanStatus =
   | "pending"

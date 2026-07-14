@@ -12,6 +12,8 @@ import {
   requalifyCandidate,
 } from "@/lib/prospecting";
 import { sendGenericEmail } from "@/lib/email";
+import { isEmailOutreachConfigured, processDueOutreach } from "@/lib/lead-outreach";
+import { launchScanCampaign } from "@/lib/outreach-campaign";
 import { isSmsConfigured, sendSms } from "@/lib/sms";
 import { countSmsSegments, normalizePhone } from "@/lib/sms-utils";
 import type { ActionResult } from "@/lib/types";
@@ -373,6 +375,110 @@ export async function deleteScheduleAction(id: string): Promise<ActionResult> {
     .delete()
     .eq("id", id);
   if (error) return { ok: false, error: error.message };
+  revalidatePath("/crm/prospecting");
+  return { ok: true };
+}
+
+// ---- Post-scan outreach prompt ---------------------------------------------
+
+/**
+ * Turn the leads a finished scan imported into a cold email campaign.
+ *
+ * The choice is recorded on the scan (`analysis.outreachChoice`) so the prompt
+ * asks ONCE — not on every page load, and never twice for the same scan.
+ */
+export async function startScanOutreach(
+  scanId: string,
+  opts: { autoSend: boolean; dailyCap: number },
+): Promise<ActionResult<{ queued: number; campaignId: string }>> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+
+  if (!isEmailOutreachConfigured()) {
+    return {
+      ok: false,
+      error:
+        "Outreach isn't configured — RESEND_API_KEY plus the research keys are required.",
+    };
+  }
+
+  const { data: scan } = await supabase
+    .from("prospect_scans")
+    .select("id, city, country, analysis")
+    .eq("id", scanId)
+    .maybeSingle();
+  if (!scan) return { ok: false, error: "That scan no longer exists." };
+
+  const analysis = (scan.analysis ?? {}) as Record<string, unknown>;
+  // Guard against a double-click or two tabs both answering the prompt —
+  // without this you'd get two campaigns over the same leads.
+  if (analysis.outreachChoice) {
+    return { ok: false, error: "Outreach was already set up for this scan." };
+  }
+
+  const res = await launchScanCampaign(supabase, {
+    scanId,
+    scanLabel: `Find Leads — ${scan.city}${
+      opts.autoSend ? "" : " (approval)"
+    }`,
+    autoSend: opts.autoSend,
+    dailyCap: opts.dailyCap,
+    actorId: user.id,
+  });
+  if (!res.ok || !res.id) {
+    return { ok: false, error: res.error ?? "Could not start outreach." };
+  }
+
+  await supabase
+    .from("prospect_scans")
+    .update({
+      analysis: {
+        ...analysis,
+        outreachChoice: opts.autoSend ? "auto" : "manual",
+        outreachCampaignId: res.id,
+      },
+    })
+    .eq("id", scanId);
+
+  after(async () => {
+    await processDueOutreach(supabase);
+  });
+  revalidatePath("/crm/prospecting");
+  revalidatePath("/crm/outreach");
+  return { ok: true, queued: res.queued ?? 0, campaignId: res.id };
+}
+
+/**
+ * "Not now" — record the choice so the prompt stops asking for this scan. The
+ * drafts the import already queued are left alone: they sit in the approval
+ * queue on each lead, which is where they were headed anyway.
+ */
+export async function skipScanOutreach(scanId: string): Promise<ActionResult> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+
+  const { data: scan } = await supabase
+    .from("prospect_scans")
+    .select("analysis")
+    .eq("id", scanId)
+    .maybeSingle();
+  if (!scan) return { ok: false, error: "That scan no longer exists." };
+
+  await supabase
+    .from("prospect_scans")
+    .update({
+      analysis: {
+        ...((scan.analysis ?? {}) as object),
+        outreachChoice: "skipped",
+      },
+    })
+    .eq("id", scanId);
   revalidatePath("/crm/prospecting");
   return { ok: true };
 }

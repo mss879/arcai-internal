@@ -415,11 +415,29 @@ async function runSearch(supabase: DB, scan: ScanRow): Promise<void> {
     }
   }
 
-  // Never re-pitch someone already in the CRM: match by website domain or name.
+  // Never re-pitch someone already in the CRM. THIS is the check that protects
+  // the prospect — the old global place_id index only hid businesses from the
+  // operator (see 0059). Three ways to match, strongest first:
+  //   1. prospect_place_id — the exact Google id stamped on every lead this
+  //      agent imported. Unambiguous, and survives a rename.
+  //   2. website domain.
+  //   3. company/title name similarity.
+  // Soft-deleted leads are excluded on purpose: if the owner binned a lead,
+  // finding that business again is the desired behaviour, not a bug.
   const { data: leads } = await supabase
     .from("leads")
-    .select("title, company, company_website")
+    .select("title, company, company_website, custom")
     .is("deleted_at", null);
+  const leadPlaceIds = new Set(
+    (leads ?? [])
+      .map((l) => {
+        const custom = (l.custom ?? {}) as Record<string, unknown>;
+        return typeof custom.prospect_place_id === "string"
+          ? custom.prospect_place_id
+          : "";
+      })
+      .filter(Boolean),
+  );
   const leadDomains = new Set(
     (leads ?? [])
       .map((l) => (l.company_website ? domainOf(l.company_website) : ""))
@@ -432,6 +450,7 @@ async function runSearch(supabase: DB, scan: ScanRow): Promise<void> {
   const rows = businesses.map((b) => {
     const denied = b.types.some((t) => DENY_TYPES.has(t));
     const inCrm =
+      leadPlaceIds.has(b.placeId) ||
       (b.website && leadDomains.has(domainOf(b.website))) ||
       leadNames.some((n) => sameCompany(n, b.name));
     const verdict: ProspectVerdict = denied
@@ -460,12 +479,24 @@ async function runSearch(supabase: DB, scan: ScanRow): Promise<void> {
     };
   });
 
+  // How many of these has an EARLIER scan already looked at? Since 0059 that
+  // no longer suppresses them — they're re-examined — but it's the honest
+  // answer to "why did a re-scan of the same street turn up so little?", so
+  // it's counted and shown rather than left invisible.
+  const seenBefore = await countSeenByEarlierScans(
+    supabase,
+    scan.id,
+    businesses.map((b) => b.placeId),
+  );
+
   if (rows.length) {
-    // place_id is globally unique: businesses seen by ANY earlier scan are
-    // silently dropped here — a re-scan of the same area only yields new ones.
+    // Unique on (scan_id, place_id) since 0059 — this only collapses dupes
+    // WITHIN this scan (the same business matching two categories). Businesses
+    // seen by earlier scans are re-examined; not re-pitching them is handled
+    // properly above by the CRM domain/name check → verdict 'duplicate'.
     const { error } = await supabase
       .from("prospect_candidates")
-      .upsert(rows, { onConflict: "place_id", ignoreDuplicates: true });
+      .upsert(rows, { onConflict: "scan_id,place_id", ignoreDuplicates: true });
     if (error) throw new Error(error.message);
   }
 
@@ -473,10 +504,53 @@ async function runSearch(supabase: DB, scan: ScanRow): Promise<void> {
     .from("prospect_candidates")
     .select("*", { count: "exact", head: true })
     .eq("scan_id", scan.id);
+
+  // The funnel, so the UI can explain the gap between "find 40" and what
+  // actually lands in the CRM instead of just showing a smaller number.
+  const funnel = {
+    requested: scan.max_results,
+    returned: businesses.length,
+    seenBefore,
+    excluded: rows.filter((r) => r.website_verdict === "excluded").length,
+    duplicate: rows.filter((r) => r.website_verdict === "duplicate").length,
+    examined: rows.filter((r) => r.website_verdict === "pending").length,
+    ...(placesError ? { searchError: placesError.slice(0, 300) } : {}),
+  };
+
   await supabase
     .from("prospect_scans")
-    .update({ found: count ?? 0 })
+    .update({
+      found: count ?? 0,
+      analysis: { ...((scan.analysis ?? {}) as object), funnel },
+    })
     .eq("id", scan.id);
+}
+
+/**
+ * How many of these businesses an EARLIER scan already covered.
+ *
+ * Counts DISTINCT place_ids, not rows: now that (scan_id, place_id) is the
+ * unique key, several past scans can each hold a row for the same business, so
+ * a row count would report more "already seen" businesses than were returned.
+ * Chunked — `in()` on a few hundred ids blows the URL length.
+ */
+async function countSeenByEarlierScans(
+  supabase: DB,
+  scanId: string,
+  placeIds: string[],
+): Promise<number> {
+  if (!placeIds.length) return 0;
+  const seen = new Set<string>();
+  for (let i = 0; i < placeIds.length; i += 100) {
+    const chunk = placeIds.slice(i, i + 100);
+    const { data } = await supabase
+      .from("prospect_candidates")
+      .select("place_id")
+      .in("place_id", chunk)
+      .neq("scan_id", scanId);
+    for (const r of data ?? []) seen.add(r.place_id);
+  }
+  return seen.size;
 }
 
 // ---- STEP 2: qualify websites ----------------------------------------------------

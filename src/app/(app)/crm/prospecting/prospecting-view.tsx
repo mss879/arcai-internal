@@ -16,6 +16,8 @@ import {
   Radar,
   RefreshCw,
   Send,
+  ShieldCheck,
+  Sparkles,
   Star,
   Trash2,
 } from "lucide-react";
@@ -41,7 +43,9 @@ import {
   recheckScanAll,
   sendProspectEmail,
   sendProspectSms,
+  skipScanOutreach,
   startProspectScan,
+  startScanOutreach,
 } from "./actions";
 import { SchedulesCard } from "./schedules-card";
 import { useDriveProspecting } from "./use-drive-prospecting";
@@ -51,6 +55,253 @@ export type PipelineOption = {
   name: string;
   stages: { id: string; name: string }[];
 };
+
+/**
+ * Post-scan prompt: the scan just put N cold leads in the CRM — email them?
+ *
+ * Shows once per scan. The import path has ALREADY queued a draft per lead
+ * heading for the approval queue, so "Draft for my approval" is confirming the
+ * default, and "Not now" leaves those drafts sitting on each lead rather than
+ * binning work that's already been paid for.
+ */
+function ScanOutreachPrompt({
+  scan,
+  emailConfigured,
+}: {
+  scan: ProspectScan;
+  emailConfigured: boolean;
+}) {
+  const router = useRouter();
+  const [pending, startTransition] = React.useTransition();
+  const [autoSend, setAutoSend] = React.useState(false);
+  const [dailyCap, setDailyCap] = React.useState(40);
+  const [confirming, setConfirming] = React.useState(false);
+
+  const analysis = (scan.analysis ?? {}) as { outreachChoice?: string };
+  const open =
+    scan.status === "done" &&
+    scan.imported > 0 &&
+    !analysis.outreachChoice &&
+    emailConfigured;
+
+  function go() {
+    startTransition(async () => {
+      const res = await startScanOutreach(scan.id, { autoSend, dailyCap });
+      setConfirming(false);
+      if (res.ok) {
+        toast.success(
+          autoSend
+            ? `Researching and emailing ${res.queued} leads — up to ${dailyCap}/day.`
+            : `Drafting ${res.queued} emails for your approval.`,
+        );
+        router.refresh();
+      } else toast.error(res.error);
+    });
+  }
+
+  function skip() {
+    startTransition(async () => {
+      const res = await skipScanOutreach(scan.id);
+      if (res.ok) {
+        toast.success("No campaign started. Drafts stay on each lead.");
+        router.refresh();
+      } else toast.error(res.error);
+    });
+  }
+
+  if (!open) return null;
+
+  return (
+    <>
+      <Modal
+        open
+        onClose={skip}
+        title={`${scan.imported} new lead${scan.imported === 1 ? "" : "s"} added to your CRM`}
+        description="Start cold email outreach on them?"
+        size="md"
+        footer={
+          <>
+            <Button variant="ghost" onClick={skip} disabled={pending}>
+              Not now
+            </Button>
+            <Button onClick={() => setConfirming(true)} disabled={pending} loading={pending}>
+              {autoSend ? (
+                <>
+                  <Send className="h-4 w-4" /> Research &amp; send
+                </>
+              ) : (
+                <>
+                  <Sparkles className="h-4 w-4" /> Draft for approval
+                </>
+              )}
+            </Button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-4">
+          <p className="text-sm text-slate-600">
+            Each lead gets researched, then a personalized email written from
+            what we find about their business and website.
+          </p>
+
+          <div className="flex flex-col gap-2">
+            <button
+              type="button"
+              onClick={() => setAutoSend(false)}
+              className={cn(
+                "flex items-start gap-3 rounded-xl border p-3 text-left transition",
+                !autoSend
+                  ? "border-primary-300 bg-primary-50/50 ring-2 ring-primary-100"
+                  : "border-slate-200 bg-white hover:border-slate-300",
+              )}
+            >
+              <ShieldCheck
+                className={cn(
+                  "mt-0.5 h-4 w-4 shrink-0",
+                  !autoSend ? "text-primary-600" : "text-slate-400",
+                )}
+              />
+              <span>
+                <span className="block text-sm font-semibold text-slate-800">
+                  Manually — draft for my approval
+                </span>
+                <span className="mt-0.5 block text-xs text-slate-500">
+                  Each email waits on its lead until you click Approve &amp;
+                  send. Nothing goes out on its own.
+                </span>
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setAutoSend(true)}
+              className={cn(
+                "flex items-start gap-3 rounded-xl border p-3 text-left transition",
+                autoSend
+                  ? "border-amber-300 bg-amber-50 ring-2 ring-amber-100"
+                  : "border-slate-200 bg-white hover:border-slate-300",
+              )}
+            >
+              <Send
+                className={cn(
+                  "mt-0.5 h-4 w-4 shrink-0",
+                  autoSend ? "text-amber-600" : "text-slate-400",
+                )}
+              />
+              <span>
+                <span className="block text-sm font-semibold text-slate-800">
+                  Automatically — research, write and send
+                </span>
+                <span className="mt-0.5 block text-xs text-slate-500">
+                  Emails go out as they&apos;re written, with no review. Paced by
+                  the daily limit.
+                </span>
+              </span>
+            </button>
+          </div>
+
+          {autoSend && (
+            <Field
+              label="Daily limit"
+              hint="Cold email from arcai.agency shares a reputation with your invoice mail. 40/day is the safe pace."
+            >
+              <Select
+                value={String(dailyCap)}
+                onChange={(e) => setDailyCap(Number(e.target.value))}
+              >
+                <option value="20">20 emails / day — very cautious</option>
+                <option value="40">40 emails / day — recommended</option>
+                <option value="100">100 emails / day — aggressive</option>
+                <option value="150">150 emails / day — risky</option>
+              </Select>
+            </Field>
+          )}
+
+          <p className="text-xs text-slate-400">
+            You can pause or cancel this any time from CRM → ⋯ → Email
+            campaigns.
+          </p>
+        </div>
+      </Modal>
+
+      <ConfirmDialog
+        open={confirming}
+        onClose={() => setConfirming(false)}
+        onConfirm={go}
+        destructive={autoSend}
+        confirmLabel={autoSend ? `Send to ${scan.imported} leads` : "Start drafting"}
+        title={autoSend ? "Send without approval?" : "Start drafting?"}
+        description={
+          autoSend
+            ? `${scan.imported} cold emails will be researched, written and sent from support@arcai.agency with no further review, up to ${dailyCap} per day. You can pause any time, but anything already delivered can't be recalled.`
+            : `${scan.imported} emails will be researched and drafted. Nothing sends until you approve each one.`
+        }
+      />
+    </>
+  );
+}
+
+/** Written by runSearch — the real story behind "I asked for 40, I got 6". */
+type ScanFunnelData = {
+  requested?: number;
+  returned?: number;
+  seenBefore?: number;
+  excluded?: number;
+  duplicate?: number;
+  examined?: number;
+  searchError?: string;
+};
+
+/**
+ * Explains the gap between the number the user picked and the number of leads
+ * they got. Without this the scan just shows a smaller figure and it reads as
+ * "Google ran out of businesses" — which is never what happened.
+ *
+ * Renders nothing for scans that pre-date the funnel data.
+ */
+function ScanFunnel({ scan }: { scan: ProspectScan }) {
+  const funnel = ((scan.analysis ?? {}) as { funnel?: ScanFunnelData }).funnel;
+  if (!funnel?.returned && !funnel?.requested) return null;
+
+  const requested = funnel.requested ?? 0;
+  const returned = funnel.returned ?? 0;
+  const parts: string[] = [];
+  if (funnel.excluded) parts.push(`${funnel.excluded} institutions/utilities`);
+  if (funnel.duplicate) parts.push(`${funnel.duplicate} already in your CRM`);
+  if (funnel.seenBefore) parts.push(`${funnel.seenBefore} seen by an earlier scan`);
+
+  // Google's text search is relevance-ranked, not a directory: it caps at ~60
+  // per query and often returns fewer. That's the honest reason for a short
+  // haul — not something a bigger number in the form can fix.
+  const short = returned > 0 && returned < requested;
+
+  return (
+    <div className="mt-3 rounded-xl border border-slate-100 bg-white px-3 py-2.5">
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+        Where they went
+      </p>
+      <p className="mt-1 text-xs text-slate-600">
+        Asked Google for <span className="font-semibold">{requested}</span> ·
+        got <span className="font-semibold">{returned}</span>
+        {parts.length > 0 && <> · minus {parts.join(", ")}</>} ·{" "}
+        <span className="font-semibold">{funnel.examined ?? 0}</span> websites
+        checked → <span className="font-semibold">{scan.qualified}</span>{" "}
+        qualified
+      </p>
+      {short && (
+        <p className="mt-1.5 text-[11px] text-slate-400">
+          Google returned fewer than you asked for — its text search is
+          relevance-ranked and caps at ~60 per category, so a narrow category or
+          a small city simply runs out. Add more categories to widen the net.
+        </p>
+      )}
+      {funnel.searchError && (
+        <p className="mt-1.5 text-[11px] text-amber-700">
+          Search issue: {funnel.searchError}
+        </p>
+      )}
+    </div>
+  );
+}
 
 const COUNTRIES = [
   "Sri Lanka",
@@ -583,7 +834,11 @@ function ScanResults({
             </div>
           ))}
         </div>
+
+        <ScanFunnel scan={scan} />
       </div>
+
+      <ScanOutreachPrompt scan={scan} emailConfigured={emailConfigured} />
 
       {/* Qualified leads */}
       {qualified.length === 0 && !running ? (

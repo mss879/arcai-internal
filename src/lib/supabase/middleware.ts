@@ -23,6 +23,9 @@ const PUBLIC_PREFIXES = [
   // servers. The route guards itself: POST needs a valid Svix signature from
   // RESEND_WEBHOOK_SECRET.
   "/api/webhooks",
+  // Cold-outreach unsubscribe link — recipients aren't logged in. The route
+  // guards itself with a per-email HMAC token.
+  "/api/outreach/unsubscribe",
   // Public prospect showcase pages (unguessable token, like /q).
   "/showcase",
   // Netlify functions (the scheduled automation tick) are invoked server-to-

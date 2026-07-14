@@ -117,6 +117,17 @@ export type LeadActivityKind =
 export type CrmTaskStatus = "open" | "done";
 export type LeadStatus = "open" | "won" | "lost";
 export type LeadScore = "hot" | "warm" | "cold";
+/** Automated outreach pipeline state (0056). Draft → approve → send. */
+export type LeadOutreachStatus =
+  | "pending"
+  | "researching"
+  | "drafting"
+  | "ready"
+  | "sending"
+  | "sent"
+  | "failed"
+  | "skipped"
+  | "discarded";
 export type QuoteStatus =
   | "draft"
   | "sent"
@@ -177,6 +188,10 @@ export type WaShowcaseStatus =
   | "sent"
   | "error";
 export type WaVoiceReplies = "off" | "match";
+/** Promise tracking — prospect commitments the agent follows up on (0054). */
+export type WaPromiseStatus = "pending" | "sent" | "cancelled";
+/** Language matching — detected chat language incl. romanized variants (0055). */
+export type WaLanguage = "en" | "si" | "ta" | "si-latn" | "ta-latn";
 export type AutomationRunStatus =
   | "running"
   | "completed"
@@ -1334,6 +1349,76 @@ export type Database = {
         >;
         Relationships: [];
       };
+      lead_outreach: {
+        Row: {
+          id: UUID;
+          lead_id: UUID;
+          status: LeadOutreachStatus;
+          recipients: string[];
+          sent_to: string[];
+          subject: string;
+          body: string;
+          audit: Record<string, unknown> | null;
+          audit_score: number | null;
+          company_facts: Record<string, unknown> | null;
+          message_ids: string[];
+          from_email: string;
+          source: string;
+          attempts: number;
+          error: string | null;
+          locked_at: Timestamp | null;
+          requested_by: UUID | null;
+          created_by: UUID | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+          sent_at: Timestamp | null;
+        };
+        Insert: {
+          id?: UUID;
+          lead_id: UUID;
+          status?: LeadOutreachStatus;
+          recipients?: string[];
+          sent_to?: string[];
+          subject?: string;
+          body?: string;
+          audit?: Record<string, unknown> | null;
+          audit_score?: number | null;
+          company_facts?: Record<string, unknown> | null;
+          message_ids?: string[];
+          from_email?: string;
+          source?: string;
+          attempts?: number;
+          error?: string | null;
+          locked_at?: Timestamp | null;
+          requested_by?: UUID | null;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+          sent_at?: Timestamp | null;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["lead_outreach"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      outreach_suppressions: {
+        Row: {
+          email: string;
+          reason: string;
+          lead_id: UUID | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          email: string;
+          reason?: string;
+          lead_id?: UUID | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["outreach_suppressions"]["Insert"]
+        >;
+        Relationships: [];
+      };
       crm_tasks: {
         Row: {
           id: UUID;
@@ -1942,6 +2027,7 @@ export type Database = {
           next_followup_at: Timestamp | null;
           do_not_contact: boolean;
           agent_due_at: Timestamp | null;
+          language: WaLanguage | null;
           created_at: Timestamp;
           updated_at: Timestamp;
         };
@@ -1963,6 +2049,7 @@ export type Database = {
           next_followup_at?: Timestamp | null;
           do_not_contact?: boolean;
           agent_due_at?: Timestamp | null;
+          language?: WaLanguage | null;
           created_at?: Timestamp;
           updated_at?: Timestamp;
         };
@@ -2024,6 +2111,7 @@ export type Database = {
           quiet_hours_start: number;
           quiet_hours_end: number;
           timezone: string;
+          language_matching: boolean;
           updated_at: Timestamp;
         };
         Insert: {
@@ -2048,6 +2136,7 @@ export type Database = {
           quiet_hours_start?: number;
           quiet_hours_end?: number;
           timezone?: string;
+          language_matching?: boolean;
           updated_at?: Timestamp;
         };
         Update: Partial<
@@ -2128,6 +2217,34 @@ export type Database = {
         };
         Update: Partial<
           Database["public"]["Tables"]["wa_agent_logs"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      wa_promises: {
+        Row: {
+          id: UUID;
+          contact_id: UUID;
+          summary: string;
+          source_quote: string | null;
+          due_at: Timestamp;
+          status: WaPromiseStatus;
+          result: string | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          contact_id: UUID;
+          summary: string;
+          source_quote?: string | null;
+          due_at: Timestamp;
+          status?: WaPromiseStatus;
+          result?: string | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["wa_promises"]["Insert"]
         >;
         Relationships: [];
       };

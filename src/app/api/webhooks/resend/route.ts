@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 import { createAdminClient } from "@/lib/supabase/admin";
+import { suppressEmail } from "@/lib/lead-outreach";
 
 export const runtime = "nodejs";
 
@@ -91,6 +92,13 @@ export async function POST(request: Request) {
     const { data: profiles } = await supabase.from("profiles").select("id");
 
     for (const email of recipients) {
+      // Never cold-email a bounced/complained address again.
+      await suppressEmail(
+        supabase,
+        email,
+        type === "email.complained" ? "complaint" : "bounce",
+      );
+
       // Leave a trace on any matching CRM lead(s).
       const { data: leads } = await supabase
         .from("leads")

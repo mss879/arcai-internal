@@ -7,6 +7,11 @@ import { fireAutomationTrigger } from "@/lib/automation";
 import { createClient } from "@/lib/supabase/server";
 import { startLeadResearch } from "@/lib/research";
 import { isResearchConfigured } from "@/lib/ai/lead-research";
+import {
+  buildRecipients,
+  drainOutreachRow,
+  sendLeadOutreach,
+} from "@/lib/lead-outreach";
 import { sendPushToUser } from "@/lib/push";
 import { sendSmsToUser } from "@/lib/sms-alerts";
 import { DEFAULT_PIPELINE_STAGES } from "@/lib/constants";
@@ -1040,4 +1045,119 @@ export async function aiLeadAssist(
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "AI call failed." };
   }
+}
+
+// --- Automated outreach (research → audit → AI email → approve → send) ------
+
+/**
+ * Manually kick off an AI outreach draft for a lead (research + audit +
+ * compose). Resets any prior draft to pending and drains the pipeline inline
+ * so the "Approve & send" card appears shortly. Never sends by itself.
+ */
+export async function prepareLeadOutreach(leadId: string): Promise<ActionResult> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+
+  const recipients = await buildRecipients(supabase, leadId);
+  const { data, error } = await supabase
+    .from("lead_outreach")
+    .upsert(
+      {
+        lead_id: leadId,
+        status: "pending",
+        recipients,
+        source: "manual",
+        subject: "",
+        body: "",
+        error: null,
+        sent_to: [],
+        message_ids: [],
+        sent_at: null,
+        attempts: 0,
+        requested_by: user.id,
+      },
+      { onConflict: "lead_id" },
+    )
+    .select("id")
+    .single();
+  if (error) return { ok: false, error: error.message };
+
+  const id = data.id;
+  after(async () => {
+    await drainOutreachRow(supabase, id);
+  });
+  revalidatePath(`/crm/lead/${leadId}`);
+  return { ok: true };
+}
+
+/** Approve the drafted email and send it to every valid recipient. */
+export async function approveLeadOutreach(
+  leadId: string,
+): Promise<ActionResult<{ sent: number }>> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+
+  const res = await sendLeadOutreach(supabase, leadId, { actorId: user.id });
+  revalidatePath(`/crm/lead/${leadId}`);
+  if (!res.ok) return { ok: false, error: res.error ?? "Send failed." };
+  return { ok: true, sent: res.sent ?? 0 };
+}
+
+/** Edit the drafted subject/body before approving. */
+export async function saveOutreachDraft(
+  leadId: string,
+  subject: string,
+  body: string,
+): Promise<ActionResult> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  if (!body.trim()) return { ok: false, error: "The email body can't be empty." };
+
+  const { error } = await supabase
+    .from("lead_outreach")
+    .update({ subject: subject.trim().slice(0, 200), body: body.trim().slice(0, 4000) })
+    .eq("lead_id", leadId)
+    .eq("status", "ready");
+  if (error) return { ok: false, error: error.message };
+  revalidatePath(`/crm/lead/${leadId}`);
+  return { ok: true };
+}
+
+/** Discard a drafted outreach (keeps any already-sent history intact). */
+export async function discardLeadOutreach(leadId: string): Promise<ActionResult> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+
+  await supabase
+    .from("lead_outreach")
+    .update({ status: "discarded" })
+    .eq("lead_id", leadId)
+    .in("status", ["ready", "failed", "pending", "drafting"]);
+
+  // Drop the "Draft Ready" chip.
+  const { data: lead } = await supabase
+    .from("leads")
+    .select("tags")
+    .eq("id", leadId)
+    .maybeSingle();
+  if (lead?.tags?.includes("Draft Ready")) {
+    await supabase
+      .from("leads")
+      .update({ tags: lead.tags.filter((t) => t !== "Draft Ready") })
+      .eq("id", leadId);
+  }
+  revalidatePath(`/crm/lead/${leadId}`);
+  return { ok: true };
 }

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import type { Database, WaMessageStatus } from "@/lib/database.types";
+import type { Database, WaLanguage, WaMessageStatus } from "@/lib/database.types";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
   detectWaOptOut,
@@ -8,6 +8,11 @@ import {
   handleInboundWaMessage,
   handleWaOptOut,
 } from "@/lib/wa-agent";
+import {
+  baseLanguage,
+  detectScriptLanguage,
+  whisperLanguageToCode,
+} from "@/lib/wa-lang";
 import { markWhatsAppRead, verifyWaSignature, whatsAppVerifyToken } from "@/lib/whatsapp";
 
 /**
@@ -180,12 +185,17 @@ async function handleMessages(supabase: DB, value: WaWebhookValue): Promise<void
     let body = extractBody(message);
     let isVoice = false;
     let meta: Record<string, unknown> = {};
+    let voiceLanguage: "en" | "si" | "ta" | null = null;
     if (message.type === "audio" && message.audio?.id) {
-      const transcript = await transcribeVoiceNote(message.audio.id);
+      const transcript = await transcribeVoiceNote(
+        message.audio.id,
+        contact.language ? baseLanguage(contact.language) : undefined,
+      );
       if (transcript) {
-        body = transcript;
+        body = transcript.text;
         isVoice = true;
-        meta = { voice: true };
+        voiceLanguage = transcript.language;
+        meta = { voice: true, ...(transcript.language ? { language: transcript.language } : {}) };
       }
     } else if (message.type === "image" && message.image?.id) {
       const media = await ingestInboundMedia(supabase, contact.id, message.image.id, "image");
@@ -234,6 +244,21 @@ async function handleMessages(supabase: DB, value: WaWebhookValue): Promise<void
     // Already processed this exact message on a previous delivery attempt.
     if (message.id && (stored ?? []).length === 0) continue;
 
+    // Language: native Sinhala/Tamil SCRIPT in a typed message always wins
+    // (it also captures their script preference). A voice note's detected
+    // language only fills a blank/English slot — it must never clobber a
+    // romanized "Singlish" classification (they type Latin, Whisper hears
+    // Sinhala). Plain-Latin text never downgrades anything — the agent's
+    // set_language tool handles romanized detection.
+    let language: WaLanguage | null = contact.language;
+    const scriptLang = isVoice ? null : detectScriptLanguage(body);
+    if (scriptLang) language = scriptLang;
+    else if (
+      (voiceLanguage === "si" || voiceLanguage === "ta") &&
+      (!language || language === "en")
+    )
+      language = voiceLanguage;
+
     await supabase
       .from("wa_contacts")
       .update({
@@ -243,6 +268,7 @@ async function handleMessages(supabase: DB, value: WaWebhookValue): Promise<void
         last_inbound_at: now,
         last_message_preview: body.slice(0, 160),
         last_direction: "in",
+        language,
         // Any reply instantly clears the autonomous follow-up cadence.
         followup_stage: 0,
         next_followup_at: null,
@@ -250,6 +276,7 @@ async function handleMessages(supabase: DB, value: WaWebhookValue): Promise<void
       .eq("id", contact.id);
     contact.profile_name = profileName ?? contact.profile_name;
     contact.last_inbound_at = now;
+    contact.language = language;
     contact.followup_stage = 0;
     contact.next_followup_at = null;
 
@@ -394,20 +421,27 @@ async function analyzeInboundImage(url: string): Promise<ImageAnalysis | null> {
   }
 }
 
-/** Download + Whisper-transcribe a voice note. Null on any failure. */
-async function transcribeVoiceNote(mediaId: string): Promise<string | null> {
+/** Download + Whisper-transcribe a voice note (with its detected language,
+ * when the transcribe model reports one). Null on any failure. */
+async function transcribeVoiceNote(
+  mediaId: string,
+  languageHint?: string,
+): Promise<{ text: string; language: "en" | "si" | "ta" | null } | null> {
   try {
     const { downloadWaMedia } = await import("@/lib/whatsapp");
     const media = await downloadWaMedia(mediaId);
     if (!media.ok) return null;
-    const { isOpenAIConfigured, openaiTranscribe } = await import("@/lib/ai/openai");
+    const { isOpenAIConfigured, openaiTranscribeVerbose } = await import("@/lib/ai/openai");
     if (!isOpenAIConfigured()) return null;
     const ext = media.mimeType.includes("mpeg") ? "mp3" : "ogg";
-    const text = await openaiTranscribe(
+    const result = await openaiTranscribeVerbose(
       new Blob([new Uint8Array(media.data)], { type: media.mimeType }),
       `voice.${ext}`,
+      { languageHint },
     );
-    return text.trim() || null;
+    const text = result.text.trim();
+    if (!text) return null;
+    return { text, language: whisperLanguageToCode(result.language) };
   } catch (e) {
     console.error("[whatsapp] voice transcription failed:", e);
     return null;

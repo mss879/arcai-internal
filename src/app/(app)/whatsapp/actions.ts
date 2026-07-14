@@ -4,7 +4,11 @@ import { revalidatePath } from "next/cache";
 
 import { createClient } from "@/lib/supabase/server";
 import type { ActionResult, WaMatchType, WaVoiceReplies } from "@/lib/types";
-import { linkWaContactToCrm, sendAndLogWa } from "@/lib/wa-agent";
+import {
+  cancelPendingWaPromises,
+  linkWaContactToCrm,
+  sendAndLogWa,
+} from "@/lib/wa-agent";
 import { WA_TOOL_CATALOG } from "@/lib/wa-tools-catalog";
 import { isWhatsAppConfigured } from "@/lib/whatsapp";
 
@@ -87,6 +91,9 @@ export async function setContactOptOutAction(
     })
     .eq("id", contactId);
   if (error) return { ok: false, error: error.message };
+  if (optedOut) {
+    await cancelPendingWaPromises(supabase, contactId, "contact opted out");
+  }
   revalidatePath("/whatsapp");
   return { ok: true };
 }
@@ -127,6 +134,7 @@ export type WaConfigInput = {
   quiet_hours_start?: number;
   quiet_hours_end?: number;
   timezone?: string;
+  language_matching?: boolean;
 };
 
 export async function saveWaConfigAction(
@@ -198,6 +206,9 @@ export async function saveWaConfigAction(
           : {}),
         ...(input.timezone != null
           ? { timezone: input.timezone.trim() || "Asia/Colombo" }
+          : {}),
+        ...(input.language_matching != null
+          ? { language_matching: Boolean(input.language_matching) }
           : {}),
       },
       { onConflict: "id" },

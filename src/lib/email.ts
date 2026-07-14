@@ -13,7 +13,7 @@ function getResend() {
   return new Resend(key);
 }
 
-type SendResult = { sent: boolean; error?: string };
+type SendResult = { sent: boolean; error?: string; id?: string };
 
 function shell(title: string, body: string) {
   return `
@@ -142,6 +142,18 @@ export async function sendGenericEmail(opts: {
   body: string;
   /** Optional CTA button appended after the body. */
   cta?: { href: string; label: string };
+  /**
+   * Override the sender + reply-to. Defaults to RESEND_FROM_EMAIL. Cold
+   * outreach pins support@arcai.agency so replies land in that mailbox;
+   * transactional mail (invoices, credentials) leaves these unset.
+   */
+  from?: string;
+  replyTo?: string;
+  /**
+   * Trusted HTML appended below the body (e.g. a cold-outreach unsubscribe +
+   * postal-address footer for CAN-SPAM). Server-built, not user input.
+   */
+  footer?: string;
 }): Promise<SendResult> {
   const resend = getResend();
   if (!resend) return { sent: false, error: "RESEND_API_KEY not configured" };
@@ -158,17 +170,19 @@ export async function sendGenericEmail(opts: {
   const body = `
     ${paragraphs}
     ${opts.cta ? `<p style="margin:24px 0 0;">${button(opts.cta.href, opts.cta.label)}</p>` : ""}
+    ${opts.footer ?? ""}
   `;
 
   try {
-    const { error } = await resend.emails.send({
-      from: FROM,
+    const { data, error } = await resend.emails.send({
+      from: opts.from || FROM,
       to: opts.to,
+      ...(opts.replyTo ? { replyTo: opts.replyTo } : {}),
       subject: opts.subject,
       html: shell(opts.subject, body),
     });
     if (error) return { sent: false, error: error.message };
-    return { sent: true };
+    return { sent: true, id: data?.id };
   } catch (e) {
     return { sent: false, error: e instanceof Error ? e.message : "send failed" };
   }

@@ -14,9 +14,14 @@ import {
   processDueProspectSchedules,
   processPendingProspectScans,
 } from "@/lib/prospecting";
+import { processDueOutreach } from "@/lib/lead-outreach";
 import { processPendingCarousels } from "@/lib/carousels";
 import { processPendingWaShowcases } from "@/lib/wa-showcase";
-import { processDueWaAgentRuns, processDueWaFollowups } from "@/lib/wa-agent";
+import {
+  processDueWaAgentRuns,
+  processDueWaFollowups,
+  processDueWaPromises,
+} from "@/lib/wa-agent";
 import { isSmsConfigured } from "@/lib/sms";
 
 /**
@@ -63,11 +68,16 @@ export async function GET(request: Request) {
     const research = await processPendingResearch(supabase);
     const schedules = await processDueProspectSchedules(supabase);
     const prospecting = await processPendingProspectScans(supabase);
+    // Draft (research + audit + AI email) newly-found leads — stops at 'ready';
+    // a human approves the send from the lead. Reuses research audits when present.
+    const outreach = await processDueOutreach(supabase);
     const carousels = await processPendingCarousels(supabase);
     const showcases = await processPendingWaShowcases(supabase);
     // Queued inbound replies first — answering a live customer beats nudging
-    // a quiet one.
+    // a quiet one. Promised follow-ups ("call me Monday") beat the generic
+    // cadence — the customer named that moment themselves.
     const agentRuns = await processDueWaAgentRuns(supabase);
+    const promises = await processDueWaPromises(supabase);
     const followups = await processDueWaFollowups(supabase);
     const sms = isSmsConfigured()
       ? await processDueSmsRuns(supabase)
@@ -84,9 +94,11 @@ export async function GET(request: Request) {
       research,
       schedules,
       prospecting,
+      outreach,
       carousels,
       showcases,
       agentRuns,
+      promises,
       followups,
     });
   } catch (e) {

@@ -11,6 +11,7 @@ import {
   CalendarClock,
   Check,
   CheckCheck,
+  Handshake,
   Inbox,
   KanbanSquare,
   MessageCircle,
@@ -32,6 +33,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input, Select, Textarea } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { useRealtimeSyncTables } from "@/hooks/use-realtime-sync";
+import { WA_LANGUAGE_LABELS } from "@/lib/wa-lang";
 import { WA_TOOL_CATALOG } from "@/lib/wa-tools-catalog";
 import { cn, getInitials } from "@/lib/utils";
 import type {
@@ -45,6 +47,7 @@ import type {
   WaKeywordRule,
   WaMatchType,
   WaMessage,
+  WaPromise,
 } from "@/lib/types";
 
 import {
@@ -116,6 +119,7 @@ export function WhatsappView({
   stages,
   automations,
   coaching,
+  promises,
   waReady,
   aiReady,
   appBaseUrl,
@@ -129,11 +133,12 @@ export function WhatsappView({
   stages: PipelineStage[];
   automations: Automation[];
   coaching: WaCoaching | null;
+  promises: WaPromise[];
   waReady: boolean;
   aiReady: boolean;
   appBaseUrl: string;
 }) {
-  useRealtimeSyncTables(["wa_contacts", "wa_messages", "wa_agent_logs"]);
+  useRealtimeSyncTables(["wa_contacts", "wa_messages", "wa_agent_logs", "wa_promises"]);
   const [tab, setTab] = React.useState<Tab>("inbox");
 
   const attention = contacts.filter((c) => c.needs_attention).length;
@@ -214,7 +219,7 @@ export function WhatsappView({
       </div>
 
       {tab === "inbox" && (
-        <InboxTab contacts={contacts} messages={messages} waReady={waReady} appBaseUrl={appBaseUrl} />
+        <InboxTab contacts={contacts} messages={messages} promises={promises} waReady={waReady} appBaseUrl={appBaseUrl} />
       )}
       {tab === "agent" && (
         <AgentTab
@@ -238,11 +243,13 @@ export function WhatsappView({
 function InboxTab({
   contacts,
   messages,
+  promises,
   waReady,
   appBaseUrl,
 }: {
   contacts: WaContact[];
   messages: WaMessage[];
+  promises: WaPromise[];
   waReady: boolean;
   appBaseUrl: string;
 }) {
@@ -260,6 +267,12 @@ function InboxTab({
   const thread = React.useMemo(
     () => messages.filter((m) => m.contact_id === selected?.id),
     [messages, selected?.id],
+  );
+
+  // The next promised follow-up for this chat (promises arrive sorted by due_at).
+  const selectedPromise = React.useMemo(
+    () => promises.find((p) => p.contact_id === selected?.id) ?? null,
+    [promises, selected?.id],
   );
 
   const filtered = React.useMemo(() => {
@@ -411,7 +424,17 @@ function InboxTab({
               <p className="truncate text-sm font-semibold text-slate-900">
                 {contactName(selected)}
               </p>
-              <p className="text-xs text-slate-400">{fmtWa(selected.wa_id)}</p>
+              <p className="text-xs text-slate-400">
+                {fmtWa(selected.wa_id)}
+                {selected.language && (
+                  <span
+                    title="Detected chat language — the agent replies in it (same script), including follow-ups."
+                    className="ml-2 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500 ring-1 ring-slate-200"
+                  >
+                    {WA_LANGUAGE_LABELS[selected.language]}
+                  </span>
+                )}
+              </p>
             </div>
             {selected.do_not_contact ? (
               <button
@@ -422,6 +445,19 @@ function InboxTab({
               >
                 <Ban className="h-3 w-3" /> Opted out — tap to lift
               </button>
+            ) : selectedPromise ? (
+              <span
+                title={`They said: "${selectedPromise.summary}" — the agent will message them at exactly this moment. Kept automatically.`}
+                className="inline-flex h-7 items-center gap-1 rounded-full bg-amber-50 px-2.5 text-[11px] font-medium text-amber-700 ring-1 ring-amber-200"
+              >
+                <Handshake className="h-3 w-3" /> Promise ·{" "}
+                {new Date(selectedPromise.due_at).toLocaleString([], {
+                  month: "short",
+                  day: "numeric",
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })}
+              </span>
             ) : selected.next_followup_at ? (
               <span
                 title="The agent will chase this deal automatically. Any reply from them cancels it."
@@ -638,6 +674,7 @@ function AgentTab({
     quiet_hours_start: config?.quiet_hours_start ?? 21,
     quiet_hours_end: config?.quiet_hours_end ?? 9,
     timezone: config?.timezone ?? "Asia/Colombo",
+    language_matching: config?.language_matching ?? true,
   }));
   const [saving, setSaving] = React.useState(false);
 
@@ -728,6 +765,11 @@ function AgentTab({
               checked={form.voice_replies === "match"}
               onChange={(v) => set("voice_replies", v ? "match" : "off")}
               label="Reply to voice notes with voice"
+            />
+            <Toggle
+              checked={form.language_matching}
+              onChange={(v) => set("language_matching", v)}
+              label="Match customer language (Sinhala / Tamil / Singlish)"
             />
           </div>
 

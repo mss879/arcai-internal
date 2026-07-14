@@ -6,6 +6,7 @@ import type {
   CrmField,
   CrmTask,
   LeadActivity,
+  LeadOutreach,
   LeadResearch,
   LeadWithAssignee,
   Pipeline,
@@ -50,6 +51,7 @@ export default async function LeadPage({
     stagesRes,
     pipelineRes,
     researchRes,
+    outreachRes,
     members,
   ] = await Promise.all([
     supabase
@@ -82,6 +84,11 @@ export default async function LeadPage({
       .select("*")
       .eq("lead_id", id)
       .maybeSingle(),
+    supabase
+      .from("lead_outreach")
+      .select("*")
+      .eq("lead_id", id)
+      .maybeSingle(),
     getMembers(),
   ]);
 
@@ -95,6 +102,7 @@ export default async function LeadPage({
       stages={(stagesRes.data ?? []) as PipelineStage[]}
       pipeline={(pipelineRes.data ?? null) as Pipeline | null}
       research={(researchRes.data ?? null) as LeadResearch | null}
+      outreach={(outreachRes.data ?? null) as LeadOutreach | null}
       members={members}
     />
   );

@@ -32,6 +32,7 @@ import {
 import { isOpenAIConfigured, openaiChatJSON } from "@/lib/ai/openai";
 import { probeSite } from "@/lib/ai/site-probe";
 import { fireAutomationTrigger } from "@/lib/automation";
+import { enqueueLeadOutreach, outreachSettings } from "@/lib/lead-outreach";
 
 type DB = SupabaseClient<Database>;
 type ScanRow = Database["public"]["Tables"]["prospect_scans"]["Row"];
@@ -1057,6 +1058,8 @@ async function runImport(supabase: DB, scan: ScanRow): Promise<number> {
   const createdLeads: LeadRow[] = [];
   // Candidate context per lead — the cold first-touch template's variables.
   const candidateByLead = new Map<string, CandidateRow>();
+  // Auto-draft AI outreach for each new lead (gated on the global toggle).
+  const { enabled: outreachEnabled } = await outreachSettings(supabase);
 
   for (const c of candidates) {
     const { data: lead, error } = await supabase
@@ -1077,6 +1080,8 @@ async function runImport(supabase: DB, scan: ScanRow): Promise<number> {
           prospect_place_id: c.place_id,
           prospect_score: c.score,
           prospect_verdict: c.website_verdict,
+          // The full scraped list — the outreach pipeline emails ALL of them.
+          prospect_emails: c.emails,
         },
         position: position++,
       })
@@ -1101,6 +1106,15 @@ async function runImport(supabase: DB, scan: ScanRow): Promise<number> {
         kind: "note",
         title: `Cold outreach draft: ${c.draft_subject || "email"}`,
         body: `${c.draft_body}${c.draft_sms ? `\n\n— SMS version —\n${c.draft_sms}` : ""}`,
+      });
+    }
+
+    // Queue an AI-researched, audit-personalized outreach draft (approve-to-send).
+    if (outreachEnabled) {
+      await enqueueLeadOutreach(supabase, {
+        leadId: lead.id,
+        recipients: c.emails,
+        source: "prospecting",
       });
     }
   }

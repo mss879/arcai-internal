@@ -10,6 +10,7 @@ import type {
   WaContact,
   WaKeywordRule,
   WaMessage,
+  WaPromise,
 } from "@/lib/types";
 import { isWhatsAppConfigured } from "@/lib/whatsapp";
 
@@ -30,6 +31,7 @@ export default async function WhatsappPage() {
     stagesRes,
     automationsRes,
     coachingRes,
+    promisesRes,
   ] = await Promise.all([
     supabase
       .from("wa_contacts")
@@ -61,6 +63,12 @@ export default async function WhatsappPage() {
       .order("week_start", { ascending: false })
       .limit(1)
       .maybeSingle(),
+    supabase
+      .from("wa_promises")
+      .select("*")
+      .eq("status", "pending")
+      .order("due_at")
+      .limit(200),
   ]);
 
   return (
@@ -74,6 +82,7 @@ export default async function WhatsappPage() {
       stages={(stagesRes.data ?? []) as PipelineStage[]}
       automations={(automationsRes.data ?? []) as Automation[]}
       coaching={(coachingRes.data as WaCoaching | null) ?? null}
+      promises={(promisesRes.data ?? []) as WaPromise[]}
       waReady={isWhatsAppConfigured()}
       aiReady={isOpenAIConfigured()}
       appBaseUrl={process.env.NEXT_PUBLIC_APP_URL ?? ""}

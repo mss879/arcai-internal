@@ -21,6 +21,7 @@ import {
   Plus,
   RefreshCw,
   ScanSearch,
+  Send,
   Sparkles,
   Tag,
   ThumbsDown,
@@ -45,6 +46,7 @@ import type {
   CrmTask,
   LeadActivity,
   LeadActivityKind,
+  LeadOutreach,
   LeadResearch,
   LeadWithAssignee,
   MemberLite,
@@ -63,8 +65,12 @@ import { useDriveResearch } from "../../research/use-drive-research";
 import {
   addLeadActivity,
   aiLeadAssist,
+  approveLeadOutreach,
   deleteCrmTask,
+  discardLeadOutreach,
+  prepareLeadOutreach,
   saveCrmTask,
+  saveOutreachDraft,
   setLeadStatus,
   toggleCrmTask,
   trashLead,
@@ -107,6 +113,7 @@ export function LeadDetail({
   stages,
   pipeline,
   research,
+  outreach,
   members,
 }: {
   lead: LeadWithAssignee;
@@ -117,6 +124,7 @@ export function LeadDetail({
   stages: PipelineStage[];
   pipeline: Pipeline | null;
   research: LeadResearch | null;
+  outreach: LeadOutreach | null;
   members: MemberLite[];
 }) {
   useRealtimeSyncTables([
@@ -124,6 +132,7 @@ export function LeadDetail({
     "lead_activities",
     "crm_tasks",
     "lead_research",
+    "lead_outreach",
   ]);
   const router = useRouter();
   const [editOpen, setEditOpen] = React.useState(false);
@@ -213,6 +222,12 @@ export function LeadDetail({
           )}
           {stale && (
             <Badge className="bg-amber-50 text-amber-600 ring-amber-200">{idle}d idle</Badge>
+          )}
+          {outreach?.status === "sent" && (
+            <Badge className="bg-sky-50 text-sky-600 ring-sky-200">✉️ Email Sent</Badge>
+          )}
+          {outreach?.status === "ready" && (
+            <Badge className="bg-amber-50 text-amber-600 ring-amber-200">✍️ Draft Ready</Badge>
           )}
           <Button
             variant="outline"
@@ -316,6 +331,7 @@ export function LeadDetail({
         {/* Side column */}
         <div className="min-w-0 space-y-4">
           <AiPanel lead={lead} />
+          <OutreachCard lead={lead} outreach={outreach} />
           <ResearchCard lead={lead} research={research} />
           <DetailsCard lead={lead} customFields={customFields} />
           <TasksCard leadId={lead.id} tasks={tasks} members={members} />
@@ -564,6 +580,285 @@ function AiPanel({ lead }: { lead: LeadWithAssignee }) {
             }}
           >
             Copy
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---- Outreach card ----------------------------------------------------------
+
+function OutreachCard({
+  lead,
+  outreach,
+}: {
+  lead: LeadWithAssignee;
+  outreach: LeadOutreach | null;
+}) {
+  const router = useRouter();
+  const [busy, setBusy] = React.useState(false);
+  const [editing, setEditing] = React.useState(false);
+  const [subject, setSubject] = React.useState(outreach?.subject ?? "");
+  const [body, setBody] = React.useState(outreach?.body ?? "");
+
+  // Keep the local draft in sync when realtime pushes a fresh row.
+  React.useEffect(() => {
+    setSubject(outreach?.subject ?? "");
+    setBody(outreach?.body ?? "");
+  }, [outreach?.subject, outreach?.body]);
+
+  const status = outreach?.status;
+  const preparing =
+    status === "pending" || status === "drafting" || status === "sending";
+  const idle = !outreach || status === "discarded";
+
+  async function act(
+    fn: () => Promise<{ ok: boolean; error?: string }>,
+    okMsg: string,
+  ) {
+    setBusy(true);
+    try {
+      const res = await fn();
+      if (res.ok) {
+        toast.success(okMsg);
+        router.refresh();
+      } else toast.error(res.error ?? "Something went wrong.");
+    } catch {
+      toast.error("Something went wrong.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function approve() {
+    setBusy(true);
+    try {
+      const res = await approveLeadOutreach(lead.id);
+      if (res.ok) {
+        toast.success(`Sent to ${res.sent} recipient${res.sent === 1 ? "" : "s"} 🎉`);
+        router.refresh();
+      } else toast.error(res.error ?? "Send failed.");
+    } catch {
+      toast.error("Send failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveEdits() {
+    setBusy(true);
+    try {
+      const res = await saveOutreachDraft(lead.id, subject, body);
+      if (res.ok) {
+        setEditing(false);
+        toast.success("Draft saved.");
+        router.refresh();
+      } else toast.error(res.error ?? "Couldn't save.");
+    } catch {
+      toast.error("Couldn't save.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-[var(--shadow-card)]">
+      <div className="flex items-center gap-2">
+        <Send className="h-4 w-4 text-primary-600" />
+        <h3 className="text-sm font-semibold text-slate-900">AI outreach</h3>
+      </div>
+
+      {/* No draft yet */}
+      {idle && (
+        <div className="mt-3">
+          <p className="text-sm text-slate-500">
+            Research this company, audit their website, and let AI write a
+            personalised cold email. Nothing sends until you approve it.
+          </p>
+          <Button
+            className="mt-3"
+            size="sm"
+            loading={busy}
+            onClick={() =>
+              act(
+                () => prepareLeadOutreach(lead.id),
+                "Drafting outreach — it'll appear here shortly.",
+              )
+            }
+          >
+            <Sparkles className="h-3.5 w-3.5" />
+            Draft AI outreach
+          </Button>
+        </div>
+      )}
+
+      {/* Working */}
+      {preparing && (
+        <p className="mt-3 animate-pulse rounded-xl bg-slate-50 px-3 py-2.5 text-sm text-slate-500">
+          {status === "sending"
+            ? "Sending the email…"
+            : "Researching the company + writing the email…"}
+        </p>
+      )}
+
+      {/* Ready to approve */}
+      {status === "ready" && (
+        <div className="mt-3 space-y-3">
+          <p className="text-xs text-slate-400">
+            {outreach?.recipients?.length
+              ? `To: ${outreach.recipients.join(", ")}`
+              : "No email found yet — add a contact email in Details, then re-draft."}
+          </p>
+
+          {editing ? (
+            <div className="space-y-2">
+              <Input
+                value={subject}
+                onChange={(e) => setSubject(e.target.value)}
+                placeholder="Subject"
+              />
+              <Textarea
+                value={body}
+                onChange={(e) => setBody(e.target.value)}
+                rows={9}
+              />
+              <div className="flex gap-2">
+                <Button size="sm" onClick={saveEdits} loading={busy}>
+                  <Check className="h-3.5 w-3.5" />
+                  Save
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setSubject(outreach?.subject ?? "");
+                    setBody(outreach?.body ?? "");
+                    setEditing(false);
+                  }}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3">
+              <p className="text-sm font-semibold text-slate-800">
+                {outreach?.subject || "(no subject)"}
+              </p>
+              <p className="mt-1.5 whitespace-pre-line text-sm text-slate-600">
+                {outreach?.body}
+              </p>
+              <button
+                onClick={() => setEditing(true)}
+                className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-primary-600 hover:underline"
+              >
+                <Pencil className="h-3 w-3" /> Edit before sending
+              </button>
+            </div>
+          )}
+
+          {!editing && (
+            <>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  onClick={approve}
+                  loading={busy}
+                  disabled={!outreach?.recipients?.length}
+                  className="bg-emerald-600 hover:bg-emerald-500"
+                >
+                  <Send className="h-3.5 w-3.5" />
+                  Approve &amp; send
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="text-slate-500"
+                  onClick={() =>
+                    act(() => discardLeadOutreach(lead.id), "Draft discarded.")
+                  }
+                >
+                  Discard
+                </Button>
+              </div>
+              <p className="text-[11px] text-slate-400">
+                Sends from support@arcai.agency with an unsubscribe footer.
+              </p>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Sent */}
+      {status === "sent" && (
+        <div className="mt-3 space-y-2">
+          <p className="rounded-xl bg-sky-50 px-3 py-2.5 text-sm text-sky-700">
+            ✉️ Sent to {outreach?.sent_to?.join(", ") || "the contact"}
+            {outreach?.sent_at
+              ? ` · ${formatDistanceToNow(new Date(outreach.sent_at), { addSuffix: true })}`
+              : ""}
+          </p>
+          <p className="whitespace-pre-line rounded-xl border border-slate-200 bg-slate-50/60 p-3 text-xs text-slate-500">
+            <span className="font-semibold text-slate-700">{outreach?.subject}</span>
+            {"\n"}
+            {outreach?.body}
+          </p>
+          <Button
+            variant="ghost"
+            size="sm"
+            loading={busy}
+            onClick={() =>
+              act(() => prepareLeadOutreach(lead.id), "Drafting a fresh email…")
+            }
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            Draft again
+          </Button>
+        </div>
+      )}
+
+      {/* No deliverable email */}
+      {status === "skipped" && (
+        <div className="mt-3">
+          <p className="rounded-xl bg-amber-50 px-3 py-2.5 text-sm text-amber-700">
+            No deliverable email was found for this lead. Add a contact email in
+            Details, then re-draft.
+          </p>
+          <Button
+            className="mt-2"
+            size="sm"
+            variant="outline"
+            loading={busy}
+            onClick={() =>
+              act(() => prepareLeadOutreach(lead.id), "Re-drafting…")
+            }
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            Try again
+          </Button>
+        </div>
+      )}
+
+      {/* Failed */}
+      {status === "failed" && (
+        <div className="mt-3">
+          <p className="rounded-xl bg-rose-50 px-3 py-2.5 text-sm text-rose-600">
+            {outreach?.error || "Outreach failed. Try again."}
+          </p>
+          <Button
+            className="mt-2"
+            size="sm"
+            variant="outline"
+            loading={busy}
+            onClick={() =>
+              outreach?.body
+                ? approve()
+                : act(() => prepareLeadOutreach(lead.id), "Re-drafting…")
+            }
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            Retry
           </Button>
         </div>
       )}

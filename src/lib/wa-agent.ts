@@ -32,6 +32,7 @@ import { sendPushToUser } from "@/lib/push";
 import { checkEmail } from "@/lib/email-check";
 import { queueLeadResearch } from "@/lib/research";
 import { queueWaShowcase } from "@/lib/wa-showcase";
+import { baseLanguage, isWaLanguage, WA_LANGUAGE_LABELS } from "@/lib/wa-lang";
 import { WA_TOOL_CATALOG } from "@/lib/wa-tools-catalog";
 import {
   formatWaPhone,
@@ -414,12 +415,25 @@ async function runWaAgent(
   }
 }
 
+/**
+ * Whether a voice note may be TTS'd for this contact's language. English
+ * (or unknown) is always fine; Sinhala/Tamil — native or romanized — only
+ * when the team explicitly opted into a multilingual model by setting
+ * OPENAI_TTS_MODEL (the default tts-1/alloy mangles them badly enough to
+ * hurt the brand; the caller degrades to a plain text send instead).
+ */
+function voiceableLanguage(language: WaContact["language"]): boolean {
+  if (!language || language === "en") return true;
+  return Boolean(process.env.OPENAI_TTS_MODEL?.trim());
+}
+
 /** TTS the reply, upload it and send it as a WhatsApp voice note. */
 async function sendVoiceReply(
   supabase: DB,
   contact: WaContact,
   text: string,
 ): Promise<boolean> {
+  if (!voiceableLanguage(contact.language)) return false;
   try {
     const { openaiSpeech } = await import("@/lib/ai/openai");
     const { sendWhatsAppAudio } = await import("@/lib/whatsapp");
@@ -429,7 +443,16 @@ async function sendVoiceReply(
     const spoken = text.replace(/[*_~]|[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, "").trim();
     if (!spoken) return false;
 
-    const audio = await openaiSpeech(spoken);
+    // On a multilingual model, steer the accent; classic tts-1 ignores this.
+    const lang = contact.language ? baseLanguage(contact.language) : "en";
+    const audio = await openaiSpeech(
+      spoken,
+      lang === "si"
+        ? { instructions: "Speak naturally in Sinhala with a Sri Lankan accent." }
+        : lang === "ta"
+          ? { instructions: "Speak naturally in Tamil with a Sri Lankan accent." }
+          : undefined,
+    );
     const path = `voice/${contact.id}/${Date.now()}.mp3`;
     const { error: uploadError } = await supabase.storage
       .from(STORAGE_BUCKETS.waMedia)
@@ -473,7 +496,11 @@ async function buildSystemPrompt(
   config: WaConfig,
 ): Promise<string> {
   const name = contact.display_name || null;
+  const tz = config.timezone || "Asia/Colombo";
   const known: string[] = [];
+  known.push(
+    `Current date & time: ${formatInTimezone(new Date(), tz)} (${tz}) — resolve every relative time they mention ("Monday", "tomorrow", "the 25th", "next week") against this.`,
+  );
   known.push(`Phone: ${formatWaPhone(contact.wa_id)}`);
   if (name) known.push(`Name: ${name}`);
   else if (contact.profile_name)
@@ -486,7 +513,7 @@ async function buildSystemPrompt(
     `HOW YOU SOUND (this matters more than anything):
 - Like a sharp, friendly human on WhatsApp — warm, confident, a little playful. Use contractions ("I'll", "that's"), natural fillers ("ah nice", "got it", "to be honest"), and the occasional emoji 👍 — but never more than one per message.
 - SHORT messages. 1-3 sentences, like real texting. Never send walls of text or bullet lists longer than 3 items. ONE exception: when presenting a package (see PRICING PLAYBOOK) you may send one structured message of up to ~10 short lines with *bold* prices and line breaks.
-- Mirror their energy and language — casual if they're casual, formal if they're formal; reply in English, Sinhala or Tamil, whichever they use.
+- Mirror their energy — casual if they're casual, formal if they're formal.
 - WhatsApp does NOT render markdown. NEVER write [text](url) links or # headers — paste the bare URL on its own line. Only *single asterisks* for bold and _underscores_ for italics work.
 - BANNED: "As an AI", "I understand your concern", "Certainly!", "How may I assist you today", "I apologize for any inconvenience" — anything that smells like a call center or a bot. If someone directly asks if you're a bot, be honest and light: you're Arc, the agency's digital assistant, and a teammate can jump in anytime.
 - NEVER invent prices, discounts or delivery dates. Quote ONLY what's in the knowledge base; anything else → "let me get the team to confirm that."`,
@@ -540,11 +567,18 @@ CLOSING PLAYS:
 - DISCOUNTS: you have ZERO discount authority unless the team granted a limit (send_quote enforces it). Use it at most once per deal, only on a genuine price objection, always framed as a "if you confirm this week" incentive. Never open with a discount.
 - If they go quiet after pricing, DON'T chase with discounts — the follow-up system re-engages them automatically; use schedule_followup only when a HUMAN teammate needs to act.
 - Human wanted, frustration, or anything sensitive → handoff_human immediately.`,
+    `PROMISES — never let a commitment slip:
+- The moment the customer names a time or future event — "call me Monday", "I'll talk to my partner tonight", "salary comes on the 25th", "message me next week" — call schedule_promise in that SAME turn, then acknowledge it naturally in your reply ("perfect, I'll check in with you Monday 👍"). The system messages them for you at exactly that moment.
+- Also schedule one when they promise to DO something ("I'll send the logo tomorrow") — so you can gently nudge if it doesn't arrive.
+- Never schedule promises for things YOU are doing right now, and never tell them a "reminder" or "system" exists — you simply remember.
+- When a promise resolves in the chat or plans change, call cancel_promise (and schedule the new time if they named one). schedule_followup is different — that one only reminds a HUMAN teammate.`,
     `IMAGES & PAYMENT SLIPS:
 - Photos and files the customer sends appear in the chat as 📷/📄 lines with a short description — that's you seeing them. React to their content naturally; NEVER say you can't view images.
 - Bank slip / payment receipt: thank them warmly, tell them accounts is confirming it and the confirmation will land right here in this chat — do NOT declare the payment verified yourself, and do NOT re-ask for a slip they already sent. If it's the deposit, remind them the project kicks off the moment it's confirmed.`,
     `What you already know about this contact:\n${known.join("\n")}`,
   ];
+
+  if (config.language_matching) parts.push(languageDirective(contact.language));
 
   if (config.greeting.trim())
     parts.push(
@@ -580,6 +614,24 @@ CLOSING PLAYS:
         );
       }
     }
+  }
+
+  // Promises already on the books — the model must manage them, not
+  // duplicate them.
+  const { data: promises } = await supabase
+    .from("wa_promises")
+    .select("id, summary, due_at")
+    .eq("contact_id", contact.id)
+    .eq("status", "pending")
+    .order("due_at")
+    .limit(5);
+  if (promises?.length) {
+    const lines = promises.map(
+      (p) => `- [${p.id}] due ${formatInTimezone(p.due_at, tz)} — ${p.summary}`,
+    );
+    parts.push(
+      `OPEN PROMISES (follow-ups you already scheduled — the system WILL message them at these moments; never schedule a duplicate, cancel_promise any that resolve or change):\n${lines.join("\n")}`,
+    );
   }
 
   // Photos & files never age out of the agent's memory, even after the
@@ -621,6 +673,24 @@ CLOSING PLAYS:
   }
 
   return parts.join("\n\n");
+}
+
+/** The per-contact language instruction — same language AND same script. */
+function languageDirective(language: WaContact["language"]): string {
+  switch (language) {
+    case "si":
+      return `LANGUAGE: This customer writes in Sinhala (සිංහල script). Reply ONLY in Sinhala, in Sinhala script — every message, every follow-up. Keep package names, prices (Rs 90,000) and technical terms (SEO, CRM, e-commerce) in English/numerals, the way Sri Lankans naturally mix them.`;
+    case "ta":
+      return `LANGUAGE: This customer writes in Tamil (தமிழ் script). Reply ONLY in Tamil, in Tamil script — every message, every follow-up. Keep package names, prices (Rs 90,000) and technical terms (SEO, CRM, e-commerce) in English/numerals, the way Sri Lankans naturally mix them.`;
+    case "si-latn":
+      return `LANGUAGE: This customer writes Sinhala in English letters ("Singlish", e.g. "mata website ekak one"). Reply in romanized Sinhala EXACTLY the same way — Latin letters, NEVER Sinhala script — matching their casual spelling style. English technical terms and prices stay as they are.`;
+    case "ta-latn":
+      return `LANGUAGE: This customer writes Tamil in English letters ("Tanglish", e.g. "enakku website venum"). Reply in romanized Tamil EXACTLY the same way — Latin letters, NEVER Tamil script — matching their casual spelling style. English technical terms and prices stay as they are.`;
+    case "en":
+      return `LANGUAGE: Reply in English.`;
+    default:
+      return `LANGUAGE: Reply in English by default. Switch to Sinhala or Tamil ONLY when the customer clearly writes to you in that language, or explicitly asks you to use it — a stray local word ("machan", "aiya") or a mixed English sentence is NOT a switch, stay in English. When they genuinely do write in Sinhala/Tamil — native script OR romanized in English letters ("Singlish"/"Tanglish") — reply the same way and in the SAME script (romanized stays romanized, never native script), then call set_language ONCE so it sticks across replies, follow-ups and voice notes.`;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -666,6 +736,26 @@ function buildToolSchemas(allowed: Set<string>): ToolSchema[] {
       days: { type: "number", description: "In how many days to follow up." },
       note: { type: "string", description: "What to say / check when following up." },
     }, ["days"]),
+    schedule_promise: fn("schedule_promise", "The customer committed to a time or future event ('call me Monday', 'salary on the 25th', 'let me ask my partner') — schedule YOUR OWN follow-up message for exactly that moment. Call it in the same turn you hear the commitment.", {
+      summary: {
+        type: "string",
+        description: "What they committed to, in your words, e.g. \"said to call back Monday after lunch\" or \"salary lands on the 25th, will decide then\".",
+      },
+      due_date: {
+        type: "string",
+        description: "When to follow up, as \"YYYY-MM-DD\" in the customer's LOCAL date (resolve \"Monday\"/\"the 25th\" against the current date & time you were given).",
+      },
+      due_time: {
+        type: "string",
+        description: "Local time \"HH:mm\" (24h). If they only named a day, pick a sensible business hour (default 10:00); if they named a time already past today, use the next occurrence.",
+      },
+      source_quote: { type: "string", description: "Their exact words that made the commitment, verbatim." },
+    }, ["summary", "due_date"]),
+    cancel_promise: fn("cancel_promise", "Cancel or complete a scheduled promise follow-up (see the OPEN PROMISES list) when it resolved in-chat or plans changed.", {
+      promise_id: { type: "string", description: "The id in [brackets] from the OPEN PROMISES list — copy it exactly." },
+      outcome: { type: "string", enum: ["done", "no_longer_relevant"], description: "Why it's being closed." },
+      reason: { type: "string", description: "Short note on what happened." },
+    }, ["promise_id"]),
     send_booking_link: fn("send_booking_link", "Get the agency's active meeting booking link(s) to share with the contact.", {}),
     create_proposal: fn("create_proposal", "Create a draft proposal from the collected requirements. Only call once you know their name, business and what they need.", {
       business_description: {
@@ -721,6 +811,13 @@ function buildToolSchemas(allowed: Set<string>): ToolSchema[] {
     handoff_human: fn("handoff_human", "Pause the AI for this chat and alert the team that a human must take over.", {
       reason: { type: "string", description: "Why the handoff is needed." },
     }, ["reason"]),
+    set_language: fn("set_language", "Set the language for this chat. English is the default, so you only call this to switch AWAY from English — when the customer clearly writes to you in Sinhala/Tamil (native script or romanized 'Singlish'/'Tanglish'), or explicitly asks you to reply in that language. Do NOT call it for a stray local word or a mostly-English message. Call it once when they genuinely switch, and again only if they clearly switch back.", {
+      language: {
+        type: "string",
+        enum: ["en", "si", "ta", "si-latn", "ta-latn"],
+        description: "en = English · si = Sinhala script · ta = Tamil script · si-latn = Sinhala in English letters (\"Singlish\") · ta-latn = Tamil in English letters (\"Tanglish\").",
+      },
+    }, ["language"]),
   };
 
   return Array.from(allowed)
@@ -796,6 +893,33 @@ async function executeWaTool(
         return error
           ? { ok: false, result: error.message }
           : { ok: true, result: `Task created, due in ${days} day(s): "${title}".` };
+      }
+      case "schedule_promise":
+        return await toolSchedulePromise(supabase, contact, config, args);
+      case "cancel_promise":
+        return await toolCancelPromise(supabase, contact, args);
+      case "set_language": {
+        const lang = String(args.language ?? "").trim();
+        if (!isWaLanguage(lang))
+          return { ok: false, result: "language must be one of: en, si, ta, si-latn, ta-latn." };
+        // The webhook's script detector is ground truth for native script —
+        // the model may refine TO a script/romanized variant, but a typed
+        // Sinhala/Tamil contact never gets "downgraded" to plain English.
+        if ((contact.language === "si" || contact.language === "ta") && lang === "en")
+          return {
+            ok: false,
+            result: `They have written to you in ${contact.language === "si" ? "Sinhala" : "Tamil"} script — keep replying in it. Only switch if THEY clearly switch language.`,
+          };
+        const { error } = await supabase
+          .from("wa_contacts")
+          .update({ language: lang })
+          .eq("id", contact.id);
+        if (error) return { ok: false, result: error.message };
+        contact.language = lang;
+        return {
+          ok: true,
+          result: `Saved — reply in ${WA_LANGUAGE_LABELS[lang]} (same script) from now on, including follow-ups.`,
+        };
       }
       case "send_booking_link": {
         const { data: links } = await supabase
@@ -1757,6 +1881,465 @@ export async function processDueWaAgentRuns(
 }
 
 // ---------------------------------------------------------------------------
+// Promise tracking — the agent keeps the customer's own commitments
+// ---------------------------------------------------------------------------
+
+/**
+ * "Call me Monday", "salary comes on the 25th", "let me ask my partner" —
+ * the agent captures these with the schedule_promise tool and the tick
+ * fires an agent-composed message at exactly that moment. Unlike the
+ * generic cadence, promises survive inbound replies (the conversation
+ * moving doesn't cancel "salary on the 25th"); the model sees its open
+ * promises in every system prompt and cancels the ones that resolve.
+ * A pending promise suppresses the 48/72/120h cadence — one nudge track
+ * per contact at a time.
+ */
+const MAX_PROMISES_PER_TICK = 3;
+/** Beyond this horizon an automatic message is presumptuous — a human task fits better. */
+const MAX_PROMISE_DAYS = 60;
+const MAX_PENDING_PROMISES = 5;
+
+type WaPromise = Database["public"]["Tables"]["wa_promises"]["Row"];
+
+/**
+ * "YYYY-MM-DD" + "HH:mm" wall-clock in `timezone` → UTC Date. Two-pass
+ * Intl shift, no date library: guess the instant as if the wall-clock were
+ * UTC, read that instant back in the timezone, correct by the difference.
+ * (Asia/Colombo has no DST so one pass converges; loop twice for others.)
+ */
+function localToUtc(date: string, time: string, timezone: string): Date | null {
+  const d = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date.trim());
+  const t = /^(\d{1,2}):(\d{2})$/.exec(time.trim());
+  if (!d || !t) return null;
+  const [year, month, day] = [Number(d[1]), Number(d[2]), Number(d[3])];
+  const [hour, minute] = [Number(t[1]), Number(t[2])];
+  if (month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59) return null;
+  const wallUtc = Date.UTC(year, month - 1, day, hour, minute);
+  if (!Number.isFinite(wallUtc)) return null;
+  let guess = wallUtc;
+  try {
+    for (let i = 0; i < 2; i++) {
+      const parts = new Intl.DateTimeFormat("en-CA", {
+        timeZone: timezone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      }).formatToParts(new Date(guess));
+      const get = (type: string) =>
+        Number(parts.find((p) => p.type === type)?.value ?? NaN);
+      const seen = Date.UTC(
+        get("year"),
+        get("month") - 1,
+        get("day"),
+        get("hour") % 24,
+        get("minute"),
+      );
+      if (!Number.isFinite(seen)) return null;
+      guess += wallUtc - seen;
+    }
+  } catch {
+    // Bad timezone string — degrade to treating the wall-clock as UTC.
+    return new Date(wallUtc);
+  }
+  return new Date(guess);
+}
+
+/** "Tuesday, 14 Jul 2026, 15:30" in the workspace timezone — for prompts and tool results. */
+function formatInTimezone(at: Date | string, timezone: string): string {
+  try {
+    return new Intl.DateTimeFormat("en-GB", {
+      timeZone: timezone,
+      weekday: "long",
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).format(new Date(at));
+  } catch {
+    return new Date(at).toISOString();
+  }
+}
+
+async function toolSchedulePromise(
+  supabase: DB,
+  contact: WaContact,
+  config: WaConfig,
+  args: Record<string, unknown>,
+): Promise<WaToolOutcome> {
+  if (contact.do_not_contact)
+    return { ok: false, result: "This contact opted out — never schedule messages for them." };
+  const tz = config.timezone || "Asia/Colombo";
+  const summary = String(args.summary ?? "").trim();
+  if (!summary)
+    return { ok: false, result: "Describe what they committed to in `summary`." };
+  const due = localToUtc(
+    String(args.due_date ?? ""),
+    String(args.due_time ?? "").trim() || "10:00",
+    tz,
+  );
+  if (!due)
+    return {
+      ok: false,
+      result: 'Could not parse the time — pass due_date as "YYYY-MM-DD" and due_time as "HH:mm" (24h, local).',
+    };
+  if (due.getTime() <= Date.now())
+    return {
+      ok: false,
+      result: `That moment already passed — it is now ${formatInTimezone(new Date(), tz)} (${tz}). Pick the next sensible occurrence.`,
+    };
+  if (due.getTime() > Date.now() + MAX_PROMISE_DAYS * 24 * 3600_000)
+    return {
+      ok: false,
+      result: `That's more than ${MAX_PROMISE_DAYS} days out — too far for an automatic follow-up. Use schedule_followup to remind the team instead.`,
+    };
+
+  const sourceQuote = String(args.source_quote ?? "").trim() || null;
+
+  // Same-moment dedupe: a lease retry (or an over-eager second call) updates
+  // the existing promise instead of stacking a duplicate nudge.
+  const { data: pending } = await supabase
+    .from("wa_promises")
+    .select("id, due_at")
+    .eq("contact_id", contact.id)
+    .eq("status", "pending");
+  const near = (pending ?? []).find(
+    (p) => Math.abs(new Date(p.due_at).getTime() - due.getTime()) < 3600_000,
+  );
+  if (near) {
+    await supabase
+      .from("wa_promises")
+      .update({ summary, source_quote: sourceQuote, due_at: due.toISOString() })
+      .eq("id", near.id);
+    return {
+      ok: true,
+      result: `Updated the existing scheduled follow-up — you'll automatically message them ${formatInTimezone(due, tz)}.`,
+    };
+  }
+  if ((pending ?? []).length >= MAX_PENDING_PROMISES)
+    return {
+      ok: false,
+      result: `This contact already has ${MAX_PENDING_PROMISES} scheduled follow-ups — cancel one with cancel_promise first.`,
+    };
+
+  const { error } = await supabase.from("wa_promises").insert({
+    contact_id: contact.id,
+    summary,
+    source_quote: sourceQuote,
+    due_at: due.toISOString(),
+  });
+  if (error) return { ok: false, result: error.message };
+
+  // The promise IS the next touch — pause the generic quiet-chat cadence.
+  await supabase
+    .from("wa_contacts")
+    .update({ next_followup_at: null })
+    .eq("id", contact.id);
+  contact.next_followup_at = null;
+
+  return {
+    ok: true,
+    result: `Done — you'll automatically follow up ${formatInTimezone(due, tz)} (${tz}). Acknowledge it naturally in your reply; never mention reminders or systems.`,
+  };
+}
+
+async function toolCancelPromise(
+  supabase: DB,
+  contact: WaContact,
+  args: Record<string, unknown>,
+): Promise<WaToolOutcome> {
+  const id = String(args.promise_id ?? "").trim();
+  if (!id)
+    return { ok: false, result: "Pass promise_id exactly as shown in the OPEN PROMISES list." };
+  const outcome = String(args.outcome ?? "").trim() || "no_longer_relevant";
+  const reason = String(args.reason ?? "").trim();
+  const { data: cancelled } = await supabase
+    .from("wa_promises")
+    .update({ status: "cancelled", result: reason ? `${outcome}: ${reason}` : outcome })
+    .eq("id", id)
+    .eq("contact_id", contact.id)
+    .eq("status", "pending")
+    .select("id");
+  if (!cancelled?.length)
+    return { ok: false, result: "No pending promise with that id — check the OPEN PROMISES list." };
+
+  // Nothing else scheduled and they still owe a reply → the generic
+  // cadence takes back over from the agent's last outbound message.
+  const { data: remaining } = await supabase
+    .from("wa_promises")
+    .select("id")
+    .eq("contact_id", contact.id)
+    .eq("status", "pending")
+    .limit(1);
+  if (!remaining?.length && contact.last_direction === "out") {
+    await scheduleNextFollowup(supabase, contact.id);
+  }
+  return { ok: true, result: "Promise cancelled." };
+}
+
+/** Called by the automation tick — fires every due promised follow-up. */
+export async function processDueWaPromises(
+  supabase: DB,
+): Promise<{ processed: number; sent: number; skipped: number }> {
+  const out = { processed: 0, sent: 0, skipped: 0 };
+  try {
+    const config = await getWaAgentConfig(supabase);
+    if (!config.enabled || !config.followups_enabled) return out;
+
+    const { data: due } = await supabase
+      .from("wa_promises")
+      .select("*")
+      .eq("status", "pending")
+      .lte("due_at", new Date().toISOString())
+      .order("due_at")
+      .limit(MAX_PROMISES_PER_TICK);
+
+    for (const promise of due ?? []) {
+      const { data: contact } = await supabase
+        .from("wa_contacts")
+        .select("*")
+        .eq("id", promise.contact_id)
+        .maybeSingle();
+      if (!contact) continue;
+      out.processed++;
+
+      // They're mid-conversation (a reply run is queued) — nudge the
+      // promise out a few minutes instead of colliding with the live reply.
+      if (contact.agent_due_at) {
+        await supabase
+          .from("wa_promises")
+          .update({ due_at: new Date(Date.now() + 5 * 60_000).toISOString() })
+          .eq("id", promise.id)
+          .eq("due_at", promise.due_at);
+        out.skipped++;
+        continue;
+      }
+
+      // Quiet hours: a promised late-night ping shifts to morning like
+      // every other nudge (replies stay 24/7 — this is agent-initiated).
+      if (isQuietHours(config)) {
+        const resume = nextQuietHoursEnd(config).toISOString();
+        const { data: deferred } = await supabase
+          .from("wa_promises")
+          .update({ due_at: resume })
+          .eq("id", promise.id)
+          .eq("due_at", promise.due_at)
+          .select("id");
+        if (deferred?.length) {
+          out.skipped++;
+          await logPromise(supabase, promise, true, `Deferred to ${resume} — quiet hours`);
+        }
+        continue;
+      }
+
+      // Claim first — a crash beyond this point must never double-send.
+      const { data: claimed } = await supabase
+        .from("wa_promises")
+        .update({ status: "sent" })
+        .eq("id", promise.id)
+        .eq("status", "pending")
+        .select("id");
+      if (!claimed?.length) continue;
+
+      const skip = await promiseSkipReason(supabase, contact);
+      if (skip) {
+        out.skipped++;
+        await supabase
+          .from("wa_promises")
+          .update({ result: `Skipped: ${skip}` })
+          .eq("id", promise.id);
+        await logPromise(supabase, promise, true, `Skipped: ${skip}`);
+        continue;
+      }
+
+      const withinWindow =
+        !!contact.last_inbound_at &&
+        Date.now() - new Date(contact.last_inbound_at).getTime() < 24 * 3600_000;
+
+      if (withinWindow && isOpenAIConfigured()) {
+        const sent = await sendPromiseTouch(supabase, contact, config, promise);
+        if (sent) out.sent++;
+        await supabase
+          .from("wa_promises")
+          .update({ result: sent ? "Promise follow-up sent" : "Compose/send failed — nothing was sent" })
+          .eq("id", promise.id);
+        await logPromise(
+          supabase,
+          promise,
+          sent,
+          sent ? "Promise follow-up sent" : "Promise follow-up — nothing was sent",
+        );
+      } else if (config.followup_template_name?.trim()) {
+        // Outside the free-form window → the approved template.
+        const template = config.followup_template_name.trim();
+        const sent = await sendWhatsAppTemplate({
+          to: contact.wa_id,
+          template,
+          language: config.followup_template_lang?.trim() || "en",
+        });
+        await supabase.from("wa_messages").insert({
+          contact_id: contact.id,
+          wa_message_id: sent.ok ? sent.waMessageId : null,
+          direction: "out",
+          body: `[template: ${template}]`,
+          status: sent.ok ? "sent" : "failed",
+          error: sent.ok ? null : sent.error,
+          sent_by: "agent",
+        });
+        if (sent.ok) {
+          out.sent++;
+          await supabase
+            .from("wa_contacts")
+            .update({
+              last_message_at: new Date().toISOString(),
+              last_message_preview: `[template: ${template}]`,
+              last_direction: "out",
+            })
+            .eq("id", contact.id);
+          // If they ignore the template, the generic cadence takes over.
+          await scheduleNextFollowup(supabase, contact.id);
+        }
+        await supabase
+          .from("wa_promises")
+          .update({
+            result: sent.ok
+              ? `Sent as template "${template}"`
+              : `Template send failed: ${sent.error}`,
+          })
+          .eq("id", promise.id);
+        await logPromise(
+          supabase,
+          promise,
+          sent.ok,
+          sent.ok ? `Sent as template "${template}"` : `Template send failed: ${sent.error}`,
+        );
+      } else {
+        // Outside the window and no template — a human has to keep the promise.
+        out.skipped++;
+        await supabase.from("crm_tasks").insert({
+          lead_id: contact.lead_id,
+          title: `Promised follow-up due — ${contact.display_name || formatWaPhone(contact.wa_id)}`,
+          notes: `The customer's moment has arrived: "${promise.summary}". The 24h WhatsApp window is closed and no approved template is configured, so the agent can't message them itself. Call them or send a template manually.`,
+          due_at: new Date().toISOString(),
+          created_by: null,
+        });
+        await supabase
+          .from("wa_promises")
+          .update({ result: "Outside the 24h window with no template — handed to the team" })
+          .eq("id", promise.id);
+        await logPromise(
+          supabase,
+          promise,
+          true,
+          "Outside the 24h window with no follow-up template — handed to the team.",
+        );
+      }
+    }
+  } catch (e) {
+    console.error("[wa-agent] promise processing failed:", e);
+  }
+  return out;
+}
+
+/** Why a due promise must NOT be sent — or null when it's good to go. */
+async function promiseSkipReason(
+  supabase: DB,
+  contact: WaContact,
+): Promise<string | null> {
+  if (contact.do_not_contact) return "contact opted out";
+  if (!contact.agent_enabled) return "agent is paused for this chat";
+  if (contact.needs_attention) return "chat is flagged for a human";
+  if (contact.lead_id) {
+    const { data: lead } = await supabase
+      .from("leads")
+      .select("status")
+      .eq("id", contact.lead_id)
+      .maybeSingle();
+    if (lead && lead.status !== "open") return `deal is already ${lead.status}`;
+  }
+  return null;
+}
+
+/** Compose + send one promise follow-up with full conversation context. */
+async function sendPromiseTouch(
+  supabase: DB,
+  contact: WaContact,
+  config: WaConfig,
+  promise: WaPromise,
+): Promise<boolean> {
+  const quoteLine = await buildQuoteStateLine(supabase, contact.lead_id);
+  const nudge = `It's now the exact moment the customer asked you to come back to them: ${promise.summary}${promise.source_quote ? ` (their words: "${promise.source_quote}")` : ""}. Send ONE short, natural message that picks the conversation up right on that promise — reference what they said they'd do or what was supposed to happen, like a sharp human who simply remembered. NEVER say "just following up" and never mention schedules, reminders or systems. Human voice, max 3 sentences, end with exactly one easy question or next step.${quoteLine}`;
+
+  const { data: history } = await supabase
+    .from("wa_messages")
+    .select("direction, body")
+    .eq("contact_id", contact.id)
+    .order("created_at", { ascending: false })
+    .limit(HISTORY_MESSAGES);
+  const thread: ChatMessage[] = (history ?? [])
+    .reverse()
+    .filter((m) => m.body.trim())
+    .map((m) => ({
+      role: m.direction === "in" ? ("user" as const) : ("assistant" as const),
+      content: m.body,
+    }));
+
+  const messages: ChatMessage[] = [
+    { role: "system", content: await buildSystemPrompt(supabase, contact, config) },
+    ...thread,
+    { role: "system", content: nudge },
+  ];
+
+  const model = process.env.OPENAI_WHATSAPP_MODEL?.trim() || undefined;
+  let text = "";
+  try {
+    const reply = await openaiChat(messages, undefined, { model });
+    text = (reply.content ?? "").trim();
+  } catch (e) {
+    console.error("[wa-agent] promise compose failed:", e);
+    return false;
+  }
+  if (!text) return false;
+
+  // sendAndLogWa arms the generic cadence afterwards — if they ignore the
+  // kept promise, the ordinary 48h chase takes over naturally.
+  const sent = await sendAndLogWa(supabase, { contact, body: text, sentBy: "agent" });
+  return sent.ok;
+}
+
+/** Cancel every pending promise for a contact (opt-out, manual block). */
+export async function cancelPendingWaPromises(
+  supabase: DB,
+  contactId: string,
+  reason: string,
+): Promise<void> {
+  await supabase
+    .from("wa_promises")
+    .update({ status: "cancelled", result: reason })
+    .eq("contact_id", contactId)
+    .eq("status", "pending");
+}
+
+async function logPromise(
+  supabase: DB,
+  promise: WaPromise,
+  ok: boolean,
+  result: string,
+): Promise<void> {
+  await supabase.from("wa_agent_logs").insert({
+    contact_id: promise.contact_id,
+    tool: "promise",
+    args: { promise_id: promise.id, summary: promise.summary, due_at: promise.due_at },
+    ok,
+    result,
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Quiet hours — the agent never sleeps, but its NUDGES wait for morning
 // ---------------------------------------------------------------------------
 
@@ -1855,6 +2438,15 @@ async function scheduleNextFollowup(supabase: DB, contactId: string): Promise<vo
   if (!c || c.next_followup_at || c.do_not_contact) return;
   const hours = FOLLOWUP_DELAY_HOURS[c.followup_stage ?? 0];
   if (!hours) return; // all touches sent — the cadence is over
+  // A pending promise IS the next touch — never stack the generic cadence
+  // on top of a moment the customer themselves named.
+  const { data: promise } = await supabase
+    .from("wa_promises")
+    .select("id")
+    .eq("contact_id", contactId)
+    .eq("status", "pending")
+    .limit(1);
+  if (promise?.length) return;
   await supabase
     .from("wa_contacts")
     .update({
@@ -2027,6 +2619,17 @@ async function followupSkipReason(
   if (contact.needs_attention) return "chat is flagged for a human";
   if ((contact.followup_stage ?? 0) >= MAX_FOLLOWUP_TOUCHES) return "cadence already complete";
   if (contact.last_direction !== "out") return "they already replied";
+  {
+    // Belt-and-braces: a cadence armed before the promise existed must
+    // yield to it (the promise processor is the one nudge track).
+    const { data: promise } = await supabase
+      .from("wa_promises")
+      .select("id")
+      .eq("contact_id", contact.id)
+      .eq("status", "pending")
+      .limit(1);
+    if (promise?.length) return "a promise follow-up is pending";
+  }
   if (contact.lead_id) {
     const { data: lead } = await supabase
       .from("leads")
@@ -2038,6 +2641,26 @@ async function followupSkipReason(
   return null;
 }
 
+/** One DEAL STATE line when a signable quote sits unsigned — sharpens a nudge. */
+async function buildQuoteStateLine(
+  supabase: DB,
+  leadId: string | null,
+): Promise<string> {
+  if (!leadId) return "";
+  const { data: q } = await supabase
+    .from("quotes")
+    .select("quote_number, status, grand_total, currency, valid_until, viewed_at")
+    .eq("lead_id", leadId)
+    .in("status", ["sent", "viewed"])
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (!q) return "";
+  const justViewed =
+    !!q.viewed_at && Date.now() - new Date(q.viewed_at).getTime() < 3600_000;
+  return `\nDEAL STATE: quote ${q.quote_number} (${q.currency} ${Number(q.grand_total).toLocaleString()}) is awaiting their signature${q.status === "viewed" ? " — they HAVE opened it" : " — not opened yet"}${justViewed ? ". They were looking at it just minutes ago — this is a hot moment, reference it naturally and invite questions" : ""}${q.valid_until ? `; it's valid until ${q.valid_until}` : ""}.`;
+}
+
 /** Compose + send one AI follow-up touch (touch 2 goes out as a voice note). */
 async function sendFollowupTouch(
   supabase: DB,
@@ -2046,22 +2669,7 @@ async function sendFollowupTouch(
   touch: number,
 ): Promise<boolean> {
   // Deal state sharpens the nudge: is a signable quote sitting unsigned?
-  let quoteLine = "";
-  if (contact.lead_id) {
-    const { data: q } = await supabase
-      .from("quotes")
-      .select("quote_number, status, grand_total, currency, valid_until, viewed_at")
-      .eq("lead_id", contact.lead_id)
-      .in("status", ["sent", "viewed"])
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (q) {
-      const justViewed =
-        !!q.viewed_at && Date.now() - new Date(q.viewed_at).getTime() < 3600_000;
-      quoteLine = `\nDEAL STATE: quote ${q.quote_number} (${q.currency} ${Number(q.grand_total).toLocaleString()}) is awaiting their signature${q.status === "viewed" ? " — they HAVE opened it" : " — not opened yet"}${justViewed ? ". They were looking at it just minutes ago — this is a hot moment, reference it naturally and invite questions" : ""}${q.valid_until ? `; it's valid until ${q.valid_until}` : ""}.`;
-    }
-  }
+  const quoteLine = await buildQuoteStateLine(supabase, contact.lead_id);
 
   const nudge =
     touch >= MAX_FOLLOWUP_TOUCHES
@@ -2191,6 +2799,7 @@ export async function handleWaOptOut(supabase: DB, contact: WaContact): Promise<
     })
     .eq("id", contact.id);
   contact.do_not_contact = true;
+  await cancelPendingWaPromises(supabase, contact.id, "contact opted out");
 
   if (contact.lead_id) {
     await supabase

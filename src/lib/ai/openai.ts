@@ -233,9 +233,51 @@ export async function openaiTranscribe(
   return (json?.text ?? "").toString();
 }
 
+/**
+ * Transcription that also returns Whisper's detected language ("sinhala",
+ * "tamil", "english", …). verbose_json is whisper-1-only — on other
+ * transcribe models this degrades to a plain transcription with language
+ * null. An ISO-639-1 `languageHint` (e.g. "si") from a known contact
+ * noticeably improves short-clip accuracy.
+ */
+export async function openaiTranscribeVerbose(
+  audio: Blob,
+  filename = "audio.webm",
+  opts?: { languageHint?: string },
+): Promise<{ text: string; language: string | null }> {
+  const model = AI_MODELS.transcribe;
+  const verbose = model === "whisper-1";
+  const form = new FormData();
+  form.append("file", audio, filename);
+  form.append("model", model);
+  if (verbose) form.append("response_format", "verbose_json");
+  if (opts?.languageHint?.trim()) form.append("language", opts.languageHint.trim());
+
+  const res = await fetch(`${BASE_URL}/audio/transcriptions`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey()}` },
+    body: form,
+  });
+
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(`OpenAI transcription failed (${res.status}): ${detail}`);
+  }
+
+  const json = await res.json();
+  return {
+    text: (json?.text ?? "").toString(),
+    language: verbose && json?.language ? String(json.language) : null,
+  };
+}
+
 // ---- Text to speech ------------------------------------------------------
 
-export async function openaiSpeech(text: string): Promise<ArrayBuffer> {
+export async function openaiSpeech(
+  text: string,
+  opts?: { instructions?: string },
+): Promise<ArrayBuffer> {
+  const model = AI_MODELS.tts;
   const res = await fetch(`${BASE_URL}/audio/speech`, {
     method: "POST",
     headers: {
@@ -243,10 +285,15 @@ export async function openaiSpeech(text: string): Promise<ArrayBuffer> {
       Authorization: `Bearer ${apiKey()}`,
     },
     body: JSON.stringify({
-      model: AI_MODELS.tts,
+      model,
       voice: AI_MODELS.voice,
       input: text,
       response_format: "mp3",
+      // Speaking-style steering exists only on the newer TTS models —
+      // the classic tts-1/tts-1-hd reject the param outright.
+      ...(opts?.instructions?.trim() && !/^tts-1/.test(model)
+        ? { instructions: opts.instructions.trim() }
+        : {}),
     }),
   });
 

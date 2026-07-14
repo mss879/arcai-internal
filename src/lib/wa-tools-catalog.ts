@@ -79,6 +79,27 @@ export const WA_TOOL_CATALOG: WaToolMeta[] = [
     kind: "write",
   },
   {
+    key: "schedule_promise",
+    label: "Keep the customer's promises",
+    description:
+      "When the customer commits to a time or future event ('call me Monday', 'salary comes on the 25th', 'let me ask my partner'), schedules the agent's own WhatsApp follow-up for exactly that moment — replacing the generic quiet-chat cadence.",
+    kind: "write",
+  },
+  {
+    key: "cancel_promise",
+    label: "Cancel a scheduled promise",
+    description:
+      "Cancels or completes a scheduled promise follow-up when plans change or it already resolved in the chat.",
+    kind: "write",
+  },
+  {
+    key: "set_language",
+    label: "Match the customer's language",
+    description:
+      "Switches replies to Sinhala or Tamil (native script or romanized 'Singlish'/'Tanglish') ONLY when the customer clearly writes in that language or asks for it — otherwise the agent stays in English. Persists the choice across replies, follow-ups and voice notes.",
+    kind: "write",
+  },
+  {
     key: "send_booking_link",
     label: "Share meeting booking link",
     description:

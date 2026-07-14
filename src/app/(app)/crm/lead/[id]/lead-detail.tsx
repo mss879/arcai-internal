@@ -61,6 +61,7 @@ import {
 } from "@/components/crm/research-progress";
 import { requestLeadResearch } from "../../research/actions";
 import { useDriveResearch } from "../../research/use-drive-research";
+import { useDriveOutreach } from "../../outreach/use-drive-outreach";
 
 import {
   addLeadActivity,
@@ -610,8 +611,17 @@ function OutreachCard({
 
   const status = outreach?.status;
   const preparing =
-    status === "pending" || status === "drafting" || status === "sending";
+    status === "pending" ||
+    status === "researching" ||
+    status === "drafting" ||
+    status === "sending";
   const idle = !outreach || status === "discarded";
+
+  // Keep the draft moving while this card shows an in-progress row. The
+  // `researching` step parks waiting on the dossier and only resumes on a
+  // tick — and local dev has no cron at all, so without this a manual draft
+  // would sit at "Researching…" forever. Mirrors the ResearchCard above.
+  useDriveOutreach(preparing && status !== "sending", lead.id);
 
   async function act(
     fn: () => Promise<{ ok: boolean; error?: string }>,
@@ -693,12 +703,17 @@ function OutreachCard({
         </div>
       )}
 
-      {/* Working */}
+      {/* Working. The research step waits on the full dossier, which takes a
+          few minutes — say so rather than letting it look stuck. */}
       {preparing && (
         <p className="mt-3 animate-pulse rounded-xl bg-slate-50 px-3 py-2.5 text-sm text-slate-500">
           {status === "sending"
             ? "Sending the email…"
-            : "Researching the company + writing the email…"}
+            : status === "researching"
+              ? "Researching the company — this takes a few minutes…"
+              : status === "drafting"
+                ? "Writing the email…"
+                : "Starting research…"}
         </p>
       )}
 

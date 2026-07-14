@@ -76,6 +76,7 @@ export type CrmField = Tables["crm_fields"]["Row"];
 export type CrmSegment = Tables["crm_segments"]["Row"];
 export type LeadActivity = Tables["lead_activities"]["Row"];
 export type LeadOutreach = Tables["lead_outreach"]["Row"];
+export type OutreachCampaign = Tables["outreach_campaigns"]["Row"];
 export type CrmTask = Tables["crm_tasks"]["Row"];
 export type Quote = Tables["quotes"]["Row"];
 export type Automation = Tables["automations"]["Row"];

@@ -10,10 +10,12 @@ import {
   isResearchConfigured,
   extractEmails,
 } from "@/lib/ai/lead-research";
+import { queueLeadResearch } from "@/lib/research";
 import { firecrawlScrape, isFirecrawlConfigured } from "@/lib/ai/firecrawl";
 import { openaiChatJSON, isOpenAIConfigured } from "@/lib/ai/openai";
 import { checkEmail } from "@/lib/email-check";
 import { sendGenericEmail } from "@/lib/email";
+import { PRICING_CATALOG } from "@/lib/pricing-catalog";
 import type { ResearchAudit } from "@/lib/research-report";
 
 /** ARC AI's contact block — appended to EVERY outreach pitch (see coldFooter). */
@@ -34,15 +36,68 @@ type LeadRow = Database["public"]["Tables"]["leads"]["Row"];
 
 export type OutreachTickResult = { processed: number; failed: number };
 
-const MODEL = process.env.OPENAI_PROSPECTING_MODEL || undefined;
+/**
+ * The copywriter. This defaulted to `undefined` — which quietly fell through to
+ * AI_MODELS.chat (gpt-4o-mini) — while the sibling prospecting drafter defaulted
+ * to gpt-5.4-mini, so outreach was being written by the weaker model by accident.
+ * Pinned explicitly: this copy goes out under the agency's name, sometimes with
+ * no human reading it first.
+ */
+const MODEL =
+  process.env.OPENAI_OUTREACH_MODEL ||
+  process.env.OPENAI_PROSPECTING_MODEL ||
+  "gpt-5.4-mini";
+/**
+ * Kept at "medium": the drafting step runs inside the automation tick, which
+ * has a ~30s serverless budget on Netlify. "high" writes marginally better copy
+ * but routinely blows that budget, and a step killed mid-flight just retries
+ * next tick — burning spend for a draft that never lands. Override per-env.
+ */
+const REASONING_EFFORT = process.env.OPENAI_OUTREACH_REASONING_EFFORT || "medium";
+/**
+ * A compose measured 7-18s on gpt-5.4-mini/medium. This ceiling lets the slow
+ * tail through but still fails cleanly into the deterministic template rather
+ * than being killed mid-write by the serverless timeout.
+ */
+const COMPOSE_TIMEOUT_MS = Number(
+  process.env.OPENAI_OUTREACH_TIMEOUT_MS || 18_000,
+);
+/**
+ * Wall-clock budget for one outreach pass. `/api/automation/tick` runs ~15
+ * processors inside Netlify's ~26s function budget, so outreach cannot simply
+ * take MAX_PER_TICK × compose-time — three slow drafts would blow the whole
+ * tick and take every other automation down with it.
+ *
+ * The budget self-tunes: the cheap steps (queue research, poll research) cost
+ * milliseconds and fly through, while a slow draft consumes the budget and
+ * ends the pass. In practice ~1 draft/tick = ~1,440/day, far above any daily
+ * send cap, so this costs no real throughput.
+ */
+const TICK_BUDGET_MS = Number(process.env.OUTREACH_TICK_BUDGET_MS || 12_000);
 /** How many draft pipelines to advance per minute-tick (bounds cost + reputation). */
 const MAX_PER_TICK = 3;
 /** Max scraped emails to actually message per lead. */
 const MAX_RECIPIENTS = 5;
+/**
+ * Auto-send campaigns message ONE address per lead — the best-ranked one.
+ * Hitting info@ + sales@ + admin@ at the same company in the same minute is a
+ * textbook spam signal, and it would burn the daily cap 5× faster for no extra
+ * reach. The manual Approve & send path still uses the full list.
+ */
+const CAMPAIGN_MAX_RECIPIENTS = 1;
 /** Lease TTL — mirror research.ts; each step is internally timeout-capped well under this. */
 const LOCK_TTL_MS = 45 * 1000;
-/** Non-terminal states the draft pipeline can be claimed in (pending → drafting → ready). */
-const CLAIMABLE: LeadOutreachStatus[] = ["pending", "drafting"];
+/**
+ * How long the `researching` step waits for the full dossier before giving up
+ * and drafting from the site audit alone. Research is a 3-step pipeline driven
+ * by its own minute-tick (~2-3 min typical), so this is generous; a lead is
+ * never stuck behind research that died.
+ */
+const RESEARCH_WAIT_MS = 12 * 60 * 1000;
+/** Auto-sends to attempt per tick. The daily cap is the real bound; this just paces bursts. */
+const MAX_SEND_PER_TICK = 2;
+/** Non-terminal states the draft pipeline can be claimed in (pending → researching → drafting → ready). */
+const CLAIMABLE: LeadOutreachStatus[] = ["pending", "researching", "drafting"];
 
 // ---------------------------------------------------------------------------
 // Config
@@ -168,7 +223,17 @@ export async function buildRecipients(
 // Draft pipeline (pending → drafting → ready). NEVER sends.
 // ---------------------------------------------------------------------------
 
-export type StepOutcome = "advanced" | "done" | "error" | "skipped";
+/**
+ * "waiting" = the row is parked on something out of our hands (the research
+ * dossier). It's not progress and not a failure — the lease is released and
+ * the next tick re-checks, so a drain stops instead of spinning on it.
+ */
+export type StepOutcome =
+  | "advanced"
+  | "done"
+  | "error"
+  | "skipped"
+  | "waiting";
 
 /** Run a row through the draft pipeline in one pass (manual/inline path). */
 export async function drainOutreachRow(
@@ -226,9 +291,81 @@ export async function advanceOutreachRow(
       return "error";
     }
 
-    // pending → research + audit
+    // pending → kick off the full company dossier, then wait for it.
+    // Reuses a finished report as-is (zero extra spend); only queues a fresh
+    // run when there's nothing usable yet.
     if (row.status === "pending") {
-      const { audit, facts } = await gatherContext(supabase, lead as LeadRow);
+      const existing = await finishedResearch(supabase, row.lead_id);
+      if (existing) {
+        const { audit, facts } = await gatherContext(
+          supabase,
+          lead as LeadRow,
+          existing,
+        );
+        await commit({
+          status: "drafting",
+          audit: (audit ?? null) as unknown as Record<string, unknown> | null,
+          audit_score: audit?.overall ?? null,
+          company_facts: facts as unknown as Record<string, unknown>,
+          error: null,
+        });
+        return "advanced";
+      }
+
+      const company =
+        lead.company?.trim() || lead.title?.trim() || "";
+      // No company name = nothing to research on. Draft from the audit alone.
+      if (!company) {
+        const { audit, facts } = await gatherContext(supabase, lead as LeadRow, null);
+        await commit({
+          status: "drafting",
+          audit: (audit ?? null) as unknown as Record<string, unknown> | null,
+          audit_score: audit?.overall ?? null,
+          company_facts: facts as unknown as Record<string, unknown>,
+          error: null,
+        });
+        return "advanced";
+      }
+
+      await queueLeadResearch(supabase, {
+        leadId: row.lead_id,
+        company,
+        requestedBy: row.requested_by,
+      });
+      await commit({
+        status: "researching",
+        research_started_at: new Date().toISOString(),
+        error: null,
+      });
+      return "advanced";
+    }
+
+    // researching → poll the dossier. Research has its own tick/drain driving
+    // it; we just wait for a verdict (or time out into an audit-only draft).
+    if (row.status === "researching") {
+      const done = await finishedResearch(supabase, row.lead_id);
+      const startedAt = row.research_started_at
+        ? new Date(row.research_started_at).getTime()
+        : 0;
+      const timedOut =
+        !startedAt || Date.now() - startedAt > RESEARCH_WAIT_MS;
+
+      if (!done && !timedOut) {
+        // Still cooking. Drop the lease so the next tick re-checks; this is
+        // NOT progress, so drainOutreachRow stops here rather than spinning.
+        await supabase
+          .from("lead_outreach")
+          .update({ locked_at: null })
+          .eq("id", rowId)
+          .eq("locked_at", token);
+        return "waiting";
+      }
+
+      const { audit, facts } = await gatherContext(
+        supabase,
+        lead as LeadRow,
+        done,
+      );
       await commit({
         status: "drafting",
         audit: (audit ?? null) as unknown as Record<string, unknown> | null,
@@ -249,7 +386,12 @@ export async function advanceOutreachRow(
         facts,
       );
       await commit({ status: "ready", subject, body, error: null });
-      await setLeadTags(supabase, row.lead_id, ["Draft Ready"]);
+      // Auto-send rows aren't waiting on anyone — don't nag the board with a
+      // "Draft Ready" chip they're not meant to act on. processAutoSendQueue
+      // picks them up from `ready` on the next tick, under the daily cap.
+      if (!row.auto_send) {
+        await setLeadTags(supabase, row.lead_id, ["Draft Ready"]);
+      }
       return "done";
     }
 
@@ -284,16 +426,28 @@ export async function processDueOutreach(
   if (!isResearchConfigured()) return result;
 
   const lockCutoff = new Date(Date.now() - LOCK_TTL_MS).toISOString();
+  // Over-fetch, then drop rows owned by a paused/cancelled campaign in JS.
+  // Pausing has to stop the *drafting* spend too, not just the sending — and
+  // one clear filter beats stacking PostgREST .or() groups on a null FK.
   const { data: rows } = await supabase
     .from("lead_outreach")
-    .select("id")
+    .select("id, campaign_id")
     .in("status", CLAIMABLE)
     .or(`locked_at.is.null,locked_at.lt.${lockCutoff}`)
     .order("updated_at", { ascending: true })
-    .limit(MAX_PER_TICK);
+    .limit(MAX_PER_TICK * 6);
   if (!rows?.length) return result;
 
-  for (const row of rows) {
+  const halted = await haltedCampaignIds(supabase);
+  const due = rows
+    .filter((r) => !r.campaign_id || !halted.has(r.campaign_id))
+    .slice(0, MAX_PER_TICK);
+
+  const deadline = Date.now() + TICK_BUDGET_MS;
+  for (const row of due) {
+    // Anything left is picked up by the next tick — rows stay claimable, so
+    // stopping early loses nothing but protects the rest of the tick.
+    if (Date.now() > deadline) break;
     const outcome = await advanceOutreachRow(supabase, row.id);
     if (outcome === "done" || outcome === "advanced") result.processed += 1;
     else if (outcome === "error") result.failed += 1;
@@ -301,52 +455,284 @@ export async function processDueOutreach(
   return result;
 }
 
+/** Campaigns whose work must stop: paused by the owner, or cancelled outright. */
+async function haltedCampaignIds(supabase: DB): Promise<Set<string>> {
+  const { data } = await supabase
+    .from("outreach_campaigns")
+    .select("id")
+    .in("status", ["paused", "cancelled"]);
+  return new Set((data ?? []).map((c) => c.id));
+}
+
+// ---------------------------------------------------------------------------
+// Auto-send queue — the no-approval leg. THIS is the only code path that can
+// email a prospect without a human clicking anything, so every guard lives here.
+// ---------------------------------------------------------------------------
+
+export type AutoSendTickResult = {
+  sent: number;
+  failed: number;
+  /** Set when the queue was held back rather than empty — surfaced in the UI. */
+  capped?: boolean;
+};
+
+/** Emails sent by ANY path since local midnight — what the daily cap counts. */
+export async function sentToday(supabase: DB): Promise<number> {
+  const since = new Date();
+  since.setHours(0, 0, 0, 0);
+  const { count } = await supabase
+    .from("lead_outreach")
+    .select("id", { count: "exact", head: true })
+    .gte("sent_at", since.toISOString());
+  return count ?? 0;
+}
+
 /**
- * Gather the personalization context: reuse a completed research dossier's
- * audit when one exists (zero extra spend), else run the standalone site
- * audit. A lead with no website skips the audit entirely.
+ * Send drafted auto-send rows belonging to RUNNING campaigns, oldest first,
+ * bounded by the smallest daily cap in play. Pausing a campaign stops it here
+ * within a minute — the drafts survive, they just stop going out.
+ *
+ * Deliberately does NOT run when outreach is globally disabled.
+ */
+export async function processAutoSendQueue(
+  supabase: DB,
+): Promise<AutoSendTickResult> {
+  const result: AutoSendTickResult = { sent: 0, failed: 0 };
+
+  // Reconcile completion first, and unconditionally — a draft-only campaign
+  // never reaches the send code below but still needs to be marked done.
+  await closeFinishedCampaigns(supabase);
+
+  if (!isEmailOutreachConfigured()) return result;
+
+  const { enabled } = await outreachSettings(supabase);
+  if (!enabled) return result;
+
+  const { data: campaigns } = await supabase
+    .from("outreach_campaigns")
+    .select("id, daily_cap")
+    .eq("status", "running")
+    .eq("auto_send", true);
+  if (!campaigns?.length) return result;
+
+  // One shared mailbox, one shared reputation — the strictest cap wins.
+  const cap = Math.min(...campaigns.map((c) => c.daily_cap));
+  const remaining = cap - (await sentToday(supabase));
+  if (remaining <= 0) {
+    result.capped = true;
+    return result;
+  }
+
+  const { data: rows } = await supabase
+    .from("lead_outreach")
+    .select("lead_id")
+    .eq("status", "ready")
+    .eq("auto_send", true)
+    .in(
+      "campaign_id",
+      campaigns.map((c) => c.id),
+    )
+    .order("updated_at", { ascending: true })
+    .limit(Math.min(MAX_SEND_PER_TICK, remaining));
+  if (!rows?.length) return result;
+
+  for (const row of rows) {
+    const res = await sendLeadOutreach(supabase, row.lead_id, {
+      maxRecipients: CAMPAIGN_MAX_RECIPIENTS,
+    });
+    if (res.ok) result.sent += 1;
+    else if (!res.skipped) result.failed += 1;
+  }
+  await closeFinishedCampaigns(supabase);
+  return result;
+}
+
+/** Flip a running campaign to `done` once none of its rows are still in flight. */
+async function closeFinishedCampaigns(supabase: DB): Promise<void> {
+  const { data: campaigns } = await supabase
+    .from("outreach_campaigns")
+    .select("id, auto_send")
+    .eq("status", "running");
+  if (!campaigns?.length) return;
+
+  for (const c of campaigns) {
+    // An auto-send run isn't finished until the mail is actually out. A
+    // draft-only run is finished once everything is DRAFTED — its rows then
+    // sit at `ready` indefinitely, waiting on a human, which is the point.
+    const inFlight: LeadOutreachStatus[] = c.auto_send
+      ? ["pending", "researching", "drafting", "ready", "sending"]
+      : ["pending", "researching", "drafting"];
+    const { count } = await supabase
+      .from("lead_outreach")
+      .select("id", { count: "exact", head: true })
+      .eq("campaign_id", c.id)
+      .in("status", inFlight);
+    if ((count ?? 0) === 0) {
+      await supabase
+        .from("outreach_campaigns")
+        .update({ status: "done", finished_at: new Date().toISOString() })
+        .eq("id", c.id)
+        .eq("status", "running");
+    }
+  }
+}
+
+/** The finished dossier for a lead, or null if there isn't a usable one yet. */
+async function finishedResearch(
+  supabase: DB,
+  leadId: string,
+): Promise<Record<string, unknown> | null> {
+  const { data } = await supabase
+    .from("lead_research")
+    .select("report, status")
+    .eq("lead_id", leadId)
+    .maybeSingle();
+  if (data?.status !== "done") return null;
+  const report = (data.report ?? {}) as Record<string, unknown>;
+  return Object.keys(report).length ? report : null;
+}
+
+/**
+ * Distil a dossier into the personalization facts — gated on whether research
+ * is actually sure it profiled the RIGHT company.
+ *
+ * `match_confidence` is only "high" when the anchor domain's own content names
+ * the company (see resolveConfidence in lead-research.ts). Anything less means
+ * the dossier may describe a same-named business somewhere else entirely.
+ *
+ * When it isn't high, the facts are DROPPED rather than passed along with a
+ * warning. Warning the model does not work — tested against a low-confidence
+ * dossier it cheerfully opened "Hi Karen, your freight brokerage…" to a
+ * Sri Lankan lead. On auto-send there's no human to catch that, so the only
+ * safe design is that the wrong facts never enter the prompt at all.
+ *
+ * The audit is deliberately NOT gated: it measured the website on the lead
+ * record, so it's true about this prospect no matter who the dossier described.
+ *
+ * Pure + exported so the trust gate is directly testable without a database.
+ */
+export function factsFromReport(
+  report: Record<string, unknown> | null,
+): Record<string, unknown> {
+  const facts: Record<string, unknown> = {};
+  if (!report) return facts;
+
+  const confidence = str(report.match_confidence);
+  const trusted = confidence === "high";
+  facts.source = "research";
+  facts.match_confidence = confidence;
+  facts.trusted = trusted;
+  if (!trusted) return facts;
+
+  facts.overview = str(report.overview);
+  facts.industry = str(report.industry);
+  facts.headquarters = str(report.headquarters);
+  facts.products_services = strList(report.products_services).slice(0, 12);
+  facts.pain_points = strList(report.pain_points).slice(0, 6);
+  facts.competitor_gaps = strList(report.competitor_gaps).slice(0, 5);
+  facts.talking_points = strList(report.talking_points).slice(0, 5);
+  facts.competitors = Array.isArray(report.competitors)
+    ? (report.competitors as Record<string, unknown>[])
+        .map((c) => str(c?.name))
+        .filter(Boolean)
+        .slice(0, 5)
+    : [];
+  facts.key_people = Array.isArray(report.key_people)
+    ? (report.key_people as Record<string, unknown>[])
+        .map((p) => [str(p?.name), str(p?.title)].filter(Boolean).join(" — "))
+        .filter(Boolean)
+        .slice(0, 3)
+    : [];
+  const rep = report.reputation as Record<string, unknown> | null;
+  if (rep) {
+    facts.reputation = [str(rep.rating), str(rep.summary)]
+      .filter(Boolean)
+      .join(" — ")
+      .slice(0, 300);
+  }
+  const web = report.web_presence as Record<string, unknown> | null;
+  if (web) facts.web_presence = str(web.notes).slice(0, 400);
+  return facts;
+}
+
+/**
+ * Gather everything the writer needs to sound like it actually knows this
+ * business: the dossier (what they do, who they are, how competitors are
+ * beating them, their reputation) plus a website scorecard.
+ *
+ * The audit is the pitch's hard evidence, so it's worth a standalone run when
+ * the dossier doesn't carry one — but only once, and only if there's a site.
  */
 async function gatherContext(
   supabase: DB,
   lead: LeadRow,
+  report: Record<string, unknown> | null,
 ): Promise<{ audit: ResearchAudit | null; facts: Record<string, unknown> }> {
   const website = lead.company_website?.trim() || "";
+  const facts = factsFromReport(report);
 
-  // Reuse an existing finished research report's audit if we have one.
-  const { data: research } = await supabase
-    .from("lead_research")
-    .select("report, status")
-    .eq("lead_id", lead.id)
-    .maybeSingle();
-  if (research?.status === "done") {
-    const report = (research.report ?? {}) as Record<string, unknown>;
-    const audit = (report.audit ?? null) as ResearchAudit | null;
-    const overview =
-      typeof report.overview === "string" ? report.overview : "";
-    if (audit) return { audit, facts: { overview, source: "research" } };
-    if (overview) return { audit: null, facts: { overview, source: "research" } };
+  // The dossier's own audit is free — take it.
+  const fromReport = (report?.audit ?? null) as ResearchAudit | null;
+  if (fromReport) {
+    facts.audit_source = "research";
+    return { audit: fromReport, facts };
   }
 
   if (!website) {
-    return { audit: null, facts: { no_website: true } };
+    facts.no_website = true;
+    return { audit: null, facts };
   }
 
   const result = await researchSiteAudit(website);
-  return {
-    audit: result?.audit ?? null,
-    facts: {
-      measured_url: result?.audit?.measured_url ?? website,
-      source: "audit",
-    },
-  };
+  facts.audit_source = "audit";
+  facts.measured_url = result?.audit?.measured_url ?? website;
+  return { audit: result?.audit ?? null, facts };
+}
+
+function str(v: unknown): string {
+  return typeof v === "string" ? v.trim() : "";
+}
+
+function strList(v: unknown): string[] {
+  return Array.isArray(v) ? v.map((x) => str(x)).filter(Boolean) : [];
 }
 
 /**
- * Write the customized cold email from real audit issues. Uses openaiChatJSON
- * (same model/shape as the prospecting drafter); a deterministic template is
- * the fallback so a row is NEVER left draftless.
+ * ARC AI's real service menu, derived from the pricing catalog so it can never
+ * drift from what the team actually sells. Names + taglines + headline features,
+ * deliberately WITHOUT prices: a cold email that opens with a price list reads
+ * like a flyer, and the CTA is a free breakdown — real numbers come later, from
+ * the real pricing page. Add-on-only cards (no feature list) are skipped.
+ *
+ * Exported for testing — it's what the model is told ARC AI can sell, so it's
+ * worth being able to inspect it directly.
  */
-async function composeOutreachEmail(
+export function serviceMenu(): string {
+  return PRICING_CATALOG.map((group) => {
+    const lines = group.packages
+      .filter((p) => p.features?.length)
+      .map((p) => {
+        const head = [p.name, p.tagline].filter(Boolean).join(" — ");
+        const top = (p.features ?? []).slice(0, 3).join("; ");
+        return `  - ${head}: ${top}`;
+      })
+      .join("\n");
+    return lines ? `${group.title}\n${lines}` : "";
+  })
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+/**
+ * Write the customized cold email. Everything the dossier learned about the
+ * business goes in, so the model can lead with something true and specific and
+ * then pitch only the services that genuinely fit. A deterministic template is
+ * the fallback so a row is NEVER left draftless.
+ *
+ * Exported for testing — this is the whole product, so it's worth being able
+ * to generate a sample against a real dossier without a live campaign.
+ */
+export async function composeOutreachEmail(
   lead: LeadRow,
   audit: ResearchAudit | null,
   facts: Record<string, unknown>,
@@ -356,18 +742,43 @@ async function composeOutreachEmail(
 
   if (isOpenAIConfigured()) {
     try {
+      const list = (label: string, v: unknown, max = 6): string => {
+        const items = strList(v).slice(0, max);
+        return items.length ? `${label}:\n${items.map((i) => `- ${i}`).join("\n")}` : "";
+      };
       const context = [
         `business: ${business}`,
         lead.contact_name ? `owner/contact: ${lead.contact_name}` : "",
-        lead.company_website ? `website: ${lead.company_website}` : "situation: has NO website",
-        typeof facts.overview === "string" && facts.overview
-          ? `about: ${String(facts.overview).slice(0, 600)}`
+        lead.company_website
+          ? `website: ${lead.company_website}`
+          : "situation: has NO website",
+        str(facts.industry) ? `industry: ${str(facts.industry)}` : "",
+        str(facts.headquarters) ? `location: ${str(facts.headquarters)}` : "",
+        str(facts.overview) ? `about them: ${str(facts.overview).slice(0, 900)}` : "",
+        list("what they sell", facts.products_services, 12),
+        list("decision-makers", facts.key_people, 3),
+        str(facts.reputation) ? `reputation: ${str(facts.reputation)}` : "",
+        str(facts.web_presence)
+          ? `their web presence: ${str(facts.web_presence)}`
           : "",
-        audit ? `website score: ${audit.overall}/100 (${audit.measured})` : "",
+        list("how competitors are beating them", facts.competitor_gaps, 5),
+        list("likely pain points", facts.pain_points, 6),
+        audit
+          ? `website score: ${audit.overall}/100 (${audit.measured})`
+          : "",
         audit?.issues?.length
-          ? `concrete website issues:\n${audit.issues.slice(0, 6).map((i) => `- ${i}`).join("\n")}`
+          ? `concrete website issues:\n${audit.issues
+              .slice(0, 6)
+              .map((i) => `- ${i}`)
+              .join("\n")}`
           : "",
-        lead.notes ? `notes: ${lead.notes.slice(0, 400)}` : "",
+        lead.notes ? `internal notes: ${lead.notes.slice(0, 400)}` : "",
+        // Belt-and-braces. factsFromReport has already withheld the untrusted
+        // dossier, so there is nothing here to leak — this just stops the model
+        // INVENTING an industry to fill the silence.
+        facts.trusted === false
+          ? `NOTE: nothing is known about this business beyond its name and the website measurements above. Do NOT guess or state their industry, services, size, location, staff or customers. Build the whole email on the website findings alone.`
+          : "",
       ]
         .filter(Boolean)
         .join("\n");
@@ -376,17 +787,46 @@ async function composeOutreachEmail(
         [
           {
             role: "system",
-            content: `You write ONE cold outreach email for ARC AI, a web design & digital agency in Sri Lanka. Return JSON only: {"subject": "...", "body": "..."}.
-- "subject": under 60 chars, specific to THIS business, no clickbait, no emoji.
-- "body": plain text, 90-140 words. Open with something SPECIFIC and true about them (a real website issue from the list, or — if they have NO website — what they're missing locally). Plainly state what it's costing them. Offer a free, no-obligation breakdown of exactly what you'd improve. Soft CTA (a quick reply or call). Greet the owner by name when given, else "Hi ${business} team". Sign off "Best regards,\\nThe ARC AI Team". NEVER invent facts, prices, or results. Do NOT write any website, phone number, address, or contact block — ARC AI's full signature (website, phone numbers, office address) and an unsubscribe link are appended automatically.`,
+            content: `You are a senior cold-email copywriter for ARC AI, an AI & digital agency in Sri Lanka. Write ONE outreach email to the business described by the user. Return JSON only: {"subject": "...", "body": "..."}.
+
+WHAT ARC AI ACTUALLY SELLS (never offer anything outside this list):
+${serviceMenu()}
+
+The combination that sets ARC AI apart: we build the website AND wire an AI agent into the back of it — a WhatsApp AI sales agent (and/or an on-site chat agent) that answers, qualifies, follows up and books customers 24/7, in English, Sinhala and Tamil, feeding straight into a lead dashboard/CRM. Most agencies hand over a brochure site and walk away; ARC AI ships the thing that actually answers the customer at 11pm.
+
+"subject": under 55 chars. Write it like one person emailing one business about a specific thing — the way you'd title a note to a colleague. Lowercase-ish and plain beats Title Case And Punchy.
+- BANNED shapes: "Unlock", "Boost", "Transform", "Elevate", "Supercharge", "Revolutionize", "Improve X with Y", "Grow your X", colon-then-benefit, emoji, exclamation marks, and the company's own name jammed in just to look personalized.
+- Bad: "Unlock 24/7 Bookings for Kandy Auto Care". "Improve Your Spice Export Efficiency with AI".
+- Derive it from the ONE concrete detail you opened the body with, so it could only have been written to this business. Vary the construction every time — a noun phrase ("your contact form on mobile"), a question ("enquiries going unanswered?"), or a plain observation ("the Matale site loads slowly on phones") are all fair. Do NOT reach for a stock opener like "quick note about…" or "a thought on…"; a run of near-identical subject lines across many emails is itself a spam signal.
+
+"body": plain text, 130-190 words, in this shape:
+1. Greet the decision-maker by first name if one is given, else "Hi ${business} team".
+2. Open with ONE specific, TRUE observation about them — a real website issue from the list, a gap a competitor is exploiting, or (if they have no website) what that costs them locally. This must read as though you looked at their business, because you did. Never flatter, never open with "I hope this finds you well".
+3. One line on what it's plainly costing them. Concrete, no hype, no invented statistics.
+4. Pitch the 2-3 services from the list above that genuinely fit THIS business, each tied to their actual situation — not a generic list. If they sell things people ask questions about before buying, the website + WhatsApp AI agent combo is usually the strongest angle. Refer to a package the way a person would in conversation ("a Growth site", "our WhatsApp AI agent"); never paste the catalog's internal formatting or taglines verbatim — "Starter — Get Online Fast" and "Growth — Capture & Close Leads" are how the price list reads, not how an email reads.
+5. ONE short line signalling the wider menu (e.g. that ARC AI also handles e-commerce, social media, SEO and business automation) so they know the full range — keep it to a single sentence, do not enumerate everything.
+6. Soft CTA: offer a free, no-obligation breakdown of exactly what you'd improve, and ask for a quick reply or call. No pressure, no deadline, no fake scarcity.
+7. Sign off exactly "Best regards,\\nThe ARC AI Team".
+
+HARD RULES:
+- NEVER invent facts, prices, timelines, statistics, results, client names or case studies. If you don't know a number, don't use one.
+- Never mention prices at all — the CTA is the free breakdown.
+- Never say you "researched", "scanned", "audited" or "ran a report on" them. Just know things.
+- Write like a sharp human wrote it for this one company. No corporate filler, no buzzwords, no em-dash-heavy AI cadence, no "In today's digital landscape".
+- Plain text only. No markdown, no bullet characters, no links.
+- Do NOT write any website, phone number, address, or contact block — ARC AI's signature (website, phones, office address) and an unsubscribe link are appended automatically.`,
           },
           { role: "user", content: context },
         ],
-        { model: MODEL, reasoningEffort: "low", timeoutMs: 90_000 },
+        {
+          model: MODEL,
+          reasoningEffort: REASONING_EFFORT,
+          timeoutMs: COMPOSE_TIMEOUT_MS,
+        },
       );
       const parsed = JSON.parse(raw) as { subject?: string; body?: string };
       const subject = String(parsed.subject ?? "").trim().slice(0, 120);
-      const body = String(parsed.body ?? "").trim().slice(0, 2000);
+      const body = String(parsed.body ?? "").trim().slice(0, 2600);
       if (body) {
         return {
           subject: subject || templateOutreach(business, audit, noWebsite).subject,
@@ -400,22 +840,30 @@ async function composeOutreachEmail(
   return templateOutreach(business, audit, noWebsite);
 }
 
-/** Deterministic fallback so a draft is never empty. */
+/**
+ * Deterministic fallback so a draft is never empty — and, since auto-send
+ * campaigns can go out on this path if OpenAI is down, it carries the same
+ * core pitch (site + WhatsApp AI agent + the wider menu) as the AI version.
+ * Less personal by necessity; never wrong.
+ */
 function templateOutreach(
   business: string,
   audit: ResearchAudit | null,
   noWebsite: boolean,
 ): { subject: string; body: string } {
-  const topIssue = audit?.issues?.[0];
+  const menu = `We also handle e-commerce stores, social media, SEO and business automation.`;
+  const agent = `We can also wire a WhatsApp AI sales agent into the back of it — it answers questions, qualifies buyers and follows up 24/7 in English, Sinhala and Tamil, so enquiries stop going cold overnight.`;
   if (noWebsite) {
     return {
       subject: `A website for ${business}?`,
-      body: `Hi ${business} team,\n\nI came across ${business} online and noticed you don't have a website yet — which means customers searching for you locally are landing on competitors instead.\n\nWe're ARC AI, a web & digital agency. We'd be happy to put together a free, no-obligation breakdown of a simple site that would bring those searches back to you.\n\nWorth a quick chat? Just reply here and I'll send over some ideas.\n\nBest regards,\nThe ARC AI Team`,
+      body: `Hi ${business} team,\n\nI came across ${business} online and noticed you don't have a website yet — which means customers searching for what you do are landing on competitors instead.\n\nWe're ARC AI, an AI and digital agency. We build fast, modern sites that turn those searches into enquiries. ${agent}\n\n${menu}\n\nHappy to put together a free, no-obligation breakdown of what we'd build and what it would bring in — no pressure either way. Worth a quick chat? Just reply here.\n\nBest regards,\nThe ARC AI Team`,
     };
   }
   return {
     subject: `A few quick wins for ${business}`,
-    body: `Hi ${business} team,\n\nI took a look at your website${topIssue ? ` and noticed ${lowerFirst(topIssue)}` : ""}. Small things like that quietly cost you enquiries every week.\n\nWe're ARC AI, a web & digital agency. I'd be glad to send a free, no-obligation breakdown of exactly what we'd improve — no pressure either way.\n\nWould that be useful? Just reply and I'll put it together.\n\nBest regards,\nThe ARC AI Team`,
+    body: `Hi ${business} team,\n\nI took a look at your website${
+      audit?.issues?.[0] ? ` and noticed ${lowerFirst(audit.issues[0])}` : ""
+    }. Small things like that quietly cost you enquiries every week.\n\nWe're ARC AI, an AI and digital agency. We'd rebuild it to load fast and actually convert. ${agent}\n\n${menu}\n\nI'd be glad to send a free, no-obligation breakdown of exactly what we'd improve — no pressure either way. Would that be useful? Just reply and I'll put it together.\n\nBest regards,\nThe ARC AI Team`,
   };
 }
 
@@ -432,7 +880,11 @@ function templateOutreach(
 export async function sendLeadOutreach(
   supabase: DB,
   leadId: string,
-  opts?: { actorId?: string | null },
+  opts?: {
+    actorId?: string | null;
+    /** Cap the send list (campaigns pin this to 1 — see CAMPAIGN_MAX_RECIPIENTS). */
+    maxRecipients?: number;
+  },
 ): Promise<{ ok: boolean; sent?: number; skipped?: boolean; error?: string }> {
   const { data: claimed } = await supabase
     .from("lead_outreach")
@@ -460,7 +912,12 @@ export async function sendLeadOutreach(
     const checks = await Promise.all(
       recipients.map(async (e) => ({ e, ok: (await checkEmail(e)).ok })),
     );
-    const valid = checks.filter((c) => c.ok).map((c) => c.e);
+    // `recipients` is already ranked best-first by cleanEmails, so capping
+    // here keeps the single best address rather than an arbitrary one.
+    const valid = checks
+      .filter((c) => c.ok)
+      .map((c) => c.e)
+      .slice(0, opts?.maxRecipients ?? MAX_RECIPIENTS);
 
     if (!valid.length) {
       await supabase

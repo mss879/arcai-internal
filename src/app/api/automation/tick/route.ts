@@ -14,7 +14,7 @@ import {
   processDueProspectSchedules,
   processPendingProspectScans,
 } from "@/lib/prospecting";
-import { processDueOutreach } from "@/lib/lead-outreach";
+import { processAutoSendQueue, processDueOutreach } from "@/lib/lead-outreach";
 import { processPendingCarousels } from "@/lib/carousels";
 import { processPendingWaShowcases } from "@/lib/wa-showcase";
 import {
@@ -68,9 +68,12 @@ export async function GET(request: Request) {
     const research = await processPendingResearch(supabase);
     const schedules = await processDueProspectSchedules(supabase);
     const prospecting = await processPendingProspectScans(supabase);
-    // Draft (research + audit + AI email) newly-found leads — stops at 'ready';
-    // a human approves the send from the lead. Reuses research audits when present.
+    // Draft (research + audit + AI email) newly-found leads. Rows drafted by a
+    // draft-then-approve campaign stop at 'ready' for a human to approve.
     const outreach = await processDueOutreach(supabase);
+    // The no-approval leg: sends drafts belonging to RUNNING auto-send
+    // campaigns, bounded by the campaign's daily cap. Pausing stops it here.
+    const autoSend = await processAutoSendQueue(supabase);
     const carousels = await processPendingCarousels(supabase);
     const showcases = await processPendingWaShowcases(supabase);
     // Queued inbound replies first — answering a live customer beats nudging
@@ -95,6 +98,7 @@ export async function GET(request: Request) {
       schedules,
       prospecting,
       outreach,
+      autoSend,
       carousels,
       showcases,
       agentRuns,

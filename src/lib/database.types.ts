@@ -129,6 +129,12 @@ export type LeadOutreachStatus =
   | "failed"
   | "skipped"
   | "discarded";
+/** Bulk outreach run (0058). Owner can pause/cancel a run mid-flight. */
+export type OutreachCampaignStatus =
+  | "running"
+  | "paused"
+  | "done"
+  | "cancelled";
 export type QuoteStatus =
   | "draft"
   | "sent"
@@ -1373,6 +1379,10 @@ export type Database = {
           created_at: Timestamp;
           updated_at: Timestamp;
           sent_at: Timestamp | null;
+          // 0058 — bulk campaigns
+          auto_send: boolean;
+          campaign_id: UUID | null;
+          research_started_at: Timestamp | null;
         };
         Insert: {
           id?: UUID;
@@ -1396,9 +1406,45 @@ export type Database = {
           created_at?: Timestamp;
           updated_at?: Timestamp;
           sent_at?: Timestamp | null;
+          // 0058 — bulk campaigns
+          auto_send?: boolean;
+          campaign_id?: UUID | null;
+          research_started_at?: Timestamp | null;
         };
         Update: Partial<
           Database["public"]["Tables"]["lead_outreach"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      outreach_campaigns: {
+        Row: {
+          id: UUID;
+          name: string;
+          status: OutreachCampaignStatus;
+          auto_send: boolean;
+          daily_cap: number;
+          filters: Record<string, unknown>;
+          queued: number;
+          created_by: UUID | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+          finished_at: Timestamp | null;
+        };
+        Insert: {
+          id?: UUID;
+          name?: string;
+          status?: OutreachCampaignStatus;
+          auto_send?: boolean;
+          daily_cap?: number;
+          filters?: Record<string, unknown>;
+          queued?: number;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+          finished_at?: Timestamp | null;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["outreach_campaigns"]["Insert"]
         >;
         Relationships: [];
       };

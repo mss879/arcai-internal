@@ -15,6 +15,7 @@ import {
   Radar,
   ScanSearch,
   Search,
+  Send,
   Settings2,
   Table2,
   Trash2,
@@ -36,6 +37,7 @@ import type {
   MemberLite,
 } from "@/lib/types";
 import { LEAD_SOURCES } from "@/components/crm/lead-form-modal";
+import { ColdEmailAnalyticsButton } from "@/components/crm/cold-email-analytics";
 import { daysInactive } from "@/components/crm/lead-card";
 
 import {
@@ -235,6 +237,9 @@ export function CrmToolbar({
 
         <span className="ml-auto" />
 
+        {/* Cold email analytics — who the AI has actually emailed */}
+        <ColdEmailAnalyticsButton />
+
         {/* Tasks */}
         <Button
           variant="outline"
@@ -304,6 +309,12 @@ export function CrmToolbar({
             onClick={() => router.push("/crm/research")}
           >
             Prospect research
+          </DropdownItem>
+          <DropdownItem
+            icon={<Send className="h-4 w-4" />}
+            onClick={() => router.push("/crm/outreach")}
+          >
+            Email campaigns
           </DropdownItem>
           <DropdownItem
             icon={<Users2 className="h-4 w-4" />}

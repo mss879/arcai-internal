@@ -15,6 +15,7 @@ import type {
   InvoiceCardData,
   SmsCardData,
 } from "@/lib/assistant-cards";
+import { nextInvoiceNumber } from "@/lib/invoice";
 import { isSmsConfigured } from "@/lib/sms";
 import {
   SMS_MAX_LENGTH,
@@ -658,20 +659,18 @@ function isEmail(value: string): boolean {
 }
 
 /**
- * Use the number the user gave, or generate the next one. Generated numbers
- * follow the workspace's "#00200" style, continuing from how many invoices
- * already exist.
+ * Use the number the user gave, or generate the next one — the highest number
+ * across every saved invoice plus one, in the same "#00200" style (the exact
+ * rule the Invoice Generator's auto-numbering follows).
  */
-async function nextInvoiceNumber(
+async function resolveInvoiceNumber(
   supabase: DB,
   provided?: string | null,
 ): Promise<string> {
   const p = (provided ?? "").trim();
   if (p) return p.startsWith("#") ? p : `#${p}`;
-  const { count } = await supabase
-    .from("invoices")
-    .select("*", { count: "exact", head: true });
-  return "#" + String(200 + (count ?? 0) + 1).padStart(5, "0");
+  const { data } = await supabase.from("invoices").select("invoice_number");
+  return nextInvoiceNumber((data ?? []).map((row) => row.invoice_number));
 }
 
 // ---- Executor ------------------------------------------------------------
@@ -1414,7 +1413,7 @@ export async function executeTool(
         typeof args.invoice_date === "string" && args.invoice_date.trim()
           ? args.invoice_date.trim()
           : today;
-      const number = await nextInvoiceNumber(
+      const number = await resolveInvoiceNumber(
         supabase,
         args.invoice_number as string,
       );

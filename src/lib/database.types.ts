@@ -470,6 +470,8 @@ export type Database = {
           grand_total: number;
           due_today: number;
           stamp: string | null;
+          /** Bank account id from INVOICE_BANKS; null = the default account. */
+          bank_account: string | null;
           recipient_email: string | null;
           sent_at: Timestamp | null;
           created_by: UUID | null;
@@ -485,6 +487,7 @@ export type Database = {
           grand_total?: number;
           due_today?: number;
           stamp?: string | null;
+          bank_account?: string | null;
           recipient_email?: string | null;
           sent_at?: Timestamp | null;
           created_by?: UUID | null;

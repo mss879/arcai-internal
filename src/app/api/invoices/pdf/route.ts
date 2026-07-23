@@ -47,6 +47,7 @@ export async function POST(request: Request) {
     grand_total: Number(body.grand_total ?? 0),
     due_today: Number(body.due_today ?? 0),
     stamp: body.stamp ? String(body.stamp) : null,
+    bank_account: body.bank_account ? String(body.bank_account) : null,
   };
 
   const pdf = await renderInvoicePdf(invoice);

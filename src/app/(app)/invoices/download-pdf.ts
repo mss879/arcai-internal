@@ -9,6 +9,8 @@ export type InvoicePdfPayload = {
   grand_total: number;
   due_today: number;
   stamp?: string | null;
+  /** Bank account id from INVOICE_BANKS; omitted = the default account. */
+  bank_account?: string | null;
 };
 
 /**

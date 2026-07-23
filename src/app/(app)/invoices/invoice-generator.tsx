@@ -9,13 +9,17 @@ import { Plus, Trash2, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn, formatCurrency } from "@/lib/utils";
 import {
+  DEFAULT_INVOICE_BANK_ID,
+  FIRST_INVOICE_NUMBER,
+  INVOICE_BANKS,
   INVOICE_COMPANY,
-  INVOICE_BANK,
   INVOICE_SIGNOFF,
   INVOICE_STAMP_OPTIONS,
   emptyLineItem,
+  invoiceBank,
   lineItemsFromSaved,
   lineItemTotal,
+  nextInvoiceNumber,
   parseAmount,
   stampImage,
   type InvoiceLineItem,
@@ -39,7 +43,13 @@ export function InvoiceGenerator({
   pastInvoices?: SavedInvoice[];
   quotes?: Quote[];
 }) {
-  const [invoiceNumber, setInvoiceNumber] = React.useState("#00200");
+  // The invoice number is filled in automatically: highest past number + 1.
+  // `suggestNumber()` reads the freshest list of past invoices every time it's
+  // called, so it stays right after a save refreshes the page data.
+  const pastNumbers = pastInvoices.map((p) => p.invoice_number);
+  const suggestNumber = () => nextInvoiceNumber(pastNumbers);
+
+  const [invoiceNumber, setInvoiceNumber] = React.useState(suggestNumber);
   const [invoiceDate, setInvoiceDate] = React.useState(
     format(new Date(), "yyyy-MM-dd"),
   );
@@ -50,6 +60,9 @@ export function InvoiceGenerator({
   ]);
   const [dueToday, setDueToday] = React.useState(""); // "" = same as total
   const [stamp, setStamp] = React.useState<"none" | InvoiceStamp>("none");
+  const [bankAccount, setBankAccount] = React.useState<string>(
+    DEFAULT_INVOICE_BANK_ID,
+  );
   // Which past invoice / quote the form was loaded from (controls the pickers only).
   const [loadedId, setLoadedId] = React.useState("");
   const [loadedQuoteId, setLoadedQuoteId] = React.useState("");
@@ -62,13 +75,14 @@ export function InvoiceGenerator({
     setLoadedQuoteId("");
     const inv = pastInvoices.find((p) => p.id === id);
     if (!inv) {
-      setInvoiceNumber("#00200");
+      setInvoiceNumber(suggestNumber());
       setInvoiceDate(format(new Date(), "yyyy-MM-dd"));
       setBillToName("");
       setBillToDetails("");
       setItems([emptyLineItem()]);
       setDueToday("");
       setStamp("none");
+      setBankAccount(DEFAULT_INVOICE_BANK_ID);
       return;
     }
     setInvoiceNumber(inv.invoice_number);
@@ -79,6 +93,7 @@ export function InvoiceGenerator({
     setItems(loaded.length ? loaded : [emptyLineItem()]);
     setDueToday(String(Number(inv.due_today)));
     setStamp((inv.stamp as InvoiceStamp) || "none");
+    setBankAccount(invoiceBank(inv.bank_account).id);
   };
 
   // Load a quote's customer + line items into the invoice form — the fastest
@@ -88,6 +103,7 @@ export function InvoiceGenerator({
     setLoadedId("");
     const quote = quotes.find((q) => q.id === id);
     if (!quote) return;
+    setInvoiceNumber(suggestNumber());
     setBillToName(quote.customer_name || "");
     setBillToDetails(
       [quote.customer_email, quote.customer_phone].filter(Boolean).join("\n"),
@@ -102,6 +118,7 @@ export function InvoiceGenerator({
   const grandTotal = items.reduce((sum, l) => sum + lineItemTotal(l), 0);
   const dueTodayValue =
     dueToday.trim() === "" ? grandTotal : parseAmount(dueToday);
+  const selectedBank = invoiceBank(bankAccount);
 
   const router = useRouter();
   const [saving, setSaving] = React.useState(false);
@@ -126,10 +143,17 @@ export function InvoiceGenerator({
       grand_total: grandTotal,
       due_today: dueTodayValue,
       stamp: stamp === "none" ? null : stamp,
+      bank_account: bankAccount,
     };
     const res = await saveInvoice(payload);
     if (res.ok) {
       toast.success("Saved to Past invoices.");
+      // Queue up the next number straight away so a second invoice needs no
+      // typing. A re-issued invoice (loaded from Past invoices to add a paid
+      // stamp) keeps the number it was issued under.
+      if (!loadedId) {
+        setInvoiceNumber(nextInvoiceNumber([...pastNumbers, invoiceNumber]));
+      }
       router.refresh();
     } else {
       toast.error(`Couldn't save: ${res.error}`);
@@ -249,7 +273,7 @@ export function InvoiceGenerator({
                   className={fieldCls}
                   value={invoiceNumber}
                   onChange={(e) => setInvoiceNumber(e.target.value)}
-                  placeholder="#00200"
+                  placeholder={FIRST_INVOICE_NUMBER}
                 />
               </div>
               <div>
@@ -261,6 +285,29 @@ export function InvoiceGenerator({
                   onChange={(e) => setInvoiceDate(e.target.value)}
                 />
               </div>
+            </div>
+            <p className="mt-1 text-[11px] text-slate-400">
+              Numbered automatically from your highest past invoice — type over
+              it if you need a different one.
+            </p>
+
+            <div className="mt-4">
+              <label className={labelCls}>Pay into</label>
+              <select
+                className={fieldCls}
+                value={bankAccount}
+                onChange={(e) => setBankAccount(e.target.value)}
+              >
+                {INVOICE_BANKS.map((bank) => (
+                  <option key={bank.id} value={bank.id}>
+                    {bank.label}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-[11px] text-slate-400">
+                {selectedBank.accountNumber} · {selectedBank.branch} — printed
+                under &ldquo;Bank details for payment&rdquo;.
+              </p>
             </div>
           </section>
 
@@ -457,6 +504,7 @@ export function InvoiceGenerator({
             grandTotal={grandTotal}
             dueToday={dueTodayValue}
             stamp={stamp === "none" ? null : stamp}
+            bankAccount={bankAccount}
           />
         </div>
       </div>
@@ -477,6 +525,7 @@ export function InvoiceDocument({
   grandTotal,
   dueToday,
   stamp,
+  bankAccount,
 }: {
   invoiceNumber: string;
   displayDate: string;
@@ -486,8 +535,11 @@ export function InvoiceDocument({
   grandTotal: number;
   dueToday: number;
   stamp?: string | null;
+  /** Bank account id from INVOICE_BANKS; omitted/unknown = the default account. */
+  bankAccount?: string | null;
 }) {
   const stampSrc = stampImage(stamp);
+  const bank = invoiceBank(bankAccount);
   return (
     <div
       id="invoice-print"
@@ -613,19 +665,19 @@ export function InvoiceDocument({
           <p className="font-bold text-neutral-900">BANK DETAILS FOR PAYMENT</p>
           <p className="mt-1">
             <span className="font-bold text-neutral-900">Bank Name:</span>{" "}
-            {INVOICE_BANK.bankName}
+            {bank.bankName}
           </p>
           <p>
             <span className="font-bold text-neutral-900">Account Name:</span>{" "}
-            {INVOICE_BANK.accountName}
+            {bank.accountName}
           </p>
           <p>
             <span className="font-bold text-neutral-900">Account Number:</span>{" "}
-            {INVOICE_BANK.accountNumber}
+            {bank.accountNumber}
           </p>
           <p>
             <span className="font-bold text-neutral-900">Branch:</span>{" "}
-            {INVOICE_BANK.branch}
+            {bank.branch}
           </p>
         </div>
       </div>

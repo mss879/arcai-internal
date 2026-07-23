@@ -18,9 +18,9 @@ import {
 Font.registerHyphenationCallback((word) => [word]);
 
 import {
-  INVOICE_BANK,
   INVOICE_COMPANY,
   INVOICE_SIGNOFF,
+  invoiceBank,
 } from "@/lib/invoice";
 
 /**
@@ -47,6 +47,8 @@ export type InvoiceEmailData = {
   due_today: number;
   /** "deposit_paid" | "payment_received" — null/absent means no stamp. */
   stamp?: string | null;
+  /** Bank account id from INVOICE_BANKS; null/absent = the default account. */
+  bank_account?: string | null;
 };
 
 function money(amount: number): string {
@@ -197,6 +199,7 @@ const styles = StyleSheet.create({
 function InvoicePdfDoc({ invoice }: { invoice: InvoiceEmailData }) {
   const sig = getSignature();
   const stamp = getStamp(invoice.stamp);
+  const bank = invoiceBank(invoice.bank_account);
   const billLines = (invoice.bill_to_details || "")
     .split("\n")
     .map((l) => l.trim())
@@ -303,19 +306,19 @@ function InvoicePdfDoc({ invoice }: { invoice: InvoiceEmailData }) {
             <Text style={styles.bold}>BANK DETAILS FOR PAYMENT</Text>
             <Text>
               <Text style={styles.bold}>Bank Name: </Text>
-              {INVOICE_BANK.bankName}
+              {bank.bankName}
             </Text>
             <Text>
               <Text style={styles.bold}>Account Name: </Text>
-              {INVOICE_BANK.accountName}
+              {bank.accountName}
             </Text>
             <Text>
               <Text style={styles.bold}>Account Number: </Text>
-              {INVOICE_BANK.accountNumber}
+              {bank.accountNumber}
             </Text>
             <Text>
               <Text style={styles.bold}>Branch: </Text>
-              {INVOICE_BANK.branch}
+              {bank.branch}
             </Text>
           </View>
         </View>

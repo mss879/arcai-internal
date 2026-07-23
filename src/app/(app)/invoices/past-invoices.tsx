@@ -65,6 +65,7 @@ export function PastInvoices({ invoices }: { invoices: SavedInvoice[] }) {
         grand_total: Number(inv.grand_total),
         due_today: Number(inv.due_today),
         stamp: inv.stamp ?? null,
+        bank_account: inv.bank_account ?? null,
       });
     } catch (err) {
       toast.error(
@@ -176,6 +177,7 @@ export function PastInvoices({ invoices }: { invoices: SavedInvoice[] }) {
                 grandTotal={Number(viewing.grand_total)}
                 dueToday={Number(viewing.due_today)}
                 stamp={viewing.stamp}
+                bankAccount={viewing.bank_account}
               />
             </div>
           </div>

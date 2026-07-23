@@ -15,6 +15,8 @@ export type SaveInvoiceInput = {
   grand_total: number;
   due_today: number;
   stamp?: string | null;
+  /** Bank account id from INVOICE_BANKS — which account to be paid into. */
+  bank_account?: string | null;
 };
 
 export async function saveInvoice(
@@ -60,6 +62,20 @@ export async function saveInvoice(
         .eq("id", inserted.id);
     } catch {
       // ignore — stamping the saved copy is non-critical
+    }
+  }
+
+  // Same deal for the chosen bank account (migration 0061). Written on its own
+  // so a missing column can't take the stamp down with it — and so an invoice
+  // still saves on a database that hasn't run the migration yet.
+  if (input.bank_account && inserted?.id) {
+    try {
+      await supabase
+        .from("invoices")
+        .update({ bank_account: input.bank_account })
+        .eq("id", inserted.id);
+    } catch {
+      // ignore — the PDF the user just downloaded already has the right bank
     }
   }
 

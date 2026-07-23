@@ -14,12 +14,88 @@ export const INVOICE_COMPANY = {
   addressLines: ["No 8, Milagiriya AV, Colombo 4, Sri Lanka", "Birmingham, UK"],
 };
 
-export const INVOICE_BANK = {
-  bankName: "Commercial Bank",
-  accountName: "Mohamed Shahid Shamir",
-  accountNumber: "1106030714",
-  branch: "Bambalapitiya",
+/**
+ * The bank accounts an invoice can be paid into. The generator lets the user
+ * pick one per invoice; the choice is stored on `invoices.bank_account` so a
+ * re-download or emailed copy prints the same details. The first entry is the
+ * default — it's what older invoices (saved before the picker existed) use.
+ */
+export const INVOICE_BANKS = [
+  {
+    id: "commercial",
+    label: "Commercial Bank — Mohamed Shahid Shamir",
+    bankName: "Commercial Bank",
+    accountName: "Mohamed Shahid Shamir",
+    accountNumber: "1106030714",
+    branch: "Bambalapitiya",
+  },
+  {
+    id: "nations-trust",
+    label: "Nations Trust Bank — ARC AI PVT LTD",
+    bankName: "Nations Trust Bank",
+    accountName: "ARC AI PVT LTD",
+    accountNumber: "100250017428",
+    branch: "Havelock Branch",
+  },
+] as const;
+
+export type InvoiceBank = (typeof INVOICE_BANKS)[number];
+export type InvoiceBankId = InvoiceBank["id"];
+
+export const DEFAULT_INVOICE_BANK_ID: InvoiceBankId = INVOICE_BANKS[0].id;
+
+/** Resolve a stored bank id to its details, falling back to the default. */
+export function invoiceBank(id: string | null | undefined): InvoiceBank {
+  return INVOICE_BANKS.find((b) => b.id === id) ?? INVOICE_BANKS[0];
+}
+
+/** The default account — used wherever there's no per-invoice choice (e.g. WhatsApp replies). */
+export const INVOICE_BANK = invoiceBank(DEFAULT_INVOICE_BANK_ID);
+
+/* ------------------------------------------------------------------ */
+/* Invoice numbering                                                    */
+/* ------------------------------------------------------------------ */
+
+/** Where the series starts when there isn't a single saved invoice yet. */
+export const FIRST_INVOICE_NUMBER = "#00200";
+
+type ParsedInvoiceNumber = {
+  prefix: string;
+  /** Zero-padded width of the numeric part, so "#00200" stays 5 digits wide. */
+  width: number;
+  value: number;
+  suffix: string;
 };
+
+/** Split "#00200" into its "#" prefix and the 200 it counts from. */
+function parseInvoiceNumber(raw: string): ParsedInvoiceNumber | null {
+  const match = /^(.*?)(\d+)(\D*)$/.exec((raw ?? "").trim());
+  if (!match) return null;
+  return {
+    prefix: match[1],
+    width: match[2].length,
+    value: Number(match[2]),
+    suffix: match[3],
+  };
+}
+
+/**
+ * The next number in the series: the highest number across every past invoice,
+ * plus one, formatted exactly like that highest one ("#00204" → "#00205").
+ * Numbers that carry no digits at all are skipped, and an empty history starts
+ * the series at FIRST_INVOICE_NUMBER.
+ */
+export function nextInvoiceNumber(existing: readonly string[]): string {
+  let highest: ParsedInvoiceNumber | null = null;
+  for (const raw of existing) {
+    const parsed = parseInvoiceNumber(raw);
+    if (!parsed) continue;
+    if (!highest || parsed.value > highest.value) highest = parsed;
+  }
+  if (!highest) return FIRST_INVOICE_NUMBER;
+  const next = String(highest.value + 1).padStart(highest.width, "0");
+  return `${highest.prefix}${next}${highest.suffix}`;
+}
 
 export const INVOICE_SIGNOFF = {
   questionsLine:

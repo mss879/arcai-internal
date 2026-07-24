@@ -21,6 +21,7 @@ import { saveLead, type LeadInput } from "@/app/(app)/crm/actions";
 
 export const LEAD_SOURCES = [
   "manual",
+  "website",
   "form",
   "webhook",
   "api",

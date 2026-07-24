@@ -230,6 +230,7 @@ export async function createWebhookEndpoint(input: {
   });
   if (error) return { ok: false, error: error.message };
   revalidatePath("/automation");
+  revalidatePath("/crm/webhooks");
   return { ok: true };
 }
 
@@ -238,6 +239,7 @@ export async function deleteWebhookEndpoint(id: string): Promise<ActionResult> {
   const { error } = await supabase.from("webhook_endpoints").delete().eq("id", id);
   if (error) return { ok: false, error: error.message };
   revalidatePath("/automation");
+  revalidatePath("/crm/webhooks");
   return { ok: true };
 }
 

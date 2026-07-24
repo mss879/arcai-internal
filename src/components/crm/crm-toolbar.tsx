@@ -22,6 +22,7 @@ import {
   TrendingUp,
   Upload,
   Users2,
+  Webhook,
   X,
 } from "lucide-react";
 
@@ -321,6 +322,12 @@ export function CrmToolbar({
             onClick={() => router.push("/crm/duplicates")}
           >
             Find duplicates
+          </DropdownItem>
+          <DropdownItem
+            icon={<Webhook className="h-4 w-4" />}
+            onClick={() => router.push("/crm/webhooks")}
+          >
+            Webhooks
           </DropdownItem>
           <DropdownItem
             icon={<Settings2 className="h-4 w-4" />}

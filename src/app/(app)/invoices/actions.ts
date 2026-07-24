@@ -14,6 +14,8 @@ export type SaveInvoiceInput = {
   items: InvoiceItem[];
   grand_total: number;
   due_today: number;
+  /** Amount already paid — subtracted from the total to give what's due. */
+  amount_paid?: number;
   stamp?: string | null;
   /** Bank account id from INVOICE_BANKS — which account to be paid into. */
   bank_account?: string | null;
@@ -76,6 +78,20 @@ export async function saveInvoice(
         .eq("id", inserted.id);
     } catch {
       // ignore — the PDF the user just downloaded already has the right bank
+    }
+  }
+
+  // And the amount already paid (migration 0062). Same best-effort write so a
+  // database without the column still saves the invoice; the just-downloaded
+  // PDF already shows the deduction regardless.
+  if (typeof input.amount_paid === "number" && input.amount_paid > 0 && inserted?.id) {
+    try {
+      await supabase
+        .from("invoices")
+        .update({ amount_paid: input.amount_paid })
+        .eq("id", inserted.id);
+    } catch {
+      // ignore — persisting the paid amount is non-critical
     }
   }
 

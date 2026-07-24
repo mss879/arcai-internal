@@ -45,6 +45,8 @@ export type InvoiceEmailData = {
   }[];
   grand_total: number;
   due_today: number;
+  /** Amount already paid — shown in red and subtracted from the total. */
+  amount_paid?: number | null;
   /** "deposit_paid" | "payment_received" — null/absent means no stamp. */
   stamp?: string | null;
   /** Bank account id from INVOICE_BANKS; null/absent = the default account. */
@@ -115,6 +117,7 @@ const BODY = "#374151";
 const MUTED = "#6b7280";
 const LINE = "#d4d4d4";
 const LINE_SOFT = "#e5e5e5";
+const RED = "#dc2626";
 
 const styles = StyleSheet.create({
   page: {
@@ -186,6 +189,8 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
   totalRule: { borderTopWidth: 1, borderTopColor: LINE, width: 220 },
+  paidLabel: { fontFamily: "Helvetica-Bold", color: RED },
+  paidValue: { color: RED },
   footerRow: { flexDirection: "row", marginTop: 18 },
   signRow: {
     flexDirection: "row",
@@ -200,6 +205,11 @@ function InvoicePdfDoc({ invoice }: { invoice: InvoiceEmailData }) {
   const sig = getSignature();
   const stamp = getStamp(invoice.stamp);
   const bank = invoiceBank(invoice.bank_account);
+  const paid = Number(invoice.amount_paid) || 0;
+  const balance = Math.max(
+    0,
+    Number(invoice.grand_total) - paid - Number(invoice.due_today),
+  );
   const billLines = (invoice.bill_to_details || "")
     .split("\n")
     .map((l) => l.trim())
@@ -282,11 +292,26 @@ function InvoicePdfDoc({ invoice }: { invoice: InvoiceEmailData }) {
             <Text style={styles.bold}>TOTAL:</Text>
             <Text>{money(invoice.grand_total)}</Text>
           </View>
+          {paid > 0 ? (
+            <View style={styles.totalLine}>
+              <Text style={styles.paidLabel}>AMOUNT PAID:</Text>
+              <Text style={styles.paidValue}>{`- ${money(paid)}`}</Text>
+            </View>
+          ) : null}
           <View style={styles.totalRule} />
           <View style={styles.totalLine}>
             <Text style={styles.bold}>DUE TODAY:</Text>
             <Text>{money(invoice.due_today)}</Text>
           </View>
+          {balance > 0 ? (
+            <>
+              <View style={styles.totalRule} />
+              <View style={styles.totalLine}>
+                <Text style={styles.bold}>BALANCE REMAINING:</Text>
+                <Text style={styles.bold}>{money(balance)}</Text>
+              </View>
+            </>
+          ) : null}
         </View>
 
         <View style={styles.rule} />

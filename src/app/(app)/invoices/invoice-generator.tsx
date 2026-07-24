@@ -59,6 +59,7 @@ export function InvoiceGenerator({
     emptyLineItem(),
   ]);
   const [dueToday, setDueToday] = React.useState(""); // "" = same as total
+  const [amountPaid, setAmountPaid] = React.useState(""); // "" = nothing paid yet
   const [stamp, setStamp] = React.useState<"none" | InvoiceStamp>("none");
   const [bankAccount, setBankAccount] = React.useState<string>(
     DEFAULT_INVOICE_BANK_ID,
@@ -81,6 +82,7 @@ export function InvoiceGenerator({
       setBillToDetails("");
       setItems([emptyLineItem()]);
       setDueToday("");
+      setAmountPaid("");
       setStamp("none");
       setBankAccount(DEFAULT_INVOICE_BANK_ID);
       return;
@@ -91,7 +93,10 @@ export function InvoiceGenerator({
     setBillToDetails(inv.bill_to_details || "");
     const loaded = lineItemsFromSaved(inv.items ?? []);
     setItems(loaded.length ? loaded : [emptyLineItem()]);
+    // `due_today` is the amount charged today and `amount_paid` what was paid
+    // before — both stored as-is, so they reload straight into their fields.
     setDueToday(String(Number(inv.due_today)));
+    setAmountPaid(Number(inv.amount_paid) > 0 ? String(Number(inv.amount_paid)) : "");
     setStamp((inv.stamp as InvoiceStamp) || "none");
     setBankAccount(invoiceBank(inv.bank_account).id);
   };
@@ -111,13 +116,27 @@ export function InvoiceGenerator({
     const loaded = lineItemsFromSaved(quote.items ?? []);
     setItems(loaded.length ? loaded : [emptyLineItem()]);
     setDueToday("");
+    setAmountPaid("");
     setStamp("none");
     setInvoiceDate(format(new Date(), "yyyy-MM-dd"));
   };
 
   const grandTotal = items.reduce((sum, l) => sum + lineItemTotal(l), 0);
+  // The running statement: TOTAL, minus anything already paid, minus what's
+  // being charged today, leaves the balance still remaining.
+  //  • Amount already paid — money in before this invoice.
+  //  • Due today — what's charged now (its own figure). Left blank, it defaults
+  //    to whatever's still owed after the earlier payment (total − paid).
+  //  • Balance remaining — total − paid − due today, floored at zero.
+  const amountPaidValue = parseAmount(amountPaid);
   const dueTodayValue =
-    dueToday.trim() === "" ? grandTotal : parseAmount(dueToday);
+    dueToday.trim() === ""
+      ? Math.max(0, grandTotal - amountPaidValue)
+      : parseAmount(dueToday);
+  const balanceRemaining = Math.max(
+    0,
+    grandTotal - amountPaidValue - dueTodayValue,
+  );
   const selectedBank = invoiceBank(bankAccount);
 
   const router = useRouter();
@@ -142,6 +161,7 @@ export function InvoiceGenerator({
       })),
       grand_total: grandTotal,
       due_today: dueTodayValue,
+      amount_paid: amountPaidValue,
       stamp: stamp === "none" ? null : stamp,
       bank_account: bankAccount,
     };
@@ -455,19 +475,50 @@ export function InvoiceGenerator({
                 </span>
               </div>
               <div>
+                <label className={labelCls}>Amount already paid</label>
+                <input
+                  className={cn(
+                    fieldCls,
+                    amountPaid.trim() !== "" &&
+                      "font-semibold text-rose-600 focus:ring-rose-100",
+                  )}
+                  value={amountPaid}
+                  onChange={(e) => setAmountPaid(e.target.value)}
+                  placeholder="0"
+                  inputMode="decimal"
+                />
+                <p className="mt-1 text-[11px] text-slate-400">
+                  Anything the client has already paid — shown in red on the
+                  invoice and subtracted from the total.
+                </p>
+              </div>
+              <div>
                 <label className={labelCls}>Due today</label>
                 <input
                   className={fieldCls}
                   value={dueToday}
                   onChange={(e) => setDueToday(e.target.value)}
-                  placeholder={`Defaults to total (${formatCurrency(grandTotal)})`}
+                  placeholder={`Defaults to ${formatCurrency(dueTodayValue)}`}
                   inputMode="decimal"
                 />
                 <p className="mt-1 text-[11px] text-slate-400">
-                  Leave blank to charge the full total. Enter a number for a
-                  partial / deposit amount.
+                  What you&rsquo;re charging on this invoice today. Leave blank
+                  to bill everything still owed.
                 </p>
               </div>
+
+              <div className="flex items-center justify-between border-t border-slate-100 pt-3 text-sm">
+                <span className="font-semibold text-slate-700">
+                  Balance remaining
+                </span>
+                <span className="font-bold text-slate-900">
+                  {formatCurrency(balanceRemaining)}
+                </span>
+              </div>
+              <p className="-mt-1 text-[11px] text-slate-400">
+                Total minus what&rsquo;s already paid and what&rsquo;s due today.
+                Shows on the invoice only when something&rsquo;s left over.
+              </p>
 
               <div>
                 <label className={labelCls}>Paid stamp</label>
@@ -502,6 +553,7 @@ export function InvoiceGenerator({
             billToLines={billToLines}
             items={items}
             grandTotal={grandTotal}
+            amountPaid={amountPaidValue}
             dueToday={dueTodayValue}
             stamp={stamp === "none" ? null : stamp}
             bankAccount={bankAccount}
@@ -523,6 +575,7 @@ export function InvoiceDocument({
   billToLines,
   items,
   grandTotal,
+  amountPaid = 0,
   dueToday,
   stamp,
   bankAccount,
@@ -533,6 +586,8 @@ export function InvoiceDocument({
   billToLines: string[];
   items: InvoiceLineItem[];
   grandTotal: number;
+  /** Already paid; shown in red and subtracted from the total. 0 = hide it. */
+  amountPaid?: number;
   dueToday: number;
   stamp?: string | null;
   /** Bank account id from INVOICE_BANKS; omitted/unknown = the default account. */
@@ -540,6 +595,9 @@ export function InvoiceDocument({
 }) {
   const stampSrc = stampImage(stamp);
   const bank = invoiceBank(bankAccount);
+  // What's left after the earlier payment and today's charge — hidden when
+  // there's nothing outstanding (a plain paid-in-full invoice).
+  const balanceRemaining = Math.max(0, grandTotal - amountPaid - dueToday);
   return (
     <div
       id="invoice-print"
@@ -641,11 +699,29 @@ export function InvoiceDocument({
           <span className="font-bold text-neutral-900">TOTAL:</span>
           <span className="text-neutral-700">{formatCurrency(grandTotal)}</span>
         </div>
+        {amountPaid > 0 && (
+          <div className="flex w-full max-w-[340px] items-center justify-between py-2">
+            <span className="font-bold text-rose-600">AMOUNT PAID:</span>
+            <span className="text-rose-600">
+              &minus;{formatCurrency(amountPaid)}
+            </span>
+          </div>
+        )}
         <div className="w-full max-w-[340px] border-t border-neutral-300" />
         <div className="flex w-full max-w-[340px] items-center justify-between py-2">
           <span className="font-bold text-neutral-900">DUE TODAY:</span>
           <span className="text-neutral-700">{formatCurrency(dueToday)}</span>
         </div>
+        {balanceRemaining > 0 && (
+          <div className="flex w-full max-w-[340px] items-center justify-between border-t border-neutral-300 py-2">
+            <span className="font-bold text-neutral-900">
+              BALANCE REMAINING:
+            </span>
+            <span className="font-bold text-neutral-900">
+              {formatCurrency(balanceRemaining)}
+            </span>
+          </div>
+        )}
       </div>
 
       <div className="mt-10 border-t border-neutral-300" />

@@ -8,6 +8,8 @@ export type InvoicePdfPayload = {
   items: InvoiceItem[];
   grand_total: number;
   due_today: number;
+  /** Amount already paid — shown in red and subtracted from the total. */
+  amount_paid?: number;
   stamp?: string | null;
   /** Bank account id from INVOICE_BANKS; omitted = the default account. */
   bank_account?: string | null;

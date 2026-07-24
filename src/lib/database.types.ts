@@ -469,6 +469,8 @@ export type Database = {
           items: InvoiceItem[];
           grand_total: number;
           due_today: number;
+          /** Already paid toward this invoice; null = nothing paid yet. */
+          amount_paid: number | null;
           stamp: string | null;
           /** Bank account id from INVOICE_BANKS; null = the default account. */
           bank_account: string | null;
@@ -486,6 +488,7 @@ export type Database = {
           items?: InvoiceItem[];
           grand_total?: number;
           due_today?: number;
+          amount_paid?: number | null;
           stamp?: string | null;
           bank_account?: string | null;
           recipient_email?: string | null;

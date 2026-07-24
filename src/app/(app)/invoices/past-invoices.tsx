@@ -64,6 +64,7 @@ export function PastInvoices({ invoices }: { invoices: SavedInvoice[] }) {
         })),
         grand_total: Number(inv.grand_total),
         due_today: Number(inv.due_today),
+        amount_paid: Number(inv.amount_paid ?? 0),
         stamp: inv.stamp ?? null,
         bank_account: inv.bank_account ?? null,
       });
@@ -175,6 +176,7 @@ export function PastInvoices({ invoices }: { invoices: SavedInvoice[] }) {
                   .filter(Boolean)}
                 items={lineItemsFromSaved(viewing.items)}
                 grandTotal={Number(viewing.grand_total)}
+                amountPaid={Number(viewing.amount_paid ?? 0)}
                 dueToday={Number(viewing.due_today)}
                 stamp={viewing.stamp}
                 bankAccount={viewing.bank_account}

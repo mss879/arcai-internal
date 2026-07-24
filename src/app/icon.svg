@@ -1,0 +1,44 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="ARC AI">
+  <defs>
+    <linearGradient id="tile" x1="64" y1="48" x2="452" y2="472" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fdba74"/>
+      <stop offset="0.45" stop-color="#f97316"/>
+      <stop offset="1" stop-color="#ea580c"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.30"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Brand tile -->
+  <rect x="16" y="16" width="480" height="480" rx="116" fill="url(#tile)"/>
+  <rect x="16" y="16" width="480" height="480" rx="116" fill="url(#sheen)"/>
+
+  <!-- Mark: circuit speed-lines feeding an "AI" monogram -->
+  <g transform="translate(14,0)" stroke="#ffffff" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <!-- circuit lines -->
+    <g stroke-width="22">
+      <path d="M112 198 H184"/>
+      <path d="M96 256 H184"/>
+      <path d="M112 314 H184"/>
+    </g>
+    <!-- nodes -->
+    <g fill="#ffffff" stroke="none">
+      <circle cx="98" cy="198" r="12"/>
+      <circle cx="82" cy="256" r="12"/>
+      <circle cx="98" cy="314" r="12"/>
+    </g>
+    <!-- letter A -->
+    <g stroke-width="42">
+      <path d="M198 358 L252 158 L306 358"/>
+      <path d="M218 300 H286"/>
+    </g>
+    <!-- letter I -->
+    <g stroke-width="36">
+      <path d="M362 168 V348"/>
+      <path d="M334 168 H390"/>
+      <path d="M334 348 H390"/>
+    </g>
+  </g>
+</svg>

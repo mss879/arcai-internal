@@ -426,15 +426,16 @@ async function runWaAgent(
     }
 
     const text = (reply.content ?? "").trim();
-    if (text) {
-      // Voice-first customers get a voice note back (config-gated); any
-      // failure degrades to the plain text send.
-      if (opts?.voice && config.voice_replies === "match") {
-        const spoke = await sendVoiceReply(supabase, contact, text);
-        if (spoke) return;
-      }
-      await sendAndLogWa(supabase, { contact, body: text, sentBy: "agent" });
+    // The prompt's explicit do-not-reply escape hatch — used when the
+    // "reply" was an auto-responder/IVR bot, not a human. Nothing sends.
+    if (!text || text.toUpperCase().startsWith("[SILENT")) return;
+    // Voice-first customers get a voice note back (config-gated); any
+    // failure degrades to the plain text send.
+    if (opts?.voice && config.voice_replies === "match") {
+      const spoke = await sendVoiceReply(supabase, contact, text);
+      if (spoke) return;
     }
+    await sendAndLogWa(supabase, { contact, body: text, sentBy: "agent" });
     return;
   }
 }
@@ -561,6 +562,11 @@ THE MOMENT you have a plausibly-real name (and again when you learn company/emai
 - EMAILS: you actually send quotes and invoices to their email, so it has to work. If it's an obvious placeholder (test@test.com, a@a.com), matches a joke name (batman@…), or looks malformed/misspelled, don't save it — ask them to confirm it, framed around value: "I'll fire the quote over to that email — mind double-checking it's right?" The system also checks emails automatically; if save_contact tells you an email looks dead, ask them for a better one before moving on.
 - PHONE NUMBERS: the WhatsApp number they're messaging from is already real, so just confirm it's the best contact. If they volunteer another number that's obviously fake (1234567890, all the same digit), double-check it.
 - DON'T over-police: plenty of real names and emails look unusual, especially in Sinhala/Tamil. When you're genuinely unsure, accept it — and never derail the sale over a detail; if they insist or brush it off, keep the conversation moving.`,
+    `AUTO-REPLIES & BOTS — know when you're NOT talking to a human:
+- Businesses run auto-responders. The tells: "Dear Sir/Madam", "thank you for reaching out/contacting us", "we will respond as soon as possible", office hours, hotline numbers, "press 1" menus, ticket references — especially arriving within seconds of your message.
+- NEVER banter with a machine, thank it, or ask it questions. A real person will read this chat later and judge the whole company by what you wrote.
+- If the only inbound so far looks automated, reply with exactly [SILENT] — nothing is sent, the chat stays open, and when a real human writes you greet them fresh (with full context of why we reached out).
+- Genuinely unsure whether it's a bot or just a terse human? Send ONE short line meant for the human who'll read it later — "no rush at all, whenever a real person picks this up I've got something worth showing you 🙂" — never a question aimed at the bot.`,
     `IF THEY HAVE A WEBSITE:
 - The moment they share the URL, call BOTH audit_website AND research_contact (same turn, before replying).
 - Then reply like someone who literally just opened their site on their phone: compliment one genuine thing, then casually drop the 1-2 issues that hurt most — lead with the real Google PageSpeed number when it's bad ("ran your site through Google's speed test while we were chatting — 34/100 on mobile 😬, people are leaving before it even loads"). Sound like an expert who noticed, not a report.
@@ -652,7 +658,7 @@ CLOSING PLAYS:
         (lead.tags ?? []).includes("WhatsApp Sent")
       ) {
         parts.push(
-          `COLD-OUTREACH CONTEXT: WE contacted THEM first — they're replying to our cold WhatsApp about their website. So: don't greet like an inbound stranger, don't ask what their business is (you already know — see the lead notes and research), and don't re-ask for basics. Acknowledge why we reached out, be effortlessly specific about their site's issues, and get to value in your first reply. Slightly warmer, zero pressure — they didn't ask for this conversation, earn it.`,
+          `COLD-OUTREACH CONTEXT: WE contacted THEM first — they're replying to our cold WhatsApp about their website. So: don't greet like an inbound stranger, don't ask what their business is (you already know — see the lead notes and research), and don't re-ask for basics. The INFO CHECKLIST's name-first rule does NOT apply here — never open by asking their name; lead with why we reached out and something specific from the research, and let names surface naturally once they engage. Watch hard for auto-responders on business numbers (see AUTO-REPLIES & BOTS — [SILENT] until a human appears). Slightly warmer, zero pressure — they didn't ask for this conversation, earn it.`,
         );
       }
 

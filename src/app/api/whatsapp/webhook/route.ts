@@ -53,7 +53,7 @@ type WaWebhookValue = {
   statuses?: {
     id?: string;
     status?: string;
-    errors?: { title?: string; message?: string }[];
+    errors?: { code?: number; title?: string; message?: string }[];
   }[];
 };
 
@@ -133,8 +133,12 @@ async function handleStatuses(supabase: DB, value: WaWebhookValue): Promise<void
       status: mapped,
     };
     if (mapped === "failed") {
+      // Keep Meta's numeric code in front — cold outreach reads it to tell
+      // "not on WhatsApp" (131026) apart from other delivery failures.
+      const err = status.errors?.[0];
       patch.error =
-        status.errors?.[0]?.message || status.errors?.[0]?.title || "Delivery failed.";
+        [err?.code, err?.message || err?.title].filter(Boolean).join(" ") ||
+        "Delivery failed.";
     }
 
     let query = supabase.from("wa_messages").update(patch).eq("wa_message_id", status.id);

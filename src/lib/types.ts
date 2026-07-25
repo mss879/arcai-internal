@@ -66,6 +66,7 @@ export type WaKeywordRule = Tables["wa_keyword_rules"]["Row"];
 export type WaAgentLog = Tables["wa_agent_logs"]["Row"];
 export type WaPromise = Tables["wa_promises"]["Row"];
 export type WaShowcase = Tables["wa_showcases"]["Row"];
+export type WaColdOutreach = Tables["wa_cold_outreach"]["Row"];
 export type ProspectScanSchedule = Tables["prospect_scan_schedules"]["Row"];
 export type WaCoaching = Tables["wa_coaching"]["Row"];
 export type SmsWorkflow = Tables["sms_workflows"]["Row"];

@@ -61,7 +61,7 @@ export const WA_TOOL_CATALOG: WaToolMeta[] = [
     key: "update_lead",
     label: "Update the lead",
     description:
-      "Sets deal value, score (hot/warm/cold) and appends qualification notes onto the linked CRM lead.",
+      "Sets deal value, score (hot/warm/cold), appends qualification notes and moves the lead forward through the pipeline stages (e.g. to Contacted / Qualified) as the conversation progresses.",
     kind: "write",
   },
   {

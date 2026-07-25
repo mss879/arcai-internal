@@ -7,6 +7,7 @@ import type {
   WaAgentConfig,
   WaAgentLog,
   WaCoaching,
+  WaColdOutreach,
   WaContact,
   WaKeywordRule,
   WaMessage,
@@ -71,6 +72,58 @@ export default async function WhatsappPage() {
       .limit(200),
   ]);
 
+  // The cold-outreach card's "recent picks" list (last 48h of activity).
+  const coldSinceDate = new Date();
+  coldSinceDate.setHours(coldSinceDate.getHours() - 48);
+  const { data: coldRows } = await supabase
+    .from("wa_cold_outreach")
+    .select("*")
+    .gte("updated_at", coldSinceDate.toISOString())
+    .order("updated_at", { ascending: false })
+    .limit(30);
+
+  // 30-day performance tiles for the same card.
+  const statsSinceDate = new Date();
+  statsSinceDate.setDate(statsSinceDate.getDate() - 30);
+  const statsSince = statsSinceDate.toISOString();
+  const weekAgoDate = new Date();
+  weekAgoDate.setDate(weekAgoDate.getDate() - 7);
+  const weekAgo = weekAgoDate.toISOString();
+  const { data: coldStatRows } = await supabase
+    .from("wa_cold_outreach")
+    .select("status, sent_at, followup_sent_at")
+    .or(`sent_at.gte.${statsSince},followup_sent_at.gte.${statsSince}`)
+    .limit(1000);
+  const attempts = (coldStatRows ?? []).filter(
+    (r) =>
+      r.sent_at && ["sent", "delivered", "replied", "failed"].includes(r.status),
+  );
+  const sent30 = attempts.length;
+  const replied30 = (coldStatRows ?? []).filter((r) => r.status === "replied").length;
+  const coldStats = {
+    sent7: attempts.filter((r) => (r.sent_at as string) >= weekAgo).length,
+    sent30,
+    delivered30: (coldStatRows ?? []).filter((r) =>
+      ["delivered", "replied"].includes(r.status),
+    ).length,
+    replied30,
+    replyRate: sent30 > 0 ? Math.round((replied30 / sent30) * 100) : null,
+    noWhatsApp30: (coldStatRows ?? []).filter((r) => r.status === "no_whatsapp")
+      .length,
+    failed30: (coldStatRows ?? []).filter((r) => r.status === "failed").length,
+    nudged30: (coldStatRows ?? []).filter((r) => r.followup_sent_at).length,
+  };
+  const coldLeadIds = (coldRows ?? []).map((r) => r.lead_id);
+  const { data: coldLeads } = coldLeadIds.length
+    ? await supabase
+        .from("leads")
+        .select("id, title, company")
+        .in("id", coldLeadIds)
+    : { data: [] };
+  const coldLeadById = new Map(
+    (coldLeads ?? []).map((l) => [l.id, l.company?.trim() || l.title]),
+  );
+
   return (
     <WhatsappView
       contacts={(contactsRes.data ?? []) as WaContact[]}
@@ -83,6 +136,11 @@ export default async function WhatsappPage() {
       automations={(automationsRes.data ?? []) as Automation[]}
       coaching={(coachingRes.data as WaCoaching | null) ?? null}
       promises={(promisesRes.data ?? []) as WaPromise[]}
+      coldRows={((coldRows ?? []) as WaColdOutreach[]).map((r) => ({
+        ...r,
+        lead_label: coldLeadById.get(r.lead_id) ?? "Deleted lead",
+      }))}
+      coldStats={coldStats}
       waReady={isWhatsAppConfigured()}
       aiReady={isOpenAIConfigured()}
       appBaseUrl={process.env.NEXT_PUBLIC_APP_URL ?? ""}

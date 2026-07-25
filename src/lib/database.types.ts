@@ -135,6 +135,16 @@ export type OutreachCampaignStatus =
   | "paused"
   | "done"
   | "cancelled";
+/** Automatic WhatsApp cold-outreach pipeline state (0063). */
+export type WaColdOutreachStatus =
+  | "researching"
+  | "ready"
+  | "sent"
+  | "delivered"
+  | "replied"
+  | "no_whatsapp"
+  | "failed"
+  | "skipped";
 export type QuoteStatus =
   | "draft"
   | "sent"
@@ -2198,6 +2208,20 @@ export type Database = {
           timezone: string;
           language_matching: boolean;
           updated_at: Timestamp;
+          // 0063 — automatic cold outreach
+          cold_outreach_enabled: boolean;
+          cold_daily_cap: number;
+          cold_template_name: string | null;
+          cold_template_lang: string;
+          cold_template_params: string[];
+          cold_pipeline_id: UUID | null;
+          cold_stage_id: UUID | null;
+          // 0064 — follow-up nudge + daily digest
+          cold_followup_template_name: string | null;
+          cold_followup_template_lang: string;
+          cold_followup_template_params: string[];
+          cold_followup_days: number;
+          cold_digest_sent_for: string | null;
         };
         Insert: {
           id?: number;
@@ -2223,9 +2247,75 @@ export type Database = {
           timezone?: string;
           language_matching?: boolean;
           updated_at?: Timestamp;
+          // 0063 — automatic cold outreach
+          cold_outreach_enabled?: boolean;
+          cold_daily_cap?: number;
+          cold_template_name?: string | null;
+          cold_template_lang?: string;
+          cold_template_params?: string[];
+          cold_pipeline_id?: UUID | null;
+          cold_stage_id?: UUID | null;
+          // 0064 — follow-up nudge + daily digest
+          cold_followup_template_name?: string | null;
+          cold_followup_template_lang?: string;
+          cold_followup_template_params?: string[];
+          cold_followup_days?: number;
+          cold_digest_sent_for?: string | null;
         };
         Update: Partial<
           Database["public"]["Tables"]["wa_agent_config"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      wa_cold_outreach: {
+        Row: {
+          id: UUID;
+          lead_id: UUID;
+          wa_id: string;
+          status: WaColdOutreachStatus;
+          picked_for: string;
+          research_started_at: Timestamp | null;
+          template_name: string | null;
+          template_lang: string | null;
+          template_params: string[];
+          contact_id: UUID | null;
+          wa_message_id: string | null;
+          sent_at: Timestamp | null;
+          error: string | null;
+          attempts: number;
+          locked_at: Timestamp | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+          // 0064 — follow-up nudge + reply tracking
+          followup_sent_at: Timestamp | null;
+          followup_wa_message_id: string | null;
+          replied_at: Timestamp | null;
+        };
+        Insert: {
+          id?: UUID;
+          lead_id: UUID;
+          wa_id: string;
+          status?: WaColdOutreachStatus;
+          picked_for: string;
+          research_started_at?: Timestamp | null;
+          template_name?: string | null;
+          template_lang?: string | null;
+          template_params?: string[];
+          contact_id?: UUID | null;
+          wa_message_id?: string | null;
+          sent_at?: Timestamp | null;
+          error?: string | null;
+          attempts?: number;
+          locked_at?: Timestamp | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+          // 0064 — follow-up nudge + reply tracking
+          followup_sent_at?: Timestamp | null;
+          followup_wa_message_id?: string | null;
+          replied_at?: Timestamp | null;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["wa_cold_outreach"]["Insert"]
         >;
         Relationships: [];
       };

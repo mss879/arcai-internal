@@ -19,6 +19,7 @@ import {
 import { probeSite } from "@/lib/ai/site-probe";
 import { appLink } from "@/lib/app-url";
 import { enrollAutomationRun, fireAutomationTrigger } from "@/lib/automation";
+import { moveLeadToStageByName, topLeadPosition } from "@/lib/crm";
 import {
   buildPricing,
   defaultContent,
@@ -33,6 +34,7 @@ import { isSmsConfigured, sendSms } from "@/lib/sms";
 import { countSmsSegments, normalizePhone, SMS_MAX_LENGTH } from "@/lib/sms-utils";
 import { checkEmail } from "@/lib/email-check";
 import { queueLeadResearch } from "@/lib/research";
+import { buildAgentKnowledge } from "@/lib/wa-knowledge";
 import { queueWaShowcase } from "@/lib/wa-showcase";
 import { baseLanguage, isWaLanguage, WA_LANGUAGE_LABELS } from "@/lib/wa-lang";
 import { WA_TOOL_CATALOG } from "@/lib/wa-tools-catalog";
@@ -531,7 +533,12 @@ async function buildSystemPrompt(
   known.push(contact.client_id ? "Client profile: linked" : "Client profile: none yet");
 
   const parts: string[] = [
-    `You are ${config.agent_name || "Arc"}, a sales consultant at ARC AI Agency — a Sri Lankan AI & digital agency that builds business websites, e-commerce stores, runs social media marketing and sets up AI automations. You're chatting with a potential customer on WhatsApp.`,
+    `You are ${config.agent_name || "Arc"}, a sales consultant at ARC AI Agency — a Sri Lankan AI & digital agency. ARC builds business websites, e-commerce stores, runs social media marketing and sets up AI automations — but what it really sells is the Smart Website system (below). You're chatting with a potential customer on WhatsApp.`,
+    `THE PRODUCT — the Smart Website system (what you are really selling):
+- Not "a website" — a system that RUNS the business's sales. The website captures every inquiry straight into the owner's own CRM pipeline, quotations and invoices are generated and e-signed right on the customer's phone, and AI agents answer customers on the website, on WhatsApp and on Instagram — with automatic follow-ups so no lead is ever forgotten.
+- ARC runs this exact system itself, and the prospect is experiencing it RIGHT NOW: you ARE the WhatsApp agent of that system. When it genuinely helps — they ask how it works, or they're impressed by the speed — say so naturally: "what your customers would get is exactly this: an assistant like me on your own website and WhatsApp, quoting and following up for you." Never as a gimmick, never twice in one conversation.
+- Sell outcomes, not pages: inquiries answered at 2am, quotes signed on the phone, zero forgotten follow-ups. A plain website is the entry point; the system is the real product.
+- Upsell path: website tiers → Growth (CRM pipeline built in) → Scale + AI agents (the full system). Meet their budget where it is, then show what the next step up unlocks for THEIR business.`,
     `HOW YOU SOUND (this matters more than anything):
 - Like a sharp, friendly human on WhatsApp — warm, confident, a little playful. Use contractions ("I'll", "that's"), natural fillers ("ah nice", "got it", "to be honest"), and the occasional emoji 👍 — but never more than one per message.
 - SHORT messages. 1-3 sentences, like real texting. Never send walls of text or bullet lists longer than 3 items. ONE exception: when presenting a package (see PRICING PLAYBOOK) you may send one structured message of up to ~10 short lines with *bold* prices and line breaks.
@@ -548,7 +555,7 @@ INFO CHECKLIST (collect in this order, one at a time, weaving it into natural ch
 4. What they need, their timeline, and a feel for budget.
 5. Their email, and confirm this WhatsApp number is the best contact — slip these in naturally mid-conversation, e.g. when offering to send something.
 
-THE MOMENT you have a plausibly-real name (and again when you learn company/email), call save_contact. Log every meaningful detail they share with update_lead (note). Buying signals — asking prices, timelines, "can you do X" — mark the lead hot with update_lead.`,
+THE MOMENT you have a plausibly-real name (and again when you learn company/email), call save_contact. Log every meaningful detail they share with update_lead (note). Buying signals — asking prices, timelines, "can you do X" — mark the lead hot with update_lead. And keep the lead's pipeline stage current with update_lead (stage) as the conversation progresses — see PIPELINE STAGES below.`,
     `SANITY-CHECK WHAT THEY GIVE YOU (use common sense — you're a sharp human, not a form that swallows anything):
 - NAMES: if the "name" is obviously not real — a fictional character (Batman, Superman), a celebrity, a placeholder ("test", "asdf", "N/A", "idk"), an insult, or clearly a joke — DON'T earnestly accept it or save it. Play along warmly for ONE beat, then ask for their real name: "haha Batman 😄 what's your actual name though, so I know who I'm chatting with?" Only call save_contact once the name is plausibly real.
 - EMAILS: you actually send quotes and invoices to their email, so it has to work. If it's an obvious placeholder (test@test.com, a@a.com), matches a joke name (batman@…), or looks malformed/misspelled, don't save it — ask them to confirm it, framed around value: "I'll fire the quote over to that email — mind double-checking it's right?" The system also checks emails automatically; if save_contact tells you an email looks dead, ask them for a better one before moving on.
@@ -607,14 +614,24 @@ CLOSING PLAYS:
       `When greeting a brand-new contact (no conversation history), base your opening message on this greeting:\n"${config.greeting.trim()}"`,
     );
   if (config.persona.trim()) parts.push(`Extra instructions from the team:\n${config.persona.trim()}`);
+  // Built-in knowledge base — authored from the actual product, with live
+  // prices from the pricing catalog (+ /pricing page overrides). The team's
+  // own knowledge field rides on top and wins on any conflict.
+  parts.push(
+    `KNOWLEDGE BASE (services, pricing, FAQs — your ground truth):\n${await buildAgentKnowledge(supabase)}`,
+  );
   if (config.knowledge.trim())
-    parts.push(`KNOWLEDGE BASE (services, pricing, FAQs — your ground truth):\n${config.knowledge.trim()}`);
+    parts.push(
+      `TEAM NOTES (extra facts & corrections from the team — these OVERRIDE the knowledge base on any conflict):\n${config.knowledge.trim()}`,
+    );
 
   // Give the model fresh CRM context up-front so it doesn't waste a round.
   if (contact.lead_id) {
     const { data: lead } = await supabase
       .from("leads")
-      .select("title, value, status, score, notes, tags, source, company, company_website")
+      .select(
+        "title, value, status, score, notes, tags, source, company, company_website, stage_id, pipeline_id",
+      )
       .eq("id", contact.lead_id)
       .maybeSingle();
     if (lead) {
@@ -630,9 +647,31 @@ CLOSING PLAYS:
           notes: (lead.notes ?? "").slice(0, 500),
         })}`,
       );
-      if (lead.source === "prospecting") {
+      if (
+        lead.source === "prospecting" ||
+        (lead.tags ?? []).includes("WhatsApp Sent")
+      ) {
         parts.push(
           `COLD-OUTREACH CONTEXT: WE contacted THEM first — they're replying to our cold WhatsApp about their website. So: don't greet like an inbound stranger, don't ask what their business is (you already know — see the lead notes and research), and don't re-ask for basics. Acknowledge why we reached out, be effortlessly specific about their site's issues, and get to value in your first reply. Slightly warmer, zero pressure — they didn't ask for this conversation, earn it.`,
+        );
+      }
+
+      // The pipeline's real stage names, so update_lead stage moves land.
+      const { data: stageRows } = await supabase
+        .from("pipeline_stages")
+        .select("id, name")
+        .eq("pipeline_id", lead.pipeline_id)
+        .order("position", { ascending: true });
+      if (stageRows?.length) {
+        const currentName =
+          stageRows.find((s) => s.id === lead.stage_id)?.name ?? "(none)";
+        parts.push(
+          `PIPELINE STAGES (in order): ${stageRows.map((s) => s.name).join(" → ")}. This lead is currently in "${currentName}".
+KEEP THE BOARD TRUTHFUL — the team reads the pipeline, not the chat. The moment the conversation genuinely reaches a later stage, call update_lead with stage (exact name from the list):
+- a real two-way conversation started → move past the first column (e.g. "Contacted")
+- they've shared their needs/budget/timeline and they're a fit → the qualified/next stage, if the pipeline has one
+- quotes and payment stages move automatically when you send a quote — don't move those yourself.
+Moves are forward-only; never park a dead conversation forward, and when they clearly say NO, mark the lead cold with update_lead instead.`,
         );
       }
     }
@@ -744,10 +783,11 @@ function buildToolSchemas(allowed: Set<string>): ToolSchema[] {
     send_showcase: fn("send_showcase", "Queue the live showcase: a personalized page with their audit scores AND an AI redesign concept of their own homepage, delivered automatically into this chat as one image message with a link. Use after the audit has run and interest is real — it's your strongest closing move.", {
       website: { type: "string", description: "Their website URL (defaults to the lead's saved website)." },
     }),
-    update_lead: fn("update_lead", "Update the linked CRM lead: deal value, score and/or a qualification note.", {
+    update_lead: fn("update_lead", "Update the linked CRM lead: deal value, score, a qualification note and/or its pipeline stage.", {
       value: { type: "number", description: "Estimated deal value in LKR." },
       score: { type: "string", enum: ["hot", "warm", "cold"], description: "How promising this lead feels." },
       note: { type: "string", description: "A short qualification note to log on the lead." },
+      stage: { type: "string", description: "Move the lead to this pipeline stage, by EXACT name from the stage list in your context (e.g. \"Contacted\", \"Qualified\"). Forward-only — use it the moment the conversation genuinely reaches that point." },
     }),
     create_task: fn("create_task", "Create a CRM task for the team.", {
       title: { type: "string", description: "Short task title." },
@@ -1092,6 +1132,8 @@ async function toolSaveContact(
         source: config.lead_source || "whatsapp",
         tags: ["whatsapp"],
         client_id: clientId,
+        // Land at the top of the stage column, above existing cards.
+        position: await topLeadPosition(supabase, spot.stageId),
         created_by: null,
       })
       .select("*")
@@ -1460,6 +1502,25 @@ async function toolUpdateLead(
       actor_id: null,
     });
   }
+
+  // Stage moves are forward-only and matched by name against the lead's own
+  // pipeline — the agent keeps the board truthful as the conversation
+  // progresses, but can never demote a lead the team advanced by hand.
+  const stage = String(args.stage ?? "").trim();
+  if (stage) {
+    const moved = await moveLeadToStageByName(
+      supabase,
+      contact.lead_id,
+      [stage],
+      "Moved by the WhatsApp agent from the conversation.",
+    );
+    return {
+      ok: true,
+      result: moved.moved
+        ? `Lead updated and moved to "${moved.stageName}".`
+        : `Lead updated. Stage NOT moved — "${stage}" doesn't match a later stage in this pipeline (moves are forward-only; check the stage list in your context).`,
+    };
+  }
   return { ok: true, result: "Lead updated." };
 }
 
@@ -1710,6 +1771,13 @@ async function toolSendQuote(
       .from("leads")
       .update({ value: grandTotal, score: "hot", score_reason: "Agreed to a package — quote sent" })
       .eq("id", contact.lead_id);
+    // The board should say so: a signable quote is in their hands.
+    await moveLeadToStageByName(
+      supabase,
+      contact.lead_id,
+      ["proposal sent", "quote sent", "proposal"],
+      `Quote ${quoteNumber} sent on WhatsApp by the agent.`,
+    );
   }
 
   const link = appLink(`/q/${quote.share_token}`)!;
@@ -3022,7 +3090,7 @@ export async function linkWaContactToCrm(
 
 // ---- shared ------------------------------------------------------------------
 
-async function notifyEveryone(
+export async function notifyEveryone(
   supabase: DB,
   opts: { title: string; body: string | null; link: string; sms?: string | null },
 ): Promise<number> {

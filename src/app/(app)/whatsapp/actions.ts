@@ -135,6 +135,19 @@ export type WaConfigInput = {
   quiet_hours_end?: number;
   timezone?: string;
   language_matching?: boolean;
+  // 0063 — automatic cold outreach
+  cold_outreach_enabled?: boolean;
+  cold_daily_cap?: number;
+  cold_template_name?: string;
+  cold_template_lang?: string;
+  cold_template_params?: string[];
+  cold_pipeline_id?: string | null;
+  cold_stage_id?: string | null;
+  // 0064 — follow-up nudge
+  cold_followup_template_name?: string;
+  cold_followup_template_lang?: string;
+  cold_followup_template_params?: string[];
+  cold_followup_days?: number;
 };
 
 export async function saveWaConfigAction(
@@ -209,6 +222,59 @@ export async function saveWaConfigAction(
           : {}),
         ...(input.language_matching != null
           ? { language_matching: Boolean(input.language_matching) }
+          : {}),
+        ...(input.cold_outreach_enabled != null
+          ? { cold_outreach_enabled: Boolean(input.cold_outreach_enabled) }
+          : {}),
+        ...(input.cold_daily_cap != null
+          ? {
+              cold_daily_cap: Math.min(
+                20,
+                Math.max(1, Math.round(Number(input.cold_daily_cap) || 5)),
+              ),
+            }
+          : {}),
+        ...(input.cold_template_name != null
+          ? { cold_template_name: input.cold_template_name.trim() || null }
+          : {}),
+        ...(input.cold_template_lang != null
+          ? { cold_template_lang: input.cold_template_lang.trim() || "en" }
+          : {}),
+        ...(input.cold_template_params != null
+          ? {
+              cold_template_params: input.cold_template_params
+                .map((p) => p.trim())
+                .filter(Boolean)
+                .slice(0, 10),
+            }
+          : {}),
+        ...(input.cold_pipeline_id !== undefined
+          ? { cold_pipeline_id: input.cold_pipeline_id || null }
+          : {}),
+        ...(input.cold_stage_id !== undefined
+          ? { cold_stage_id: input.cold_stage_id || null }
+          : {}),
+        ...(input.cold_followup_template_name != null
+          ? { cold_followup_template_name: input.cold_followup_template_name.trim() || null }
+          : {}),
+        ...(input.cold_followup_template_lang != null
+          ? { cold_followup_template_lang: input.cold_followup_template_lang.trim() || "en" }
+          : {}),
+        ...(input.cold_followup_template_params != null
+          ? {
+              cold_followup_template_params: input.cold_followup_template_params
+                .map((p) => p.trim())
+                .filter(Boolean)
+                .slice(0, 10),
+            }
+          : {}),
+        ...(input.cold_followup_days != null
+          ? {
+              cold_followup_days: Math.min(
+                14,
+                Math.max(1, Math.round(Number(input.cold_followup_days) || 3)),
+              ),
+            }
           : {}),
       },
       { onConflict: "id" },

@@ -1286,7 +1286,7 @@ function ColdOutreachTab({
             <Input
               value={form.cold_template_params}
               onChange={(e) => set("cold_template_params", e.target.value)}
-              placeholder="{{business}}, {{first_name}}"
+              placeholder="{{first_name}}, {{business}}"
             />
           </label>
           <p className="mt-1 text-[11px] text-slate-400">
@@ -1383,7 +1383,7 @@ function ColdOutreachTab({
               <Input
                 value={form.cold_followup_template_params}
                 onChange={(e) => set("cold_followup_template_params", e.target.value)}
-                placeholder="{{business}}, {{first_name}}"
+                placeholder="{{first_name}}, {{business}}"
               />
             </label>
             <label className="space-y-1.5 text-xs font-medium text-slate-600">

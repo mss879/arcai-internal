@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { createAdminClient } from "@/lib/supabase/admin";
 import { enrollAutomationRun, fireAutomationTrigger } from "@/lib/automation";
+import { topLeadPosition } from "@/lib/crm";
 
 /**
  * Inbound webhooks: POST /api/public/hooks/<token>
@@ -181,15 +182,8 @@ export async function POST(
         stageId = stage?.id ?? null;
       }
 
-      // Drop the lead at the bottom of its stage.
-      let position = 0;
-      if (stageId) {
-        const { count } = await supabase
-          .from("leads")
-          .select("*", { count: "exact", head: true })
-          .eq("stage_id", stageId);
-        position = count ?? 0;
-      }
+      // Drop the lead at the top of its stage, above existing cards.
+      const position = await topLeadPosition(supabase, stageId);
 
       const { data: lead, error } = await supabase
         .from("leads")

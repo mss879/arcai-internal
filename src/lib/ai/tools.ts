@@ -15,6 +15,7 @@ import type {
   InvoiceCardData,
   SmsCardData,
 } from "@/lib/assistant-cards";
+import { topLeadPosition } from "@/lib/crm";
 import { nextInvoiceNumber } from "@/lib/invoice";
 import { isSmsConfigured } from "@/lib/sms";
 import {
@@ -1062,10 +1063,8 @@ export async function executeTool(
             )
           : null) ?? stages?.[0];
 
-      const { count } = await supabase
-        .from("leads")
-        .select("*", { count: "exact", head: true })
-        .eq("stage_id", stage?.id ?? "");
+      // New leads land at the top of their stage column, not the bottom.
+      const position = await topLeadPosition(supabase, stage?.id ?? null);
 
       const { data: created, error } = await supabase
         .from("leads")
@@ -1079,7 +1078,7 @@ export async function executeTool(
           contact_email: (args.contact_email as string)?.trim() || null,
           value: typeof args.value === "number" ? args.value : null,
           source: "manual",
-          position: count ?? 0,
+          position,
         })
         .select("*")
         .single();

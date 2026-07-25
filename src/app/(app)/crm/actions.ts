@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { after } from "next/server";
 
 import { fireAutomationTrigger } from "@/lib/automation";
+import { topLeadPosition } from "@/lib/crm";
 import { createClient } from "@/lib/supabase/server";
 import { startLeadResearch } from "@/lib/research";
 import { isResearchConfigured } from "@/lib/ai/lead-research";
@@ -245,13 +246,11 @@ export async function saveLead(input: LeadInput): Promise<ActionResult> {
       });
     }
   } else {
-    const { count } = await supabase
-      .from("leads")
-      .select("*", { count: "exact", head: true })
-      .eq("stage_id", input.stage_id);
+    // New leads land at the top of their stage column, not the bottom.
+    const position = await topLeadPosition(supabase, input.stage_id);
     const { data: created, error } = await supabase
       .from("leads")
-      .insert({ ...base, position: count ?? 0 })
+      .insert({ ...base, position })
       .select("*")
       .single();
     if (error) return { ok: false, error: error.message };
@@ -874,11 +873,13 @@ export async function importLeads(input: {
     );
   }
 
-  const { count } = await supabase
-    .from("leads")
-    .select("*", { count: "exact", head: true })
-    .eq("stage_id", input.stage_id);
-  let position = count ?? 0;
+  // Imported leads land as a block at the top of their stage column, in file
+  // order, above everything already there.
+  let position = await topLeadPosition(
+    supabase,
+    input.stage_id,
+    input.rows.length,
+  );
 
   let imported = 0;
   let skipped = 0;

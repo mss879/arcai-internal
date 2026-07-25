@@ -4,6 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/lib/database.types";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { fireAutomationTrigger } from "@/lib/automation";
+import { topLeadPosition } from "@/lib/crm";
 
 /**
  * Open API — leads. Authenticate with an API key from the Automation page:
@@ -121,6 +122,8 @@ export async function POST(request: Request) {
       notes: body.notes ? String(body.notes) : null,
       source: body.source ? String(body.source) : "api",
       tags: Array.isArray(body.tags) ? body.tags.map(String) : [],
+      // Land at the top of the stage column, above existing cards.
+      position: await topLeadPosition(supabase, stageId),
       created_by: null,
     })
     .select("*")

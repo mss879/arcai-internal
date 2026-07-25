@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { createAdminClient } from "@/lib/supabase/admin";
 import { fireAutomationTrigger } from "@/lib/automation";
+import { topLeadPosition } from "@/lib/crm";
 
 /**
  * Public inquiry-form endpoint. Point any website form at it:
@@ -105,6 +106,8 @@ export async function POST(request: Request) {
         notes: message || null,
         source,
         tags: ["inbound"],
+        // Land at the top of the stage column, above existing cards.
+        position: await topLeadPosition(supabase, stageId),
         created_by: null,
       })
       .select("*")

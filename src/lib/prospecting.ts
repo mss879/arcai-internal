@@ -32,6 +32,7 @@ import {
 import { isOpenAIConfigured, openaiChatJSON } from "@/lib/ai/openai";
 import { probeSite } from "@/lib/ai/site-probe";
 import { fireAutomationTrigger } from "@/lib/automation";
+import { topLeadPosition } from "@/lib/crm";
 import { enqueueLeadOutreach, outreachSettings } from "@/lib/lead-outreach";
 
 type DB = SupabaseClient<Database>;
@@ -1122,11 +1123,9 @@ async function runImport(supabase: DB, scan: ScanRow): Promise<number> {
     }
   }
 
-  const { count } = await supabase
-    .from("leads")
-    .select("*", { count: "exact", head: true })
-    .eq("stage_id", stageId);
-  let position = count ?? 0;
+  // Prospected leads land as a block at the top of their stage column, above
+  // everything already there.
+  let position = await topLeadPosition(supabase, stageId, candidates.length);
 
   const cityTag = scan.city.trim();
   const createdLeads: LeadRow[] = [];

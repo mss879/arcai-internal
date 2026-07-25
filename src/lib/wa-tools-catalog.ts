@@ -54,7 +54,7 @@ export const WA_TOOL_CATALOG: WaToolMeta[] = [
     key: "send_showcase",
     label: "Send the live showcase",
     description:
-      "Builds a personalized page — their audit scores plus an AI redesign concept of their own homepage — and delivers it into the chat as one image message with a link. The 'show, don't tell' closer.",
+      "The 'show, don't tell' closer, delivered into the chat as one image. Has a website: audit scores + an AI redesign concept of their homepage. No website: a from-scratch design concept of their potential site, built from details gathered in the conversation.",
     kind: "write",
   },
   {

@@ -43,6 +43,13 @@ type ShowcaseRow = Database["public"]["Tables"]["wa_showcases"]["Row"];
  *   rendering → generate the redesign mockup with Gemini (Nano Banana 2)
  *   ready     → send the chat message, notify the team
  *   sent      ✓
+ *
+ * CONCEPT MODE (no website): when the prospect has no site, the agent
+ * gathers a rich brief in chat (what the business does, style, must-have
+ * features) and queues a showcase with `brief` instead of `url`. The
+ * pipeline skips the audit + PDF steps entirely and renders a from-scratch
+ * homepage concept of their POTENTIAL site — the "here's what you could
+ * have" closer.
  */
 
 const LOCK_TTL_MS = 3 * 60 * 1000;
@@ -84,8 +91,22 @@ export type ShowcasePayload = {
 
 export async function queueWaShowcase(
   supabase: DB,
-  opts: { contactId: string; leadId: string | null; url: string; business: string },
+  opts: {
+    contactId: string;
+    leadId: string | null;
+    /** Their existing site (redesign mode). Omit for concept mode. */
+    url?: string;
+    business: string;
+    /** Concept mode: the chat-gathered brief the mockup is built from. */
+    brief?: string;
+  },
 ): Promise<{ ok: boolean; token?: string; error?: string }> {
+  const url = opts.url?.trim() || "";
+  const brief = opts.brief?.trim() || "";
+  if (!url && !brief) {
+    return { ok: false, error: "A showcase needs a website URL or a concept brief." };
+  }
+
   // One in-flight showcase per contact — re-offer the existing one.
   const { data: existing } = await supabase
     .from("wa_showcases")
@@ -101,7 +122,7 @@ export async function queueWaShowcase(
     .insert({
       contact_id: opts.contactId,
       lead_id: opts.leadId,
-      config: { url: opts.url, business: opts.business },
+      config: { url, business: opts.business, ...(brief ? { brief } : {}) },
     })
     .select("token")
     .single();
@@ -167,7 +188,22 @@ async function advanceWaShowcase(supabase: DB, id: string): Promise<StepOutcome>
   };
 
   try {
+    const cfg = (row.config ?? {}) as { url?: string; brief?: string };
+    const isConcept = !String(cfg.url ?? "").trim() && Boolean(String(cfg.brief ?? "").trim());
+
     if (row.status === "pending") {
+      // Concept mode has no site to audit — build the payload from the
+      // brief and jump straight to rendering (no report step either).
+      if (isConcept) {
+        const payload = await gatherConcept(supabase, row);
+        await commit({
+          status: "rendering",
+          payload: payload as unknown as Record<string, unknown>,
+          error: null,
+          attempts: 0,
+        });
+        return "advanced";
+      }
       const { payload, beforeUrl } = await gatherShowcase(supabase, row);
       await commit({
         status: "reporting",
@@ -323,6 +359,47 @@ async function gatherShowcase(
   return { payload, beforeUrl };
 }
 
+/**
+ * Concept mode's gather step: no site to audit — the payload is the chat
+ * brief plus whatever research already knows, and the CTA links.
+ */
+async function gatherConcept(supabase: DB, row: ShowcaseRow): Promise<ShowcasePayload> {
+  const cfg = (row.config ?? {}) as { business?: string; brief?: string };
+  const payload: ShowcasePayload = {
+    business: String(cfg.business ?? "").trim() || "your business",
+    url: "",
+    scores: {},
+    issues: [],
+    summary: String(cfg.brief ?? "").trim(),
+    whatsapp_number: null,
+    booking_url: null,
+  };
+
+  // Research context sharpens the mockup (industry, what they sell).
+  if (row.lead_id) {
+    const { data: lead } = await supabase
+      .from("leads")
+      .select("ai_summary")
+      .eq("id", row.lead_id)
+      .maybeSingle();
+    if (lead?.ai_summary) {
+      payload.summary = `${payload.summary}\n${lead.ai_summary.slice(0, 300)}`.trim();
+    }
+  }
+
+  const { data: link } = await supabase
+    .from("meeting_links")
+    .select("slug")
+    .eq("active", true)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (link) payload.booking_url = appLink(`/book/${link.slug}`);
+  payload.whatsapp_number = await businessWaNumber();
+
+  return payload;
+}
+
 /** The business's own display number (digits) for the page's wa.me CTA. */
 async function businessWaNumber(): Promise<string | null> {
   const token = process.env.WHATSAPP_ACCESS_TOKEN?.trim();
@@ -450,14 +527,20 @@ async function renderMockup(supabase: DB, row: ShowcaseRow): Promise<string | nu
     }
   }
 
+  const isConcept = !String(payload.url ?? "").trim();
   const prompt = [
-    `Premium homepage redesign concept for "${business}" (${payload.url ?? "their website"}).`,
+    isConcept
+      ? `Homepage design concept for "${business}" — they have NO website yet; this is the first vision of their POTENTIAL site, built from what they described.`
+      : `Premium homepage redesign concept for "${business}" (${payload.url ?? "their website"}).`,
     `A photorealistic desktop-browser mockup of a stunning modern landing page: bold hero section featuring the business name "${business}", confident headline, professional photography, clean spacious layout, modern typography, a clear call-to-action button, subtle trust signals.`,
     payload.summary
-      ? `About the business (reflect this in imagery and copy): ${payload.summary.slice(0, 300)}`
+      ? `About the business (reflect this in imagery, sections and copy — their words matter most): ${payload.summary.slice(0, 600)}`
       : "",
     references.length
       ? "The attached image is their CURRENT website — keep the brand's identity (name, colours, subject matter) but make the design dramatically more premium and modern."
+      : "",
+    isConcept
+      ? "Make it feel unmistakably THEIRS — the industry, products and vibe they described, not a generic template. Include a WhatsApp chat button in the design."
       : "",
     "Style: award-winning web design portfolio shot, soft shadows, cohesive colour palette, ultra-clean. No watermarks.",
   ]
@@ -536,9 +619,12 @@ async function deliverShowcase(supabase: DB, row: ShowcaseRow): Promise<void> {
     .filter(Boolean)
     .join(", and ");
 
-  const caption = row.mockup_image_url
-    ? `${firstName}, had a quick play with what ${payload.business ?? "your"} site could look like 👆${punch ? `\n\n${punch} — this concept fixes all of that.` : ""}${row.report_pdf_url ? "\n\nFull audit report of your current site coming right up 👇" : "\n\nWant me to walk you through what we'd change?"}`
-    : `${firstName}, took a proper look at your site.${punch ? ` ${punch}.` : ""}${row.report_pdf_url ? " Your full audit report is coming right up 👇" : " Want me to walk you through what we'd fix?"}`;
+  const isConcept = !String(payload.url ?? "").trim();
+  const caption = isConcept && row.mockup_image_url
+    ? `${firstName}, I put together a first concept of what a ${payload.business ?? "your business"} website could look like 👆 built from exactly what you told me.\n\nJust a taste — the real thing would be fully yours: your photos, your colours, and it answers inquiries + takes bookings by itself. Like the direction?`
+    : row.mockup_image_url
+      ? `${firstName}, had a quick play with what ${payload.business ?? "your"} site could look like 👆${punch ? `\n\n${punch} — this concept fixes all of that.` : ""}${row.report_pdf_url ? "\n\nFull audit report of your current site coming right up 👇" : "\n\nWant me to walk you through what we'd change?"}`
+      : `${firstName}, took a proper look at your site.${punch ? ` ${punch}.` : ""}${row.report_pdf_url ? " Your full audit report is coming right up 👇" : " Want me to walk you through what we'd fix?"}`;
 
   const sent = row.mockup_image_url
     ? await sendWhatsAppImage({

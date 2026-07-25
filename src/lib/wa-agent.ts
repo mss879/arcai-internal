@@ -569,10 +569,10 @@ THE MOMENT you have a plausibly-real name (and again when you learn company/emai
 - Then bridge to the fix: what we'd do, the package that fits (knowledge base), and a call — send_booking_link.
 
 IF THEY DON'T HAVE A WEBSITE:
-- Totally fine — "actually easier, we start clean 😄". Ask what kind of site they're picturing: business site or online store?
-- Then gather: what the business does, must-have features, any sites they like, timeline.
-- Give them the fitting package + price straight from the knowledge base, frame it around THEIR goals ("for a bakery doing deliveries, the Growth package makes sense because…").
-- Still call research_contact with their business name — reviews and Facebook pages often exist without a website.
+- Totally fine — "actually easier, we start clean 😄". Still call research_contact with their business name — reviews and Facebook pages often exist without a website.
+- DIG DEEP before you pitch — this is a discovery conversation, one question at a time, genuinely curious: what the business does and sells → who their customers are and how they find them today → business site or online store → must-have features (bookings, catalog, payments, delivery…) → the style/vibe they picture (modern/classic? colours? a site they admire?). Every answer is ammunition.
+- THE CLOSER: once you have a real picture (their words about the business + style + features), call send_showcase with a RICH business_description — a from-scratch design concept of THEIR potential site arrives in this chat as an image. Tease it first ("give me a few minutes, I want to sketch something for you 😄"). When it lands, ask what they'd change — debating details means they already want it.
+- Then bridge to the fitting package + price straight from the knowledge base, framed around THEIR goals ("for a bakery doing deliveries, the Growth package makes sense because…"), and send_booking_link or a quote when they're warm.
 
 PRICING PLAYBOOK (follow this EXACTLY whenever budget or packages come up):
 - Never name a package without immediately giving its full picture from the knowledge base: *price*, what's included (pages, design level, CRM/AI, SEO — whatever the knowledge base lists), and delivery time if listed. A package name alone is a wasted message.
@@ -780,8 +780,9 @@ function buildToolSchemas(allowed: Set<string>): ToolSchema[] {
     audit_website: fn("audit_website", "Instantly audit a website (seconds): mobile-friendliness, HTTPS, SEO basics, freshness. Returns concrete issues you can mention naturally in conversation. Call this the moment they share their website URL.", {
       website: { type: "string", description: "The website URL or domain, e.g. nimalbakery.lk" },
     }, ["website"]),
-    send_showcase: fn("send_showcase", "Queue the live showcase: a personalized page with their audit scores AND an AI redesign concept of their own homepage, delivered automatically into this chat as one image message with a link. Use after the audit has run and interest is real — it's your strongest closing move.", {
-      website: { type: "string", description: "Their website URL (defaults to the lead's saved website)." },
+    send_showcase: fn("send_showcase", "Queue the live showcase — your strongest closing move, delivered automatically into this chat as one image message. WITH a website: their audit scores + an AI redesign concept of their own homepage (use after the audit has run and interest is real). WITHOUT a website: a from-scratch design concept of their POTENTIAL site — but only after you've gathered a rich brief in chat (pass it as business_description).", {
+      website: { type: "string", description: "Their website URL (defaults to the lead's saved website). Omit if they have no site." },
+      business_description: { type: "string", description: "No-website leads only: everything learned in chat — what the business does and sells, who buys, style/vibe/colours they like, must-have features (booking, catalog, payments…). The mockup is built from THIS, so richer = better." },
     }),
     update_lead: fn("update_lead", "Update the linked CRM lead: deal value, score, a qualification note and/or its pipeline stage.", {
       value: { type: "number", description: "Estimated deal value in LKR." },
@@ -1438,6 +1439,7 @@ async function toolSendShowcase(
   args: Record<string, unknown>,
 ): Promise<WaToolOutcome> {
   let website = String(args.website ?? "").trim();
+  const brief = String(args.business_description ?? "").trim();
   let business = contact.display_name || contact.profile_name || "";
 
   if (contact.lead_id) {
@@ -1449,10 +1451,36 @@ async function toolSendShowcase(
     website = website || lead?.company_website?.trim() || "";
     business = lead?.company?.trim() || business || lead?.contact_name?.trim() || "";
   }
+
+  // No website → concept mode: a from-scratch mockup of their POTENTIAL
+  // site, built from the brief the agent gathered in chat.
   if (!website) {
+    if (brief.length < 60) {
+      return {
+        ok: false,
+        result:
+          "For a concept mockup you need a RICH business_description (60+ chars) gathered from the chat: what the business does and sells, who their customers are, the style/vibe and colours they like, and the must-have features (booking, catalog, payments…). Keep asking — one question at a time — then call this again.",
+      };
+    }
+    const { isGeminiConfigured } = await import("@/lib/ai/gemini");
+    if (!isGeminiConfigured()) {
+      return {
+        ok: false,
+        result:
+          "Image generation isn't configured (GEMINI_API_KEY missing) — don't promise a design concept. Continue qualifying and offer a call instead.",
+      };
+    }
+    const queued = await queueWaShowcase(supabase, {
+      contactId: contact.id,
+      leadId: contact.lead_id,
+      business: business || "their business",
+      brief,
+    });
+    if (!queued.ok) return { ok: false, result: queued.error ?? "Could not queue the concept." };
     return {
-      ok: false,
-      result: "No website on file — ask for their website URL first (or run audit_website with it).",
+      ok: true,
+      result:
+        "Concept queued — a from-scratch design mockup of THEIR potential website builds in the background and arrives in this chat automatically as one image. Tease it ('give me a few minutes, I want to sketch something for you 😄'), keep chatting, and when it lands, ask what they'd change — that conversation IS the close.",
     };
   }
 

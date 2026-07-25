@@ -21,6 +21,7 @@ import {
   Search,
   Send,
   Settings2,
+  Snowflake,
   Trash2,
   UserPlus,
   Zap,
@@ -55,6 +56,7 @@ import {
   deleteKeywordRuleAction,
   linkContactToCrmAction,
   markContactReadAction,
+  saveColdConfigAction,
   saveKeywordRuleAction,
   saveWaConfigAction,
   sendWaMessageAction,
@@ -108,7 +110,7 @@ const SENT_BY_LABEL: Record<string, string> = {
 
 // ---- main view ----------------------------------------------------------------
 
-type Tab = "inbox" | "agent" | "keywords" | "activity";
+type Tab = "inbox" | "agent" | "cold" | "keywords" | "activity";
 
 /** A cold-outreach row with its lead's display label joined in. */
 type ColdRow = WaColdOutreach & { lead_label: string };
@@ -178,6 +180,7 @@ export function WhatsappView({
   const TABS: { key: Tab; label: string; icon: React.ReactNode; badge?: number }[] = [
     { key: "inbox", label: "Inbox", icon: <Inbox className="h-4 w-4" />, badge: unread },
     { key: "agent", label: "AI Agent", icon: <Bot className="h-4 w-4" /> },
+    { key: "cold", label: "Cold Outreach", icon: <Snowflake className="h-4 w-4" /> },
     { key: "keywords", label: "Keywords", icon: <Zap className="h-4 w-4" /> },
     { key: "activity", label: "Agent Activity", icon: <ScrollText className="h-4 w-4" /> },
   ];
@@ -258,12 +261,20 @@ export function WhatsappView({
           pipelines={pipelines}
           stages={stages}
           coaching={coaching}
+          waReady={waReady}
+          aiReady={aiReady}
+          appBaseUrl={appBaseUrl}
+        />
+      )}
+      {tab === "cold" && (
+        <ColdOutreachTab
+          config={config}
+          pipelines={pipelines}
+          stages={stages}
           coldRows={coldRows}
           coldStats={coldStats}
           coldUpcoming={coldUpcoming}
           waReady={waReady}
-          aiReady={aiReady}
-          appBaseUrl={appBaseUrl}
         />
       )}
       {tab === "keywords" && <KeywordsTab rules={rules} automations={automations} />}
@@ -680,9 +691,6 @@ function AgentTab({
   pipelines,
   stages,
   coaching,
-  coldRows,
-  coldStats,
-  coldUpcoming,
   waReady,
   aiReady,
   appBaseUrl,
@@ -691,9 +699,6 @@ function AgentTab({
   pipelines: Pipeline[];
   stages: PipelineStage[];
   coaching: WaCoaching | null;
-  coldRows: ColdRow[];
-  coldStats: ColdStats;
-  coldUpcoming: ColdUpcoming[];
   waReady: boolean;
   aiReady: boolean;
   appBaseUrl: string;
@@ -720,25 +725,10 @@ function AgentTab({
     quiet_hours_end: config?.quiet_hours_end ?? 9,
     timezone: config?.timezone ?? "Asia/Colombo",
     language_matching: config?.language_matching ?? true,
-    cold_outreach_enabled: config?.cold_outreach_enabled ?? false,
-    cold_daily_cap: config?.cold_daily_cap ?? 5,
-    cold_template_name: config?.cold_template_name ?? "",
-    cold_template_lang: config?.cold_template_lang ?? "en",
-    // Edited as one comma-separated line; split back on save.
-    cold_template_params: (config?.cold_template_params ?? []).join(", "),
-    cold_pipeline_id: config?.cold_pipeline_id ?? "",
-    cold_stage_id: config?.cold_stage_id ?? "",
-    cold_followup_template_name: config?.cold_followup_template_name ?? "",
-    cold_followup_template_lang: config?.cold_followup_template_lang ?? "en",
-    cold_followup_template_params: (config?.cold_followup_template_params ?? []).join(", "),
-    cold_followup_days: config?.cold_followup_days ?? 3,
   }));
   const [saving, setSaving] = React.useState(false);
 
   const pipelineStages = stages.filter((s) => s.pipeline_id === form.pipeline_id);
-  const coldPipelineStages = stages.filter(
-    (s) => s.pipeline_id === form.cold_pipeline_id,
-  );
   const webhookUrl = `${appBaseUrl || "https://<your-domain>"}/api/whatsapp/webhook`;
 
   function set<K extends keyof typeof form>(key: K, value: (typeof form)[K]) {
@@ -760,16 +750,6 @@ function AgentTab({
       ...form,
       pipeline_id: form.pipeline_id || null,
       stage_id: form.stage_id || null,
-      cold_pipeline_id: form.cold_pipeline_id || null,
-      cold_stage_id: form.cold_stage_id || null,
-      cold_template_params: form.cold_template_params
-        .split(",")
-        .map((p) => p.trim())
-        .filter(Boolean),
-      cold_followup_template_params: form.cold_followup_template_params
-        .split(",")
-        .map((p) => p.trim())
-        .filter(Boolean),
     });
     setSaving(false);
     if (res.ok) toast.success("Agent configuration saved.");
@@ -1019,257 +999,6 @@ function AgentTab({
           </div>
         </section>
 
-        {/* Automatic cold outreach */}
-        <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <h2 className="text-sm font-semibold text-slate-900">
-                Automatic cold outreach
-              </h2>
-              <p className="text-xs text-slate-500">
-                Each day the agent takes the top leads of your New Lead column,
-                researches the company first, then opens the conversation with
-                your approved template. Numbers that turn out not to be on
-                WhatsApp are tagged &quot;no-whatsapp&quot; and the next lead
-                takes the slot.
-              </p>
-            </div>
-            <Toggle
-              checked={form.cold_outreach_enabled}
-              onChange={(v) => set("cold_outreach_enabled", v)}
-              label="Cold outreach"
-            />
-          </div>
-
-          <div className="mt-4 grid gap-3 sm:grid-cols-3">
-            <label className="space-y-1.5 text-xs font-medium text-slate-600 sm:col-span-2">
-              Approved cold template (opens the conversation)
-              <Input
-                value={form.cold_template_name}
-                onChange={(e) => set("cold_template_name", e.target.value)}
-                placeholder="e.g. site_audit_intro (Meta-approved template name)"
-              />
-            </label>
-            <label className="space-y-1.5 text-xs font-medium text-slate-600">
-              Template language
-              <Input
-                value={form.cold_template_lang}
-                onChange={(e) => set("cold_template_lang", e.target.value)}
-                placeholder="en"
-              />
-            </label>
-          </div>
-          <label className="mt-3 block space-y-1.5 text-xs font-medium text-slate-600">
-            Template variables ({"{{1}}, {{2}}"}… in order, comma-separated)
-            <Input
-              value={form.cold_template_params}
-              onChange={(e) => set("cold_template_params", e.target.value)}
-              placeholder="{{business}}, {{first_name}}"
-            />
-          </label>
-          <p className="mt-1 text-[11px] text-slate-400">
-            Tokens filled per lead: {"{{business}} {{name}} {{first_name}} {{website}} {{city}}"}.
-            Nothing sends until a template name is set — approve it in Meta
-            Business Manager first.
-          </p>
-
-          <div className="mt-3 grid gap-3 sm:grid-cols-3">
-            <label className="space-y-1.5 text-xs font-medium text-slate-600">
-              Max messages per day
-              <Input
-                type="number"
-                min={1}
-                max={20}
-                value={String(form.cold_daily_cap)}
-                onChange={(e) =>
-                  set(
-                    "cold_daily_cap",
-                    Math.min(20, Math.max(1, Math.round(Number(e.target.value) || 5))),
-                  )
-                }
-              />
-            </label>
-            <label className="space-y-1.5 text-xs font-medium text-slate-600">
-              Pick leads from pipeline
-              <Select
-                value={form.cold_pipeline_id}
-                onChange={(e) => {
-                  set("cold_pipeline_id", e.target.value);
-                  set("cold_stage_id", "");
-                }}
-              >
-                <option value="">First pipeline (default)</option>
-                {pipelines.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </Select>
-            </label>
-            <label className="space-y-1.5 text-xs font-medium text-slate-600">
-              Stage
-              <Select
-                value={form.cold_stage_id}
-                onChange={(e) => set("cold_stage_id", e.target.value)}
-                disabled={!form.cold_pipeline_id}
-              >
-                <option value="">Auto: New Lead stage</option>
-                {coldPipelineStages.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
-                ))}
-              </Select>
-            </label>
-          </div>
-          <p className="mt-2 text-[11px] text-slate-400">
-            Account safety: at most {form.cold_daily_cap} cold message
-            {form.cold_daily_cap === 1 ? "" : "s"} a day, spread 90+ minutes
-            apart, only outside quiet hours, one lead at a time, and a number is
-            never messaged twice.
-          </p>
-
-          {/* Follow-up nudge */}
-          <div className="mt-4 border-t border-slate-100 pt-4">
-            <h3 className="text-xs font-semibold text-slate-900">Follow-up nudge</h3>
-            <p className="text-[11px] text-slate-400">
-              If a delivered message gets no reply for the set number of days,
-              the agent sends ONE follow-up template, then stops forever. Leave
-              the template empty to disable. Nudges count toward the daily cap.
-            </p>
-            <div className="mt-3 grid gap-3 sm:grid-cols-3">
-              <label className="space-y-1.5 text-xs font-medium text-slate-600 sm:col-span-2">
-                Approved follow-up template
-                <Input
-                  value={form.cold_followup_template_name}
-                  onChange={(e) => set("cold_followup_template_name", e.target.value)}
-                  placeholder="e.g. site_audit_nudge (a SECOND Meta-approved template)"
-                />
-              </label>
-              <label className="space-y-1.5 text-xs font-medium text-slate-600">
-                Template language
-                <Input
-                  value={form.cold_followup_template_lang}
-                  onChange={(e) => set("cold_followup_template_lang", e.target.value)}
-                  placeholder="en"
-                />
-              </label>
-            </div>
-            <div className="mt-3 grid gap-3 sm:grid-cols-3">
-              <label className="space-y-1.5 text-xs font-medium text-slate-600 sm:col-span-2">
-                Template variables (comma-separated)
-                <Input
-                  value={form.cold_followup_template_params}
-                  onChange={(e) => set("cold_followup_template_params", e.target.value)}
-                  placeholder="{{business}}, {{first_name}}"
-                />
-              </label>
-              <label className="space-y-1.5 text-xs font-medium text-slate-600">
-                Days of silence first
-                <Input
-                  type="number"
-                  min={1}
-                  max={14}
-                  value={String(form.cold_followup_days)}
-                  onChange={(e) =>
-                    set(
-                      "cold_followup_days",
-                      Math.min(14, Math.max(1, Math.round(Number(e.target.value) || 3))),
-                    )
-                  }
-                />
-              </label>
-            </div>
-          </div>
-
-          {/* Performance */}
-          <div className="mt-4 border-t border-slate-100 pt-4">
-            <h3 className="text-xs font-semibold text-slate-900">Last 30 days</h3>
-            <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
-              <ColdStat label="Sent (7d)" value={coldStats.sent7} />
-              <ColdStat label="Sent (30d)" value={coldStats.sent30} />
-              <ColdStat
-                label="Replied"
-                value={coldStats.replied30}
-                sub={coldStats.replyRate != null ? `${coldStats.replyRate}% reply rate` : undefined}
-                tone={coldStats.replied30 > 0 ? "emerald" : "slate"}
-              />
-              <ColdStat
-                label="No WhatsApp"
-                value={coldStats.noWhatsApp30}
-                tone={coldStats.noWhatsApp30 > 0 ? "amber" : "slate"}
-              />
-            </div>
-            {(coldStats.failed30 > 0 || coldStats.nudged30 > 0) && (
-              <p className="mt-2 text-[11px] text-slate-400">
-                {coldStats.failed30 > 0 ? `${coldStats.failed30} failed to send. ` : ""}
-                {coldStats.nudged30 > 0 ? `${coldStats.nudged30} follow-up nudge${coldStats.nudged30 === 1 ? "" : "s"} sent.` : ""}
-              </p>
-            )}
-          </div>
-
-          {/* Up next — the queue, exactly as the picker will take it */}
-          <div className="mt-4 border-t border-slate-100 pt-4">
-            <h3 className="text-xs font-semibold text-slate-900">Up next</h3>
-            <p className="text-[11px] text-slate-400">
-              The next leads the agent will message, straight from the top of
-              your New Lead column — drag cards on the CRM board to change the
-              order.
-            </p>
-            {coldUpcoming.length > 0 ? (
-              <ol className="mt-2 space-y-1.5">
-                {coldUpcoming.map((u, i) => (
-                  <li
-                    key={u.leadId}
-                    className="flex items-center gap-2 text-xs text-slate-700"
-                  >
-                    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-100 text-[10px] font-semibold text-slate-500">
-                      {i + 1}
-                    </span>
-                    <Link
-                      href={`/crm/lead/${u.leadId}`}
-                      className="min-w-0 flex-1 truncate hover:underline"
-                    >
-                      {u.label}
-                      <span className="ml-2 text-slate-400">{fmtWa(u.waId)}</span>
-                    </Link>
-                  </li>
-                ))}
-              </ol>
-            ) : (
-              <p className="mt-2 text-xs text-slate-400">
-                No eligible leads right now — add leads with phone numbers to
-                the New Lead column and they&apos;ll appear here.
-              </p>
-            )}
-          </div>
-
-          {coldRows.length > 0 && (
-            <div className="mt-4 border-t border-slate-100 pt-4">
-              <h3 className="text-xs font-semibold text-slate-900">
-                Recent picks (48h)
-              </h3>
-              <ul className="mt-2 space-y-1.5">
-                {coldRows.map((r) => (
-                  <li
-                    key={r.id}
-                    className="flex items-center justify-between gap-3 text-xs"
-                  >
-                    <span className="min-w-0 flex-1 truncate text-slate-700">
-                      {r.lead_label}
-                      <span className="ml-2 text-slate-400">{fmtWa(r.wa_id)}</span>
-                      {r.followup_sent_at && (
-                        <span className="ml-1 text-[10px] text-sky-600">· nudged</span>
-                      )}
-                    </span>
-                    <ColdStatusChip status={r.status} />
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </section>
-
         {/* Tool permissions */}
         <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm">
           <h2 className="text-sm font-semibold text-slate-900">What the agent is allowed to do</h2>
@@ -1433,6 +1162,346 @@ function AgentTab({
             <li>4️⃣ Interested → booking link · Serious → proposal drafted for review</li>
             <li>5️⃣ Wants a human → AI pauses & the team is pinged</li>
           </ul>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+// ---- Cold Outreach tab ----------------------------------------------------------
+
+function ColdOutreachTab({
+  config,
+  pipelines,
+  stages,
+  coldRows,
+  coldStats,
+  coldUpcoming,
+  waReady,
+}: {
+  config: WaAgentConfig | null;
+  pipelines: Pipeline[];
+  stages: PipelineStage[];
+  coldRows: ColdRow[];
+  coldStats: ColdStats;
+  coldUpcoming: ColdUpcoming[];
+  waReady: boolean;
+}) {
+  const [form, setForm] = React.useState(() => ({
+    cold_outreach_enabled: config?.cold_outreach_enabled ?? false,
+    cold_daily_cap: config?.cold_daily_cap ?? 5,
+    cold_template_name: config?.cold_template_name ?? "",
+    cold_template_lang: config?.cold_template_lang ?? "en",
+    // Edited as one comma-separated line; split back on save.
+    cold_template_params: (config?.cold_template_params ?? []).join(", "),
+    cold_pipeline_id: config?.cold_pipeline_id ?? "",
+    cold_stage_id: config?.cold_stage_id ?? "",
+    cold_followup_template_name: config?.cold_followup_template_name ?? "",
+    cold_followup_template_lang: config?.cold_followup_template_lang ?? "en",
+    cold_followup_template_params: (config?.cold_followup_template_params ?? []).join(", "),
+    cold_followup_days: config?.cold_followup_days ?? 3,
+  }));
+  const [saving, setSaving] = React.useState(false);
+
+  const coldPipelineStages = stages.filter(
+    (s) => s.pipeline_id === form.cold_pipeline_id,
+  );
+
+  function set<K extends keyof typeof form>(key: K, value: (typeof form)[K]) {
+    setForm((f) => ({ ...f, [key]: value }));
+  }
+
+  async function handleSave() {
+    setSaving(true);
+    const res = await saveColdConfigAction({
+      ...form,
+      cold_pipeline_id: form.cold_pipeline_id || null,
+      cold_stage_id: form.cold_stage_id || null,
+      cold_template_params: form.cold_template_params
+        .split(",")
+        .map((p) => p.trim())
+        .filter(Boolean),
+      cold_followup_template_params: form.cold_followup_template_params
+        .split(",")
+        .map((p) => p.trim())
+        .filter(Boolean),
+    });
+    setSaving(false);
+    if (res.ok) toast.success("Cold outreach settings saved.");
+    else toast.error(res.error);
+  }
+
+  return (
+    <div className="grid items-start gap-4 xl:grid-cols-[1fr_380px]">
+      {/* Left — settings */}
+      <div className="space-y-4">
+        <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold text-slate-900">
+                Automatic cold outreach
+              </h2>
+              <p className="text-xs text-slate-500">
+                Each day the agent takes the top leads of your New Lead column,
+                researches the company first, then opens the conversation with
+                your approved template. Numbers that turn out not to be on
+                WhatsApp are tagged &quot;no-whatsapp&quot; and the next lead
+                takes the slot.
+              </p>
+            </div>
+            <Toggle
+              checked={form.cold_outreach_enabled}
+              onChange={(v) => set("cold_outreach_enabled", v)}
+              label="Cold outreach"
+            />
+          </div>
+
+          {!waReady && (
+            <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 ring-1 ring-inset ring-amber-200">
+              WhatsApp keys are missing — nothing can send until they&apos;re
+              configured.
+            </p>
+          )}
+
+          <div className="mt-4 grid gap-3 sm:grid-cols-3">
+            <label className="space-y-1.5 text-xs font-medium text-slate-600 sm:col-span-2">
+              Approved cold template (opens the conversation)
+              <Input
+                value={form.cold_template_name}
+                onChange={(e) => set("cold_template_name", e.target.value)}
+                placeholder="e.g. site_audit_intro (Meta-approved template name)"
+              />
+            </label>
+            <label className="space-y-1.5 text-xs font-medium text-slate-600">
+              Template language
+              <Input
+                value={form.cold_template_lang}
+                onChange={(e) => set("cold_template_lang", e.target.value)}
+                placeholder="en"
+              />
+            </label>
+          </div>
+          <label className="mt-3 block space-y-1.5 text-xs font-medium text-slate-600">
+            Template variables ({"{{1}}, {{2}}"}… in order, comma-separated)
+            <Input
+              value={form.cold_template_params}
+              onChange={(e) => set("cold_template_params", e.target.value)}
+              placeholder="{{business}}, {{first_name}}"
+            />
+          </label>
+          <p className="mt-1 text-[11px] text-slate-400">
+            Tokens filled per lead: {"{{business}} {{name}} {{first_name}} {{website}} {{city}}"}.
+            Nothing sends until a template name is set — approve it in Meta
+            Business Manager first.
+          </p>
+
+          <div className="mt-3 grid gap-3 sm:grid-cols-3">
+            <label className="space-y-1.5 text-xs font-medium text-slate-600">
+              Max messages per day
+              <Input
+                type="number"
+                min={1}
+                max={20}
+                value={String(form.cold_daily_cap)}
+                onChange={(e) =>
+                  set(
+                    "cold_daily_cap",
+                    Math.min(20, Math.max(1, Math.round(Number(e.target.value) || 5))),
+                  )
+                }
+              />
+            </label>
+            <label className="space-y-1.5 text-xs font-medium text-slate-600">
+              Pick leads from pipeline
+              <Select
+                value={form.cold_pipeline_id}
+                onChange={(e) => {
+                  set("cold_pipeline_id", e.target.value);
+                  set("cold_stage_id", "");
+                }}
+              >
+                <option value="">First pipeline (default)</option>
+                {pipelines.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </Select>
+            </label>
+            <label className="space-y-1.5 text-xs font-medium text-slate-600">
+              Stage
+              <Select
+                value={form.cold_stage_id}
+                onChange={(e) => set("cold_stage_id", e.target.value)}
+                disabled={!form.cold_pipeline_id}
+              >
+                <option value="">Auto: New Lead stage</option>
+                {coldPipelineStages.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </Select>
+            </label>
+          </div>
+          <p className="mt-2 text-[11px] text-slate-400">
+            Account safety: at most {form.cold_daily_cap} cold message
+            {form.cold_daily_cap === 1 ? "" : "s"} a day, spread 90+ minutes
+            apart, only outside quiet hours, one lead at a time, and a number is
+            never messaged twice.
+          </p>
+        </section>
+
+        <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm">
+          <h2 className="text-sm font-semibold text-slate-900">Follow-up nudge</h2>
+          <p className="text-xs text-slate-500">
+            If a delivered message gets no reply for the set number of days, the
+            agent sends ONE follow-up template, then stops forever. Leave the
+            template empty to disable. Nudges count toward the daily cap.
+          </p>
+          <div className="mt-3 grid gap-3 sm:grid-cols-3">
+            <label className="space-y-1.5 text-xs font-medium text-slate-600 sm:col-span-2">
+              Approved follow-up template
+              <Input
+                value={form.cold_followup_template_name}
+                onChange={(e) => set("cold_followup_template_name", e.target.value)}
+                placeholder="e.g. site_audit_nudge (a SECOND Meta-approved template)"
+              />
+            </label>
+            <label className="space-y-1.5 text-xs font-medium text-slate-600">
+              Template language
+              <Input
+                value={form.cold_followup_template_lang}
+                onChange={(e) => set("cold_followup_template_lang", e.target.value)}
+                placeholder="en"
+              />
+            </label>
+          </div>
+          <div className="mt-3 grid gap-3 sm:grid-cols-3">
+            <label className="space-y-1.5 text-xs font-medium text-slate-600 sm:col-span-2">
+              Template variables (comma-separated)
+              <Input
+                value={form.cold_followup_template_params}
+                onChange={(e) => set("cold_followup_template_params", e.target.value)}
+                placeholder="{{business}}, {{first_name}}"
+              />
+            </label>
+            <label className="space-y-1.5 text-xs font-medium text-slate-600">
+              Days of silence first
+              <Input
+                type="number"
+                min={1}
+                max={14}
+                value={String(form.cold_followup_days)}
+                onChange={(e) =>
+                  set(
+                    "cold_followup_days",
+                    Math.min(14, Math.max(1, Math.round(Number(e.target.value) || 3))),
+                  )
+                }
+              />
+            </label>
+          </div>
+        </section>
+
+        <div className="flex justify-end">
+          <Button onClick={handleSave} disabled={saving}>
+            {saving ? "Saving…" : "Save cold outreach settings"}
+          </Button>
+        </div>
+      </div>
+
+      {/* Right — what's happening */}
+      <div className="space-y-4">
+        <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm">
+          <h2 className="text-sm font-semibold text-slate-900">Last 30 days</h2>
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <ColdStat label="Sent (7d)" value={coldStats.sent7} />
+            <ColdStat label="Sent (30d)" value={coldStats.sent30} />
+            <ColdStat
+              label="Replied"
+              value={coldStats.replied30}
+              sub={coldStats.replyRate != null ? `${coldStats.replyRate}% reply rate` : undefined}
+              tone={coldStats.replied30 > 0 ? "emerald" : "slate"}
+            />
+            <ColdStat
+              label="No WhatsApp"
+              value={coldStats.noWhatsApp30}
+              tone={coldStats.noWhatsApp30 > 0 ? "amber" : "slate"}
+            />
+          </div>
+          {(coldStats.failed30 > 0 || coldStats.nudged30 > 0) && (
+            <p className="mt-2 text-[11px] text-slate-400">
+              {coldStats.failed30 > 0 ? `${coldStats.failed30} failed to send. ` : ""}
+              {coldStats.nudged30 > 0 ? `${coldStats.nudged30} follow-up nudge${coldStats.nudged30 === 1 ? "" : "s"} sent.` : ""}
+            </p>
+          )}
+        </section>
+
+        <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm">
+          <h2 className="text-sm font-semibold text-slate-900">Up next</h2>
+          <p className="text-xs text-slate-500">
+            The next leads the agent will message, straight from the top of
+            your New Lead column — drag cards on the CRM board to change the
+            order.
+          </p>
+          {coldUpcoming.length > 0 ? (
+            <ol className="mt-3 space-y-2">
+              {coldUpcoming.map((u, i) => (
+                <li
+                  key={u.leadId}
+                  className="flex items-center gap-2 text-xs text-slate-700"
+                >
+                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-100 text-[10px] font-semibold text-slate-500">
+                    {i + 1}
+                  </span>
+                  <Link
+                    href={`/crm/lead/${u.leadId}`}
+                    className="min-w-0 flex-1 truncate hover:underline"
+                  >
+                    {u.label}
+                    <span className="ml-2 text-slate-400">{fmtWa(u.waId)}</span>
+                  </Link>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className="mt-3 text-xs text-slate-400">
+              No eligible leads right now — add leads with phone numbers to the
+              New Lead column and they&apos;ll appear here.
+            </p>
+          )}
+        </section>
+
+        <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm">
+          <h2 className="text-sm font-semibold text-slate-900">Recent picks (48h)</h2>
+          {coldRows.length > 0 ? (
+            <ul className="mt-3 space-y-2">
+              {coldRows.map((r) => (
+                <li
+                  key={r.id}
+                  className="flex items-center justify-between gap-3 text-xs"
+                >
+                  <Link
+                    href={`/crm/lead/${r.lead_id}`}
+                    className="min-w-0 flex-1 truncate text-slate-700 hover:underline"
+                  >
+                    {r.lead_label}
+                    <span className="ml-2 text-slate-400">{fmtWa(r.wa_id)}</span>
+                    {r.followup_sent_at && (
+                      <span className="ml-1 text-[10px] text-sky-600">· nudged</span>
+                    )}
+                  </Link>
+                  <ColdStatusChip status={r.status} />
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-3 text-xs text-slate-400">
+              Nothing yet — once the agent starts messaging, every pick shows up
+              here with its live status.
+            </p>
+          )}
         </section>
       </div>
     </div>

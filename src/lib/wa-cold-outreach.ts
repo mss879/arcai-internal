@@ -740,56 +740,8 @@ async function pickNextCandidate(
     if (Date.now() - Date.parse(usage.lastSentAt) < gap) return 0;
   }
 
-  const { data: leads } = await supabase
-    .from("leads")
-    .select("*")
-    .eq("stage_id", stageId)
-    .eq("status", "open")
-    .is("deleted_at", null)
-    .not("contact_phone", "is", null)
-    .order("position", { ascending: true })
-    .limit(CANDIDATE_POOL);
-  if (!leads?.length) return 0;
-
-  // Board-order filter: valid phone, no duplicate numbers in the batch,
-  // never attempted before, and genuinely cold (no WhatsApp history).
-  const seen = new Set<string>();
-  const candidates: { lead: LeadRow; waId: string }[] = [];
-  for (const lead of leads as LeadRow[]) {
-    if ((lead.tags ?? []).includes("no-whatsapp")) continue;
-    const phone = normalizeWaPhone(lead.contact_phone ?? "");
-    if (!phone.ok) continue;
-    if (seen.has(phone.value)) continue;
-    seen.add(phone.value);
-    candidates.push({ lead, waId: phone.value });
-  }
-  if (!candidates.length) return 0;
-
-  const leadIds = candidates.map((c) => c.lead.id);
-  const waIds = candidates.map((c) => c.waId);
-  const [{ data: priorByLead }, { data: priorByWa }, { data: contacts }] =
-    await Promise.all([
-      supabase.from("wa_cold_outreach").select("lead_id").in("lead_id", leadIds),
-      supabase.from("wa_cold_outreach").select("wa_id").in("wa_id", waIds),
-      supabase
-        .from("wa_contacts")
-        .select("wa_id, do_not_contact, last_message_at, last_inbound_at")
-        .in("wa_id", waIds),
-    ]);
-  const priorLeads = new Set((priorByLead ?? []).map((r) => r.lead_id));
-  const priorWa = new Set((priorByWa ?? []).map((r) => r.wa_id));
-  const blockedWa = new Set(
-    (contacts ?? [])
-      .filter((c) => c.do_not_contact || c.last_message_at || c.last_inbound_at)
-      .map((c) => c.wa_id),
-  );
-
-  const winner = candidates.find(
-    (c) =>
-      !priorLeads.has(c.lead.id) &&
-      !priorWa.has(c.waId) &&
-      !blockedWa.has(c.waId),
-  );
+  const eligible = await eligibleColdCandidates(supabase, stageId);
+  const winner = eligible[0];
   if (!winner) return 0;
 
   // Research-first: reuse a finished dossier as-is; wait on one already in
@@ -821,6 +773,100 @@ async function pickNextCandidate(
       : "Research already on file — sending in the next open slot.",
   );
   return 1;
+}
+
+/**
+ * The board-ordered list of leads the picker would take next, after every
+ * eligibility filter: valid phone, no duplicate numbers in the batch, never
+ * attempted before (by lead OR by number), not tagged no-whatsapp, and
+ * genuinely cold (no WhatsApp history, not opted out). `pickNextCandidate`
+ * takes `[0]`; the UI's "Up next" preview shows the first few — same code,
+ * so the preview can never drift from what actually happens.
+ */
+async function eligibleColdCandidates(
+  supabase: DB,
+  stageId: string,
+): Promise<{ lead: LeadRow; waId: string }[]> {
+  const { data: leads } = await supabase
+    .from("leads")
+    .select("*")
+    .eq("stage_id", stageId)
+    .eq("status", "open")
+    .is("deleted_at", null)
+    .not("contact_phone", "is", null)
+    .order("position", { ascending: true })
+    .limit(CANDIDATE_POOL);
+  if (!leads?.length) return [];
+
+  const seen = new Set<string>();
+  const candidates: { lead: LeadRow; waId: string }[] = [];
+  for (const lead of leads as LeadRow[]) {
+    if ((lead.tags ?? []).includes("no-whatsapp")) continue;
+    const phone = normalizeWaPhone(lead.contact_phone ?? "");
+    if (!phone.ok) continue;
+    if (seen.has(phone.value)) continue;
+    seen.add(phone.value);
+    candidates.push({ lead, waId: phone.value });
+  }
+  if (!candidates.length) return [];
+
+  const leadIds = candidates.map((c) => c.lead.id);
+  const waIds = candidates.map((c) => c.waId);
+  const [{ data: priorByLead }, { data: priorByWa }, { data: contacts }] =
+    await Promise.all([
+      supabase.from("wa_cold_outreach").select("lead_id").in("lead_id", leadIds),
+      supabase.from("wa_cold_outreach").select("wa_id").in("wa_id", waIds),
+      supabase
+        .from("wa_contacts")
+        .select("wa_id, do_not_contact, last_message_at, last_inbound_at")
+        .in("wa_id", waIds),
+    ]);
+  const priorLeads = new Set((priorByLead ?? []).map((r) => r.lead_id));
+  const priorWa = new Set((priorByWa ?? []).map((r) => r.wa_id));
+  const blockedWa = new Set(
+    (contacts ?? [])
+      .filter((c) => c.do_not_contact || c.last_message_at || c.last_inbound_at)
+      .map((c) => c.wa_id),
+  );
+
+  return candidates.filter(
+    (c) =>
+      !priorLeads.has(c.lead.id) &&
+      !priorWa.has(c.waId) &&
+      !blockedWa.has(c.waId),
+  );
+}
+
+export type ColdQueuePreview = {
+  leadId: string;
+  label: string;
+  waId: string;
+};
+
+/**
+ * The UI's "Up next" list — who the agent will message, in order. Runs the
+ * REAL picker's eligibility scan, so what you see is exactly what happens.
+ * Works even while the feature is disabled (so the team can preview before
+ * switching it on). Never throws.
+ */
+export async function previewColdQueue(
+  supabase: DB,
+  limit = 5,
+): Promise<ColdQueuePreview[]> {
+  try {
+    const config = await getWaAgentConfig(supabase);
+    const stageId = await resolveColdStage(supabase, config);
+    if (!stageId) return [];
+    const eligible = await eligibleColdCandidates(supabase, stageId);
+    return eligible.slice(0, limit).map((c) => ({
+      leadId: c.lead.id,
+      label: c.lead.company?.trim() || c.lead.title,
+      waId: c.waId,
+    }));
+  } catch (e) {
+    console.error("[wa-cold] queue preview failed:", e);
+    return [];
+  }
 }
 
 /**

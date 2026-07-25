@@ -1,5 +1,6 @@
 import { isOpenAIConfigured } from "@/lib/ai/openai";
 import { createClient } from "@/lib/supabase/server";
+import { previewColdQueue } from "@/lib/wa-cold-outreach";
 import type {
   Automation,
   Pipeline,
@@ -124,6 +125,9 @@ export default async function WhatsappPage() {
     (coldLeads ?? []).map((l) => [l.id, l.company?.trim() || l.title]),
   );
 
+  // Who the picker will take next — the REAL eligibility scan, previewed.
+  const coldUpcoming = await previewColdQueue(supabase, 5);
+
   return (
     <WhatsappView
       contacts={(contactsRes.data ?? []) as WaContact[]}
@@ -141,6 +145,7 @@ export default async function WhatsappPage() {
         lead_label: coldLeadById.get(r.lead_id) ?? "Deleted lead",
       }))}
       coldStats={coldStats}
+      coldUpcoming={coldUpcoming}
       waReady={isWhatsAppConfigured()}
       aiReady={isOpenAIConfigured()}
       appBaseUrl={process.env.NEXT_PUBLIC_APP_URL ?? ""}

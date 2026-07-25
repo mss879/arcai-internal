@@ -113,6 +113,9 @@ type Tab = "inbox" | "agent" | "keywords" | "activity";
 /** A cold-outreach row with its lead's display label joined in. */
 type ColdRow = WaColdOutreach & { lead_label: string };
 
+/** Who the cold picker will message next (real eligibility scan). */
+type ColdUpcoming = { leadId: string; label: string; waId: string };
+
 /** 30-day cold-outreach performance, computed server-side in page.tsx. */
 type ColdStats = {
   sent7: number;
@@ -138,6 +141,7 @@ export function WhatsappView({
   promises,
   coldRows,
   coldStats,
+  coldUpcoming,
   waReady,
   aiReady,
   appBaseUrl,
@@ -154,6 +158,7 @@ export function WhatsappView({
   promises: WaPromise[];
   coldRows: ColdRow[];
   coldStats: ColdStats;
+  coldUpcoming: ColdUpcoming[];
   waReady: boolean;
   aiReady: boolean;
   appBaseUrl: string;
@@ -255,6 +260,7 @@ export function WhatsappView({
           coaching={coaching}
           coldRows={coldRows}
           coldStats={coldStats}
+          coldUpcoming={coldUpcoming}
           waReady={waReady}
           aiReady={aiReady}
           appBaseUrl={appBaseUrl}
@@ -676,6 +682,7 @@ function AgentTab({
   coaching,
   coldRows,
   coldStats,
+  coldUpcoming,
   waReady,
   aiReady,
   appBaseUrl,
@@ -686,6 +693,7 @@ function AgentTab({
   coaching: WaCoaching | null;
   coldRows: ColdRow[];
   coldStats: ColdStats;
+  coldUpcoming: ColdUpcoming[];
   waReady: boolean;
   aiReady: boolean;
   appBaseUrl: string;
@@ -1196,6 +1204,42 @@ function AgentTab({
               <p className="mt-2 text-[11px] text-slate-400">
                 {coldStats.failed30 > 0 ? `${coldStats.failed30} failed to send. ` : ""}
                 {coldStats.nudged30 > 0 ? `${coldStats.nudged30} follow-up nudge${coldStats.nudged30 === 1 ? "" : "s"} sent.` : ""}
+              </p>
+            )}
+          </div>
+
+          {/* Up next — the queue, exactly as the picker will take it */}
+          <div className="mt-4 border-t border-slate-100 pt-4">
+            <h3 className="text-xs font-semibold text-slate-900">Up next</h3>
+            <p className="text-[11px] text-slate-400">
+              The next leads the agent will message, straight from the top of
+              your New Lead column — drag cards on the CRM board to change the
+              order.
+            </p>
+            {coldUpcoming.length > 0 ? (
+              <ol className="mt-2 space-y-1.5">
+                {coldUpcoming.map((u, i) => (
+                  <li
+                    key={u.leadId}
+                    className="flex items-center gap-2 text-xs text-slate-700"
+                  >
+                    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-100 text-[10px] font-semibold text-slate-500">
+                      {i + 1}
+                    </span>
+                    <Link
+                      href={`/crm/lead/${u.leadId}`}
+                      className="min-w-0 flex-1 truncate hover:underline"
+                    >
+                      {u.label}
+                      <span className="ml-2 text-slate-400">{fmtWa(u.waId)}</span>
+                    </Link>
+                  </li>
+                ))}
+              </ol>
+            ) : (
+              <p className="mt-2 text-xs text-slate-400">
+                No eligible leads right now — add leads with phone numbers to
+                the New Lead column and they&apos;ll appear here.
               </p>
             )}
           </div>

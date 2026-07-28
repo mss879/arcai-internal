@@ -3,15 +3,19 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { appLink } from "@/lib/app-url";
+// Shared with the meeting form, deliberately: the scan below must reach at
+// least as far ahead as the largest lead time the form can set, or meetings
+// beyond it would silently never be reminded.
+import {
+  DEFAULT_MEETING_REMINDER_HOURS,
+  MAX_MEETING_REMINDER_HOURS,
+} from "@/lib/constants";
 import type { Database } from "@/lib/database.types";
 import { sendPushToUser } from "@/lib/push";
 import { isSmsConfigured, sendSms } from "@/lib/sms";
 import { countSmsSegments, normalizePhone } from "@/lib/sms-utils";
 
 type DB = SupabaseClient<Database>;
-
-/** How long before a meeting starts the reminder goes out. */
-const REMINDER_HOURS = 3;
 
 /** Notify.lk is Sri Lankan; start times are texted in local time. */
 const TIME_ZONE = "Asia/Colombo";
@@ -48,14 +52,17 @@ type MeetingRow = {
   location_type: "online" | "in_person";
   location: string | null;
   meeting_url: string | null;
+  reminder_hours: number | null;
+  client: { name: string } | null;
   attendees: { user_id: string }[] | null;
 };
 
 /**
- * Built-in meeting reminders, run from the automation tick: once a meeting
- * is less than REMINDER_HOURS away, every assigned attendee gets an in-app
- * notification, a push and an SMS. For ONLINE meetings the SMS carries the
- * join link; for in-person ones it carries the venue instead.
+ * Built-in meeting reminders, run from the automation tick: once a meeting is
+ * inside its own lead time (meetings.reminder_hours, 1-5, chosen on the form),
+ * every assigned attendee gets an in-app notification, a push and an SMS. For
+ * ONLINE meetings the SMS carries the join link; for in-person ones it carries
+ * the venue instead.
  *
  * `meetings.reminder_sent_at` guarantees the reminder fires exactly once;
  * changing the start time clears it (see meetings/scheduled-actions.ts) so
@@ -67,18 +74,23 @@ export async function processMeetingReminders(
   const result: MeetingReminderResult = { meeting_reminders: 0, sms_sent: 0 };
 
   const now = Date.now();
-  const windowEnd = new Date(now + REMINDER_HOURS * 3600_000).toISOString();
+  // Each meeting carries its own lead time (1-5h), so scan out to the widest
+  // one and then keep only the meetings that are actually inside theirs.
+  const windowEnd = new Date(now + MAX_MEETING_REMINDER_HOURS * 3600_000).toISOString();
 
   const { data: due } = await supabase
     .from("meetings")
     .select(
-      "id, title, meeting_at, location_type, location, meeting_url, attendees:meeting_attendees(user_id)",
+      "id, title, meeting_at, location_type, location, meeting_url, reminder_hours, client:clients(name), attendees:meeting_attendees(user_id)",
     )
     .is("reminder_sent_at", null)
     .gt("meeting_at", new Date(now).toISOString())
     .lte("meeting_at", windowEnd)
     .limit(100);
-  const meetings = (due ?? []) as unknown as MeetingRow[];
+  const meetings = ((due ?? []) as unknown as MeetingRow[]).filter((m) => {
+    const hours = m.reminder_hours ?? DEFAULT_MEETING_REMINDER_HOURS;
+    return new Date(m.meeting_at).getTime() <= now + hours * 3600_000;
+  });
   if (!meetings.length) return result;
 
   // One profile lookup for every attendee across the batch.
@@ -118,11 +130,13 @@ export async function processMeetingReminders(
           : appUrl
             ? `Open: ${appUrl}`
             : "";
+    // Who it's with matters more than anything else on a reminder.
+    const withClient = meeting.client?.name ? ` with ${meeting.client.name}` : "";
     const smsMessage =
-      `ARC AI: Meeting reminder - "${shortTitle}" starts in ${remaining} (${when}).` +
+      `ARC AI: Meeting reminder - "${shortTitle}"${withClient} starts in ${remaining} (${when}).` +
       (detail ? ` ${detail}` : "");
     const notifTitle = `Meeting in ${remaining}`;
-    const notifBody = `"${meeting.title}" starts ${when}.`;
+    const notifBody = `"${meeting.title}"${withClient} starts ${when}.`;
 
     const recipients = [
       ...new Set((meeting.attendees ?? []).map((a) => a.user_id)),

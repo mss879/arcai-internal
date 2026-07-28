@@ -3,12 +3,16 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Check, MapPin, Trash2, Video } from "lucide-react";
+import { Check, MapPin, Trash2, UserPlus, Video, X } from "lucide-react";
 
 import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select, Textarea } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
+import {
+  DEFAULT_MEETING_REMINDER_HOURS,
+  MEETING_REMINDER_OPTIONS,
+} from "@/lib/constants";
 import { cn } from "@/lib/utils";
 import type {
   MeetingLocationType,
@@ -17,8 +21,11 @@ import type {
 } from "@/lib/types";
 
 import {
+  createClientForMeeting,
   deleteMeeting,
+  listClientOptions,
   saveMeeting,
+  type ClientOption,
   type MeetingInput,
 } from "@/app/(app)/meetings/scheduled-actions";
 
@@ -69,6 +76,21 @@ export function MeetingFormModal({
   const [meetingUrl, setMeetingUrl] = React.useState("");
   const [location, setLocation] = React.useState("");
   const [attendees, setAttendees] = React.useState<string[]>([]);
+  const [reminderHours, setReminderHours] = React.useState(
+    DEFAULT_MEETING_REMINDER_HOURS,
+  );
+
+  const [clients, setClients] = React.useState<ClientOption[]>([]);
+  const [clientId, setClientId] = React.useState("");
+  // Inline "new client" form, so a first meeting with someone new doesn't
+  // mean leaving this modal and losing what's already typed.
+  const [newClient, setNewClient] = React.useState<{
+    name: string;
+    company: string;
+    phone: string;
+    email: string;
+  } | null>(null);
+  const [creatingClient, startCreateClient] = React.useTransition();
 
   React.useEffect(() => {
     if (!open) return;
@@ -80,7 +102,31 @@ export function MeetingFormModal({
     setMeetingUrl(meeting?.meeting_url ?? "");
     setLocation(meeting?.location ?? "");
     setAttendees(meeting?.attendee_ids ?? []);
+    setReminderHours(meeting?.reminder_hours ?? DEFAULT_MEETING_REMINDER_HOURS);
+    setClientId(meeting?.client_id ?? "");
+    setNewClient(null);
+    void listClientOptions().then(setClients);
   }, [open, meeting, defaultAt]);
+
+  function saveNewClient() {
+    if (!newClient?.name.trim()) {
+      toast.error("Give the client a name.");
+      return;
+    }
+    startCreateClient(async () => {
+      const res = await createClientForMeeting(newClient);
+      if (!res.ok || !res.client) {
+        toast.error(res.ok ? "Could not create the client." : res.error);
+        return;
+      }
+      setClients((prev) =>
+        [...prev, res.client!].sort((a, b) => a.name.localeCompare(b.name)),
+      );
+      setClientId(res.client.id);
+      setNewClient(null);
+      toast.success(`${res.client.name} added to Clients`);
+    });
+  }
 
   function toggleAttendee(id: string) {
     setAttendees((prev) =>
@@ -89,6 +135,10 @@ export function MeetingFormModal({
   }
 
   function submit() {
+    if (newClient) {
+      toast.error("Save or cancel the new client first.");
+      return;
+    }
     if (!title.trim()) {
       toast.error("Give the meeting a title.");
       return;
@@ -110,6 +160,8 @@ export function MeetingFormModal({
       location_type: locationType,
       location: locationType === "in_person" ? location.trim() || null : null,
       meeting_url: locationType === "online" ? meetingUrl.trim() || null : null,
+      reminder_hours: reminderHours,
+      client_id: clientId || null,
       attendee_ids: attendees,
     };
     startTransition(async () => {
@@ -147,7 +199,7 @@ export function MeetingFormModal({
       open={open}
       onClose={onClose}
       title={meeting ? "Edit meeting" : "New meeting"}
-      description="Set a time, pick online or in person, and assign your team. They're texted now and 3 hours before."
+      description="Set a time, pick online or in person, and assign your team. They're texted now and again before it starts."
       size="lg"
       footer={
         <>
@@ -212,6 +264,114 @@ export function MeetingFormModal({
           </Field>
         </div>
 
+        <Field
+          label="Remind attendees"
+          hint="Everyone assigned gets a text, a push and an in-app alert this far ahead."
+        >
+          <Select
+            value={reminderHours}
+            onChange={(e) => setReminderHours(Number(e.target.value))}
+          >
+            {MEETING_REMINDER_OPTIONS.map((h) => (
+              <option key={h} value={h}>
+                {h} hour{h === 1 ? "" : "s"} before
+              </option>
+            ))}
+          </Select>
+        </Field>
+
+        <Field
+          label="Client"
+          hint="Who the meeting is with — their name rides along on the invite and the reminder."
+        >
+          {newClient ? (
+            <div className="space-y-2.5 rounded-xl border border-primary-200 bg-primary-50/50 p-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-primary-700">
+                  New client
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setNewClient(null)}
+                  className="rounded-lg p-1 text-slate-400 hover:bg-white hover:text-slate-600"
+                  aria-label="Cancel new client"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <Input
+                  value={newClient.name}
+                  onChange={(e) =>
+                    setNewClient({ ...newClient, name: e.target.value })
+                  }
+                  placeholder="Name *"
+                  autoFocus
+                />
+                <Input
+                  value={newClient.company}
+                  onChange={(e) =>
+                    setNewClient({ ...newClient, company: e.target.value })
+                  }
+                  placeholder="Business"
+                />
+                <Input
+                  value={newClient.phone}
+                  onChange={(e) =>
+                    setNewClient({ ...newClient, phone: e.target.value })
+                  }
+                  placeholder="Phone"
+                  inputMode="tel"
+                />
+                <Input
+                  value={newClient.email}
+                  onChange={(e) =>
+                    setNewClient({ ...newClient, email: e.target.value })
+                  }
+                  placeholder="Email"
+                  inputMode="email"
+                />
+              </div>
+              <Button
+                size="sm"
+                onClick={saveNewClient}
+                loading={creatingClient}
+                className="w-full"
+              >
+                Add client
+              </Button>
+              <p className="text-[11px] text-slate-500">
+                Saved to Clients as a lead — you can fill in the rest there later.
+              </p>
+            </div>
+          ) : (
+            <div className="flex gap-2">
+              <Select
+                value={clientId}
+                onChange={(e) => setClientId(e.target.value)}
+                className="flex-1"
+              >
+                <option value="">No client</option>
+                {clients.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                    {c.company ? ` — ${c.company}` : ""}
+                  </option>
+                ))}
+              </Select>
+              <Button
+                variant="outline"
+                onClick={() =>
+                  setNewClient({ name: "", company: "", phone: "", email: "" })
+                }
+              >
+                <UserPlus className="h-4 w-4" />
+                New
+              </Button>
+            </div>
+          )}
+        </Field>
+
         <Field label="Where">
           <div className="grid grid-cols-2 gap-2">
             {(
@@ -245,7 +405,7 @@ export function MeetingFormModal({
           <Field
             label="Meeting link"
             required
-            hint="Texted to attendees now and in the 3-hour reminder."
+            hint="Texted to attendees now and again in the reminder."
           >
             <Input
               value={meetingUrl}

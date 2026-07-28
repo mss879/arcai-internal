@@ -14,8 +14,11 @@ import {
   Handshake,
   Inbox,
   KanbanSquare,
+  Megaphone,
   MessageCircle,
+  Pause,
   Pencil,
+  Play,
   Plus,
   ScrollText,
   Search,
@@ -34,6 +37,8 @@ import { Badge } from "@/components/ui/badge";
 import { Input, Select, Textarea } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { useRealtimeSyncTables } from "@/hooks/use-realtime-sync";
+import { STORAGE_BUCKETS } from "@/lib/constants";
+import { uploadFile } from "@/lib/upload";
 import { WA_LANGUAGE_LABELS } from "@/lib/wa-lang";
 import { WA_TOOL_CATALOG } from "@/lib/wa-tools-catalog";
 import { cn, getInitials } from "@/lib/utils";
@@ -43,6 +48,8 @@ import type {
   PipelineStage,
   WaAgentConfig,
   WaAgentLog,
+  WaCampaign,
+  WaCampaignStatus,
   WaCoaching,
   WaColdOutreach,
   WaContact,
@@ -52,17 +59,23 @@ import type {
   WaPromise,
 } from "@/lib/types";
 
+import type { CampaignStats } from "./page";
 import {
+  createCampaignAction,
+  deleteCampaignAction,
   deleteKeywordRuleAction,
   linkContactToCrmAction,
   markContactReadAction,
+  saveCampaignModeAction,
   saveColdConfigAction,
   saveKeywordRuleAction,
   saveWaConfigAction,
   sendWaMessageAction,
+  setCampaignStatusAction,
   setContactOptOutAction,
   toggleCoachingAction,
   toggleContactAgentAction,
+  updateCampaignAction,
   type WaRuleInput,
 } from "./actions";
 
@@ -95,6 +108,14 @@ function fmtClock(iso: string): string {
   return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+/** How long a lead waited for their first reply. */
+function fmtWait(seconds: number | null): string {
+  if (seconds == null) return "—";
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+  return `${Math.round(seconds / 360) / 10}h`;
+}
+
 /** Contact silent for 24h+ = Meta only accepts template messages. */
 function outsideWindow(c: WaContact): boolean {
   if (!c.last_inbound_at) return true;
@@ -110,7 +131,7 @@ const SENT_BY_LABEL: Record<string, string> = {
 
 // ---- main view ----------------------------------------------------------------
 
-type Tab = "inbox" | "agent" | "cold" | "keywords" | "activity";
+type Tab = "inbox" | "agent" | "campaign" | "cold" | "keywords" | "activity";
 
 /** A cold-outreach row with its lead's display label joined in. */
 type ColdRow = WaColdOutreach & { lead_label: string };
@@ -144,6 +165,9 @@ export function WhatsappView({
   coldRows,
   coldStats,
   coldUpcoming,
+  campaigns,
+  campaignCounts,
+  campaignStats,
   waReady,
   aiReady,
   appBaseUrl,
@@ -161,6 +185,9 @@ export function WhatsappView({
   coldRows: ColdRow[];
   coldStats: ColdStats;
   coldUpcoming: ColdUpcoming[];
+  campaigns: WaCampaign[];
+  campaignCounts: Record<string, number>;
+  campaignStats: CampaignStats | null;
   waReady: boolean;
   aiReady: boolean;
   appBaseUrl: string;
@@ -171,6 +198,7 @@ export function WhatsappView({
     "wa_agent_logs",
     "wa_promises",
     "wa_cold_outreach",
+    "wa_campaigns",
   ]);
   const [tab, setTab] = React.useState<Tab>("inbox");
 
@@ -180,6 +208,7 @@ export function WhatsappView({
   const TABS: { key: Tab; label: string; icon: React.ReactNode; badge?: number }[] = [
     { key: "inbox", label: "Inbox", icon: <Inbox className="h-4 w-4" />, badge: unread },
     { key: "agent", label: "AI Agent", icon: <Bot className="h-4 w-4" /> },
+    { key: "campaign", label: "Campaign", icon: <Megaphone className="h-4 w-4" /> },
     { key: "cold", label: "Cold Outreach", icon: <Snowflake className="h-4 w-4" /> },
     { key: "keywords", label: "Keywords", icon: <Zap className="h-4 w-4" /> },
     { key: "activity", label: "Agent Activity", icon: <ScrollText className="h-4 w-4" /> },
@@ -264,6 +293,16 @@ export function WhatsappView({
           waReady={waReady}
           aiReady={aiReady}
           appBaseUrl={appBaseUrl}
+        />
+      )}
+      {tab === "campaign" && (
+        <CampaignTab
+          config={config}
+          campaigns={campaigns}
+          campaignCounts={campaignCounts}
+          campaignStats={campaignStats}
+          waReady={waReady}
+          aiReady={aiReady}
         />
       )}
       {tab === "cold" && (
@@ -1508,6 +1547,512 @@ function ColdOutreachTab({
   );
 }
 
+// ---- Campaign -----------------------------------------------------------------
+
+const CAMPAIGN_STATUS_STYLE: Record<WaCampaignStatus, string> = {
+  active: "bg-emerald-50 text-emerald-700 ring-emerald-200",
+  paused: "bg-amber-50 text-amber-700 ring-amber-200",
+  draft: "bg-slate-100 text-slate-600 ring-slate-200",
+  ended: "bg-slate-100 text-slate-400 ring-slate-200",
+};
+
+/**
+ * Campaign mode — what the agent is selling while a Meta ad is running.
+ *
+ * Ads point at this WhatsApp number, so the people who tap them arrive as
+ * ordinary inbound chats. Without this tab the agent has no idea what they
+ * just clicked and falls back to generic discovery. The team gives it two
+ * things — the ad image and one box of service info — and both stack on top
+ * of the existing knowledge base rather than replacing it.
+ *
+ * Campaigns build up as a library for reuse; exactly one is live at a time,
+ * so the agent is never ambiguous about which offer it's pitching.
+ */
+function CampaignTab({
+  config,
+  campaigns,
+  campaignCounts,
+  campaignStats,
+  waReady,
+  aiReady,
+}: {
+  config: WaAgentConfig | null;
+  campaigns: WaCampaign[];
+  campaignCounts: Record<string, number>;
+  campaignStats: CampaignStats | null;
+  waReady: boolean;
+  aiReady: boolean;
+}) {
+  const [enabled, setEnabled] = React.useState(
+    config?.campaign_mode_enabled ?? false,
+  );
+  const [editing, setEditing] = React.useState<WaCampaign | "new" | null>(null);
+  const [pendingDelete, setPendingDelete] = React.useState<WaCampaign | null>(null);
+  const [busyId, setBusyId] = React.useState<string | null>(null);
+
+  const active = campaigns.find((c) => c.status === "active") ?? null;
+
+  async function toggleMode(next: boolean) {
+    setEnabled(next); // optimistic — the switch should never feel laggy
+    const res = await saveCampaignModeAction(next);
+    if (!res.ok) {
+      setEnabled(!next);
+      toast.error(res.error);
+      return;
+    }
+    toast.success(next ? "Campaign mode is on." : "Campaign mode is off.");
+  }
+
+  async function setStatus(campaign: WaCampaign, status: WaCampaignStatus) {
+    setBusyId(campaign.id);
+    const res = await setCampaignStatusAction(campaign.id, status);
+    setBusyId(null);
+    if (!res.ok) {
+      toast.error(res.error);
+      return;
+    }
+    toast.success(
+      status === "active"
+        ? `"${campaign.name}" is live — any other campaign was paused.`
+        : `"${campaign.name}" paused.`,
+    );
+  }
+
+  return (
+    <div className="grid items-start gap-4 xl:grid-cols-[1fr_380px]">
+      {/* Left — the switch and what's live */}
+      <div className="space-y-4">
+        <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold text-slate-900">
+                Campaign mode
+              </h2>
+              <p className="text-xs text-slate-500">
+                When your Meta ad sends people to this WhatsApp number, they
+                land straight in the inbox. Turn this on and the agent opens
+                those conversations on the campaign — what&apos;s on offer, and
+                why it&apos;s worth it — instead of running generic discovery.
+                Everything it already knows about ARC still applies.
+              </p>
+            </div>
+            <Toggle checked={enabled} onChange={toggleMode} label="Campaign mode" />
+          </div>
+
+          {!waReady && (
+            <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 ring-1 ring-inset ring-amber-200">
+              WhatsApp keys are missing — the agent can&apos;t reply to anyone
+              until they&apos;re configured.
+            </p>
+          )}
+          {enabled && !active && (
+            <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 ring-1 ring-inset ring-amber-200">
+              Campaign mode is on but nothing is live — activate a campaign on
+              the right, or the agent carries on exactly as before.
+            </p>
+          )}
+          {!aiReady && (
+            <p className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">
+              Without an OpenAI key the ad image can&apos;t be read — the agent
+              will pitch from your details box alone.
+            </p>
+          )}
+        </section>
+
+        {active ? (
+          <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm">
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-sm font-semibold text-slate-900">
+                Now selling
+              </h2>
+              <Badge
+                className="bg-emerald-50 text-emerald-700 ring-emerald-200"
+                dot="bg-emerald-500"
+              >
+                {campaignCounts[active.id] ?? 0} lead
+                {(campaignCounts[active.id] ?? 0) === 1 ? "" : "s"} so far
+              </Badge>
+            </div>
+
+            <div className="mt-4 flex flex-wrap gap-4">
+              {active.image_url && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={active.image_url}
+                  alt={`${active.name} ad creative`}
+                  className="h-36 w-36 rounded-xl object-cover ring-1 ring-slate-200"
+                />
+              )}
+              <div className="min-w-[240px] flex-1">
+                <p className="text-sm font-semibold text-slate-900">
+                  {active.name}
+                </p>
+                <p className="mt-1.5 whitespace-pre-wrap text-xs leading-relaxed text-slate-600">
+                  {active.details.trim() ||
+                    "No details written yet — the agent has nothing to pitch from."}
+                </p>
+              </div>
+            </div>
+
+            {active.image_summary && (
+              <p className="mt-4 rounded-lg bg-slate-50 px-3 py-2 text-[11px] leading-relaxed text-slate-500">
+                <span className="font-medium text-slate-600">
+                  What the agent reads off your ad image:
+                </span>{" "}
+                {active.image_summary}
+              </p>
+            )}
+
+            <div className="mt-4 flex justify-end gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setEditing(active)}
+              >
+                <Pencil className="h-4 w-4" />
+                Edit
+              </Button>
+              <Button
+                variant="subtle"
+                size="sm"
+                disabled={busyId === active.id}
+                onClick={() => setStatus(active, "paused")}
+              >
+                <Pause className="h-4 w-4" />
+                Pause
+              </Button>
+            </div>
+          </section>
+        ) : (
+          <EmptyState
+            icon={<Megaphone className="h-6 w-6" />}
+            title="No campaign is live"
+            description="Add the ad you're running and everything the agent should know about the offer, then activate it."
+            action={
+              <Button onClick={() => setEditing("new")}>
+                <Plus className="h-4 w-4" />
+                New campaign
+              </Button>
+            }
+          />
+        )}
+      </div>
+
+      {/* Right — results, then the library */}
+      <div className="space-y-4">
+        {campaignStats && (
+          <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm">
+            <h2 className="text-sm font-semibold text-slate-900">
+              This campaign
+            </h2>
+            <p className="text-xs text-slate-500">
+              Everyone who messaged while it&apos;s been live.
+            </p>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <ColdStat label="Leads" value={campaignStats.leads} />
+              <ColdStat
+                label="First reply"
+                value={fmtWait(campaignStats.medianFirstReply)}
+                sub={
+                  campaignStats.p90FirstReply != null
+                    ? `slowest 10%: ${fmtWait(campaignStats.p90FirstReply)}`
+                    : undefined
+                }
+                tone={
+                  campaignStats.medianFirstReply != null &&
+                  campaignStats.medianFirstReply <= 60
+                    ? "emerald"
+                    : campaignStats.medianFirstReply != null
+                      ? "amber"
+                      : "slate"
+                }
+              />
+              <ColdStat label="Quoted" value={campaignStats.quoted} />
+              <ColdStat
+                label="Won"
+                value={campaignStats.won}
+                sub={
+                  campaignStats.closeRate != null
+                    ? `${campaignStats.closeRate}% close rate`
+                    : undefined
+                }
+                tone={campaignStats.won > 0 ? "emerald" : "slate"}
+              />
+            </div>
+            {campaignStats.revenue > 0 && (
+              <p className="mt-2 text-[11px] text-slate-400">
+                Rs {campaignStats.revenue.toLocaleString()} won so far ·{" "}
+                {campaignStats.inCrm} of {campaignStats.leads} in the CRM.
+              </p>
+            )}
+          </section>
+        )}
+
+        <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold text-slate-900">Campaigns</h2>
+              <p className="text-xs text-slate-500">
+                One runs at a time — activating a campaign pauses the others.
+              </p>
+            </div>
+            <Button size="sm" variant="outline" onClick={() => setEditing("new")}>
+              <Plus className="h-4 w-4" />
+              New
+            </Button>
+          </div>
+
+          {campaigns.length > 0 ? (
+            <ul className="mt-3 space-y-2">
+              {campaigns.map((c) => (
+                <li
+                  key={c.id}
+                  className="rounded-xl p-3 ring-1 ring-slate-200"
+                >
+                  <div className="flex items-start gap-3">
+                    {c.image_url && (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={c.image_url}
+                        alt=""
+                        className="h-10 w-10 shrink-0 rounded-lg object-cover ring-1 ring-slate-200"
+                      />
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-xs font-semibold text-slate-800">
+                        {c.name}
+                      </p>
+                      <p className="mt-0.5 text-[11px] text-slate-400">
+                        {campaignCounts[c.id] ?? 0} lead
+                        {(campaignCounts[c.id] ?? 0) === 1 ? "" : "s"}
+                      </p>
+                    </div>
+                    <Badge className={CAMPAIGN_STATUS_STYLE[c.status]}>
+                      {c.status}
+                    </Badge>
+                  </div>
+
+                  <div className="mt-2.5 flex flex-wrap justify-end gap-1.5">
+                    {c.status !== "active" && (
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        disabled={busyId === c.id}
+                        onClick={() => setStatus(c, "active")}
+                      >
+                        <Play className="h-3.5 w-3.5" />
+                        Activate
+                      </Button>
+                    )}
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setEditing(c)}
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                      Edit
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setPendingDelete(c)}
+                    >
+                      <Trash2 className="h-3.5 w-3.5 text-rose-500" />
+                    </Button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-3 text-xs text-slate-400">
+              No campaigns yet. Add one with the ad image and everything the
+              agent should know about what you&apos;re offering.
+            </p>
+          )}
+        </section>
+      </div>
+
+      <CampaignModal
+        key={editing === "new" ? "new" : (editing?.id ?? "closed")}
+        open={editing !== null}
+        campaign={editing === "new" ? null : editing}
+        onClose={() => setEditing(null)}
+      />
+
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        onClose={() => setPendingDelete(null)}
+        title={`Delete "${pendingDelete?.name ?? ""}"?`}
+        description="The ad image goes with it. Contacts that came in under this campaign keep their chats — they just stop being counted against it."
+        onConfirm={async () => {
+          if (!pendingDelete) return;
+          const res = await deleteCampaignAction(pendingDelete.id);
+          if (!res.ok) toast.error(res.error);
+          else toast.success("Campaign deleted.");
+          setPendingDelete(null);
+        }}
+      />
+    </div>
+  );
+}
+
+/** New/edit campaign — three inputs: name, the ad image, and one box for
+ * everything the agent should know. The image is uploaded to storage first,
+ * then read once by the server action so the agent can "see" it. */
+function CampaignModal({
+  open,
+  campaign,
+  onClose,
+}: {
+  open: boolean;
+  campaign: WaCampaign | null;
+  onClose: () => void;
+}) {
+  const [name, setName] = React.useState(campaign?.name ?? "");
+  const [details, setDetails] = React.useState(campaign?.details ?? "");
+  const [firstReply, setFirstReply] = React.useState(campaign?.first_reply ?? "");
+  const [file, setFile] = React.useState<File | null>(null);
+  const [preview, setPreview] = React.useState<string | null>(
+    campaign?.image_url ?? null,
+  );
+  const [saving, setSaving] = React.useState(false);
+
+  /** Swap the preview as they pick, freeing the blob URL we're replacing. */
+  function pickFile(next: File | null) {
+    if (preview?.startsWith("blob:")) URL.revokeObjectURL(preview);
+    setFile(next);
+    setPreview(next ? URL.createObjectURL(next) : (campaign?.image_url ?? null));
+  }
+
+  async function submit() {
+    if (!name.trim()) {
+      toast.error("Give the campaign a name.");
+      return;
+    }
+    if (file && !file.type.startsWith("image/")) {
+      toast.error("The ad has to be an image.");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      // Only touch storage when a new file was actually picked; editing the
+      // text alone keeps the existing creative and skips the vision re-read.
+      let imageUrl = campaign?.image_url ?? null;
+      let imagePath = campaign?.image_path ?? null;
+      if (file) {
+        const uploaded = await uploadFile(STORAGE_BUCKETS.waCampaigns, file);
+        imageUrl = uploaded.publicUrl;
+        imagePath = uploaded.path;
+      }
+
+      const input = {
+        name,
+        details,
+        first_reply: firstReply,
+        image_url: imageUrl,
+        image_path: imagePath,
+      };
+      const res = campaign
+        ? await updateCampaignAction(campaign.id, input)
+        : await createCampaignAction(input);
+      if (!res.ok) {
+        toast.error(res.error);
+        return;
+      }
+      toast.success(campaign ? "Campaign updated." : "Campaign added.");
+      onClose();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Upload failed.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={campaign ? "Edit campaign" : "New campaign"}
+      description="The agent sells from this while campaign mode is on."
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose} disabled={saving}>
+            Cancel
+          </Button>
+          <Button onClick={submit} disabled={saving}>
+            {saving ? "Saving…" : campaign ? "Save changes" : "Add campaign"}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        <label className="block space-y-1.5 text-xs font-medium text-slate-600">
+          Campaign name
+          <Input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="e.g. July website offer"
+          />
+        </label>
+
+        <div className="space-y-1.5 text-xs font-medium text-slate-600">
+          The ad you&apos;re running
+          <div className="flex items-start gap-3">
+            {preview && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={preview}
+                alt=""
+                className="h-24 w-24 rounded-xl object-cover ring-1 ring-slate-200"
+              />
+            )}
+            <div className="flex-1 space-y-1.5">
+              <input
+                type="file"
+                accept="image/*"
+                onChange={(e) => pickFile(e.target.files?.[0] ?? null)}
+                className="block w-full text-xs text-slate-500 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-100 file:px-3 file:py-2 file:text-xs file:font-medium file:text-slate-700 hover:file:bg-slate-200"
+              />
+              <p className="text-[11px] font-normal text-slate-400">
+                A screenshot of the post or the ad creative. The agent reads it
+                once so it knows what the customer just tapped.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <label className="block space-y-1.5 text-xs font-medium text-slate-600">
+          Everything the agent should know
+          <Textarea
+            rows={9}
+            value={details}
+            onChange={(e) => setDetails(e.target.value)}
+            placeholder={
+              "The service you're advertising, what's included, the price, who it's for, and anything you want the agent to push.\n\nThis is added to what the agent already knows about ARC — you don't need to repeat the usual packages."
+            }
+          />
+        </label>
+
+        <label className="block space-y-1.5 text-xs font-medium text-slate-600">
+          Instant reply
+          <Textarea
+            rows={2}
+            value={firstReply}
+            onChange={(e) => setFirstReply(e.target.value)}
+            placeholder="Leave blank and it'll be written for you from the details above."
+          />
+          <span className="block text-[11px] font-normal text-slate-400">
+            Fires the second someone messages from the ad — before the agent has
+            read anything. Keep it short and don&apos;t quote a price here; the
+            real reply follows a moment later.
+          </span>
+        </label>
+      </div>
+    </Modal>
+  );
+}
+
 function Toggle({
   checked,
   onChange,
@@ -1565,7 +2110,7 @@ function ColdStat({
   tone = "slate",
 }: {
   label: string;
-  value: number;
+  value: number | string;
   sub?: string;
   tone?: "slate" | "emerald" | "amber";
 }) {

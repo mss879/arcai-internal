@@ -7,6 +7,7 @@ import type {
   PipelineStage,
   WaAgentConfig,
   WaAgentLog,
+  WaCampaign,
   WaCoaching,
   WaColdOutreach,
   WaContact,
@@ -19,6 +20,63 @@ import { isWhatsAppConfigured } from "@/lib/whatsapp";
 import { WhatsappView } from "./whatsapp-view";
 
 export const metadata = { title: "WhatsApp" };
+
+/** What the live campaign has actually produced — the numbers that say
+ * whether the ad spend is working, not just how many people messaged. */
+export type CampaignStats = {
+  leads: number;
+  /** First reply as the customer experienced it, in seconds. */
+  medianFirstReply: number | null;
+  p90FirstReply: number | null;
+  inCrm: number;
+  quoted: number;
+  won: number;
+  revenue: number;
+  closeRate: number | null;
+};
+
+async function buildCampaignStats(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  contacts: { lead_id: string | null; first_reply_seconds: number | null }[],
+): Promise<CampaignStats> {
+  const waits = contacts
+    .map((c) => c.first_reply_seconds)
+    .filter((s): s is number => s != null)
+    .sort((a, b) => a - b);
+  const at = (q: number) =>
+    waits.length ? waits[Math.min(waits.length - 1, Math.floor(waits.length * q))] : null;
+
+  const leadIds = contacts
+    .map((c) => c.lead_id)
+    .filter((id): id is string => Boolean(id));
+
+  const [leadsRes, quotesRes] = await Promise.all([
+    leadIds.length
+      ? supabase.from("leads").select("id, status, value").in("id", leadIds)
+      : Promise.resolve({ data: [] as { id: string; status: string; value: number | null }[] }),
+    leadIds.length
+      ? supabase.from("quotes").select("lead_id").in("lead_id", leadIds)
+      : Promise.resolve({ data: [] as { lead_id: string | null }[] }),
+  ]);
+
+  const leads = leadsRes.data ?? [];
+  const won = leads.filter((l) => l.status === "won");
+  // A lead may have several quotes — count the leads that got one.
+  const quoted = new Set((quotesRes.data ?? []).map((q) => q.lead_id)).size;
+
+  return {
+    leads: contacts.length,
+    medianFirstReply: at(0.5),
+    p90FirstReply: at(0.9),
+    inCrm: leadIds.length,
+    quoted,
+    won: won.length,
+    revenue: won.reduce((sum, l) => sum + Number(l.value ?? 0), 0),
+    closeRate: contacts.length
+      ? Math.round((won.length / contacts.length) * 100)
+      : null,
+  };
+}
 
 export default async function WhatsappPage() {
   const supabase = await createClient();
@@ -34,6 +92,7 @@ export default async function WhatsappPage() {
     automationsRes,
     coachingRes,
     promisesRes,
+    campaignsRes,
   ] = await Promise.all([
     supabase
       .from("wa_contacts")
@@ -71,7 +130,35 @@ export default async function WhatsappPage() {
       .eq("status", "pending")
       .order("due_at")
       .limit(200),
+    supabase
+      .from("wa_campaigns")
+      .select("*")
+      .order("created_at", { ascending: false }),
   ]);
+
+  // Per-campaign funnel. Contacts are stamped with whichever campaign was
+  // live when they first wrote, so everything hangs off that one column:
+  // contact → lead → quote → won.
+  const { data: campaignContacts } = await supabase
+    .from("wa_contacts")
+    .select("campaign_id, lead_id, first_reply_seconds")
+    .not("campaign_id", "is", null)
+    .limit(5000);
+  const campaignCounts: Record<string, number> = {};
+  for (const row of campaignContacts ?? []) {
+    if (!row.campaign_id) continue;
+    campaignCounts[row.campaign_id] = (campaignCounts[row.campaign_id] ?? 0) + 1;
+  }
+
+  // The live campaign gets the full funnel; the rest only need their count.
+  const liveCampaign =
+    (campaignsRes.data ?? []).find((c) => c.status === "active") ?? null;
+  const campaignStats = liveCampaign
+    ? await buildCampaignStats(
+        supabase,
+        (campaignContacts ?? []).filter((c) => c.campaign_id === liveCampaign.id),
+      )
+    : null;
 
   // The cold-outreach card's "recent picks" list (last 48h of activity).
   const coldSinceDate = new Date();
@@ -146,6 +233,9 @@ export default async function WhatsappPage() {
       }))}
       coldStats={coldStats}
       coldUpcoming={coldUpcoming}
+      campaigns={(campaignsRes.data ?? []) as WaCampaign[]}
+      campaignCounts={campaignCounts}
+      campaignStats={campaignStats}
       waReady={isWhatsAppConfigured()}
       aiReady={isOpenAIConfigured()}
       appBaseUrl={process.env.NEXT_PUBLIC_APP_URL ?? ""}

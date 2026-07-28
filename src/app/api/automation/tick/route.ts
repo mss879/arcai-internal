@@ -17,12 +17,8 @@ import {
 import { processAutoSendQueue, processDueOutreach } from "@/lib/lead-outreach";
 import { processPendingCarousels } from "@/lib/carousels";
 import { processPendingWaShowcases } from "@/lib/wa-showcase";
-import {
-  processDueWaAgentRuns,
-  processDueWaFollowups,
-  processDueWaPromises,
-} from "@/lib/wa-agent";
 import { processColdDigest, processColdOutreach } from "@/lib/wa-cold-outreach";
+import { processWaCoaching } from "@/lib/wa-coaching";
 import { isSmsConfigured } from "@/lib/sms";
 
 /**
@@ -38,9 +34,6 @@ import { isSmsConfigured } from "@/lib/sms";
  *     that got stuck when a serverless run timed out mid-report)
  *   - generates carousel designs for upcoming content-calendar posts
  *     (kicks off 3 days ahead, one copy/slide step per tick)
- *   - drains queued WhatsApp agent replies (the webhook only arms a
- *     debounced timer, so bursts get one reply and long runs never race
- *     the webhook's budget) and the agent's follow-up cadence
  *   - runs the automatic WhatsApp cold-outreach picker (top of "New Lead",
  *     research first, ≤cap template sends per day, spread apart, one
  *     follow-up nudge for delivered-but-silent leads)
@@ -81,15 +74,15 @@ export async function GET(request: Request) {
     const autoSend = await processAutoSendQueue(supabase);
     const carousels = await processPendingCarousels(supabase);
     const showcases = await processPendingWaShowcases(supabase);
-    // Queued inbound replies first — answering a live customer beats nudging
-    // a quiet one. Promised follow-ups ("call me Monday") beat the generic
-    // cadence — the customer named that moment themselves.
-    const agentRuns = await processDueWaAgentRuns(supabase);
-    const promises = await processDueWaPromises(supabase);
-    const followups = await processDueWaFollowups(supabase);
+    // NOTE: live WhatsApp replies, promises and the follow-up cadence used to
+    // run here, 13th of 18. They now have their own scheduled function
+    // (/api/whatsapp/agent-tick) so a customer waiting for an answer can't be
+    // starved by a Lighthouse pass or an image render in this one.
     // Cold outreach last — live conversations always beat opening new ones.
     const coldOutreach = await processColdOutreach(supabase);
     const coldDigest = await processColdDigest(supabase);
+    // Self-gated to once a week (and one attempt a day) — see processWaCoaching.
+    const coaching = await processWaCoaching(supabase);
     const sms = isSmsConfigured()
       ? await processDueSmsRuns(supabase)
       : { processed: 0, sent: 0, failed: 0 };
@@ -109,11 +102,9 @@ export async function GET(request: Request) {
       autoSend,
       carousels,
       showcases,
-      agentRuns,
-      promises,
-      followups,
       coldOutreach,
       coldDigest,
+      coaching,
     });
   } catch (e) {
     return NextResponse.json(

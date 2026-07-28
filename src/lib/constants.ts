@@ -160,6 +160,25 @@ export const DEFAULT_PIPELINE_STAGES: { name: string; color: string }[] = [
   { name: "Won", color: "#16c79a" },
 ];
 
+/**
+ * Meeting reminder lead time — how many hours before the start attendees get
+ * the text (meetings.reminder_hours, migration 0067).
+ *
+ * These live here, not in the meetings server-actions file, because a
+ * "use server" module may only export async functions — and because the
+ * reminder dispatcher has to scan at least as far ahead as the largest option
+ * the form offers, or meetings set beyond its window would silently never
+ * fire.
+ */
+export const MIN_MEETING_REMINDER_HOURS = 1;
+export const MAX_MEETING_REMINDER_HOURS = 5;
+export const DEFAULT_MEETING_REMINDER_HOURS = 3;
+/** Derived so the dropdown can never drift from the clamp. */
+export const MEETING_REMINDER_OPTIONS = Array.from(
+  { length: MAX_MEETING_REMINDER_HOURS - MIN_MEETING_REMINDER_HOURS + 1 },
+  (_, i) => MIN_MEETING_REMINDER_HOURS + i,
+);
+
 /** Palette offered when creating / editing a CRM stage. */
 export const STAGE_COLORS = [
   "#f97316",
@@ -182,6 +201,7 @@ export const STORAGE_BUCKETS = {
   carouselSlides: "carousel-slides",
   waShowcases: "wa-showcases",
   waMedia: "wa-media",
+  waCampaigns: "wa-campaigns",
 } as const;
 
 export const SERVICE_TYPE_LABELS: Record<string, string> = {

@@ -145,6 +145,9 @@ export type WaColdOutreachStatus =
   | "no_whatsapp"
   | "failed"
   | "skipped";
+/** Meta-ad campaign the WhatsApp agent sells from (0065). Only one
+ * row may be "active" at a time — enforced by a partial unique index. */
+export type WaCampaignStatus = "draft" | "active" | "paused" | "ended";
 export type QuoteStatus =
   | "draft"
   | "sent"
@@ -872,6 +875,10 @@ export type Database = {
           location: string | null;
           meeting_url: string | null;
           reminder_sent_at: Timestamp | null;
+          // 0067 — how many hours ahead the reminder fires (1-5), and the
+          // client this meeting is with.
+          reminder_hours: number;
+          client_id: UUID | null;
           created_by: UUID | null;
           created_at: Timestamp;
           updated_at: Timestamp;
@@ -886,6 +893,9 @@ export type Database = {
           location?: string | null;
           meeting_url?: string | null;
           reminder_sent_at?: Timestamp | null;
+          // 0067 — see the Row comment
+          reminder_hours?: number;
+          client_id?: UUID | null;
           created_by?: UUID | null;
           created_at?: Timestamp;
           updated_at?: Timestamp;
@@ -2123,6 +2133,15 @@ export type Database = {
           do_not_contact: boolean;
           agent_due_at: Timestamp | null;
           language: WaLanguage | null;
+          // 0065 — which campaign was live when they first wrote
+          campaign_id: UUID | null;
+          // 0066 — newest inbound the agent has actually answered
+          // (replaces the last_direction skip), failure backoff,
+          // instant-first-line CAS claim, and the response-time metric.
+          agent_answered_through: Timestamp | null;
+          agent_attempts: number;
+          first_reply_sent_at: Timestamp | null;
+          first_reply_seconds: number | null;
           created_at: Timestamp;
           updated_at: Timestamp;
         };
@@ -2145,6 +2164,13 @@ export type Database = {
           do_not_contact?: boolean;
           agent_due_at?: Timestamp | null;
           language?: WaLanguage | null;
+          // 0065 — which campaign was live when they first wrote
+          campaign_id?: UUID | null;
+          // 0066 — see the Row comment
+          agent_answered_through?: Timestamp | null;
+          agent_attempts?: number;
+          first_reply_sent_at?: Timestamp | null;
+          first_reply_seconds?: number | null;
           created_at?: Timestamp;
           updated_at?: Timestamp;
         };
@@ -2222,6 +2248,10 @@ export type Database = {
           cold_followup_template_params: string[];
           cold_followup_days: number;
           cold_digest_sent_for: string | null;
+          // 0065 — campaign mode
+          campaign_mode_enabled: boolean;
+          // 0066 — once-a-day attempt gate for the weekly coaching run
+          coaching_ran_for: string | null;
         };
         Insert: {
           id?: number;
@@ -2261,6 +2291,10 @@ export type Database = {
           cold_followup_template_params?: string[];
           cold_followup_days?: number;
           cold_digest_sent_for?: string | null;
+          // 0065 — campaign mode
+          campaign_mode_enabled?: boolean;
+          // 0066 — once-a-day attempt gate for the weekly coaching run
+          coaching_ran_for?: string | null;
         };
         Update: Partial<
           Database["public"]["Tables"]["wa_agent_config"]["Insert"]
@@ -2317,6 +2351,38 @@ export type Database = {
         Update: Partial<
           Database["public"]["Tables"]["wa_cold_outreach"]["Insert"]
         >;
+        Relationships: [];
+      };
+      wa_campaigns: {
+        Row: {
+          id: UUID;
+          name: string;
+          status: WaCampaignStatus;
+          image_url: string | null;
+          image_path: string | null;
+          image_summary: string | null;
+          details: string;
+          // 0066 — the instant line the webhook fires on first contact
+          first_reply: string | null;
+          created_by: UUID | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          name: string;
+          status?: WaCampaignStatus;
+          image_url?: string | null;
+          image_path?: string | null;
+          image_summary?: string | null;
+          details?: string;
+          // 0066 — the instant line the webhook fires on first contact
+          first_reply?: string | null;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["wa_campaigns"]["Insert"]>;
         Relationships: [];
       };
       pricing_config: {

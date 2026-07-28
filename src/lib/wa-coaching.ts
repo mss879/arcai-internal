@@ -164,3 +164,74 @@ Return JSON: { "notes": ["...", "..."] } — 5 to 8 short, specific coaching bul
   }
   return { ok: true, notes: bullets };
 }
+
+/**
+ * The scheduler for the above.
+ *
+ * analyzeWaSalesWeek was only ever reachable from /api/intelligence/digest,
+ * and nothing scheduled that route — so the "self-improving playbook" never
+ * ran once and wa_coaching stayed empty. The automation tick now calls this
+ * every minute, behind two gates:
+ *
+ *   1. this week already has notes → nothing to do
+ *   2. we already tried today → wait until tomorrow
+ *
+ * The second gate matters because the analysis reads up to 2000 messages and
+ * makes an OpenAI call; without it, a week with too little data (or a flaky
+ * key) would re-run that every 60 seconds for seven days. Claim-first on the
+ * date, mirroring processColdDigest, so concurrent ticks can't both run it.
+ */
+export async function processWaCoaching(
+  supabase: DB,
+): Promise<{ ran: boolean }> {
+  try {
+    if (!isOpenAIConfigured()) return { ran: false };
+
+    const { data: config } = await supabase
+      .from("wa_agent_config")
+      .select("timezone, coaching_ran_for")
+      .eq("id", 1)
+      .maybeSingle();
+    if (!config) return { ran: false };
+
+    // Already have this week's lessons.
+    const { data: existing } = await supabase
+      .from("wa_coaching")
+      .select("week_start")
+      .eq("week_start", currentWeekStart())
+      .limit(1)
+      .maybeSingle();
+    if (existing) return { ran: false };
+
+    const today = localDateInTimezone(config.timezone || "Asia/Colombo");
+    if (config.coaching_ran_for === today) return { ran: false };
+
+    const { data: claimed } = await supabase
+      .from("wa_agent_config")
+      .update({ coaching_ran_for: today })
+      .eq("id", 1)
+      .or(`coaching_ran_for.is.null,coaching_ran_for.neq.${today}`)
+      .select("id");
+    if (!claimed?.length) return { ran: false };
+
+    const result = await analyzeWaSalesWeek(supabase);
+    return { ran: result.ok };
+  } catch (e) {
+    console.error("[wa-coaching] weekly run failed:", e);
+    return { ran: false };
+  }
+}
+
+/** Calendar date in the workspace's timezone (YYYY-MM-DD). */
+function localDateInTimezone(timezone: string, at = new Date()): string {
+  try {
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(at);
+  } catch {
+    return at.toISOString().slice(0, 10);
+  }
+}

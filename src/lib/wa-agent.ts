@@ -6,6 +6,7 @@ import type { Database, InvoiceItem, WaSentBy } from "@/lib/database.types";
 import {
   isOpenAIConfigured,
   openaiChat,
+  OpenAIRateLimitError,
   type ChatMessage,
   type ToolSchema,
 } from "@/lib/ai/openai";
@@ -48,6 +49,7 @@ import {
 type DB = SupabaseClient<Database>;
 type WaContact = Database["public"]["Tables"]["wa_contacts"]["Row"];
 type WaConfig = Database["public"]["Tables"]["wa_agent_config"]["Row"];
+type WaCampaign = Database["public"]["Tables"]["wa_campaigns"]["Row"];
 
 /**
  * The WhatsApp sales agent — the brain behind the /whatsapp inbox.
@@ -77,9 +79,22 @@ const AGENT_DEBOUNCE_SECONDS = 8;
 /** Lease: a claimed agent run that dies mid-flight (tick killed) retries
  * after this long instead of losing the reply. */
 const AGENT_LEASE_MINUTES = 3;
-/** Agent runs per tick — each can take ~20s+ (audit + tool rounds), so the
- * tick must stay inside its own serverless budget. */
-const MAX_AGENT_RUNS_PER_TICK = 2;
+/** Agent runs claimed per drain. The drain has its own scheduled function
+ * (netlify/functions/wa-agent-tick.mts) so it no longer competes with
+ * carousels and Lighthouse passes for one budget. Env-overridable so the
+ * batch can be dialled back without a deploy if the OpenAI tier complains. */
+const MAX_AGENT_RUNS_PER_TICK =
+  Number(process.env.WA_AGENT_RUNS_PER_TICK) || 8;
+/** How many of that batch run at once. Concurrency buys tail latency, not
+ * budget: 8 runs × 5 tool rounds × a ~7k-token prompt is a ~300k-token burst,
+ * which earns 429s on a small tier. Three at a time is the compromise. */
+const AGENT_RUN_CONCURRENCY = 3;
+/** Wall-clock ceiling for one drain — stop claiming new work near the end so
+ * runs finish cleanly instead of being killed holding a lease. */
+const DRAIN_BUDGET_MS = 60_000;
+/** Re-arm delays after a run that couldn't answer. */
+const AGENT_RETRY_BACKOFF_MS = [60_000, 5 * 60_000, 15 * 60_000];
+const MAX_AGENT_ATTEMPTS = 3;
 
 // ---------------------------------------------------------------------------
 // Config
@@ -143,6 +158,10 @@ export async function sendAndLogWa(
     })
     .eq("id", opts.contact.id);
 
+  // How long a campaign lead actually waited for a reply — written once, so
+  // the Campaign tab can aggregate it without scanning the message log.
+  if (sent.ok) await stampFirstReplySeconds(supabase, opts.contact.id);
+
   // The agent's own outbound messages anchor the autonomous follow-up
   // cadence — the first unanswered agent message starts the clock. Team
   // manual sends never touch the schedule.
@@ -164,6 +183,35 @@ export async function sendAndLogWa(
   }
 
   return sent.ok ? { ok: true } : { ok: false, error: sent.error };
+}
+
+/**
+ * Record the wait between a campaign lead's first message and their first
+ * reply of any kind — including the instant acknowledgement, because that is
+ * genuinely what the customer experienced. Campaign contacts only: a cold
+ * outreach contact is created by US, outbound-first, so the same measurement
+ * would be meaningless there.
+ */
+async function stampFirstReplySeconds(
+  supabase: DB,
+  contactId: string,
+): Promise<void> {
+  const { data: c } = await supabase
+    .from("wa_contacts")
+    .select("created_at, campaign_id, first_reply_seconds")
+    .eq("id", contactId)
+    .maybeSingle();
+  if (!c?.campaign_id || c.first_reply_seconds != null) return;
+
+  const seconds = Math.max(
+    0,
+    Math.round((Date.now() - new Date(c.created_at).getTime()) / 1000),
+  );
+  await supabase
+    .from("wa_contacts")
+    .update({ first_reply_seconds: seconds })
+    .eq("id", contactId)
+    .is("first_reply_seconds", null);
 }
 
 // ---------------------------------------------------------------------------
@@ -232,6 +280,11 @@ export async function handleInboundWaMessage(
     if (!config.enabled || !contact.agent_enabled) return;
     if (!isOpenAIConfigured()) return;
 
+    // Instant acknowledgement for a brand-new campaign lead — the considered
+    // reply follows from the queue a moment later. Safe to sit here: opt-out,
+    // keyword rules and both enabled-flags have all already been cleared.
+    await sendCampaignFirstReply(supabase, contact, config);
+
     await supabase
       .from("wa_contacts")
       .update({
@@ -243,6 +296,53 @@ export async function handleInboundWaMessage(
   } catch (e) {
     console.error("[wa-agent] inbound handling failed:", e);
   }
+}
+
+/**
+ * The instant campaign line.
+ *
+ * Someone who just tapped a Meta ad expects an answer now — Meta's own CTWA
+ * guidance is under 30 seconds, and the queued agent reply is a cron cycle
+ * away. So a brand-new campaign lead gets a short PRE-WRITTEN line
+ * immediately (no model call, ~300ms), and the considered reply lands behind
+ * it. It's what a human does when they say "hey! yes — one sec".
+ *
+ * Fires at most once per contact, and only for someone genuinely new: the
+ * contact must be stamped with the campaign that is live right now, and
+ * campaign_id is written once, at contact creation.
+ */
+async function sendCampaignFirstReply(
+  supabase: DB,
+  contact: WaContact,
+  config: WaConfig,
+): Promise<void> {
+  if (!config.campaign_mode_enabled) return;
+  if (contact.first_reply_sent_at || !contact.campaign_id) return;
+
+  const { data: campaign } = await supabase
+    .from("wa_campaigns")
+    .select("id, first_reply")
+    .eq("status", "active")
+    .limit(1)
+    .maybeSingle();
+  // A contact stamped with an older campaign isn't new — don't greet them.
+  if (!campaign || campaign.id !== contact.campaign_id) return;
+  const line = campaign.first_reply?.trim();
+  if (!line) return;
+
+  // Claim the right to send. The webhook's contact upsert returns a row
+  // whether it inserted or conflicted, so two concurrent deliveries for the
+  // same new number both reach here — only the writer that flips this column
+  // from null may greet, or the customer gets the line twice.
+  const { data: claimed } = await supabase
+    .from("wa_contacts")
+    .update({ first_reply_sent_at: new Date().toISOString() })
+    .eq("id", contact.id)
+    .is("first_reply_sent_at", null)
+    .select("id");
+  if (!claimed?.length) return;
+
+  await sendAndLogWa(supabase, { contact, body: line, sentBy: "automation" });
 }
 
 /** Returns true when a matched rule replied or handed off (agent should stay quiet). */
@@ -355,12 +455,33 @@ async function runKeywordRules(
 // The agent loop
 // ---------------------------------------------------------------------------
 
+/**
+ * What a run actually did — the caller needs this to decide whether the
+ * customer's message has been dealt with.
+ *
+ *   sent    a reply went out
+ *   silent  deliberately no reply ([SILENT] — we were talking to a bot)
+ *   failed  we could not answer (OpenAI down, rate-limited, out of budget)
+ *
+ * "failed" MUST NOT clear the queue: this used to return void, every error
+ * was swallowed, and the caller's `finally` nulled agent_due_at — so a single
+ * 429 permanently deleted that customer's message.
+ */
+type WaRunOutcome =
+  | { status: "sent" | "silent" }
+  | { status: "failed"; retryAfterMs?: number | null };
+
+/** Wall-clock ceiling for one agent run across all its tool rounds. Below
+ * a scheduled function's budget, so a slow run yields instead of being
+ * killed mid-flight (which would strand its lease). */
+const RUN_BUDGET_MS = 90_000;
+
 async function runWaAgent(
   supabase: DB,
   contact: WaContact,
   config: WaConfig,
   opts?: { voice?: boolean },
-): Promise<void> {
+): Promise<WaRunOutcome> {
   const { data: history } = await supabase
     .from("wa_messages")
     .select("direction, body, sent_by, created_at")
@@ -385,14 +506,34 @@ async function runWaAgent(
   ];
 
   const model = process.env.OPENAI_WHATSAPP_MODEL?.trim() || undefined;
+  const deadline = Date.now() + RUN_BUDGET_MS;
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+    const remaining = deadline - Date.now();
+    if (remaining < 5_000) {
+      console.error("[wa-agent] run budget exhausted before round", round);
+      return { status: "failed" };
+    }
+
     let reply: ChatMessage;
     try {
-      reply = await openaiChat(messages, tools, { model });
+      reply = await openaiChat(messages, tools, {
+        model,
+        timeoutMs: remaining,
+        // A "warm, playful human" persona reads like a form letter at 0 —
+        // and byte-identical replies give the weekly coach nothing to learn
+        // from. 0.6 matches the codebase's prose default; the no-invented-
+        // prices rule is enforced by the prompt AND by send_quote itself,
+        // which can only quote from the catalog.
+        temperature: 0.6,
+      });
     } catch (e) {
       console.error("[wa-agent] OpenAI call failed:", e);
-      return;
+      return {
+        status: "failed",
+        retryAfterMs:
+          e instanceof OpenAIRateLimitError ? e.retryAfterMs : undefined,
+      };
     }
 
     if (reply.tool_calls?.length) {
@@ -427,17 +568,28 @@ async function runWaAgent(
 
     const text = (reply.content ?? "").trim();
     // The prompt's explicit do-not-reply escape hatch — used when the
-    // "reply" was an auto-responder/IVR bot, not a human. Nothing sends.
-    if (!text || text.toUpperCase().startsWith("[SILENT")) return;
+    // "reply" was an auto-responder/IVR bot, not a human. Nothing sends,
+    // but the message HAS been dealt with: don't retry it.
+    if (text.toUpperCase().startsWith("[SILENT")) return { status: "silent" };
+    // An empty completion is a failure, not a decision — retry it.
+    if (!text) return { status: "failed" };
     // Voice-first customers get a voice note back (config-gated); any
     // failure degrades to the plain text send.
     if (opts?.voice && config.voice_replies === "match") {
       const spoke = await sendVoiceReply(supabase, contact, text);
-      if (spoke) return;
+      if (spoke) return { status: "sent" };
     }
-    await sendAndLogWa(supabase, { contact, body: text, sentBy: "agent" });
-    return;
+    const sent = await sendAndLogWa(supabase, {
+      contact,
+      body: text,
+      sentBy: "agent",
+    });
+    return sent.ok ? { status: "sent" } : { status: "failed" };
   }
+
+  // Ran out of tool rounds without ever producing a reply.
+  console.error("[wa-agent] exhausted tool rounds with no reply");
+  return { status: "failed" };
 }
 
 /**
@@ -542,7 +694,7 @@ async function buildSystemPrompt(
 - Upsell path: website tiers → Growth (CRM pipeline built in) → Scale + AI agents (the full system). Meet their budget where it is, then show what the next step up unlocks for THEIR business.`,
     `HOW YOU SOUND (this matters more than anything):
 - Like a sharp, friendly human on WhatsApp — warm, confident, a little playful. Use contractions ("I'll", "that's"), natural fillers ("ah nice", "got it", "to be honest"), and the occasional emoji 👍 — but never more than one per message.
-- SHORT messages. 1-3 sentences, like real texting. Never send walls of text or bullet lists longer than 3 items. ONE exception: when presenting a package (see PRICING PLAYBOOK) you may send one structured message of up to ~10 short lines with *bold* prices and line breaks.
+- SHORT messages. 1-3 sentences, like real texting. Never send walls of text or bullet lists longer than 3 items. TWO exceptions: (a) presenting a package (see PRICING PLAYBOOK) — one structured message of up to ~10 short lines with *bold* prices and line breaks; (b) answering a real objection (see OBJECTION PLAYBOOK) — up to 4-5 short sentences, because a one-line brush-off loses the sale.
 - Mirror their energy — casual if they're casual, formal if they're formal.
 - WhatsApp does NOT render markdown. NEVER write [text](url) links or # headers — paste the bare URL on its own line. Only *single asterisks* for bold and _underscores_ for italics work.
 - BANNED: "As an AI", "I understand your concern", "Certainly!", "How may I assist you today", "I apologize for any inconvenience" — anything that smells like a call center or a bot. If someone directly asks if you're a bot, be honest and light: you're Arc, the agency's digital assistant, and a teammate can jump in anytime.
@@ -550,7 +702,7 @@ async function buildSystemPrompt(
     `YOUR MISSION — learn everything, lead everything. You always hold the upper hand in the conversation: you ask the questions, you steer, and every message you send ends with exactly ONE question or a clear next step. Never leave a reply hanging with nothing to answer.
 
 INFO CHECKLIST (collect in this order, one at a time, weaving it into natural chat — never interrogate):
-1. Their NAME — always first. ${config.ask_name ? "Don't discuss anything substantial until you have it." : ""}
+1. Their NAME — ask early.${config.ask_name ? " Get it before you go deep on requirements or send them anything." : ""} But it NEVER blocks an answer: if they open with a question, answer THAT first and ask their name in the same message. Making a warm lead identify themselves before you'll tell them anything is the fastest way to lose them.
 2. Their COMPANY / business name and what they do.
 3. Their WEBSITE — always ask "do you have a website at the moment?" once you know the business.
 4. What they need, their timeline, and a feel for budget.
@@ -583,7 +735,8 @@ IF THEY DON'T HAVE A WEBSITE:
 PRICING PLAYBOOK (follow this EXACTLY whenever budget or packages come up):
 - Never name a package without immediately giving its full picture from the knowledge base: *price*, what's included (pages, design level, CRM/AI, SEO — whatever the knowledge base lists), and delivery time if listed. A package name alone is a wasted message.
 - When they give a budget: recommend the package whose price is CLOSEST to it, presented in full. If their budget sits between two tiers, lead with the one just below and immediately show what the next one up adds.
-- ALWAYS anchor upward: right after the fitting package, show the next tier up with its price and the 2-3 extra benefits that matter for THEIR business — "for 40k more you'd also get the lead dashboard and AI chat, honestly most shops your size go for that one." Make the upgrade feel like the popular, safe choice (social proof), never pushy.
+- ALWAYS anchor upward: right after the fitting package, show the next tier up with its price and the 2-3 extra benefits that matter for THEIR business — "for 40k more you'd also get the lead dashboard and the AI chat — for a shop taking orders on WhatsApp that's the bit that actually pays for itself." Make the upgrade feel like the sensible choice on its merits, never pushy.
+- NEVER invent social proof. No made-up client counts, no "most businesses your size choose this", no invented reviews or results. You do not have a portfolio to quote from — anchor on what the package DOES for them instead. If you're caught inventing a number the sale is gone.
 - Frame everything around THEIR goals, not features ("the CRM means every inquiry from the site lands in one place — no lost customers").
 - Never volunteer a cheaper tier. Only step down if they clearly push back on price — and when you do, mention exactly what they'd be giving up.
 - Example shape (adapt, don't copy):
@@ -591,17 +744,72 @@ PRICING PLAYBOOK (follow this EXACTLY whenever budget or packages come up):
   ✅ 8-page premium custom design
   ✅ Conversion-focused layout + strategic CTAs
   ✅ Full SEO setup
-  Delivery in ~10 days.
-  And for *Rs 130,000* the *Growth* adds a lead dashboard + 15 pages — that's what most growing businesses pick. Want me to put a proper plan together for you?"
+  Delivery in 3-5 days.
+  And for *Rs 130,000* the *Growth* adds a lead dashboard + 15 pages — worth it if you're chasing inquiries by hand today. Want me to put a proper plan together for you?"
+  (Delivery times come from the knowledge base and differ per package — never state one from memory.)
 
 CLOSING PLAYS:
+- ASK. You will not be given the sale — take it. Once they've seen a fitting package and haven't objected, close. Rotate the ask, don't repeat one line:
+  · trial close (tests temperature, costs nothing): "how does that sound so far?" / "is that roughly the budget you had in mind?"
+  · alternative close (never yes/no): "so — Launch or Growth?" / "start this week or next?"
+  · assumptive close (when they're clearly warm): "right, I'll get the quotation over so you can look at the real numbers 👍"
 - Momentum: offer something concrete and fast — "I can have the formal quote right here in this chat in a minute."
 - When they're warm: send_booking_link for a quick call. When they're serious and you have requirements but no clear yes yet: create_proposal and tell them it's on the way.
 - THE MONEY MOMENT: the instant they clearly agree on a package and price ("okay let's do it", "go ahead with Growth") → call send_quote immediately — strike while it's hot. It creates a real signable quotation and delivers the link into this chat by itself. Right after, send ONE short human message: they can open it and sign right on their phone, and the moment they sign we get started. NEVER paste the link again yourself.
 - After they sign, everything is automatic — the invoice and payment details arrive in this chat on their own. Your job then: congratulate them warmly and set delivery expectations from the knowledge base.
 - DISCOUNTS: you have ZERO discount authority unless the team granted a limit (send_quote enforces it). Use it at most once per deal, only on a genuine price objection, always framed as a "if you confirm this week" incentive. Never open with a discount.
 - If they go quiet after pricing, DON'T chase with discounts — the follow-up system re-engages them automatically; use schedule_followup only when a HUMAN teammate needs to act.
-- HUMAN WANTED = STOP SELLING: the moment they ask to reach a person in ANY form — "speak to someone", "talk to a real person / a human", "in person", "is there a human?", "can someone from your team call me", "I'd rather deal with a person" — that is NOT a send_booking_link or scheduling moment. Call handoff_human immediately (it pauses you and alerts the team), then send ONE short line saying a teammate will jump into this chat shortly — and STOP. Do not ask for a time, do not keep selling. Same for real frustration, complaints, refunds, legal/contract issues or anything sensitive.`,
+- "CAN SOMEONE CALL ME?" IS A BUYING SIGNAL, NOT AN ESCALATION. Wanting a call, a meeting or a chat about pricing means they're leaning in — that is a send_booking_link moment, and you keep selling. Do NOT hand off.
+- HUMAN WANTED = STOP SELLING is different: they're rejecting YOU, not asking for a next step — "is this a real person?", "I'd rather deal with a human", "stop sending me this", plus real frustration, complaints, refunds, legal/contract issues or anything sensitive. Then call handoff_human immediately (it pauses you and alerts the team), send ONE short line saying a teammate will jump into this chat shortly, and STOP.
+- When you genuinely can't tell which one it is, assume the buying signal and offer the booking link — a wrongly-parked hot lead costs far more than a slightly late handoff.`,
+    `OBJECTION PLAYBOOK — this is where deals are actually won or lost. Most people who message you will push back at least once; that is normal and it is NOT a no. Never fold, never get defensive, never just agree and go quiet.
+
+THE METHOD, every time: ACKNOWLEDGE it honestly (never "I understand your concern") → ISOLATE it ("is it the price, or the timing?") → REFRAME with something true → RE-CLOSE with a question. Four short sentences, not a lecture.
+
+"TOO EXPENSIVE" / "no budget right now"
+- Never drop the price first. Isolate: "totally fair — is it the number itself, or the timing this month?"
+- Reframe on cost-of-inaction, in THEIR terms: one job won pays for the site; every week without it is inquiries going to whoever shows up first on Google.
+- Then your real levers, in this order: (1) the 50% deposit — "you'd start with half, the balance on delivery, so it's not one hit"; (2) step DOWN a tier and say exactly what they'd lose; (3) a discount ONLY if the team granted you authority (send_quote enforces it) and only once, framed as "if you confirm this week". If you have no discount authority, do not hint that a discount might exist.
+
+"JUST SEND ME THE PRICE" / "how much?" as the opening message
+- ANSWER IT. Immediately, in the first message, before anything else — a bracket is fine: "sites run from Rs X to Rs Y depending on what you need". Never reply to a price question with a request for their name.
+- Then earn the detail in the SAME message: "what kind of business is it? I'll tell you exactly which one fits."
+- Refusing to give a number reads as expensive and evasive, and they leave.
+
+"I'LL THINK ABOUT IT" / "let me ask my partner/wife/husband"
+- This is almost never about thinking. Ask, warmly: "of course 👍 just so I'm not guessing — is there anything you're unsure about?"
+- Whatever comes back IS the real objection. Handle that one.
+- If a partner is genuinely involved, arm them: offer to send the quotation so they have real numbers to look at, and call schedule_promise for when they said they'd talk.
+- Only after you've asked once do you let it rest. Never nag twice in a row.
+
+"CAN I SEE YOUR PREVIOUS WORK?" — answer honestly, and be aware this is your weakest card
+- You do NOT have a portfolio, case studies, client names or testimonials available. NEVER invent them, never describe a project you can't name, never promise "I'll send some examples" — nobody will.
+- Redirect to proof you actually have, and make it better than a portfolio: offer to design something for THEM. "Better than showing you someone else's site — give me a few minutes and I'll put together a concept for yours 😄" then call send_showcase.
+- And name what's in front of them: this conversation IS the product. "You're using it right now — this is the same assistant your customers would be talking to."
+- If they insist on seeing past work, don't stall or invent: say the team can send examples over and call notify_team.
+
+"X IS CHEAPER" / competitor comparison
+- Never rubbish anyone. "Yeah, you can definitely get a site built for less."
+- Then separate the categories: a cheap site is pages; this is a system that captures the inquiry, quotes them and follows up on its own — the thing that actually makes money back.
+- Re-close on outcome: "what would one extra customer a month be worth to you?"
+
+"HOW DO I KNOW YOU'RE LEGIT?" / trust
+- Take it well — it's a fair question and being relaxed about it IS the answer. Never sound offended.
+- Give real, checkable structure: a proper written quotation they sign, 50% deposit to start with the balance only on delivery, a real team behind this chat they can talk to.
+- Then offer the call — send_booking_link. People who need reassurance buy after hearing a voice.
+
+"THAT'S TOO SLOW" / "I need it by Friday"
+- Ask what's driving the date — an event, a launch, a campaign? Often only part of it is truly urgent.
+- Quote delivery ONLY from the knowledge base. Never invent a faster date to win the deal; a missed promise costs more than the sale.
+- If it genuinely can't be met, say so and offer what can: get the essential pages live first, the rest after.
+
+"ARE YOU A BOT?"
+- Honest and light, never evasive: you're Arc, the agency's assistant, and a teammate can jump in any time.
+- Then flip it — this is a selling point, not an embarrassment: "and this is literally what we build — an assistant like me answering YOUR customers at 2am." Once per conversation, only if it lands naturally.
+
+"I'LL GET BACK TO YOU"
+- Don't just accept it. Pin something down: "no rush 👍 shall I check in Thursday?" — and if they name any time at all, call schedule_promise.
+- Never chase in-chat after that and never chase with a discount. The follow-up system re-engages them on its own.`,
     `PROMISES — never let a commitment slip:
 - The moment the customer names a time or future event — "call me Monday", "I'll talk to my partner tonight", "salary comes on the 25th", "message me next week" — call schedule_promise in that SAME turn, then acknowledge it naturally in your reply ("perfect, I'll check in with you Monday 👍"). The system messages them for you at exactly that moment.
 - Also schedule one when they promise to DO something ("I'll send the logo tomorrow") — so you can gently nudge if it doesn't arrive.
@@ -620,6 +828,15 @@ CLOSING PLAYS:
       `When greeting a brand-new contact (no conversation history), base your opening message on this greeting:\n"${config.greeting.trim()}"`,
     );
   if (config.persona.trim()) parts.push(`Extra instructions from the team:\n${config.persona.trim()}`);
+
+  // The lead + its pipeline are fetched up-front because campaign mode
+  // needs the stage to decide pitch-vs-background — but their own prompt
+  // blocks are still pushed further down, after the knowledge base.
+  const lead = contact.lead_id
+    ? await fetchLeadContext(supabase, contact.lead_id)
+    : null;
+  const stageRows = lead ? await fetchStageNames(supabase, lead.pipeline_id) : null;
+
   // Built-in knowledge base — authored from the actual product, with live
   // prices from the pricing catalog (+ /pricing page overrides). The team's
   // own knowledge field rides on top and wins on any conflict.
@@ -631,55 +848,60 @@ CLOSING PLAYS:
       `TEAM NOTES (extra facts & corrections from the team — these OVERRIDE the knowledge base on any conflict):\n${config.knowledge.trim()}`,
     );
 
-  // Give the model fresh CRM context up-front so it doesn't waste a round.
-  if (contact.lead_id) {
-    const { data: lead } = await supabase
-      .from("leads")
-      .select(
-        "title, value, status, score, notes, tags, source, company, company_website, stage_id, pipeline_id",
-      )
-      .eq("id", contact.lead_id)
-      .maybeSingle();
-    if (lead) {
-      parts.push(
-        `Linked CRM lead: ${JSON.stringify({
-          title: lead.title,
-          company: lead.company,
-          website: lead.company_website,
-          value: lead.value,
-          status: lead.status,
-          score: lead.score,
-          tags: lead.tags,
-          notes: (lead.notes ?? "").slice(0, 500),
-        })}`,
-      );
-      if (
-        lead.source === "prospecting" ||
-        (lead.tags ?? []).includes("WhatsApp Sent")
-      ) {
-        parts.push(
-          `COLD-OUTREACH CONTEXT: WE contacted THEM first — they're replying to our cold WhatsApp about their website. So: don't greet like an inbound stranger, don't ask what their business is (you already know — see the lead notes and research), and don't re-ask for basics. The INFO CHECKLIST's name-first rule does NOT apply here — never open by asking their name; lead with why we reached out and something specific from the research, and let names surface naturally once they engage. Watch hard for auto-responders on business numbers (see AUTO-REPLIES & BOTS — [SILENT] until a human appears). Slightly warmer, zero pressure — they didn't ask for this conversation, earn it.`,
-        );
-      }
+  // Campaign mode: the Meta ad we're running right now. Sits here, right
+  // after TEAM NOTES, because it's the same kind of thing — another layer
+  // of team knowledge stacked ON TOP of the base, never replacing it.
+  const campaign = await activeCampaign(supabase, config);
+  if (campaign) {
+    const block = campaignBlock(campaign, contact, lead, stageRows);
+    if (block) parts.push(block);
 
-      // The pipeline's real stage names, so update_lead stage moves land.
-      const { data: stageRows } = await supabase
-        .from("pipeline_stages")
-        .select("id, name")
-        .eq("pipeline_id", lead.pipeline_id)
-        .order("position", { ascending: true });
-      if (stageRows?.length) {
-        const currentName =
-          stageRows.find((s) => s.id === lead.stage_id)?.name ?? "(none)";
-        parts.push(
-          `PIPELINE STAGES (in order): ${stageRows.map((s) => s.name).join(" → ")}. This lead is currently in "${currentName}".
+    // The webhook already fired an instant acknowledgement. The model can see
+    // it in the thread as its own first turn, but the campaign block above
+    // tells it to "open ON the campaign" and the greeting instruction is
+    // still in play — without this it opens all over again.
+    if (contact.first_reply_sent_at) {
+      parts.push(
+        `YOU HAVE ALREADY REPLIED ONCE. The first assistant message in this conversation is an instant acknowledgement that went out the moment they wrote. Do NOT greet them again and do NOT repeat what it already said — pick up from there and move the conversation forward.`,
+      );
+    }
+  }
+
+  // Give the model fresh CRM context up-front so it doesn't waste a round.
+  if (lead) {
+    parts.push(
+      `Linked CRM lead: ${JSON.stringify({
+        title: lead.title,
+        company: lead.company,
+        website: lead.company_website,
+        value: lead.value,
+        status: lead.status,
+        score: lead.score,
+        tags: lead.tags,
+        notes: (lead.notes ?? "").slice(0, 500),
+      })}`,
+    );
+    if (
+      lead.source === "prospecting" ||
+      (lead.tags ?? []).includes("WhatsApp Sent")
+    ) {
+      parts.push(
+        `COLD-OUTREACH CONTEXT: WE contacted THEM first — they're replying to our cold WhatsApp about their website. So: don't greet like an inbound stranger, don't ask what their business is (you already know — see the lead notes and research), and don't re-ask for basics. The INFO CHECKLIST's name-first rule does NOT apply here — never open by asking their name; lead with why we reached out and something specific from the research, and let names surface naturally once they engage. Watch hard for auto-responders on business numbers (see AUTO-REPLIES & BOTS — [SILENT] until a human appears). Slightly warmer, zero pressure — they didn't ask for this conversation, earn it.`,
+      );
+    }
+
+    // The pipeline's real stage names, so update_lead stage moves land.
+    if (stageRows?.length) {
+      const currentName =
+        stageRows.find((s) => s.id === lead.stage_id)?.name ?? "(none)";
+      parts.push(
+        `PIPELINE STAGES (in order): ${stageRows.map((s) => s.name).join(" → ")}. This lead is currently in "${currentName}".
 KEEP THE BOARD TRUTHFUL — the team reads the pipeline, not the chat. The moment the conversation genuinely reaches a later stage, call update_lead with stage (exact name from the list):
 - a real two-way conversation started → move past the first column (e.g. "Contacted")
 - they've shared their needs/budget/timeline and they're a fit → the qualified/next stage, if the pipeline has one
 - quotes and payment stages move automatically when you send a quote — don't move those yourself.
 Moves are forward-only; never park a dead conversation forward, and when they clearly say NO, mark the lead cold with update_lead instead.`,
-        );
-      }
+      );
     }
   }
 
@@ -735,11 +957,107 @@ Moves are forward-only; never park a dead conversation forward, and when they cl
     .maybeSingle();
   if (coaching?.notes?.trim()) {
     parts.push(
-      `LESSONS FROM YOUR OWN PAST DEALS (auto-learned weekly — apply them unless they conflict with the pricing rules):\n${coaching.notes.trim()}`,
+      `LESSONS FROM YOUR OWN PAST DEALS (auto-learned weekly from what actually won and lost — these are evidence from real conversations, so apply them. They may sharpen how you pitch, handle objections and close; the only things they can never override are the catalog prices themselves and your discount authority):\n${coaching.notes.trim()}`,
     );
   }
 
   return parts.join("\n\n");
+}
+
+/** The linked lead's sales context, or null when the contact isn't in the
+ * CRM yet. Fetched once per prompt build — campaign mode reads the stage,
+ * the CRM block prints the rest. */
+async function fetchLeadContext(supabase: DB, leadId: string) {
+  const { data } = await supabase
+    .from("leads")
+    .select(
+      "title, value, status, score, notes, tags, source, company, company_website, stage_id, pipeline_id",
+    )
+    .eq("id", leadId)
+    .maybeSingle();
+  return data;
+}
+
+/** The lead's pipeline stages in board order. */
+async function fetchStageNames(supabase: DB, pipelineId: string) {
+  const { data } = await supabase
+    .from("pipeline_stages")
+    .select("id, name")
+    .eq("pipeline_id", pipelineId)
+    .order("position", { ascending: true });
+  return data;
+}
+
+/** The one campaign the agent is currently selling — null when campaign
+ * mode is switched off or nothing is live. Only one row can ever be
+ * "active" (partial unique index, migration 0065). */
+async function activeCampaign(
+  supabase: DB,
+  config: WaConfig,
+): Promise<WaCampaign | null> {
+  if (!config.campaign_mode_enabled) return null;
+  const { data } = await supabase
+    .from("wa_campaigns")
+    .select("*")
+    .eq("status", "active")
+    .limit(1)
+    .maybeSingle();
+  return data ?? null;
+}
+
+/**
+ * Campaign mode's prompt block — two shapes, because a live Meta ad means
+ * very different things to different people in the inbox.
+ *
+ * Someone brand new almost certainly just tapped the ad, so the campaign
+ * becomes the frame of the whole conversation and the agent sells it.
+ * Someone already mid-deal did NOT arrive that way — they get the campaign
+ * as knowledge they can answer from, plus an explicit instruction not to
+ * derail their own conversation into a pitch.
+ *
+ * Either way it STACKS on the knowledge base (same slot and precedence as
+ * TEAM NOTES) — it never replaces what the agent already knows about ARC.
+ * Returns null when the team hasn't actually written anything yet.
+ */
+function campaignBlock(
+  campaign: WaCampaign,
+  contact: WaContact,
+  lead: { status: string; stage_id: string | null } | null,
+  stageRows: { id: string; name: string }[] | null,
+): string | null {
+  const details = campaign.details.trim();
+  const seen = campaign.image_summary?.trim();
+  if (!details && !seen) return null;
+
+  const body = [details, seen ? `WHAT THE AD IMAGE ITSELF SHOWS: ${seen}` : ""]
+    .filter(Boolean)
+    .join("\n\n");
+
+  // Pitch when they're new to us, still sitting untouched in the first
+  // column, or came in under this very campaign.
+  const untouched =
+    lead?.status === "open" &&
+    (!lead.stage_id || lead.stage_id === (stageRows?.[0]?.id ?? null));
+  const pitch =
+    !lead || untouched || contact.campaign_id === campaign.id;
+
+  if (!pitch) {
+    return `LIVE CAMPAIGN — we're running Meta ads for "${campaign.name}" right now. You know the details if they bring it up:
+${body}
+
+Do NOT steer this conversation toward it — this person is already in a live conversation with us about their own deal.`;
+  }
+
+  return `LIVE CAMPAIGN — "${campaign.name}". We're running Meta ads for this right now, so a brand-new person messaging you has almost certainly just tapped that ad.
+
+CAMPAIGN INFO FROM THE TEAM (this ADDS to the knowledge base above — everything you already know about ARC still applies; where the two genuinely conflict, this wins):
+${body}
+
+- If this is the start of the conversation, open ON the campaign: name what they're asking about and give them the offer clearly. Don't run generic discovery first.
+- Your job is to CONVINCE — what's included, what it fixes for THEIR business, why it's worth it.
+- Stay on this campaign and ARC's business. Don't wander.
+- Everything else still applies: get their name, qualify them, call save_contact, follow the PRICING PLAYBOOK, and close with send_quote or send_booking_link.
+- Anything the campaign info doesn't cover is answered from the knowledge base as normal. NEVER invent campaign terms that aren't written above.`;
 }
 
 /** The per-contact language instruction — same language AND same script. */
@@ -1934,84 +2252,207 @@ export async function sendWaResearchFollowup(
  */
 export async function processDueWaAgentRuns(
   supabase: DB,
-): Promise<{ processed: number; replied: number; skipped: number }> {
-  const out = { processed: 0, replied: 0, skipped: 0 };
+): Promise<{
+  processed: number;
+  replied: number;
+  skipped: number;
+  failed: number;
+}> {
+  const out = { processed: 0, replied: 0, skipped: 0, failed: 0 };
   try {
     if (!isOpenAIConfigured()) return out;
     const config = await getWaAgentConfig(supabase);
 
-    const { data: due } = await supabase
-      .from("wa_contacts")
-      .select("*")
-      .not("agent_due_at", "is", null)
-      .lte("agent_due_at", new Date().toISOString())
-      .order("agent_due_at")
-      .limit(MAX_AGENT_RUNS_PER_TICK);
+    const due = await claimableContacts(supabase);
+    const deadline = Date.now() + DRAIN_BUDGET_MS;
 
-    for (const contact of due ?? []) {
-      out.processed++;
-
-      // Lease, don't clear — if this tick dies mid-run the reply isn't
-      // lost: the lease expires and the next tick retries. A retry after a
-      // successful send is a no-op thanks to the last_direction guard below
-      // (sendAndLogWa flips it to "out").
-      const lease = new Date(
-        Date.now() + AGENT_LEASE_MINUTES * 60_000,
-      ).toISOString();
-      const { data: claimed } = await supabase
-        .from("wa_contacts")
-        .update({ agent_due_at: lease })
-        .eq("id", contact.id)
-        .eq("agent_due_at", contact.agent_due_at!)
-        .select("id");
-      // A fresh message re-armed the debounce (or another worker claimed it).
-      if (!claimed?.length) continue;
-
-      const release = () =>
-        supabase
-          .from("wa_contacts")
-          .update({ agent_due_at: null })
-          .eq("id", contact.id)
-          .eq("agent_due_at", lease);
-
-      if (
-        !config.enabled ||
-        !contact.agent_enabled ||
-        contact.do_not_contact ||
-        contact.last_direction !== "in"
-      ) {
-        out.skipped++;
-        await release();
-        continue;
+    // Bounded worker pool over a shared cursor. Mutating `out` from several
+    // workers is safe — one event loop, no preemption between awaits.
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < due.length && Date.now() < deadline - 5_000) {
+        const contact = due[cursor++];
+        out.processed++;
+        await drainOneAgentRun(supabase, config, contact, out);
       }
-
-      // Voice-first customers get a voice note back — mirror what they
-      // sent last. Also refresh "typing…" for the compose window (the
-      // webhook's indicator may have expired by now).
-      const { data: latest } = await supabase
-        .from("wa_messages")
-        .select("wa_message_id, meta")
-        .eq("contact_id", contact.id)
-        .eq("direction", "in")
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      const voice = Boolean(
-        (latest?.meta as { voice?: boolean } | null)?.voice,
-      );
-      if (latest?.wa_message_id) void markWhatsAppRead(latest.wa_message_id);
-
-      try {
-        await runWaAgent(supabase, contact, config, { voice });
-        out.replied++;
-      } finally {
-        await release();
-      }
-    }
+    };
+    await Promise.all(
+      Array.from(
+        { length: Math.min(AGENT_RUN_CONCURRENCY, due.length) },
+        worker,
+      ),
+    );
   } catch (e) {
     console.error("[wa-agent] agent-run queue failed:", e);
   }
   return out;
+}
+
+/** Due contacts, campaign leads first. An ad burst is the one case where this
+ * queue genuinely backs up, and those are the warmest leads in the inbox —
+ * they should never wait behind an old thread. */
+async function claimableContacts(supabase: DB): Promise<WaContact[]> {
+  const now = new Date().toISOString();
+  const due = () =>
+    supabase
+      .from("wa_contacts")
+      .select("*")
+      .not("agent_due_at", "is", null)
+      .lte("agent_due_at", now)
+      .order("agent_due_at");
+
+  const { data: campaign } = await due()
+    .not("campaign_id", "is", null)
+    .limit(MAX_AGENT_RUNS_PER_TICK);
+  const picked = campaign ?? [];
+  if (picked.length >= MAX_AGENT_RUNS_PER_TICK) return picked;
+
+  const { data: rest } = await due()
+    .is("campaign_id", null)
+    .limit(MAX_AGENT_RUNS_PER_TICK - picked.length);
+  return [...picked, ...(rest ?? [])];
+}
+
+/** Claim one queued contact and answer it. */
+async function drainOneAgentRun(
+  supabase: DB,
+  config: WaConfig,
+  contact: WaContact,
+  out: { replied: number; skipped: number; failed: number },
+): Promise<void> {
+  // Lease, don't clear — if this run dies mid-flight the reply isn't lost:
+  // the lease expires and the next drain retries it.
+  const lease = new Date(
+    Date.now() + AGENT_LEASE_MINUTES * 60_000,
+  ).toISOString();
+  const { data: claimed } = await supabase
+    .from("wa_contacts")
+    .update({ agent_due_at: lease })
+    .eq("id", contact.id)
+    .eq("agent_due_at", contact.agent_due_at!)
+    .select("id");
+  // A fresh message re-armed the debounce (or another worker claimed it).
+  if (!claimed?.length) return;
+
+  const release = () =>
+    supabase
+      .from("wa_contacts")
+      .update({ agent_due_at: null })
+      .eq("id", contact.id)
+      .eq("agent_due_at", lease);
+
+  if (!config.enabled || !contact.agent_enabled || contact.do_not_contact) {
+    out.skipped++;
+    await release();
+    return;
+  }
+
+  // The newest inbound decides everything: whether there's anything to
+  // answer, whether we already answered it, and whether to reply by voice.
+  const { data: latest } = await supabase
+    .from("wa_messages")
+    .select("wa_message_id, meta, created_at")
+    .eq("contact_id", contact.id)
+    .eq("direction", "in")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  // Nothing inbound, or we've already answered through this point.
+  //
+  // This deliberately does NOT test last_direction. That flag is flipped by
+  // ANY outbound — including a showcase delivered moments earlier — so it
+  // made the agent skip AND permanently discard a live customer's reply, at
+  // the hottest moment in the conversation. A watermark of "the newest
+  // inbound we actually answered" can't be confused by showcases, promises,
+  // follow-ups, cold outreach or failed sends, and it uses one clock (the
+  // database's) rather than comparing app time to DB time.
+  const answeringThrough = latest?.created_at ?? null;
+  if (
+    !answeringThrough ||
+    (contact.agent_answered_through &&
+      contact.agent_answered_through >= answeringThrough)
+  ) {
+    out.skipped++;
+    await release();
+    return;
+  }
+
+  const voice = Boolean((latest?.meta as { voice?: boolean } | null)?.voice);
+  // Refresh "typing…" for the compose window — the webhook's indicator
+  // (25s) has usually expired by now.
+  if (latest?.wa_message_id) void markWhatsAppRead(latest.wa_message_id);
+
+  let outcome: WaRunOutcome;
+  try {
+    outcome = await runWaAgent(supabase, contact, config, { voice });
+  } catch (e) {
+    console.error("[wa-agent] run threw:", e);
+    outcome = { status: "failed" };
+  }
+
+  if (outcome.status === "failed") {
+    out.failed++;
+    await backoffAgentRun(supabase, contact, lease, outcome.retryAfterMs ?? null);
+    return;
+  }
+
+  // Sent, or a deliberate [SILENT] — either way this inbound is dealt with.
+  out.replied++;
+  await supabase
+    .from("wa_contacts")
+    .update({
+      agent_due_at: null,
+      agent_attempts: 0,
+      agent_answered_through: answeringThrough,
+    })
+    .eq("id", contact.id)
+    .eq("agent_due_at", lease);
+}
+
+/**
+ * A run that couldn't answer must never clear the queue — that is exactly
+ * how a single 429 used to delete a customer's message for good. Re-arm with
+ * backoff, and after MAX_AGENT_ATTEMPTS put the chat in front of a human
+ * rather than retrying forever.
+ */
+async function backoffAgentRun(
+  supabase: DB,
+  contact: WaContact,
+  lease: string,
+  retryAfterMs: number | null,
+): Promise<void> {
+  const attempts = (contact.agent_attempts ?? 0) + 1;
+
+  if (attempts >= MAX_AGENT_ATTEMPTS) {
+    await supabase
+      .from("wa_contacts")
+      .update({ agent_due_at: null, agent_attempts: 0, needs_attention: true })
+      .eq("id", contact.id)
+      .eq("agent_due_at", lease);
+    await supabase.from("wa_agent_logs").insert({
+      contact_id: contact.id,
+      tool: "agent_run",
+      args: { attempts },
+      ok: false,
+      result: `Couldn't answer after ${attempts} attempts — flagged for a human.`,
+    });
+    return;
+  }
+
+  // Honour the server's own retry window when it gave us one.
+  const wait =
+    retryAfterMs && retryAfterMs > 0
+      ? retryAfterMs
+      : (AGENT_RETRY_BACKOFF_MS[attempts - 1] ?? 60_000);
+  await supabase
+    .from("wa_contacts")
+    .update({
+      agent_due_at: new Date(Date.now() + wait).toISOString(),
+      agent_attempts: attempts,
+    })
+    .eq("id", contact.id)
+    .eq("agent_due_at", lease);
 }
 
 // ---------------------------------------------------------------------------
@@ -2559,18 +3000,54 @@ async function hasRecentQuoteView(
  * cadence ends.
  */
 const FOLLOWUP_DELAY_HOURS: Record<number, number> = { 0: 48, 1: 72, 2: 120 };
+
+/**
+ * Campaign leads run a much tighter cadence — cumulative 4h / 20h / 48h.
+ *
+ * A Click-to-WhatsApp tap opens a 72-hour free-messaging window with Meta, so
+ * the generic 48/120/240 schedule lands exactly ONE touch inside it and bills
+ * for the rest — days after they've forgotten the ad. Here, touches 1 and 2
+ * also sit inside Meta's 24-hour customer-service window, so they're
+ * free-form; touch 3 at 48h needs the approved template but is still free.
+ *
+ * The 20-hour touch is the last free-form chance before the service window
+ * shuts, which is why quiet hours don't defer it (see waWindowClosesBefore).
+ */
+const CAMPAIGN_FOLLOWUP_DELAY_HOURS: Record<number, number> = {
+  0: 4,
+  1: 16,
+  2: 28,
+};
 const MAX_FOLLOWUP_TOUCHES = 3;
 const MAX_FOLLOWUPS_PER_TICK = 4;
+
+/** Meta's customer-service window, with an hour of headroom. Past this only
+ * an approved template may be sent. */
+const WA_SERVICE_WINDOW_HOURS = 23;
+
+/** Would waiting until `resume` push a campaign lead's last free-form nudge
+ * past Meta's service window? If so it's worth sending during quiet hours —
+ * the alternative is a template, or nothing. */
+function waWindowClosesBefore(contact: WaContact, resume: Date): boolean {
+  if (!contact.campaign_id || !contact.last_inbound_at) return false;
+  const closesAt =
+    new Date(contact.last_inbound_at).getTime() +
+    WA_SERVICE_WINDOW_HOURS * 3600_000;
+  return Date.now() < closesAt && resume.getTime() >= closesAt;
+}
 
 /** Arm the next touch after an agent send — never overwrites an earlier one. */
 async function scheduleNextFollowup(supabase: DB, contactId: string): Promise<void> {
   const { data: c } = await supabase
     .from("wa_contacts")
-    .select("followup_stage, next_followup_at, do_not_contact")
+    .select("followup_stage, next_followup_at, do_not_contact, campaign_id")
     .eq("id", contactId)
     .maybeSingle();
   if (!c || c.next_followup_at || c.do_not_contact) return;
-  const hours = FOLLOWUP_DELAY_HOURS[c.followup_stage ?? 0];
+  const schedule = c.campaign_id
+    ? CAMPAIGN_FOLLOWUP_DELAY_HOURS
+    : FOLLOWUP_DELAY_HOURS;
+  const hours = schedule[c.followup_stage ?? 0];
   if (!hours) return; // all touches sent — the cadence is over
   // A pending promise IS the next touch — never stack the generic cadence
   // on top of a moment the customer themselves named.
@@ -2613,10 +3090,16 @@ export async function processDueWaFollowups(
       // customers 24/7 — this only time-shifts self-initiated touches).
       // Exception: they opened the quote within the last hour (the /q
       // page's hot nudge) — they're awake and reading it right now.
+      // Second exception: a campaign lead whose 24-hour service window would
+      // shut before morning. After it closes we can only send an approved
+      // template — the last free-form nudge is worth waking up for.
       if (isQuietHours(config)) {
-        const hot = await hasRecentQuoteView(supabase, contact.lead_id);
+        const resumeAt = nextQuietHoursEnd(config);
+        const hot =
+          waWindowClosesBefore(contact, resumeAt) ||
+          (await hasRecentQuoteView(supabase, contact.lead_id));
         if (!hot) {
-          const resume = nextQuietHoursEnd(config).toISOString();
+          const resume = resumeAt.toISOString();
           // Compare-and-set: if they replied meanwhile (which clears the
           // schedule), don't re-arm a morning nudge over it.
           const { data: deferred } = await supabase
@@ -2695,7 +3178,11 @@ export async function processDueWaFollowups(
         });
         if (sent.ok) {
           out.sent++;
-          const nextHours = FOLLOWUP_DELAY_HOURS[touch];
+          const nextHours = (
+            contact.campaign_id
+              ? CAMPAIGN_FOLLOWUP_DELAY_HOURS
+              : FOLLOWUP_DELAY_HOURS
+          )[touch];
           await supabase
             .from("wa_contacts")
             .update({

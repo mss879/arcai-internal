@@ -73,11 +73,27 @@ export type ToolSchema = {
   };
 };
 
+/** Thrown on a 429 so callers can wait the server's own retry window
+ * instead of guessing (or, worse, dropping the work). */
+export class OpenAIRateLimitError extends Error {
+  readonly retryAfterMs: number | null;
+  constructor(message: string, retryAfterMs: number | null) {
+    super(message);
+    this.name = "OpenAIRateLimitError";
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
+/** Ceiling on any single chat round-trip. Finite by default on purpose: an
+ * opt-in timeout leaves every un-migrated caller able to hang a serverless
+ * invocation forever. */
+const CHAT_TIMEOUT_MS = 45_000;
+
 /** One round-trip to chat completions. Returns the assistant message. */
 export async function openaiChat(
   messages: ChatMessage[],
   tools?: ToolSchema[],
-  opts?: { model?: string },
+  opts?: { model?: string; timeoutMs?: number; temperature?: number },
 ): Promise<ChatMessage> {
   const model = opts?.model?.trim() || AI_MODELS.chat;
   const res = await fetch(`${BASE_URL}/chat/completions`, {
@@ -89,15 +105,28 @@ export async function openaiChat(
     body: JSON.stringify({
       model,
       messages,
-      // Keep it factual/deterministic — this assistant must not improvise
-      // data. (Reasoning models reject temperature — omit it for them.)
-      ...(isReasoningModel(model) ? {} : { temperature: 0 }),
+      // Factual/deterministic by default — this assistant must not improvise
+      // data. Conversational callers (the WhatsApp sales agent) pass their own
+      // temperature so every lead doesn't get a byte-identical reply.
+      // (Reasoning models reject temperature — omit it for them.)
+      ...(isReasoningModel(model) ? {} : { temperature: opts?.temperature ?? 0 }),
       ...(tools && tools.length ? { tools, tool_choice: "auto" } : {}),
     }),
+    signal: AbortSignal.timeout(
+      Math.max(1_000, opts?.timeoutMs ?? CHAT_TIMEOUT_MS),
+    ),
   });
 
   if (!res.ok) {
     const detail = await res.text();
+    if (res.status === 429) {
+      const header = res.headers.get("retry-after");
+      const seconds = header ? Number(header) : NaN;
+      throw new OpenAIRateLimitError(
+        `OpenAI chat rate-limited: ${detail}`,
+        Number.isFinite(seconds) ? seconds * 1000 : null,
+      );
+    }
     throw new Error(`OpenAI chat failed (${res.status}): ${detail}`);
   }
 

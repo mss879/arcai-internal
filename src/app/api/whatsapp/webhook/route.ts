@@ -163,9 +163,16 @@ async function handleMessages(supabase: DB, value: WaWebhookValue): Promise<void
       .eq("wa_id", waId)
       .maybeSingle();
     if (!contact) {
+      // Stamp whichever campaign was live the moment they first wrote —
+      // that's how each campaign's lead count is counted later. Costs two
+      // queries, but only ever on a contact's first message.
+      const campaignId = await activeCampaignId(supabase);
       const { data: created } = await supabase
         .from("wa_contacts")
-        .upsert({ wa_id: waId, profile_name: profileName }, { onConflict: "wa_id" })
+        .upsert(
+          { wa_id: waId, profile_name: profileName, campaign_id: campaignId },
+          { onConflict: "wa_id" },
+        )
         .select("*")
         .single();
       contact = created;
@@ -334,6 +341,25 @@ async function handleMessages(supabase: DB, value: WaWebhookValue): Promise<void
       }
     }
   }
+}
+
+/** The campaign the agent is currently selling, when campaign mode is on.
+ * Only one row can be "active" at a time (migration 0065). */
+async function activeCampaignId(supabase: DB): Promise<string | null> {
+  const { data: config } = await supabase
+    .from("wa_agent_config")
+    .select("campaign_mode_enabled")
+    .eq("id", 1)
+    .maybeSingle();
+  if (!config?.campaign_mode_enabled) return null;
+
+  const { data } = await supabase
+    .from("wa_campaigns")
+    .select("id")
+    .eq("status", "active")
+    .limit(1)
+    .maybeSingle();
+  return data?.id ?? null;
 }
 
 type InboundSlip = {

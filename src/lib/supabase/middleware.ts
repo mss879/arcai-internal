@@ -12,8 +12,13 @@ const PUBLIC_PREFIXES = [
   // Public APIs: inquiry forms, inbound webhooks, visitor tracking, open API.
   "/api/public",
   // Cron tick endpoints (optionally guarded by SMS_CRON_SECRET themselves).
+  // ANY new /api cron route must be listed here as well as given its Netlify
+  // scheduled function — miss this and the call is silently 307'd to /login,
+  // which looks like a working endpoint from the outside.
   "/api/automation/tick",
   "/api/sms/automation/tick",
+  // Live WhatsApp replies, promise touches and the follow-up cadence.
+  "/api/whatsapp/agent-tick",
   "/api/intelligence/digest",
   // Meta's WhatsApp Cloud API webhook — must be reachable by Meta's servers.
   // The route guards itself: GET needs the verify token, POST needs a valid

@@ -51,7 +51,7 @@ export function ProjectsView({
   const activeProjects = projects.filter((p) => p.status === "active");
   const activeCount = activeProjects.length;
 
-  const getSumByCurrency = (projectList: typeof projects) => {
+  const getSumByCurrency = React.useCallback((projectList: typeof projects) => {
     const sums: Record<string, number> = {};
     projectList.forEach((p) => {
       const val = Number(p.total_value) || 0;
@@ -59,9 +59,22 @@ export function ProjectsView({
       sums[curr] = (sums[curr] || 0) + val;
     });
     return sums;
-  };
+  }, []);
 
-  const totalSums = getSumByCurrency(projects);
+  const totalSums = React.useMemo(() => getSumByCurrency(projects), [projects, getSumByCurrency]);
+
+  const currentMonthKey = format(new Date(), "yyyy-MM");
+  const currentMonthProjects = React.useMemo(() => {
+    return projects.filter((p) => {
+      const date = p.created_at ? new Date(p.created_at) : new Date();
+      return format(date, "yyyy-MM") === currentMonthKey;
+    });
+  }, [projects, currentMonthKey]);
+
+  const currentMonthSums = React.useMemo(
+    () => getSumByCurrency(currentMonthProjects),
+    [currentMonthProjects, getSumByCurrency]
+  );
 
   const formatSums = (sums: Record<string, number>) => {
     const entries = Object.entries(sums);
@@ -211,7 +224,7 @@ export function ProjectsView({
       />
 
       {projects.length > 0 && (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <div className="animate-continuous-float" style={{ animationDelay: "0ms" }}>
             <div className="group rounded-2xl border border-white/30 bg-gradient-to-br from-white/60 to-white/25 p-5 shadow-sm backdrop-blur-xl transition-all duration-300 ease-out hover:-translate-y-1 hover:scale-[1.01] hover:from-white/75 hover:to-white/40 hover:border-primary-400 hover:shadow-md">
               <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
@@ -230,6 +243,17 @@ export function ProjectsView({
               </p>
               <p className="mt-2 text-3xl font-extrabold text-slate-800 tracking-tight">
                 {formatSums(totalSums)}
+              </p>
+            </div>
+          </div>
+
+          <div className="animate-continuous-float" style={{ animationDelay: "300ms" }}>
+            <div className="group rounded-2xl border border-white/30 bg-gradient-to-br from-white/60 to-white/25 p-5 shadow-sm backdrop-blur-xl transition-all duration-300 ease-out hover:-translate-y-1 hover:scale-[1.01] hover:from-white/75 hover:to-white/40 hover:border-indigo-400 hover:shadow-md">
+              <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                This Month&apos;s Value
+              </p>
+              <p className="mt-2 text-3xl font-extrabold text-slate-800 tracking-tight">
+                {formatSums(currentMonthSums)}
               </p>
             </div>
           </div>

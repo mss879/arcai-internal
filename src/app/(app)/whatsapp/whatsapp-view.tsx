@@ -353,6 +353,37 @@ function InboxTab({
     [messages, selected?.id],
   );
 
+  /**
+   * Reactions ride ON the message they target, the way WhatsApp shows them —
+   * so they're pulled out of the message flow and handed to that bubble.
+   *
+   * One that targets a message which isn't loaded (older than the window, or
+   * sent before reactions were captured) has nothing to attach to, so it
+   * stays in the flow as a bubble of its own rather than vanishing.
+   */
+  const { visibleThread, reactionsFor } = React.useMemo(() => {
+    const loaded = new Set(
+      thread.map((m) => m.wa_message_id).filter(Boolean) as string[],
+    );
+    const byTarget = new Map<string, string[]>();
+    for (const m of thread) {
+      if (m.message_type !== "reaction") continue;
+      const target = (m.meta as { reaction_target?: string } | null)
+        ?.reaction_target;
+      if (!target || !loaded.has(target)) continue;
+      byTarget.set(target, [...(byTarget.get(target) ?? []), m.body]);
+    }
+    return {
+      visibleThread: thread.filter((m) => {
+        if (m.message_type !== "reaction") return true;
+        const target = (m.meta as { reaction_target?: string } | null)
+          ?.reaction_target;
+        return !target || !loaded.has(target);
+      }),
+      reactionsFor: byTarget,
+    };
+  }, [thread]);
+
   // The next promised follow-up for this chat (promises arrive sorted by due_at).
   const selectedPromise = React.useMemo(
     () => promises.find((p) => p.contact_id === selected?.id) ?? null,
@@ -595,8 +626,14 @@ function InboxTab({
           </div>
 
           <div ref={scrollRef} className="flex-1 space-y-2 overflow-y-auto bg-slate-50/60 p-4">
-            {thread.map((m) => (
-              <MessageBubble key={m.id} message={m} />
+            {visibleThread.map((m) => (
+              <MessageBubble
+                key={m.id}
+                message={m}
+                reactions={
+                  m.wa_message_id ? reactionsFor.get(m.wa_message_id) : undefined
+                }
+              />
             ))}
             {thread.length === 0 && (
               <p className="pt-10 text-center text-sm text-slate-400">
@@ -641,18 +678,42 @@ function InboxTab({
   );
 }
 
-function MessageBubble({ message }: { message: WaMessage }) {
+function MessageBubble({
+  message,
+  reactions,
+}: {
+  message: WaMessage;
+  reactions?: string[];
+}) {
   const out = message.direction === "out";
   const meta = (message.meta ?? {}) as {
     image_url?: string;
     document_url?: string;
     filename?: string;
   };
+
+  // A reaction whose target isn't loaded has no bubble to sit on — show it
+  // as a quiet standalone line rather than a full message bubble.
+  if (message.message_type === "reaction") {
+    return (
+      <div className={cn("flex", out ? "justify-end" : "justify-start")}>
+        <span
+          className="flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-500 shadow-sm"
+          title={`Reacted ${message.body} to an earlier message`}
+        >
+          <span className="text-sm leading-none">{message.body}</span>
+          <span>reacted to an earlier message</span>
+        </span>
+      </div>
+    );
+  }
+
   return (
     <div className={cn("flex", out ? "justify-end" : "justify-start")}>
       <div
         className={cn(
-          "max-w-[78%] rounded-2xl px-3.5 py-2 text-sm shadow-sm",
+          "relative max-w-[78%] rounded-2xl px-3.5 py-2 text-sm shadow-sm",
+          reactions?.length && "mb-3",
           out
             ? "rounded-br-md bg-emerald-600 text-white"
             : "rounded-bl-md border border-slate-200 bg-white text-slate-800",
@@ -705,6 +766,21 @@ function MessageBubble({ message }: { message: WaMessage }) {
           <span>{fmtClock(message.created_at)}</span>
           {out && <StatusTicks status={message.status} error={message.error} />}
         </div>
+
+        {/* The customer's reaction, sitting on the bubble it belongs to. */}
+        {reactions?.length ? (
+          <span
+            className={cn(
+              "absolute -bottom-3 flex items-center gap-0.5 rounded-full border border-slate-200 bg-white px-1.5 py-0.5 text-xs leading-none shadow-sm",
+              out ? "left-2" : "right-2",
+            )}
+            title={`Reacted ${reactions.join(" ")}`}
+          >
+            {reactions.map((emoji, i) => (
+              <span key={i}>{emoji}</span>
+            ))}
+          </span>
+        ) : null}
       </div>
     </div>
   );

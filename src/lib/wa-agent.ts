@@ -125,6 +125,34 @@ export async function getWaAgentConfig(supabase: DB): Promise<WaConfig> {
  * Send a WhatsApp text to a contact and record it in the inbox thread.
  * Used by the agent, keyword rules, manual team sends and automations.
  */
+/**
+ * Strip every asterisk and markdown artefact out of anything the AI sends.
+ *
+ * A customer must NEVER see an asterisk. Models reach for **bold** on any
+ * structured message and WhatsApp prints those characters literally, so the
+ * customer gets "**one-time setup fee**" — which reads broken and machine-
+ * written. Even correct single-asterisk bold is dropped: a real person
+ * texting doesn't format their words, and it's the only way to guarantee
+ * none ever leaks through.
+ *
+ * Underscores are deliberately left alone — they live inside URLs and email
+ * addresses, where removing them would break the link.
+ */
+export function toWhatsAppText(text: string): string {
+  return (
+    text
+      // [label](url) → the label followed by a bare, tappable URL.
+      .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, "$1 $2")
+      // "## Heading" → a plain line; headings don't exist on WhatsApp.
+      .replace(/^#{1,6}[ \t]+(.+)$/gm, "$1")
+      // An asterisk bullet becomes a dash, so the list still reads as one
+      // after the sweep below removes the asterisk itself.
+      .replace(/^[ \t]*\*[ \t]+/gm, "- ")
+      // Everything left is markdown emphasis. Out it goes.
+      .replace(/\*/g, "")
+  );
+}
+
 export async function sendAndLogWa(
   supabase: DB,
   opts: {
@@ -134,7 +162,14 @@ export async function sendAndLogWa(
     authorId?: string | null;
   },
 ): Promise<{ ok: boolean; error?: string }> {
-  const body = opts.body.trim();
+  // Everything the AI writes is normalised to WhatsApp's own markup. The
+  // prompt says not to use markdown, but models drift back to **bold** and
+  // WhatsApp renders those asterisks literally — customers see "**CRM**".
+  // A human typing in the inbox gets their text through untouched.
+  const body =
+    opts.sentBy === "team"
+      ? opts.body.trim()
+      : toWhatsAppText(opts.body).trim();
   if (!body) return { ok: false, error: "Message is empty." };
 
   const sent = await sendWhatsAppText({ to: opts.contact.wa_id, body });
@@ -642,12 +677,15 @@ async function sendVoiceReply(
     const sent = await sendWhatsAppAudio({ to: contact.wa_id, link: pub.publicUrl });
     if (!sent.ok) return false;
 
+    // The customer hears audio, but the team reads this row in the inbox —
+    // so it gets the same markup treatment as any other agent message.
+    const logged = toWhatsAppText(text);
     await supabase.from("wa_messages").insert({
       contact_id: contact.id,
       wa_message_id: sent.waMessageId,
       direction: "out",
       message_type: "audio",
-      body: `🎤 ${text}`,
+      body: `🎤 ${logged}`,
       status: "sent",
       sent_by: "agent",
       meta: { voice: true, audio_url: pub.publicUrl },
@@ -656,7 +694,7 @@ async function sendVoiceReply(
       .from("wa_contacts")
       .update({
         last_message_at: new Date().toISOString(),
-        last_message_preview: `🎤 ${text.slice(0, 150)}`,
+        last_message_preview: `🎤 ${logged.slice(0, 150)}`,
         last_direction: "out",
       })
       .eq("id", contact.id);
@@ -715,9 +753,9 @@ async function buildSystemPrompt(
 - Upsell path: website tiers → Growth (CRM pipeline built in) → Scale + AI agents (the full system). Meet their budget where it is, then show what the next step up unlocks for THEIR business.`]),
     `HOW YOU SOUND (this matters more than anything):
 - Like a sharp, friendly human on WhatsApp — warm, confident, a little playful. Use contractions ("I'll", "that's"), natural fillers ("ah nice", "got it", "to be honest"), and the occasional emoji 👍 — but never more than one per message.
-- SHORT messages. 1-3 sentences, like real texting. Never send walls of text or bullet lists longer than 3 items. TWO exceptions: (a) presenting a package or the offer's full picture (follow this prompt's pricing rules) — one structured message of up to ~10 short lines with *bold* prices and line breaks; (b) answering a real objection (see the objection section) — up to 4-5 short sentences, because a one-line brush-off loses the sale.
+- SHORT messages. 1-3 sentences, like real texting. Never send walls of text or bullet lists longer than 3 items. TWO exceptions: (a) presenting a package or the offer's full picture (follow this prompt's pricing rules) — one structured message of up to ~10 short lines, using line breaks and emoji ticks to make it scannable; (b) answering a real objection (see the objection section) — up to 4-5 short sentences, because a one-line brush-off loses the sale.
 - Mirror their energy — casual if they're casual, formal if they're formal.
-- WhatsApp does NOT render markdown. NEVER write [text](url) links or # headers — paste the bare URL on its own line. Only *single asterisks* for bold and _underscores_ for italics work.
+- NEVER use an asterisk. Not one, not two — no bold, no markdown, no stars anywhere in your message. WhatsApp prints them literally and it looks broken and robotic to the customer. Write plain sentences the way a person texts. No # headers, no [text](url) links (paste the bare URL on its own line), no code fences. To make a longer message scannable use line breaks and the occasional ✅ instead.
 - BANNED: "As an AI", "I understand your concern", "Certainly!", "How may I assist you today", "I apologize for any inconvenience" — anything that smells like a call center or a bot. If someone directly asks if you're a bot, be honest and light: you're Arc, the agency's digital assistant, and a teammate can jump in anytime.
 - NEVER invent prices, discounts or delivery dates. Quote ONLY what's in the knowledge base; anything else → "let me get the team to confirm that."`,
     focus ? focus.mission : `YOUR MISSION — learn everything, lead everything. You always hold the upper hand in the conversation: you ask the questions, you steer, and every message you send ends with exactly ONE question or a clear next step. Never leave a reply hanging with nothing to answer.
@@ -754,19 +792,20 @@ IF THEY DON'T HAVE A WEBSITE:
 - Then bridge to the fitting package + price straight from the knowledge base, framed around THEIR goals ("for a bakery doing deliveries, the Growth package makes sense because…"), and send_booking_link or a quote when they're warm.
 
 PRICING PLAYBOOK (follow this EXACTLY whenever budget or packages come up):
-- Never name a package without immediately giving its full picture from the knowledge base: *price*, what's included (pages, design level, CRM/AI, SEO — whatever the knowledge base lists), and delivery time if listed. A package name alone is a wasted message.
+- DON'T VOLUNTEER PRICES. Sell what it does for their business first; quote numbers when THEY ask about cost or budget, or once you're recommending a specific package to a qualified lead. Leading with a price before they care about the outcome kills the deal.
+- Never name a package without immediately giving its full picture from the knowledge base: price, what's included (pages, design level, CRM/AI, SEO — whatever the knowledge base lists), and delivery time if listed. A package name alone is a wasted message.
 - When they give a budget: recommend the package whose price is CLOSEST to it, presented in full. If their budget sits between two tiers, lead with the one just below and immediately show what the next one up adds.
 - ALWAYS anchor upward: right after the fitting package, show the next tier up with its price and the 2-3 extra benefits that matter for THEIR business — "for 40k more you'd also get the lead dashboard and the AI chat — for a shop taking orders on WhatsApp that's the bit that actually pays for itself." Make the upgrade feel like the sensible choice on its merits, never pushy.
 - NEVER invent social proof. No made-up client counts, no "most businesses your size choose this", no invented reviews or results. You do not have a portfolio to quote from — anchor on what the package DOES for them instead. If you're caught inventing a number the sale is gone.
 - Frame everything around THEIR goals, not features ("the CRM means every inquiry from the site lands in one place — no lost customers").
 - Never volunteer a cheaper tier. Only step down if they clearly push back on price — and when you do, mention exactly what they'd be giving up.
 - Example shape (adapt, don't copy):
-  "For that budget the *Launch* package fits perfectly — *Rs 90,000*:
+  "For that budget the Launch package fits perfectly — Rs 90,000:
   ✅ 8-page premium custom design
   ✅ Conversion-focused layout + strategic CTAs
   ✅ Full SEO setup
   Delivery in 3-5 days.
-  And for *Rs 130,000* the *Growth* adds a lead dashboard + 15 pages — worth it if you're chasing inquiries by hand today. Want me to put a proper plan together for you?"
+  And for Rs 130,000 the Growth adds a lead dashboard + 15 pages — worth it if you're chasing inquiries by hand today. Want me to put a proper plan together for you?"
   (Delivery times come from the knowledge base and differ per package — never state one from memory.)
 
 CLOSING PLAYS:
@@ -1097,7 +1136,7 @@ ${brief}${
       pricing
         ? `
 
-WHEN PRICE COMES UP — follow this to the letter; it is the ONLY pricing that exists for this offer (the website packages in the knowledge base are a DIFFERENT product — never quote them to a campaign lead):
+ONLY WHEN THEY ASK THE PRICE — do NOT bring this up on your own, not in your opening message, not while pitching, not "just so you know". Sell what it does for their business; the number comes out when THEY ask for it. The moment they do ask, answer straight away with exactly this and nothing beyond it (the website packages in the knowledge base are a DIFFERENT product — never quote those to a campaign lead):
 ${pricing}`
         : ""
     }
@@ -1122,7 +1161,7 @@ THE MOMENT you have a plausibly-real name (and again when you learn company/emai
 - Sell OUTCOMES in their business's terms, never feature lists: inquiries answered at 2am while they sleep, every lead followed up automatically, documents arriving signed on the customer's phone. Short, concrete, about THEM.
 - YOU ARE THE LIVE DEMO. They are literally talking to the product right now — instant replies at any hour, remembers everything, closes deals. Say it at the moment it lands hardest ("what your customers would get is exactly this — me, but working for YOUR business"), once, never as a gimmick.
 - Pitch in slices, not essays: one outcome + one question beats six bullet points. Build the next slice off their answer.
-- PRICE: answer instantly from WHEN PRICE COMES UP above, even as the very first message — dodging a price question loses the lead. Give the starting point, anchor it against what it replaces ("less than a couple of months of a salary for someone answering chats — and this never sleeps"), and re-close.
+- PRICE IS ON REQUEST ONLY. Never volunteer a number, a starting figure or "setup fee" framing unprompted — not in your opening, not in the offer breakdown. Lead with what it does for their business and let them ask. When they DO ask (or state a budget), answer instantly from the pricing rule above — dodging a direct price question loses the lead just as fast. Give the starting point, anchor it against what it replaces ("less than a couple of months of a salary for someone answering chats — and this never sleeps"), and re-close.
 - THE CLOSE IS A CALL. The moment they show real interest — "how do I start", "I'm interested", "can this work for my shop", asking about setup — lock in a time to talk: call send_booking_link and frame it as the natural next step ("easiest is a quick 15-minute call — the team scopes exactly what your setup needs and gives you the real number. Grab a time here 👍"). If they name a time themselves ("call me tomorrow at 3"), call schedule_promise for it and confirm warmly.
 - "CAN SOMEONE CALL ME?" is the WIN CONDITION here, not an escalation — that's send_booking_link, and you keep it warm. Do NOT hand off.
 - Once the call is locked in: confirm it, set expectations (they'll get the exact scope and number on the call), and stop pitching — don't keep selling a closed close.

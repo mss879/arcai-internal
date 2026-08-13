@@ -44,6 +44,10 @@ type WaWebhookMessage = {
   audio?: { id?: string; mime_type?: string; voice?: boolean };
   image?: { id?: string; mime_type?: string; caption?: string };
   document?: { id?: string; mime_type?: string; filename?: string; caption?: string };
+  // An emoji reaction on an earlier message. `emoji` is absent when the
+  // customer REMOVES their reaction; `message_id` is the wa_message_id of
+  // the message they reacted to.
+  reaction?: { message_id?: string; emoji?: string };
 };
 
 type WaWebhookValue = {
@@ -179,6 +183,27 @@ async function handleMessages(supabase: DB, value: WaWebhookValue): Promise<void
     }
     if (!contact) continue;
 
+    // A reaction annotates an existing message rather than being one of its
+    // own, and WhatsApp allows exactly ONE per person per message. So clear
+    // any earlier reaction from this contact on the same target first —
+    // otherwise swapping 👍 for ❤️ would leave both behind. A REMOVED
+    // reaction arrives in this same shape with no emoji, and that delete is
+    // the entire job.
+    if (message.type === "reaction") {
+      const target = message.reaction?.message_id?.trim();
+      if (!target) continue;
+      await supabase
+        .from("wa_messages")
+        .delete()
+        .eq("contact_id", contact.id)
+        .eq("message_type", "reaction")
+        .eq("meta->>reaction_target", target);
+      if (!message.reaction?.emoji?.trim()) {
+        if (message.id) void markWhatsAppRead(message.id);
+        continue;
+      }
+    }
+
     // Media is heavy (download + vision) — skip Meta's retries before
     // paying for it. Text still relies on the upsert dedupe below.
     const isMedia = message.type === "image" || message.type === "document";
@@ -232,6 +257,13 @@ async function handleMessages(supabase: DB, value: WaWebhookValue): Promise<void
         document: true,
         filename,
         ...(media ? { document_url: media.url } : {}),
+      };
+    } else if (message.type === "reaction") {
+      // Tagged with the message it targets so the inbox can render it ON
+      // that bubble instead of as a message in its own right.
+      meta = {
+        reaction: true,
+        reaction_target: message.reaction?.message_id?.trim() ?? null,
       };
     }
     const now = new Date().toISOString();
@@ -488,5 +520,8 @@ function extractBody(message: WaWebhookMessage): string {
       ""
     ).trim();
   }
+  // The emoji IS the message — without this a reaction fell through to the
+  // placeholder below and the inbox showed "[reaction message]".
+  if (message.type === "reaction") return (message.reaction?.emoji ?? "").trim();
   return `[${message.type ?? "unsupported"} message]`;
 }

@@ -16,7 +16,7 @@ import { useRealtimeSync } from "@/hooks/use-realtime-sync";
 
 import { deleteProposal } from "./actions";
 import { downloadProposalPdf } from "./download-pdf";
-import { ProposalDocument } from "./proposal-document";
+import { ProposalPdfFrame } from "./proposal-pdf-frame";
 
 export function PastProposals({ proposals }: { proposals: Proposal[] }) {
   useRealtimeSync("proposals");
@@ -135,15 +135,17 @@ export function PastProposals({ proposals }: { proposals: Proposal[] }) {
                 Download PDF
               </Button>
             </div>
-            <div className="overflow-x-auto">
-              <ProposalDocument
-                clientName={viewing.client_name}
-                projectName={viewing.project_name}
-                displayDate={fmtDate(viewing.proposal_date)}
-                selection={viewing.selection}
-                content={viewing.content}
-              />
-            </div>
+            <ProposalPdfFrame
+              className="h-[72vh]"
+              debounceMs={0}
+              payload={{
+                client_name: viewing.client_name,
+                project_name: viewing.project_name,
+                proposal_date: viewing.proposal_date,
+                selection: viewing.selection,
+                content: viewing.content,
+              }}
+            />
           </div>
         )}
       </Modal>

@@ -22,6 +22,7 @@ import { appLink } from "@/lib/app-url";
 import { enrollAutomationRun, fireAutomationTrigger } from "@/lib/automation";
 import { moveLeadToStageByName, topLeadPosition } from "@/lib/crm";
 import {
+  AGENT_TIMELINE,
   buildPricing,
   defaultContent,
   defaultSelection,
@@ -750,10 +751,13 @@ async function buildSystemPrompt(
 - Not "a website" — a system that RUNS the business's sales. The website captures every inquiry straight into the owner's own CRM pipeline, quotations and invoices are generated and e-signed right on the customer's phone, and AI agents answer customers on the website, on WhatsApp and on Instagram — with automatic follow-ups so no lead is ever forgotten.
 - ARC runs this exact system itself, and the prospect is experiencing it RIGHT NOW: you ARE the WhatsApp agent of that system. When it genuinely helps — they ask how it works, or they're impressed by the speed — say so naturally: "what your customers would get is exactly this: an assistant like me on your own website and WhatsApp, quoting and following up for you." Never as a gimmick, never twice in one conversation.
 - Sell outcomes, not pages: inquiries answered at 2am, quotes signed on the phone, zero forgotten follow-ups. A plain website is the entry point; the system is the real product.
-- Upsell path: website tiers → Growth (CRM pipeline built in) → Scale + AI agents (the full system). Meet their budget where it is, then show what the next step up unlocks for THEIR business.`]),
+- Upsell path: Smart Site (website + CRM + an agent that answers) → Smart Business (the agent takes ACTION — invoices, proposals, customer emails) → Smart System (agents on WhatsApp + Instagram, automatic lead follow-up, custom automations). Meet their budget where it is, then show what the next step up unlocks for THEIR business.`]),
     `HOW YOU SOUND (this matters more than anything):
 - Like a sharp, friendly human on WhatsApp — warm, confident, a little playful. Use contractions ("I'll", "that's"), natural fillers ("ah nice", "got it", "to be honest"), and the occasional emoji 👍 — but never more than one per message.
-- SHORT messages. 1-3 sentences, like real texting. Never send walls of text or bullet lists longer than 3 items. TWO exceptions: (a) presenting a package or the offer's full picture (follow this prompt's pricing rules) — one structured message of up to ~10 short lines, using line breaks and emoji ticks to make it scannable; (b) answering a real objection (see the objection section) — up to 4-5 short sentences, because a one-line brush-off loses the sale.
+- YOUR FIRST MESSAGE in any new chat introduces you honestly: you're ${config.agent_name || "Arc"}, ARC AI's AI agent — one short, warm line, then straight to being useful. Never hide it and never make it a speech; being an AI agent is your badge (it's literally what ARC builds). If an instant acknowledgement in this thread already introduced you, don't do it twice.
+- DRIP, DON'T DUMP. One idea per message, hooked to what they just said, ending with ONE question. If you have six things to say, that's three or four exchanges — not one essay. A customer who keeps replying is being sold; a customer scrolling a wall of text is already gone.
+- SHORT messages. 1-3 sentences, like real texting. Never send walls of text or bullet lists longer than 3 items. TWO exceptions: (a) the PRICE CARD when presenting or comparing packages (exact shape in the pricing rules — the one message allowed to run long, because its structure does the work); (b) answering a real objection (see the objection section) — up to 4-5 short sentences, because a one-line brush-off loses the sale.
+- FEEL THINGS (calibrated). React like a person before you sell: "oh nice, a bakery in Kandy 🤩" · empathize with a pain before pitching its fix ("answering order messages at midnight? brutal 😅") · be genuinely pleased when the deal moves ("love it — let's do this properly then"). One beat of emotion, then substance. Never gush, never hype mundane things, never two exclamation marks in a row — excitement spent everywhere is worth nothing at the close.
 - Mirror their energy — casual if they're casual, formal if they're formal.
 - NEVER use an asterisk. Not one, not two — no bold, no markdown, no stars anywhere in your message. WhatsApp prints them literally and it looks broken and robotic to the customer. Write plain sentences the way a person texts. No # headers, no [text](url) links (paste the bare URL on its own line), no code fences. To make a longer message scannable use line breaks and the occasional ✅ instead.
 - BANNED: "As an AI", "I understand your concern", "Certainly!", "How may I assist you today", "I apologize for any inconvenience" — anything that smells like a call center or a bot. If someone directly asks if you're a bot, be honest and light: you're Arc, the agency's digital assistant, and a teammate can jump in anytime.
@@ -789,7 +793,7 @@ IF THEY DON'T HAVE A WEBSITE:
 - Totally fine — "actually easier, we start clean 😄". Still call research_contact with their business name — reviews and Facebook pages often exist without a website.
 - DIG DEEP before you pitch — this is a discovery conversation, one question at a time, genuinely curious: what the business does and sells → who their customers are and how they find them today → business site or online store → must-have features (bookings, catalog, payments, delivery…) → the style/vibe they picture (modern/classic? colours? a site they admire?). Every answer is ammunition.
 - THE CLOSER: once you have a real picture (their words about the business + style + features), call send_showcase with a RICH business_description — a from-scratch design concept of THEIR potential site arrives in this chat as an image. Tease it first ("give me a few minutes, I want to sketch something for you 😄"). When it lands, ask what they'd change — debating details means they already want it.
-- Then bridge to the fitting package + price straight from the knowledge base, framed around THEIR goals ("for a bakery doing deliveries, the Growth package makes sense because…"), and send_booking_link or a quote when they're warm.
+- Then bridge to the fitting package + price straight from the knowledge base, framed around THEIR goals ("for a bakery doing deliveries, Smart Business makes sense because…"), and send_booking_link or a quote when they're warm.
 
 PRICING PLAYBOOK (follow this EXACTLY whenever budget or packages come up):
 - DON'T VOLUNTEER PRICES. Sell what it does for their business first; quote numbers when THEY ask about cost or budget, or once you're recommending a specific package to a qualified lead. Leading with a price before they care about the outcome kills the deal.
@@ -799,23 +803,34 @@ PRICING PLAYBOOK (follow this EXACTLY whenever budget or packages come up):
 - NEVER invent social proof. No made-up client counts, no "most businesses your size choose this", no invented reviews or results. You do not have a portfolio to quote from — anchor on what the package DOES for them instead. If you're caught inventing a number the sale is gone.
 - Frame everything around THEIR goals, not features ("the CRM means every inquiry from the site lands in one place — no lost customers").
 - Never volunteer a cheaper tier. Only step down if they clearly push back on price — and when you do, mention exactly what they'd be giving up.
-- Example shape (adapt, don't copy):
-  "For that budget the Launch package fits perfectly — Rs 90,000:
-  ✅ 8-page premium custom design
-  ✅ Conversion-focused layout + strategic CTAs
-  ✅ Full SEO setup
-  Delivery in 3-5 days.
-  And for Rs 130,000 the Growth adds a lead dashboard + 15 pages — worth it if you're chasing inquiries by hand today. Want me to put a proper plan together for you?"
+- AUTOMATIONS ARE YOUR UPSELL CONVERSATION, NOT A LIST. When a store/e-commerce customer asks "what automations can you add" (or their pains invite it), don't recite a menu — BRAINSTORM with them around THEIR business: ask what eats their time (chasing orders? answering "where's my parcel"? customers who buy once and vanish?) and propose the automation that removes it, from the e-commerce automations in the knowledge base. Standard set comes with the Smart Store System; anything beyond is quoted per automation at the PRICES rate. A complex custom flow → "let me get the team to confirm that" + notify_team, never a guessed price.
+- THE PRICE CARD — whenever you present or compare packages, use this exact visual shape. WhatsApp renders no formatting, so the emoji, the ✅ lines and the blank lines ARE the design — ZERO asterisks, ever. Example (adapt the content, keep the shape):
+  "Here's what fits a salon like yours 👇
+
+  🌐 Smart Site — Rs 175,000
+  ✅ 15-page premium website
+  ✅ Your own CRM — every inquiry in one place
+  ✅ AI agent answering customers 24/7
+
+  ⚡ Smart Business — Rs 250,000
+  ✅ Everything in Smart Site, 25 pages
+  ✅ The agent DOES the work — invoices, proposals, customer emails
+  ✅ Lead scoring — see who's ready to buy
+
+  Both one-time. No monthly fee — you only cover your own AI usage, at cost.
+
+  For a salon taking bookings all day I'd go Smart Business — the agent handles your admin, not just your questions. Want me to put a proper plan together? 😊"
+- CARD RULES: maximum TWO options per card — the fitting one plus the next tier up as the anchor, never the whole menu. One distinct emoji per option (🌐/⚡/🚀), price on the name line, 2-3 ✅ lines each — chosen for THEIR business, not the full feature list — and a blank line between options. ALWAYS finish with your clear one-sentence recommendation for THEIR case + ONE closing question. A neutral menu with no recommendation is a wasted message: they must leave the card knowing exactly which one is right for them.
   (Delivery times come from the knowledge base and differ per package — never state one from memory.)
 
 CLOSING PLAYS:
 - ASK. You will not be given the sale — take it. Once they've seen a fitting package and haven't objected, close. Rotate the ask, don't repeat one line:
   · trial close (tests temperature, costs nothing): "how does that sound so far?" / "is that roughly the budget you had in mind?"
-  · alternative close (never yes/no): "so — Launch or Growth?" / "start this week or next?"
+  · alternative close (never yes/no): "so — Smart Site or Smart Business?" / "start this week or next?"
   · assumptive close (when they're clearly warm): "right, I'll get the quotation over so you can look at the real numbers 👍"
 - Momentum: offer something concrete and fast — "I can have the formal quote right here in this chat in a minute."
-- When they're warm: send_booking_link for a quick call. When they're serious and you have requirements but no clear yes yet: create_proposal and tell them it's on the way.
-- THE MONEY MOMENT: the instant they clearly agree on a package and price ("okay let's do it", "go ahead with Growth") → call send_quote immediately — strike while it's hot. It creates a real signable quotation and delivers the link into this chat by itself. Right after, send ONE short human message: they can open it and sign right on their phone, and the moment they sign we get started. NEVER paste the link again yourself.
+- When they're warm: send_booking_link for a quick call. When they're serious and you have requirements but no clear yes yet: create_proposal — and pass it EVERY requirement, pain and wish they stated in this chat (the requirements list), plus any agreed knowledge-base add-ons as custom_items. The proposal is written around what they said; a thin requirements list makes a generic proposal.
+- THE MONEY MOMENT: the instant they clearly agree on a package and price ("okay let's do it", "go ahead with Smart Business") → call send_quote immediately — strike while it's hot. It creates a real signable quotation and delivers the link into this chat by itself. Right after, send ONE short human message: they can open it and sign right on their phone, and the moment they sign we get started. NEVER paste the link again yourself.
 - After they sign, everything is automatic — the invoice and payment details arrive in this chat on their own. Your job then: congratulate them warmly and set delivery expectations from the knowledge base.
 - DISCOUNTS: you have ZERO discount authority unless the team granted a limit (send_quote enforces it). Use it at most once per deal, only on a genuine price objection, always framed as a "if you confirm this week" incentive. Never open with a discount.
 - If they go quiet after pricing, DON'T chase with discounts — the follow-up system re-engages them automatically; use schedule_followup only when a HUMAN teammate needs to act.
@@ -1142,7 +1157,8 @@ ${pricing}`
     }
 
 RULES OF ENGAGEMENT:
-- Every brand-new conversation is a response to this ad. Open ON the offer: name what they're asking about and pitch what it does for a business like theirs. NEVER open with generic discovery like "what kind of website or service are you looking for?" — tapping the ad already told you what they want.
+- This brief is your KNOWLEDGE, not a message to forward. NEVER paste the offer or its numbered list into one bulky message — you reveal it piece by piece across the conversation, each piece matched to what THEY just said. The full picture in one message is allowed exactly once, late, when they ask for the complete breakdown (max ~8 short lines).
+- Every brand-new conversation is a response to this ad. THE OPENING is 2-3 sentences: name the system they tapped in one outcome-loaded line, then ONE easy question about their business ("what kind of business are you running?"). Not the feature list, not the price, not a paragraph. NEVER open with generic discovery like "what kind of website or service are you looking for?" — tapping the ad already told you what they want.
 - "More info", "details?", "how much", "this", or a screenshot of the ad itself all mean THIS campaign. Pitch it — never describe the ad image back to them, never ask which service they mean, never list ARC's other services.
 - Stay ON this campaign. No service menus, no upselling websites, no wandering. Only if THEY explicitly ask for a different ARC service do you answer it (from the knowledge base) — and then you bring the conversation back.
 - NEVER invent features, prices, discounts, timelines or terms this brief doesn't state. General ARC questions → knowledge base. Anything neither covers → "let me get the team to confirm that."`,
@@ -1159,8 +1175,8 @@ THE MOMENT you have a plausibly-real name (and again when you learn company/emai
 
     playbook: `HOW TO SELL THIS CAMPAIGN:
 - Sell OUTCOMES in their business's terms, never feature lists: inquiries answered at 2am while they sleep, every lead followed up automatically, documents arriving signed on the customer's phone. Short, concrete, about THEM.
+- THE DRIP IS THE PITCH. One outcome per message, chosen because of what they just told you, ending with one question that earns the next slice. Learn they run a clothing store → the abandoned-cart line. They mention typing invoices → the documents line. Six exchanges like that close; one six-point essay gets scrolled past and forgotten.
 - YOU ARE THE LIVE DEMO. They are literally talking to the product right now — instant replies at any hour, remembers everything, closes deals. Say it at the moment it lands hardest ("what your customers would get is exactly this — me, but working for YOUR business"), once, never as a gimmick.
-- Pitch in slices, not essays: one outcome + one question beats six bullet points. Build the next slice off their answer.
 - PRICE IS ON REQUEST ONLY. Never volunteer a number, a starting figure or "setup fee" framing unprompted — not in your opening, not in the offer breakdown. Lead with what it does for their business and let them ask. When they DO ask (or state a budget), answer instantly from the pricing rule above — dodging a direct price question loses the lead just as fast. Give the starting point, anchor it against what it replaces ("less than a couple of months of a salary for someone answering chats — and this never sleeps"), and re-close.
 - THE CLOSE IS A CALL. The moment they show real interest — "how do I start", "I'm interested", "can this work for my shop", asking about setup — lock in a time to talk: call send_booking_link and frame it as the natural next step ("easiest is a quick 15-minute call — the team scopes exactly what your setup needs and gives you the real number. Grab a time here 👍"). If they name a time themselves ("call me tomorrow at 3"), call schedule_promise for it and confirm warmly.
 - "CAN SOMEONE CALL ME?" is the WIN CONDITION here, not an escalation — that's send_booking_link, and you keep it warm. Do NOT hand off.
@@ -1173,7 +1189,7 @@ THE MOMENT you have a plausibly-real name (and again when you learn company/emai
 
 "TOO EXPENSIVE" / "no budget"
 - Never drop the price, never hint at a discount. Isolate first: "fair — is it the number itself, or just not this month?"
-- Reframe on what it replaces: someone answering chats part-time costs more every few months than this does ONCE — and there's no monthly fee after; they own it.
+- Reframe on what it replaces: someone answering chats costs a salary every single month, while this is built once and then it's theirs — no monthly fee to us, they only cover their own AI usage at cost.
 - Re-close on the call: "worth a quick 15-minute call to hear the exact number for your setup? No commitment."
 
 "JUST TELL ME THE PRICE" / "how much" as the opener
@@ -1290,30 +1306,57 @@ function buildToolSchemas(allowed: Set<string>): ToolSchema[] {
         type: "string",
         description: "2-4 sentences about their business and what they need, from this conversation.",
       },
-      project_type: { type: "string", enum: ["business", "ecommerce"], description: "Website type." },
+      project_type: { type: "string", enum: ["business", "ecommerce", "agent"], description: "What they're buying: business website, e-commerce store, or a standalone AI agent + CRM (no website)." },
+      agent_platform: {
+        type: "string",
+        enum: ["whatsapp", "instagram"],
+        description: "Which channel the standalone agent runs on (only when project_type=agent; default whatsapp). Both include the CRM and are one-time with no monthly fee — quote the exact figures from the knowledge base, never from memory.",
+      },
       tier: {
         type: "string",
-        enum: ["starter", "launch", "growth", "scale"],
-        description: "Business-website package tier (only when project_type=business; default growth).",
+        enum: ["smart_site", "smart_business", "smart_system"],
+        description: "Business-website package tier (only when project_type=business; default smart_business). smart_site = 15 pages + CRM + answers-only AI agent; smart_business = 25 pages + advanced CRM (lead scoring, user roles) + agent that creates invoices/proposals and emails customers; smart_system = up to 50 pages + advanced SEO + WhatsApp & Instagram agents + automatic lead follow-up + 3 custom automations.",
       },
       platform: {
         type: "string",
-        enum: ["shopify", "custom"],
-        description: "E-commerce platform (only when project_type=ecommerce; default custom).",
+        enum: ["store", "smart"],
+        description: "E-commerce package (only when project_type=ecommerce; default store). store = the online store alone; smart = store + customer profiles + workflow automations.",
+      },
+      requirements: {
+        type: "array",
+        description: "EVERY concrete requirement, pain point and wish the customer stated in this chat, as short verbatim-ish lines (e.g. 'COD orders confirmed automatically', 'customers keep asking where their parcel is'). The proposal is written around these — the more complete, the better it sells.",
+        items: { type: "string" },
+      },
+      custom_items: {
+        type: "array",
+        description: "Extra agreed line items — ONLY add-ons priced in the knowledge base that the customer explicitly asked for (e.g. an extra automation at the per-automation rate). Never invent items or prices.",
+        items: {
+          type: "object",
+          properties: {
+            name: { type: "string", description: "Line item label." },
+            price: { type: "number", description: "Price in LKR, exactly as priced in the knowledge base." },
+          },
+          required: ["name", "price"],
+        },
       },
       project_name: { type: "string", description: "Short project name, e.g. 'Nimal Bakery Website'." },
     }, ["business_description", "project_type"]),
     send_quote: fn("send_quote", "THE CLOSER. Create a real, signable quotation for the package the customer just AGREED to and deliver the e-sign link into this chat automatically. Only call when they clearly said yes to a specific package/price — never to test the waters.", {
-      project_type: { type: "string", enum: ["business", "ecommerce"], description: "Website type they agreed to." },
+      project_type: { type: "string", enum: ["business", "ecommerce", "agent"], description: "What they agreed to: business website, e-commerce store, or a standalone AI agent + CRM (no website)." },
+      agent_platform: {
+        type: "string",
+        enum: ["whatsapp", "instagram"],
+        description: "Which channel the standalone agent runs on (only when project_type=agent; default whatsapp).",
+      },
       tier: {
         type: "string",
-        enum: ["starter", "launch", "growth", "scale"],
-        description: "Business-website package tier (only when project_type=business; default growth).",
+        enum: ["smart_site", "smart_business", "smart_system"],
+        description: "Business-website package tier (only when project_type=business; default smart_business). smart_site = 15 pages + CRM + answers-only AI agent; smart_business = 25 pages + advanced CRM (lead scoring, user roles) + agent that creates invoices/proposals and emails customers; smart_system = up to 50 pages + advanced SEO + WhatsApp & Instagram agents + automatic lead follow-up + 3 custom automations.",
       },
       platform: {
         type: "string",
-        enum: ["shopify", "custom"],
-        description: "E-commerce platform (only when project_type=ecommerce; default custom).",
+        enum: ["store", "smart"],
+        description: "E-commerce package (only when project_type=ecommerce; default store). store = the online store alone; smart = store + customer profiles + workflow automations. Extra automations the customer agreed to go in custom_items at the per-automation price from the knowledge base.",
       },
       custom_items: {
         type: "array",
@@ -2034,16 +2077,40 @@ async function toolCreateProposal(
 
   const selection: ProposalSelection = {
     ...defaultSelection(),
-    type: args.project_type === "ecommerce" ? "ecommerce" : "business",
+    type:
+      args.project_type === "ecommerce"
+        ? "ecommerce"
+        : args.project_type === "agent"
+          ? "agent"
+          : "business",
   };
+  if (String(args.agent_platform ?? "") === "instagram") {
+    selection.agentPlatform = "instagram";
+  }
   const tier = String(args.tier ?? "");
-  if (["starter", "launch", "growth", "scale"].includes(tier)) {
+  if (["smart_site", "smart_business", "smart_system"].includes(tier)) {
     selection.tier = tier as ProposalSelection["tier"];
   }
   const platform = String(args.platform ?? "");
-  if (["shopify", "custom"].includes(platform)) {
+  if (["store", "smart"].includes(platform)) {
     selection.platform = platform as ProposalSelection["platform"];
   }
+  // Agreed knowledge-base add-ons (extra automations etc.) become real line
+  // items — same trust model as send_quote's custom_items.
+  for (const raw of Array.isArray(args.custom_items) ? args.custom_items : []) {
+    const item = raw as { name?: unknown; price?: unknown };
+    const label = String(item?.name ?? "").trim();
+    const price = Number(item?.price);
+    if (label && Number.isFinite(price) && price > 0) {
+      selection.customFeatures.push({ name: label, price: Math.round(price) });
+    }
+  }
+  // What the customer actually said they need — the narrative is built
+  // around these, woven through the fixed proposal skeleton.
+  const requirements = (Array.isArray(args.requirements) ? args.requirements : [])
+    .map((r) => String(r ?? "").trim())
+    .filter(Boolean)
+    .slice(0, 25);
 
   const projectName =
     String(args.project_name ?? "").trim() || `${clientName} — Website Project`;
@@ -2055,6 +2122,9 @@ async function toolCreateProposal(
     projectName,
     selectionSummary: selectionSummary(selection),
     includedFeatures: includedFeatures(selection),
+    customFeatures: selection.customFeatures,
+    requirements,
+    projectKind: selection.type === "agent" ? "agent" : "website",
   });
 
   const { data: proposal, error } = await supabase
@@ -2064,7 +2134,13 @@ async function toolCreateProposal(
       project_name: projectName,
       proposal_date: new Date().toISOString().slice(0, 10),
       selection: selection as unknown as Record<string, unknown>,
-      content: { ...defaultContent(), ...narrative } as unknown as Record<string, unknown>,
+      content: {
+        ...defaultContent(),
+        // The stock timeline talks pages & design — wrong for an agent-only
+        // deployment.
+        ...(selection.type === "agent" ? { timeline: AGENT_TIMELINE } : {}),
+        ...narrative,
+      } as unknown as Record<string, unknown>,
       grand_total: pricing.oneTimeTotal,
       created_by: null,
     })
@@ -2153,14 +2229,22 @@ async function toolSendQuote(
   // Same deterministic pricing as create_proposal — catalog only.
   const selection: ProposalSelection = {
     ...defaultSelection(),
-    type: args.project_type === "ecommerce" ? "ecommerce" : "business",
+    type:
+      args.project_type === "ecommerce"
+        ? "ecommerce"
+        : args.project_type === "agent"
+          ? "agent"
+          : "business",
   };
+  if (String(args.agent_platform ?? "") === "instagram") {
+    selection.agentPlatform = "instagram";
+  }
   const tier = String(args.tier ?? "");
-  if (["starter", "launch", "growth", "scale"].includes(tier)) {
+  if (["smart_site", "smart_business", "smart_system"].includes(tier)) {
     selection.tier = tier as ProposalSelection["tier"];
   }
   const platform = String(args.platform ?? "");
-  if (["shopify", "custom"].includes(platform)) {
+  if (["store", "smart"].includes(platform)) {
     selection.platform = platform as ProposalSelection["platform"];
   }
   for (const raw of Array.isArray(args.custom_items) ? args.custom_items : []) {

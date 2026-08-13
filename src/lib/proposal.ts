@@ -26,15 +26,35 @@ export const PROPOSAL_SIGNOFF = {
 
 // ---- Selection -----------------------------------------------------------
 
-export type ProjectType = "business" | "ecommerce";
-export type BusinessTierKey = "starter" | "launch" | "growth" | "scale";
-export type EcommercePlatform = "shopify" | "custom";
+export type ProjectType = "business" | "ecommerce" | "agent";
+export type AgentPlatform = "whatsapp" | "instagram";
+/** "smart_site" / "smart_business" / "smart_system" are the current lineup
+ * (2026-08 repricing). "starter"–"scale" are LEGACY: old stored proposals
+ * carry them and re-price on every render, so they must keep their original
+ * numbers forever. Never offered on anything new. */
+export type BusinessTierKey =
+  | "smart_site"
+  | "smart_business"
+  | "smart_system"
+  | "starter"
+  | "launch"
+  | "growth"
+  | "scale";
+/** "store" and "smart" are the current lineup (2026-08 repricing). "shopify"
+ * and "custom" are LEGACY: proposals saved before the repricing carry them in
+ * their stored selection, and buildPricing re-runs on every render — so the
+ * old plans must keep producing their original names and numbers forever.
+ * Never offer them on anything new. */
+export type EcommercePlatform = "store" | "smart" | "shopify" | "custom";
 export type MaintenanceKey = "none" | "m3" | "m6" | "m12";
 
 export type ProposalSelection = {
   type: ProjectType;
   tier: BusinessTierKey; // used when type === "business"
   platform: EcommercePlatform; // used when type === "ecommerce"
+  /** Used when type === "agent". Selections stored before this field existed
+   * lack it — every read must fall back to "whatsapp". */
+  agentPlatform?: AgentPlatform;
   paymentGateway: boolean; // custom e-commerce add-on
   delivery: boolean; // custom e-commerce add-on
   maintenance: MaintenanceKey;
@@ -45,8 +65,9 @@ export type ProposalSelection = {
 export function defaultSelection(): ProposalSelection {
   return {
     type: "business",
-    tier: "growth",
-    platform: "custom",
+    tier: "smart_business",
+    platform: "store",
+    agentPlatform: "whatsapp",
     paymentGateway: false,
     delivery: false,
     maintenance: "none",
@@ -61,6 +82,8 @@ export type BusinessTier = {
   name: string;
   tagline: string;
   price: number;
+  /** True when the price is a floor ("from Rs X"), not a fixed figure. */
+  startsAt?: boolean;
   pages: number;
   additionalPageRate: number;
   hasCRM: boolean;
@@ -70,6 +93,63 @@ export type BusinessTier = {
 };
 
 export const BUSINESS_TIERS: Record<BusinessTierKey, BusinessTier> = {
+  smart_site: {
+    key: "smart_site",
+    name: "Smart Site",
+    tagline: "Website + CRM + AI Answers",
+    price: 175000,
+    pages: 15,
+    additionalPageRate: 6000,
+    hasCRM: true,
+    hasAI: true,
+    monthlyNote: "AI usage billed at cost — no monthly fee to ARC",
+    features: [
+      "Premium responsive website (15 pages)",
+      "Backend CRM — every inquiry lands in one pipeline",
+      "AI agent answering customer questions 24/7",
+      "Customer-service agent: answers & guides (no action steps)",
+      "Full SEO with structured data & meta tags",
+      "Free hosting forever (under 1GB)",
+    ],
+  },
+  smart_business: {
+    key: "smart_business",
+    name: "Smart Business",
+    tagline: "The Agent That Does The Work",
+    price: 250000,
+    pages: 25,
+    additionalPageRate: 6000,
+    hasCRM: true,
+    hasAI: true,
+    monthlyNote: "AI usage billed at cost — no monthly fee to ARC",
+    features: [
+      "Everything in Smart Site (25 pages)",
+      "Advanced CRM — lead scoring + multi-level user access",
+      "AI agent that TAKES ACTION: creates invoices, writes proposals, emails customers",
+      "Conversion-optimized design with strategic CTAs",
+    ],
+  },
+  smart_system: {
+    key: "smart_system",
+    name: "Smart System",
+    tagline: "One Smart System. Every Next Step.",
+    price: 450000,
+    startsAt: true,
+    pages: 50,
+    additionalPageRate: 6000,
+    hasCRM: true,
+    hasAI: true,
+    monthlyNote: "AI usage billed at cost — no monthly fee to ARC",
+    features: [
+      "Everything in Smart Business — unlimited pages (fair use up to 50) + very advanced SEO",
+      "AI agent on WhatsApp AND Instagram — follows up your CRM leads automatically",
+      "3 custom workflow automations of your choice included",
+      "Reminders & a far more interactive agent",
+    ],
+  },
+  // -- LEGACY tiers below: old stored proposals re-render through
+  //    buildPricing, so these must keep their original numbers. Never
+  //    offered on new proposals or quotes.
   starter: {
     key: "starter",
     name: "Starter",
@@ -153,11 +233,42 @@ export type EcommercePlan = {
   features: string[];
 };
 
-export const ECOMMERCE: {
-  shopify: EcommercePlan;
-  custom: EcommercePlan;
-  addons: { paymentGateway: number; delivery: number };
+export const ECOMMERCE: Record<EcommercePlatform, EcommercePlan> & {
+  addons: { paymentGateway: number; delivery: number; automation: number };
 } = {
+  store: {
+    key: "store",
+    name: "E-Commerce Store",
+    price: 150000,
+    startsAt: true,
+    monthlyNote: "Includes 500MB free backend; then $25/month if storage exceeds 500MB",
+    features: [
+      "100% custom-coded online store (Next.js) — no theme templates",
+      "Product catalog, cart & secure checkout",
+      "Payment gateway & delivery integration included",
+      "Mobile-first, fast-loading, full technical SEO",
+      "Free hosting forever (under 1GB media)",
+    ],
+  },
+  smart: {
+    key: "smart",
+    name: "Smart Store System",
+    price: 350000,
+    startsAt: true,
+    monthlyNote:
+      "Includes 500MB free backend; then $25/month if storage exceeds 500MB. Variable AI usage billed at cost.",
+    features: [
+      "Everything in E-Commerce Store",
+      "Customer profiles built automatically from every order & inquiry",
+      "Order confirmation & delivery updates sent automatically",
+      "Abandoned-cart recovery messages",
+      "Marketing campaigns to your own customer list",
+      "Every inquiry lands in your CRM pipeline — nothing lost",
+    ],
+  },
+  // -- LEGACY plans below: old stored proposals re-render through
+  //    buildPricing, so these must keep their original numbers. Never
+  //    offered on new proposals or quotes.
   shopify: {
     key: "shopify",
     name: "Shopify Theme Build",
@@ -187,8 +298,52 @@ export const ECOMMERCE: {
       "Ultimate flexibility: add any custom feature you want",
     ],
   },
-  addons: { paymentGateway: 25000, delivery: 25000 },
+  addons: { paymentGateway: 25000, delivery: 25000, automation: 30000 },
 };
+
+/** Standalone AI agent + CRM packages (2026-08) — kept in lockstep with the
+ * pricing catalog's "AI & Automation" group. */
+export const AGENT_PLANS: Record<
+  AgentPlatform,
+  { key: AgentPlatform; name: string; price: number; monthlyNote: string; features: string[] }
+> = {
+  whatsapp: {
+    key: "whatsapp",
+    name: "WhatsApp AI Agent + CRM",
+    price: 175000,
+    monthlyNote:
+      "No monthly fee to ARC — the client pays only their own AI/API usage, at cost",
+    features: [
+      "Autonomous AI rep on your own WhatsApp number",
+      "Answers, qualifies, follows up & books 24/7 — English, Sinhala & Tamil",
+      "Full CRM included — every chat becomes a tracked lead",
+      "Reads photos & payment slips; voice-note replies",
+      "Automatic follow-ups so no lead is forgotten",
+    ],
+  },
+  instagram: {
+    key: "instagram",
+    name: "Instagram AI Agent + CRM",
+    price: 150000,
+    monthlyNote:
+      "No monthly fee to ARC — the client pays only their own AI/API usage, at cost",
+    features: [
+      "Autonomous AI rep in your Instagram DMs",
+      "Answers, qualifies, follows up & books 24/7 — English, Sinhala & Tamil",
+      "Full CRM included — every chat becomes a tracked lead",
+      "Automatic follow-ups so no lead is forgotten",
+    ],
+  },
+};
+
+/** Sensible default timeline for an agent-only proposal — the website
+ * timeline talks about pages and design, which reads wrong for an agent
+ * deployment. Fully editable in the form, like everything else. */
+export const AGENT_TIMELINE: TimelineStep[] = [
+  { title: "Kickoff & Access", description: "Connect the WhatsApp/Instagram account, collect business knowledge, confirm the sales flow", duration: "Day 1-2" },
+  { title: "Build & Training", description: "Agent configured on your number, CRM pipeline set up, knowledge base loaded and tuned", duration: "Day 3-5" },
+  { title: "Test, Launch & Handover", description: "Live test conversations, tone adjustments, go-live and team walkthrough", duration: "Day 6-7" },
+];
 
 export const MAINTENANCE: Record<
   Exclude<MaintenanceKey, "none">,
@@ -219,30 +374,38 @@ export function buildPricing(sel: ProposalSelection): Pricing {
   if (sel.type === "business") {
     const t = BUSINESS_TIERS[sel.tier];
     lineItems.push({
-      label: `${t.name} Website — ${t.pages} pages`,
+      label: `${t.name} Website — ${t.pages} pages${t.startsAt ? " (starts at)" : ""}`,
       amount: t.price,
     });
     if (t.monthlyNote) recurringNotes.push(t.monthlyNote);
-  } else if (sel.platform === "shopify") {
-    lineItems.push({ label: ECOMMERCE.shopify.name, amount: ECOMMERCE.shopify.price });
-    recurringNotes.push(ECOMMERCE.shopify.monthlyNote);
+  } else if (sel.type === "agent") {
+    const plan = AGENT_PLANS[sel.agentPlatform ?? "whatsapp"];
+    lineItems.push({ label: `${plan.name} — setup`, amount: plan.price });
+    recurringNotes.push(plan.monthlyNote);
   } else {
+    // A selection saved before the 2026-08 repricing can carry a legacy
+    // platform — it must keep pricing exactly as it did the day it was sent.
+    const plan = ECOMMERCE[sel.platform] ?? ECOMMERCE.store;
     lineItems.push({
-      label: `${ECOMMERCE.custom.name} (starts at)`,
-      amount: ECOMMERCE.custom.price,
+      label: plan.startsAt ? `${plan.name} (starts at)` : plan.name,
+      amount: plan.price,
     });
-    recurringNotes.push(ECOMMERCE.custom.monthlyNote);
-    if (sel.paymentGateway) {
-      lineItems.push({
-        label: "Payment Gateway Integration",
-        amount: ECOMMERCE.addons.paymentGateway,
-      });
-    }
-    if (sel.delivery) {
-      lineItems.push({
-        label: "Delivery Integration",
-        amount: ECOMMERCE.addons.delivery,
-      });
+    recurringNotes.push(plan.monthlyNote);
+    // Gateway & delivery were separate add-ons only on the legacy custom
+    // plan — the current store packages include both.
+    if (sel.platform === "custom") {
+      if (sel.paymentGateway) {
+        lineItems.push({
+          label: "Payment Gateway Integration",
+          amount: ECOMMERCE.addons.paymentGateway,
+        });
+      }
+      if (sel.delivery) {
+        lineItems.push({
+          label: "Delivery Integration",
+          amount: ECOMMERCE.addons.delivery,
+        });
+      }
     }
   }
 
@@ -282,19 +445,30 @@ export function selectionSummary(sel: ProposalSelection): string {
         : "Frontend Website";
     return `${t.name} — ${scope}`;
   }
+  if (sel.type === "agent") {
+    const plan = AGENT_PLANS[sel.agentPlatform ?? "whatsapp"];
+    return `AI Agent — ${plan.name} (no website build; agent + CRM deployment)`;
+  }
+  if (sel.platform === "smart")
+    return "E-Commerce — Smart Store System (store + customer profiles + automations)";
   if (sel.platform === "shopify") return "E-Commerce — Shopify Store";
-  const extras = [
-    sel.paymentGateway && "Payment Gateway",
-    sel.delivery && "Delivery",
-  ]
-    .filter(Boolean)
-    .join(" + ");
-  return `E-Commerce — Custom Next.js Store${extras ? ` + ${extras}` : ""}`;
+  if (sel.platform === "custom") {
+    const extras = [
+      sel.paymentGateway && "Payment Gateway",
+      sel.delivery && "Delivery",
+    ]
+      .filter(Boolean)
+      .join(" + ");
+    return `E-Commerce — Custom Next.js Store${extras ? ` + ${extras}` : ""}`;
+  }
+  return "E-Commerce — Custom Online Store";
 }
 
 /** Short project name suggestion for the cover (e.g. "Website + AI Agent"). */
 export function suggestedProjectName(sel: ProposalSelection): string {
-  if (sel.type === "ecommerce") return "E-Commerce Store";
+  if (sel.type === "agent") return AGENT_PLANS[sel.agentPlatform ?? "whatsapp"].name;
+  if (sel.type === "ecommerce")
+    return sel.platform === "smart" ? "Smart Store System" : "E-Commerce Store";
   const t = BUSINESS_TIERS[sel.tier];
   if (t.hasAI) return "Website + AI Agent";
   if (t.hasCRM) return "Website + Backend CRM";
@@ -304,9 +478,9 @@ export function suggestedProjectName(sel: ProposalSelection): string {
 /** Feature bullets of the selected package — handed to the AI as grounding. */
 export function includedFeatures(sel: ProposalSelection): string[] {
   if (sel.type === "business") return BUSINESS_TIERS[sel.tier].features;
-  return sel.platform === "shopify"
-    ? ECOMMERCE.shopify.features
-    : ECOMMERCE.custom.features;
+  if (sel.type === "agent")
+    return AGENT_PLANS[sel.agentPlatform ?? "whatsapp"].features;
+  return (ECOMMERCE[sel.platform] ?? ECOMMERCE.store).features;
 }
 
 /** "Rs 60,000" */
@@ -318,14 +492,12 @@ export function money(n: number): string {
 // ---- Editable content shape ---------------------------------------------
 
 export type ObjectiveGroup = { group: string; items: string[] };
-export type StructurePage = { page: string; description: string };
 export type FeatureBlock = { heading: string; intro: string; bullets: string[] };
 export type TimelineStep = { title: string; description: string; duration: string };
 
 export type ProposalContent = {
   overview: string;
   objectives: ObjectiveGroup[];
-  websiteStructure: StructurePage[];
   keyFeatures: FeatureBlock[];
   educational: {
     intro: string;
@@ -349,7 +521,6 @@ export function defaultContent(): ProposalContent {
   return {
     overview: "",
     objectives: [],
-    websiteStructure: [],
     keyFeatures: [],
     educational: { intro: "", bullets: [], aiAgent: null },
     seo: { bullets: [], whyDedicated: "" },

@@ -5,7 +5,6 @@ import type {
   FeatureBlock,
   ObjectiveGroup,
   ProposalContent,
-  StructurePage,
 } from "@/lib/proposal";
 
 export type GenerateInput = {
@@ -15,6 +14,18 @@ export type GenerateInput = {
   selectionSummary: string;
   includedFeatures: string[];
   customFeatures?: { name: string; price: number }[];
+  /** Concrete requirements, pains and wishes the client stated in the sales
+   * conversation (the WhatsApp agent passes these verbatim). The narrative
+   * must visibly address every one — this is what turns the fixed proposal
+   * skeleton into THEIR proposal rather than a template. */
+  requirements?: string[];
+  /** Free-form instructions from the team (typed or dictated) — tone, things
+   * to emphasise, things to leave out. Followed wherever they don't break the
+   * hard rules. */
+  teamInstructions?: string;
+  /** "agent" = a standalone AI agent + CRM deployment with NO website build —
+   * the narrative must not invent website pages or SEO work. */
+  projectKind?: "website" | "agent";
 };
 
 /** The subset of the proposal body the AI is allowed to write (no pricing). */
@@ -22,7 +33,6 @@ export type GeneratedNarrative = Pick<
   ProposalContent,
   | "overview"
   | "objectives"
-  | "websiteStructure"
   | "keyFeatures"
   | "educational"
   | "seo"
@@ -35,7 +45,8 @@ Write confident, concrete, benefit-driven B2B copy tailored to the specific clie
 
 HARD RULES:
 - Never invent or mention any prices, money, fees, percentages, or calendar dates. Pricing is handled elsewhere.
-- Use the provided package + included features as ground truth for scope; do not promise features outside that scope.
+- Use the provided package + included features (+ any listed custom features) as ground truth for scope; do not promise features outside that scope.
+- When the client's stated requirements are provided, EVERY one of them must be visibly addressed somewhere in the narrative — in their own vocabulary, mapped to the part of the package that solves it. A requirement the package does NOT cover goes into quality.assumptions or quality.nextSteps as an item to scope together — never silently promised, never silently dropped.
 - Output ONLY a single JSON object matching the requested schema. No markdown, no commentary.`;
 
 function userPrompt(input: GenerateInput): string {
@@ -43,12 +54,23 @@ function userPrompt(input: GenerateInput): string {
     ? `\nExtra custom features requested by the client (must be incorporated/highlighted in the proposal narrative where relevant):
 ${input.customFeatures.map(f => `- ${f.name} (valued at Rs ${f.price.toLocaleString("en-US")})`).join("\n")}`
     : "";
+  const reqs = input.requirements && input.requirements.length > 0
+    ? `\nWHAT THE CLIENT ACTUALLY ASKED FOR (from the live sales conversation — the heart of this proposal; address every single item, in their language, mapped to what solves it):
+${input.requirements.map((r) => `- ${r}`).join("\n")}`
+    : "";
+  const team = input.teamInstructions?.trim()
+    ? `\nEXTRA INSTRUCTIONS FROM THE TEAM (follow them wherever they don't break the hard rules):
+"""
+${input.teamInstructions.trim().slice(0, 2000)}
+"""`
+    : "";
+  const agentOnly = input.projectKind === "agent";
 
   return `Client: ${input.clientName}
 Project: ${input.projectName || "(untitled)"}
 Selected package: ${input.selectionSummary}
 Included features (ground truth — reference, don't just restate verbatim):
-${input.includedFeatures.map((f) => `- ${f}`).join("\n")}${custom}
+${input.includedFeatures.map((f) => `- ${f}`).join("\n")}${custom}${reqs}${team}
 
 Business description (written by the agency about this client):
 """
@@ -59,7 +81,6 @@ Return a JSON object with EXACTLY these keys:
 {
   "overview": "2-3 short paragraphs separated by \\n\\n, introducing the client and the goal of the project",
   "objectives": [{ "group": "Brand & Trust", "items": ["...", "..."] }],
-  "websiteStructure": [{ "page": "Home Page", "description": "one sentence" }],
   "keyFeatures": [{ "heading": "High-End Frontend Website", "intro": "1-2 sentences", "bullets": ["...", "..."] }],
   "educational": { "intro": "1-2 sentences", "bullets": ["...", "..."], "aiAgent": { "intro": "...", "capabilities": ["...", "..."], "note": "..." } },
   "seo": { "bullets": ["...", "..."], "whyDedicated": "1-2 sentences" },
@@ -67,10 +88,16 @@ Return a JSON object with EXACTLY these keys:
 }
 
 Guidance:
-- objectives: 3 groups, each with 2-4 short bullet items, tailored to this business.
-- websiteStructure: 6-10 pages relevant to THIS business (home, about, the client's actual services/products, contact, etc.).
-- keyFeatures: 2-3 blocks. Include a "Backend CRM System" block ONLY if the package includes CRM; include AI agent specifics only if the package includes an AI agent.
-- educational.aiAgent: set to null if the package does NOT include an AI agent.
+- objectives: 3 groups, each with 2-4 short bullet items, tailored to this business — lead with the outcomes the client's own requirements point at.
+${
+  agentOnly
+    ? `- THIS IS AN AGENT-ONLY DEPLOYMENT (no website is being built). Return "seo": {"bullets": [], "whyDedicated": ""} — do NOT invent SEO work.
+- keyFeatures: 2-3 blocks about the AI agent and the CRM it comes with — how it answers, qualifies, follows up, and how every chat lands in the pipeline. Where a block answers one of the client's stated requirements, say so in its intro.
+- educational.aiAgent: REQUIRED — this is the product.`
+    : `- NEVER list or promise specific website pages — the structure is agreed with the client during kickoff, and naming pages here commits us to a layout they may not want. Talk about capabilities and outcomes instead.
+- keyFeatures: 2-3 blocks. Include a "Backend CRM System" block ONLY if the package includes CRM; include AI agent specifics only if the package includes an AI agent. Where a block answers one of the client's stated requirements, say so in its intro ("you mentioned X — this is what handles it").
+- educational.aiAgent: set to null if the package does NOT include an AI agent.`
+}
 - Keep every bullet under ~16 words.`;
 }
 
@@ -91,16 +118,6 @@ function objectives(x: unknown): ObjectiveGroup[] {
       items: strArr((g as Record<string, unknown>)?.items),
     }))
     .filter((g) => g.group && g.items.length);
-}
-
-function structure(x: unknown): StructurePage[] {
-  if (!Array.isArray(x)) return [];
-  return x
-    .map((p) => ({
-      page: str((p as Record<string, unknown>)?.page),
-      description: str((p as Record<string, unknown>)?.description),
-    }))
-    .filter((p) => p.page);
 }
 
 function features(x: unknown): FeatureBlock[] {
@@ -146,7 +163,6 @@ export async function generateProposalContent(
   return {
     overview: str(parsed.overview),
     objectives: objectives(parsed.objectives),
-    websiteStructure: structure(parsed.websiteStructure),
     keyFeatures: features(parsed.keyFeatures),
     educational: {
       intro: str(edu.intro),

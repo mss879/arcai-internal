@@ -4,12 +4,15 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import { format } from "date-fns";
 import { toast } from "sonner";
-import { Download, Plus, Sparkles, Trash2 } from "lucide-react";
+import { Download, Loader2, Mic, Plus, Sparkles, Square, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select, Textarea } from "@/components/ui/input";
+import { useDictation } from "@/hooks/use-dictation";
 import { cn } from "@/lib/utils";
 import {
+  AGENT_PLANS,
+  AGENT_TIMELINE,
   BUSINESS_TIERS,
   ECOMMERCE,
   MAINTENANCE,
@@ -18,6 +21,7 @@ import {
   defaultSelection,
   money,
   suggestedProjectName,
+  type AgentPlatform,
   type BusinessTierKey,
   type MaintenanceKey,
   type ProposalContent,
@@ -27,18 +31,17 @@ import type { Client } from "@/lib/types";
 
 import { generateProposal, saveProposal } from "./actions";
 import { downloadProposalPdf } from "./download-pdf";
-import { ProposalDocument } from "./proposal-document";
+import { ProposalPdfFrame } from "./proposal-pdf-frame";
 
 type ClientLite = Pick<Client, "id" | "name" | "company">;
-type Scope = "frontend" | "crm" | "ai";
 
-const FRONTEND_TIERS: BusinessTierKey[] = ["starter", "launch"];
-
-function scopeOf(tier: BusinessTierKey): Scope {
-  if (tier === "growth") return "crm";
-  if (tier === "scale") return "ai";
-  return "frontend";
-}
+/** The current lineup — legacy tiers (starter–scale) live only inside old
+ * stored proposals and are never offered here. */
+const BUSINESS_TIER_OPTIONS: BusinessTierKey[] = [
+  "smart_site",
+  "smart_business",
+  "smart_system",
+];
 
 const trimArr = (a: string[]) => a.map((s) => s.trim()).filter(Boolean);
 
@@ -49,9 +52,6 @@ function clean(c: ProposalContent): ProposalContent {
     objectives: c.objectives
       .map((g) => ({ group: g.group.trim(), items: trimArr(g.items) }))
       .filter((g) => g.group && g.items.length),
-    websiteStructure: c.websiteStructure
-      .map((p) => ({ page: p.page.trim(), description: p.description.trim() }))
-      .filter((p) => p.page),
     keyFeatures: c.keyFeatures
       .map((f) => ({
         heading: f.heading.trim(),
@@ -107,6 +107,16 @@ export function ProposalGenerator({ clients }: { clients: ClientLite[] }) {
     defaultSelection(),
   );
   const [content, setContent] = React.useState<ProposalContent>(defaultContent());
+  const [extraInstructions, setExtraInstructions] = React.useState("");
+  const dictation = useDictation((text) =>
+    setExtraInstructions((prev) => (prev ? `${prev.trimEnd()} ${text}` : text)),
+  );
+  const { error: dictationError, clearError: clearDictationError } = dictation;
+  React.useEffect(() => {
+    if (!dictationError) return;
+    toast.error(dictationError);
+    clearDictationError();
+  }, [dictationError, clearDictationError]);
 
   const [generating, startGen] = React.useTransition();
   const [generated, setGenerated] = React.useState(false);
@@ -123,16 +133,6 @@ export function ProposalGenerator({ clients }: { clients: ClientLite[] }) {
     });
   }
 
-  function setScope(scope: Scope) {
-    if (scope === "crm") patchSelection({ type: "business", tier: "growth" });
-    else if (scope === "ai") patchSelection({ type: "business", tier: "scale" });
-    else
-      patchSelection({
-        type: "business",
-        tier: FRONTEND_TIERS.includes(selection.tier) ? selection.tier : "launch",
-      });
-  }
-
   function generate() {
     if (!businessDescription.trim()) {
       toast.error("Add a short business description first.");
@@ -144,6 +144,7 @@ export function ProposalGenerator({ clients }: { clients: ClientLite[] }) {
         clientName,
         projectName,
         selection,
+        extraInstructions,
       });
       if (res.ok) {
         setContent((prev) => ({ ...prev, ...res.content }));
@@ -189,8 +190,6 @@ export function ProposalGenerator({ clients }: { clients: ClientLite[] }) {
     }
   }
 
-  const scope = scopeOf(selection.tier);
-  const displayDate = date ? format(new Date(date), "dd MMM, yyyy") : "";
 
   return (
     <div className="space-y-6">
@@ -271,50 +270,76 @@ export function ProposalGenerator({ clients }: { clients: ClientLite[] }) {
                 options={[
                   { value: "business", label: "Business website" },
                   { value: "ecommerce", label: "E-commerce" },
+                  { value: "agent", label: "AI agent" },
                 ]}
                 value={selection.type}
-                onChange={(v) =>
-                  patchSelection({ type: v as ProposalSelection["type"] })
-                }
+                onChange={(v) => {
+                  const type = v as ProposalSelection["type"];
+                  patchSelection({ type });
+                  // The stock timeline talks pages & design — swap it for the
+                  // agent deployment plan (and back) while nothing's generated.
+                  if (!generated) {
+                    setContent((c) => ({
+                      ...c,
+                      timeline:
+                        type === "agent" ? AGENT_TIMELINE : defaultContent().timeline,
+                    }));
+                  }
+                }}
               />
             </Field>
 
-            {selection.type === "business" ? (
+            {selection.type === "agent" ? (
               <>
-                <Field label="Scope">
+                <Field label="Package">
                   <Segmented
                     options={[
-                      { value: "frontend", label: "Front-end only" },
-                      { value: "crm", label: "+ Backend CRM" },
-                      { value: "ai", label: "+ CRM + AI Agent" },
+                      {
+                        value: "whatsapp",
+                        label: `WhatsApp — ${money(AGENT_PLANS.whatsapp.price)}`,
+                      },
+                      {
+                        value: "instagram",
+                        label: `Instagram — ${money(AGENT_PLANS.instagram.price)}`,
+                      },
                     ]}
-                    value={scope}
-                    onChange={(v) => setScope(v as Scope)}
+                    value={selection.agentPlatform ?? "whatsapp"}
+                    onChange={(v) =>
+                      patchSelection({ agentPlatform: v as AgentPlatform })
+                    }
                   />
                 </Field>
-                {scope === "frontend" && (
-                  <Field label="Design tier">
-                    <div className="grid grid-cols-2 gap-2">
-                      {FRONTEND_TIERS.map((t) => (
-                        <TierButton
-                          key={t}
-                          tier={t}
-                          active={selection.tier === t}
-                          onClick={() => patchSelection({ tier: t })}
-                        />
-                      ))}
-                    </div>
-                  </Field>
-                )}
+                <p className="text-[11px] text-slate-400">
+                  {AGENT_PLANS[selection.agentPlatform ?? "whatsapp"].name} — no
+                  website build. CRM included. One-time{" "}
+                  {money(AGENT_PLANS[selection.agentPlatform ?? "whatsapp"].price)}
+                  , no monthly fee; the client pays only their own AI usage, at
+                  cost.
+                </p>
+              </>
+            ) : selection.type === "business" ? (
+              <>
+                <Field label="Package">
+                  <div className="grid grid-cols-3 gap-2">
+                    {BUSINESS_TIER_OPTIONS.map((t) => (
+                      <TierButton
+                        key={t}
+                        tier={t}
+                        active={selection.tier === t}
+                        onClick={() => patchSelection({ tier: t })}
+                      />
+                    ))}
+                  </div>
+                </Field>
                 <PackageSummary tier={selection.tier} />
               </>
             ) : (
               <>
-                <Field label="Platform">
+                <Field label="Package">
                   <Segmented
                     options={[
-                      { value: "shopify", label: "Shopify" },
-                      { value: "custom", label: "Custom Next.js" },
+                      { value: "store", label: `Store — from ${money(ECOMMERCE.store.price)}` },
+                      { value: "smart", label: `Smart Store — from ${money(ECOMMERCE.smart.price)}` },
                     ]}
                     value={selection.platform}
                     onChange={(v) =>
@@ -324,6 +349,13 @@ export function ProposalGenerator({ clients }: { clients: ClientLite[] }) {
                     }
                   />
                 </Field>
+                {selection.platform === "smart" && (
+                  <p className="text-[11px] text-slate-400">
+                    Store + customer profiles + automations. Extra automations
+                    beyond the standard set go in as custom line items at{" "}
+                    {money(ECOMMERCE.addons.automation)} each.
+                  </p>
+                )}
                 {selection.platform === "custom" && (
                   <div className="space-y-2">
                     <Toggle
@@ -341,32 +373,34 @@ export function ProposalGenerator({ clients }: { clients: ClientLite[] }) {
               </>
             )}
 
-            <div className="grid grid-cols-2 gap-3 pt-1">
-              <Field label="Maintenance">
-                <Select
-                  value={selection.maintenance}
-                  onChange={(e) =>
-                    patchSelection({
-                      maintenance: e.target.value as MaintenanceKey,
-                    })
-                  }
-                >
-                  <option value="none">None</option>
-                  <option value="m3">3 months — {money(MAINTENANCE.m3.price)}</option>
-                  <option value="m6">6 months — {money(MAINTENANCE.m6.price)}</option>
-                  <option value="m12">12 months — {money(MAINTENANCE.m12.price)}</option>
-                </Select>
-              </Field>
-              <Field label="Monthly SEO">
-                <div className="pt-1.5">
-                  <Toggle
-                    label="Add monthly SEO"
-                    checked={selection.monthlySeo}
-                    onChange={(v) => patchSelection({ monthlySeo: v })}
-                  />
-                </div>
-              </Field>
-            </div>
+            {selection.type !== "agent" && (
+              <div className="grid grid-cols-2 gap-3 pt-1">
+                <Field label="Maintenance">
+                  <Select
+                    value={selection.maintenance}
+                    onChange={(e) =>
+                      patchSelection({
+                        maintenance: e.target.value as MaintenanceKey,
+                      })
+                    }
+                  >
+                    <option value="none">None</option>
+                    <option value="m3">3 months — {money(MAINTENANCE.m3.price)}</option>
+                    <option value="m6">6 months — {money(MAINTENANCE.m6.price)}</option>
+                    <option value="m12">12 months — {money(MAINTENANCE.m12.price)}</option>
+                  </Select>
+                </Field>
+                <Field label="Monthly SEO">
+                  <div className="pt-1.5">
+                    <Toggle
+                      label="Add monthly SEO"
+                      checked={selection.monthlySeo}
+                      onChange={(v) => patchSelection({ monthlySeo: v })}
+                    />
+                  </div>
+                </Field>
+              </div>
+            )}
 
             <div className="mt-2 flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2.5">
               <span className="text-sm font-medium text-slate-500">
@@ -437,6 +471,72 @@ export function ProposalGenerator({ clients }: { clients: ClientLite[] }) {
               </Button>
             </div>
           </Card>
+
+          {/* Anything else — typed or dictated, folded into the AI generation */}
+          <section className="rounded-2xl border border-primary-200/70 bg-primary-50/30 p-5 shadow-[var(--shadow-card)]">
+            <h2 className="mb-1 text-sm font-semibold text-slate-900">
+              Any other instructions?
+            </h2>
+            <p className="mb-3 text-[11px] text-slate-500">
+              Say it however it comes out — hit the mic and talk, or just type.
+              Tone, things to emphasise, anything the client mentioned. The AI
+              follows it when writing the proposal.
+            </p>
+            <div className="relative">
+              <Textarea
+                className="min-h-[96px] resize-y pr-12"
+                value={extraInstructions}
+                onChange={(e) => setExtraInstructions(e.target.value)}
+                placeholder="e.g. they care most about WhatsApp orders — lead with that, keep it short, and mention we can start next week"
+              />
+              <button
+                type="button"
+                onClick={dictation.toggle}
+                disabled={dictation.status === "transcribing"}
+                aria-label={
+                  dictation.status === "recording"
+                    ? "Stop dictation"
+                    : "Dictate instructions"
+                }
+                title={
+                  dictation.status === "recording"
+                    ? "Stop dictation"
+                    : "Dictate instructions"
+                }
+                className={cn(
+                  "absolute right-2 top-2 grid h-9 w-9 place-items-center rounded-lg transition-colors",
+                  dictation.status === "recording"
+                    ? "bg-rose-600 text-white hover:bg-rose-700"
+                    : "bg-white text-slate-400 ring-1 ring-slate-200 hover:text-primary-600",
+                  dictation.status === "transcribing" && "cursor-not-allowed opacity-60",
+                )}
+              >
+                {dictation.status === "transcribing" ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : dictation.status === "recording" ? (
+                  <Square className="h-3.5 w-3.5 fill-current" />
+                ) : (
+                  <Mic className="h-4 w-4" />
+                )}
+              </button>
+            </div>
+            {(dictation.status === "recording" ||
+              dictation.status === "transcribing") && (
+              <p className="mt-2 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
+                {dictation.status === "recording" ? (
+                  <>
+                    <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-rose-500" />
+                    Listening — press the square when you&rsquo;re done.
+                  </>
+                ) : (
+                  <>
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    Writing down what you said…
+                  </>
+                )}
+              </p>
+            )}
+          </section>
 
           {/* Generate */}
           <Button
@@ -516,56 +616,6 @@ export function ProposalGenerator({ clients }: { clients: ClientLite[] }) {
                         ),
                       })
                     }
-                  />
-                </>
-              )}
-            />
-
-            <Repeater
-              label="Website structure"
-              items={content.websiteStructure}
-              onAdd={() =>
-                setContent({
-                  ...content,
-                  websiteStructure: [
-                    ...content.websiteStructure,
-                    { page: "", description: "" },
-                  ],
-                })
-              }
-              onRemove={(i) =>
-                setContent({
-                  ...content,
-                  websiteStructure: content.websiteStructure.filter(
-                    (_, j) => j !== i,
-                  ),
-                })
-              }
-              render={(p, i) => (
-                <>
-                  <Input
-                    value={p.page}
-                    onChange={(e) =>
-                      setContent({
-                        ...content,
-                        websiteStructure: content.websiteStructure.map((x, j) =>
-                          j === i ? { ...x, page: e.target.value } : x,
-                        ),
-                      })
-                    }
-                    placeholder="Page name"
-                  />
-                  <Input
-                    value={p.description}
-                    onChange={(e) =>
-                      setContent({
-                        ...content,
-                        websiteStructure: content.websiteStructure.map((x, j) =>
-                          j === i ? { ...x, description: e.target.value } : x,
-                        ),
-                      })
-                    }
-                    placeholder="One-line description"
                   />
                 </>
               )}
@@ -728,14 +778,17 @@ export function ProposalGenerator({ clients }: { clients: ClientLite[] }) {
           )}
         </div>
 
-        {/* ---------- LIVE PREVIEW ---------- */}
-        <div className="overflow-x-auto">
-          <ProposalDocument
-            clientName={clientName}
-            projectName={projectName}
-            displayDate={displayDate}
-            selection={selection}
-            content={cleaned}
+        {/* ---------- LIVE PREVIEW — the real PDF, exactly as downloaded ---------- */}
+        <div className="min-w-0">
+          <ProposalPdfFrame
+            className="sticky top-4 h-[85vh]"
+            payload={{
+              client_name: clientName,
+              project_name: projectName,
+              proposal_date: date,
+              selection,
+              content: cleaned,
+            }}
           />
         </div>
       </div>

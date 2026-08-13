@@ -74,7 +74,11 @@ export default async function ShowcasePage({
   const waLink = payload.whatsapp_number
     ? `https://wa.me/${payload.whatsapp_number}?text=${encodeURIComponent("Hi! I just saw my website showcase — let's talk.")}`
     : null;
-  const tiers = [BUSINESS_TIERS.launch, BUSINESS_TIERS.growth, BUSINESS_TIERS.scale];
+  const tiers = [
+    BUSINESS_TIERS.smart_site,
+    BUSINESS_TIERS.smart_business,
+    BUSINESS_TIERS.smart_system,
+  ];
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">

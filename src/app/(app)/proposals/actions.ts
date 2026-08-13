@@ -21,6 +21,8 @@ export type GenerateProposalInput = {
   clientName: string;
   projectName: string;
   selection: ProposalSelection;
+  /** Free-form typed/dictated instructions from the team. */
+  extraInstructions?: string;
 };
 
 export async function generateProposal(
@@ -45,6 +47,8 @@ export async function generateProposal(
       selectionSummary: selectionSummary(input.selection),
       includedFeatures: includedFeatures(input.selection),
       customFeatures: input.selection.customFeatures,
+      teamInstructions: input.extraInstructions,
+      projectKind: input.selection.type === "agent" ? "agent" : "website",
     });
     return { ok: true, content };
   } catch (err) {

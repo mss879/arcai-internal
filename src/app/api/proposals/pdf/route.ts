@@ -39,10 +39,15 @@ export async function POST(request: Request) {
     (data.client_name || "proposal").replace(/[^a-zA-Z0-9._-]/g, "") ||
     "proposal";
 
+  // ?preview=1 → serve inline so the generator's live preview can render it
+  // in an <iframe>; the default stays a download. Same bytes either way —
+  // the preview IS the file the client receives.
+  const inline = new URL(request.url).searchParams.get("preview") === "1";
+
   return new NextResponse(new Uint8Array(pdf), {
     headers: {
       "Content-Type": "application/pdf",
-      "Content-Disposition": `attachment; filename="Proposal-${safeName}.pdf"`,
+      "Content-Disposition": `${inline ? "inline" : "attachment"}; filename="Proposal-${safeName}.pdf"`,
       "Content-Length": String(pdf.length),
       "Cache-Control": "no-store",
     },

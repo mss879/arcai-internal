@@ -1,0 +1,43 @@
+-- ============================================================
+-- 0071_business_website_repricing.sql
+-- New business-website lineup + standalone agent pricing (2026-08).
+--
+-- The lineup changed in code (pricing-catalog.ts + proposal.ts):
+--
+--   Smart Site        Rs 150,000 one-time — 15 pages, frontend +
+--                     simple CRM + AI agent that ANSWERS only
+--   Smart Business    Rs 200,000 one-time — 25 pages, advanced CRM
+--                     (lead scoring, multi-level user access) + AI
+--                     agent that takes ACTION (invoices, proposals,
+--                     customer emails)
+--   Smart System      Rs 350,000 one-time — up to 50 pages, very
+--                     advanced SEO, agents on WhatsApp + Instagram,
+--                     automatic CRM lead follow-up, reminders,
+--                     3 custom automations included
+--
+--   WhatsApp AI Agent + CRM    Rs 150,000 one-time
+--   Instagram AI Agent + CRM   Rs 150,000 one-time
+--   (both: no monthly fee — AI usage billed at cost)
+--
+-- This REPLACES Starter/Launch/Growth/Scale (Rs 60k–160k) and the
+-- old WhatsApp agent pricing (Rs 60k setup + from Rs 30k/month).
+-- Old proposals still render their original numbers — the legacy
+-- tiers live on in code, they're just never offered again.
+--
+-- As in 0070, prices live in code + the /pricing page's override
+-- map, so the only database work is hygiene: drop saved overrides
+-- for price keys that no longer exist, so a stale number can never
+-- silently reattach to a future package.
+-- ============================================================
+
+update public.pricing_config
+  set overrides = coalesce(overrides, '{}'::jsonb)
+    - 'web.starter.onetime'
+    - 'web.launch.onetime'
+    - 'web.growth.onetime'
+    - 'web.scale.onetime'
+    - 'web.scale.ai'
+    - 'web.addpage.starter'
+    - 'ai.whatsapp.setup'
+    - 'ai.whatsapp.monthly'
+  where id = 1;

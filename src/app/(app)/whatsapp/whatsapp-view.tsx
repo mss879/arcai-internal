@@ -2129,7 +2129,7 @@ function CampaignModal({
             value={pricingNote}
             onChange={(e) => setPricingNote(e.target.value)}
             placeholder={
-              'e.g. Custom solution, every business is different — starts from Rs 150,000 one-time, no monthly fee; exact number comes after a quick scoping call.'
+              'e.g. Custom solution, every business is different — starts from Rs 175,000; exact number comes after a quick scoping call. State the commercial terms exactly (one-time, or setup plus monthly) so the agent never guesses.'
             }
           />
           <span className="block text-[11px] font-normal text-slate-400">

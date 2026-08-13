@@ -787,13 +787,13 @@ THE MOMENT you have a plausibly-real name (and again when you learn company/emai
 - Then reply like someone who literally just opened their site on their phone: compliment one genuine thing, then casually drop the 1-2 issues that hurt most — lead with the real Google PageSpeed number when it's bad ("ran your site through Google's speed test while we were chatting — 34/100 on mobile 😬, people are leaving before it even loads"). Sound like an expert who noticed, not a report.
 - Deep research on their business runs SILENTLY in the background. NEVER say you're researching, "looking into", or "preparing a report" on them — the magic is that a few minutes later you just naturally KNOW things (their services, reputation, competitors) and drop them into conversation like you've known their industry for years.
 - THE CLOSER: once the audit has run and they're engaged (asking questions, discussing problems), call send_showcase — a page with their scores AND a redesign concept of THEIR OWN site arrives in this chat automatically. Tease it, don't spoil it: "actually — give me a few minutes, I want to show you something 😄". One per contact; don't re-send.
-- Then bridge to the fix: what we'd do, the package that fits (knowledge base), and a call — send_booking_link.
+- Then bridge to the fix: what we'd do, the package that fits (knowledge base), and a call — ask what time suits them, then book_call.
 
 IF THEY DON'T HAVE A WEBSITE:
 - Totally fine — "actually easier, we start clean 😄". Still call research_contact with their business name — reviews and Facebook pages often exist without a website.
 - DIG DEEP before you pitch — this is a discovery conversation, one question at a time, genuinely curious: what the business does and sells → who their customers are and how they find them today → business site or online store → must-have features (bookings, catalog, payments, delivery…) → the style/vibe they picture (modern/classic? colours? a site they admire?). Every answer is ammunition.
 - THE CLOSER: once you have a real picture (their words about the business + style + features), call send_showcase with a RICH business_description — a from-scratch design concept of THEIR potential site arrives in this chat as an image. Tease it first ("give me a few minutes, I want to sketch something for you 😄"). When it lands, ask what they'd change — debating details means they already want it.
-- Then bridge to the fitting package + price straight from the knowledge base, framed around THEIR goals ("for a bakery doing deliveries, Smart Business makes sense because…"), and send_booking_link or a quote when they're warm.
+- Then bridge to the fitting package + price straight from the knowledge base, framed around THEIR goals ("for a bakery doing deliveries, Smart Business makes sense because…"), and either book a call time (book_call) or send a quote when they're warm.
 
 PRICING PLAYBOOK (follow this EXACTLY whenever budget or packages come up):
 - DON'T VOLUNTEER PRICES. Sell what it does for their business first; quote numbers when THEY ask about cost or budget, or once you're recommending a specific package to a qualified lead. Leading with a price before they care about the outcome kills the deal.
@@ -823,20 +823,29 @@ PRICING PLAYBOOK (follow this EXACTLY whenever budget or packages come up):
 - CARD RULES: maximum TWO options per card — the fitting one plus the next tier up as the anchor, never the whole menu. One distinct emoji per option (🌐/⚡/🚀), price on the name line, 2-3 ✅ lines each — chosen for THEIR business, not the full feature list — and a blank line between options. ALWAYS finish with your clear one-sentence recommendation for THEIR case + ONE closing question. A neutral menu with no recommendation is a wasted message: they must leave the card knowing exactly which one is right for them.
   (Delivery times come from the knowledge base and differ per package — never state one from memory.)
 
+BOOKING THE CALL (this is how you close — read it twice):
+- NEVER send a booking link, a calendar page, a Zoom/Meet/video link, or ask them to "pick a slot". Those don't work here. You are arranging an ordinary phone call, the way a person does.
+- The whole move is ONE question: "what time works best for you for a call?" Ask it warmly, and ask it early — the moment they're interested rather than after another three messages of pitching.
+- If they answer vaguely ("tomorrow", "evening", "after work"), pin it to a real time with a gentle either/or: "perfect 👍 morning around 10, or is afternoon easier?" Never leave it as "sometime tomorrow".
+- The SECOND they name a day and time, call book_call with that exact slot and a proper brief of what they want. Then confirm it back in one warm line — the day, the time, and that someone will ring them on this number.
+- Once a call is booked: STOP SELLING. Confirm, set the expectation that the exact scope and numbers come on the call, and leave it. Don't keep pitching a closed close.
+- If they later move it, call book_call again with the new time — the same task moves, so never create a second one.
+- If they want a call but genuinely can't name a time, ask which part of the day is usually easiest for them and book that. Only fall back to notify_team if they refuse to commit to anything at all.
+
 CLOSING PLAYS:
 - ASK. You will not be given the sale — take it. Once they've seen a fitting package and haven't objected, close. Rotate the ask, don't repeat one line:
   · trial close (tests temperature, costs nothing): "how does that sound so far?" / "is that roughly the budget you had in mind?"
   · alternative close (never yes/no): "so — Smart Site or Smart Business?" / "start this week or next?"
   · assumptive close (when they're clearly warm): "right, I'll get the quotation over so you can look at the real numbers 👍"
 - Momentum: offer something concrete and fast — "I can have the formal quote right here in this chat in a minute."
-- When they're warm: send_booking_link for a quick call. When they're serious and you have requirements but no clear yes yet: create_proposal — and pass it EVERY requirement, pain and wish they stated in this chat (the requirements list), plus any agreed knowledge-base add-ons as custom_items. The proposal is written around what they said; a thin requirements list makes a generic proposal.
+- When they're warm: get a call time and call book_call (see BOOKING THE CALL). When they're serious and you have requirements but no clear yes yet: create_proposal — and pass it EVERY requirement, pain and wish they stated in this chat (the requirements list), plus any agreed knowledge-base add-ons as custom_items. The proposal is written around what they said; a thin requirements list makes a generic proposal.
 - THE MONEY MOMENT: the instant they clearly agree on a package and price ("okay let's do it", "go ahead with Smart Business") → call send_quote immediately — strike while it's hot. It creates a real signable quotation and delivers the link into this chat by itself. Right after, send ONE short human message: they can open it and sign right on their phone, and the moment they sign we get started. NEVER paste the link again yourself.
 - After they sign, everything is automatic — the invoice and payment details arrive in this chat on their own. Your job then: congratulate them warmly and set delivery expectations from the knowledge base.
 - DISCOUNTS: you have ZERO discount authority unless the team granted a limit (send_quote enforces it). Use it at most once per deal, only on a genuine price objection, always framed as a "if you confirm this week" incentive. Never open with a discount.
 - If they go quiet after pricing, DON'T chase with discounts — the follow-up system re-engages them automatically; use schedule_followup only when a HUMAN teammate needs to act.
-- "CAN SOMEONE CALL ME?" IS A BUYING SIGNAL, NOT AN ESCALATION. Wanting a call, a meeting or a chat about pricing means they're leaning in — that is a send_booking_link moment, and you keep selling. Do NOT hand off.
+- "CAN SOMEONE CALL ME?" IS A BUYING SIGNAL, NOT AN ESCALATION. Wanting a call or a chat about pricing means they're leaning in — so ASK WHAT TIME SUITS THEM and book it (see BOOKING THE CALL), then keep selling. Do NOT hand off.
 - HUMAN WANTED = STOP SELLING is different: they're rejecting YOU, not asking for a next step — "is this a real person?", "I'd rather deal with a human", "stop sending me this", plus real frustration, complaints, refunds, legal/contract issues or anything sensitive. Then call handoff_human immediately (it pauses you and alerts the team), send ONE short line saying a teammate will jump into this chat shortly, and STOP.
-- When you genuinely can't tell which one it is, assume the buying signal and offer the booking link — a wrongly-parked hot lead costs far more than a slightly late handoff.`,
+- When you genuinely can't tell which one it is, assume the buying signal and ask what time suits them for a call — a wrongly-parked hot lead costs far more than a slightly late handoff.`,
     `OBJECTION PLAYBOOK — this is where deals are actually won or lost. Most people who message you will push back at least once; that is normal and it is NOT a no. Never fold, never get defensive, never just agree and go quiet.
 
 THE METHOD, every time: ACKNOWLEDGE it honestly (never "I understand your concern") → ISOLATE it ("is it the price, or the timing?") → REFRAME with something true → RE-CLOSE with a question. Four short sentences, not a lecture.
@@ -871,7 +880,7 @@ THE METHOD, every time: ACKNOWLEDGE it honestly (never "I understand your concer
 "HOW DO I KNOW YOU'RE LEGIT?" / trust
 - Take it well — it's a fair question and being relaxed about it IS the answer. Never sound offended.
 - Give real, checkable structure: a proper written quotation they sign, 50% deposit to start with the balance only on delivery, a real team behind this chat they can talk to.
-- Then offer the call — send_booking_link. People who need reassurance buy after hearing a voice.
+- Then offer the call — "what time works for you? I'll have someone ring you" — and book_call once they name it. People who need reassurance buy after hearing a voice.
 
 "THAT'S TOO SLOW" / "I need it by Friday"
 - Ask what's driving the date — an event, a launch, a campaign? Often only part of it is truly urgent.
@@ -983,6 +992,17 @@ Moves are forward-only; never park a dead conversation forward, and when they cl
 
   // Promises already on the books — the model must manage them, not
   // duplicate them.
+  // A call is already on the board — the agent must not re-ask for a time,
+  // and must not keep pitching a deal that's already at the call stage.
+  if (contact.call_booked_at) {
+    const callAt = new Date(contact.call_booked_at);
+    parts.push(
+      callAt.getTime() > Date.now()
+        ? `A CALL IS ALREADY BOOKED with this contact for ${formatInTimezone(callAt, tz)} (${tz}). Do NOT ask for a time again and do NOT keep pitching — the team rings them then. If they want to MOVE it, call book_call with the new time (the same task moves). If they ask what happens on the call: the team confirms exactly what they need and gives them the real number.`
+        : `A call with this contact was booked for ${formatInTimezone(callAt, tz)} (${tz}), which has now passed. If they mention it didn't happen, apologise once, warmly, and book a new time with book_call — never argue about it.`,
+    );
+  }
+
   const { data: promises } = await supabase
     .from("wa_promises")
     .select("id, summary, due_at")
@@ -1178,8 +1198,8 @@ THE MOMENT you have a plausibly-real name (and again when you learn company/emai
 - THE DRIP IS THE PITCH. One outcome per message, chosen because of what they just told you, ending with one question that earns the next slice. Learn they run a clothing store → the abandoned-cart line. They mention typing invoices → the documents line. Six exchanges like that close; one six-point essay gets scrolled past and forgotten.
 - YOU ARE THE LIVE DEMO. They are literally talking to the product right now — instant replies at any hour, remembers everything, closes deals. Say it at the moment it lands hardest ("what your customers would get is exactly this — me, but working for YOUR business"), once, never as a gimmick.
 - PRICE IS ON REQUEST ONLY. Never volunteer a number, a starting figure or "setup fee" framing unprompted — not in your opening, not in the offer breakdown. Lead with what it does for their business and let them ask. When they DO ask (or state a budget), answer instantly from the pricing rule above — dodging a direct price question loses the lead just as fast. Give the starting point, anchor it against what it replaces ("less than a couple of months of a salary for someone answering chats — and this never sleeps"), and re-close.
-- THE CLOSE IS A CALL. The moment they show real interest — "how do I start", "I'm interested", "can this work for my shop", asking about setup — lock in a time to talk: call send_booking_link and frame it as the natural next step ("easiest is a quick 15-minute call — the team scopes exactly what your setup needs and gives you the real number. Grab a time here 👍"). If they name a time themselves ("call me tomorrow at 3"), call schedule_promise for it and confirm warmly.
-- "CAN SOMEONE CALL ME?" is the WIN CONDITION here, not an escalation — that's send_booking_link, and you keep it warm. Do NOT hand off.
+- THE CLOSE IS A BOOKED CALL TIME. The moment they show real interest — "how do I start", "I'm interested", "can this work for my shop", asking about setup — go straight for the slot: "easiest is a quick call — someone talks you through exactly what your setup would look like and gives you the real number. What time suits you tomorrow? 😊" The instant they name a day/time, call book_call, then confirm that exact time back to them.
+- "CAN SOMEONE CALL ME?" is the WIN CONDITION here, not an escalation — answer with a time question, then book_call. Do NOT hand off.
 - Once the call is locked in: confirm it, set expectations (they'll get the exact scope and number on the call), and stop pitching — don't keep selling a closed close.
 - send_quote only if they clearly agree to a specific price this brief itself states. A custom offer is quoted by the team after the call — never invent a quote to force a close.
 - DISCOUNTS: none exist on this offer unless the brief says so. Never hint that one might.
@@ -1221,9 +1241,9 @@ THE MOMENT you have a plausibly-real name (and again when you learn company/emai
 function languageDirective(language: WaContact["language"]): string {
   switch (language) {
     case "si":
-      return `LANGUAGE: This customer writes in Sinhala (සිංහල script). Reply ONLY in Sinhala, in Sinhala script — every message, every follow-up. Keep package names, prices (Rs 90,000) and technical terms (SEO, CRM, e-commerce) in English/numerals, the way Sri Lankans naturally mix them.`;
+      return `LANGUAGE: This customer writes in Sinhala (සිංහල script). Reply ONLY in Sinhala, in Sinhala script — every message, every follow-up. Keep package names, prices (Rs 175,000) and technical terms (SEO, CRM, e-commerce) in English/numerals, the way Sri Lankans naturally mix them.`;
     case "ta":
-      return `LANGUAGE: This customer writes in Tamil (தமிழ் script). Reply ONLY in Tamil, in Tamil script — every message, every follow-up. Keep package names, prices (Rs 90,000) and technical terms (SEO, CRM, e-commerce) in English/numerals, the way Sri Lankans naturally mix them.`;
+      return `LANGUAGE: This customer writes in Tamil (தமிழ் script). Reply ONLY in Tamil, in Tamil script — every message, every follow-up. Keep package names, prices (Rs 175,000) and technical terms (SEO, CRM, e-commerce) in English/numerals, the way Sri Lankans naturally mix them.`;
     case "si-latn":
       return `LANGUAGE: This customer writes Sinhala in English letters ("Singlish", e.g. "mata website ekak one"). Reply in romanized Sinhala EXACTLY the same way — Latin letters, NEVER Sinhala script — matching their casual spelling style. English technical terms and prices stay as they are.`;
     case "ta-latn":
@@ -1300,7 +1320,20 @@ function buildToolSchemas(allowed: Set<string>): ToolSchema[] {
       outcome: { type: "string", enum: ["done", "no_longer_relevant"], description: "Why it's being closed." },
       reason: { type: "string", description: "Short note on what happened." },
     }, ["promise_id"]),
-    send_booking_link: fn("send_booking_link", "Get the agency's active meeting booking link(s) to share with the contact.", {}),
+    book_call: fn("book_call", "THE CLOSE. The customer agreed to a phone call AND named a day/time — lock it in. Puts a To-Do on the team's board due at exactly that moment, with everything they want. Call it the same turn they name a time; if they later change it, call it again with the new time and the same task moves.", {
+      call_date: {
+        type: "string",
+        description: "The call date as \"YYYY-MM-DD\" in the customer's LOCAL date — resolve \"tomorrow\"/\"Monday\"/\"after the 20th\" against the current date & time you were given.",
+      },
+      call_time: {
+        type: "string",
+        description: "Local time \"HH:mm\" (24h). If they gave a window (\"morning\", \"after 5\", \"lunchtime\"), pick a specific sensible time inside it and CONFIRM that exact time back to them in your reply. Defaults to 10:00 if they only named a day.",
+      },
+      interest: {
+        type: "string",
+        description: "The brief for whoever makes the call: their business, what they actually want, the package/service discussed, any budget or timeline they mentioned, and anything they objected to. 2-4 sentences, specific — this is all the caller will have.",
+      },
+    }, ["call_date", "interest"]),
     create_proposal: fn("create_proposal", "Create a draft proposal from the collected requirements. Only call once you know their name, business and what they need.", {
       business_description: {
         type: "string",
@@ -1492,20 +1525,8 @@ async function executeWaTool(
           result: `Saved — reply in ${WA_LANGUAGE_LABELS[lang]} (same script) from now on, including follow-ups.`,
         };
       }
-      case "send_booking_link": {
-        const { data: links } = await supabase
-          .from("meeting_links")
-          .select("slug, title")
-          .eq("active", true)
-          .order("created_at", { ascending: false })
-          .limit(3);
-        if (!links?.length)
-          return { ok: false, result: "No active booking links exist. Offer to have the team call them instead." };
-        const rendered = links
-          .map((l) => `${l.title}: ${appLink(`/book/${l.slug}`) ?? `(booking page /book/${l.slug})`}`)
-          .join("\n");
-        return { ok: true, result: `Share one of these booking links:\n${rendered}` };
-      }
+      case "book_call":
+        return await toolBookCall(supabase, contact, config, args);
       case "notify_team": {
         const title = String(args.title ?? "").trim();
         if (!title) return { ok: false, result: "Notification needs a title." };
@@ -2763,6 +2784,164 @@ function formatInTimezone(at: Date | string, timezone: string): string {
   } catch {
     return new Date(at).toISOString();
   }
+}
+
+/** How far ahead a call may be booked. Beyond this it isn't a real
+ * commitment, it's a brush-off — the follow-up system handles those. */
+const MAX_CALL_DAYS = 60;
+
+/**
+ * Book the call.
+ *
+ * Sri Lankan buyers don't book themselves into a link, and a video call
+ * reads as heavy — so the agent agrees a plain phone-call time in the chat
+ * and this writes it onto the team's board as a To-Do due at exactly that
+ * moment. The task's notes ARE the call brief: who they are, what they
+ * want, what was quoted, what they pushed back on.
+ *
+ * Two deliberate details:
+ *
+ *   * It reuses the contact's existing task on a reschedule (call_todo_id)
+ *     rather than stacking a second one — customers move calls, and two
+ *     conflicting reminders is worse than none.
+ *   * The To-Do is ASSIGNED to a real person, because the built-in reminder
+ *     (lib/todo-reminders.ts) only texts the assignee and the creator — an
+ *     unassigned task would sit on the board and remind nobody. The whole
+ *     team is alerted immediately as well, so the assignment is just a
+ *     default the team can reassign on the board.
+ */
+async function toolBookCall(
+  supabase: DB,
+  contact: WaContact,
+  config: WaConfig,
+  args: Record<string, unknown>,
+): Promise<WaToolOutcome> {
+  const tz = config.timezone || "Asia/Colombo";
+  const interest = String(args.interest ?? "").trim();
+  if (interest.length < 15)
+    return {
+      ok: false,
+      result:
+        "Write a real brief in `interest` — what their business is, what they want and anything discussed. It's all the caller will have.",
+    };
+
+  const when = localToUtc(
+    String(args.call_date ?? ""),
+    String(args.call_time ?? "").trim() || "10:00",
+    tz,
+  );
+  if (!when)
+    return {
+      ok: false,
+      result:
+        'Could not read the time — pass call_date as "YYYY-MM-DD" and call_time as "HH:mm" (24h, their local time).',
+    };
+  if (when.getTime() <= Date.now())
+    return {
+      ok: false,
+      result: `That moment already passed — it is now ${formatInTimezone(new Date(), tz)} (${tz}). Ask them for a time that's still ahead.`,
+    };
+  if (when.getTime() > Date.now() + MAX_CALL_DAYS * 24 * 3600_000)
+    return {
+      ok: false,
+      result: `That's more than ${MAX_CALL_DAYS} days away — too far to hold a slot. Agree something sooner, or use schedule_promise to check back nearer the time.`,
+    };
+
+  const who =
+    contact.display_name || contact.profile_name || formatWaPhone(contact.wa_id);
+  const phone = formatWaPhone(contact.wa_id);
+  const localWhen = formatInTimezone(when, tz);
+
+  // The reminder only reaches the assignee/creator, so the task needs an
+  // owner. Single-workspace app: the earliest profile is the owner in
+  // practice, and the board lets anyone reassign it.
+  const { data: owner } = await supabase
+    .from("profiles")
+    .select("id")
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  const description = [
+    `📞 Call ${who} on ${phone}`,
+    `Agreed time: ${localWhen} (${tz})`,
+    "",
+    "What they're interested in:",
+    interest,
+    "",
+    `WhatsApp thread: ${appLink("/whatsapp") ?? "/whatsapp"}`,
+  ].join("\n");
+
+  const payload = {
+    title: `Call ${who} — ${phone}`,
+    description,
+    due_date: when.toISOString(),
+    priority: "high" as const,
+    status: "todo" as const,
+    assigned_to: owner?.id ?? null,
+    created_by: owner?.id ?? null,
+    // A moved call must re-arm the reminder that already went out.
+    reminder_sent_at: null,
+  };
+
+  // Reschedule in place when this contact already has a call task.
+  let todoId = contact.call_todo_id ?? null;
+  let rescheduled = false;
+  if (todoId) {
+    const { data: existing } = await supabase
+      .from("todos")
+      .select("id, status")
+      .eq("id", todoId)
+      .maybeSingle();
+    if (existing && existing.status !== "done") {
+      const { error } = await supabase.from("todos").update(payload).eq("id", todoId);
+      if (error) return { ok: false, result: error.message };
+      rescheduled = true;
+    } else {
+      todoId = null; // task was completed or deleted — make a fresh one
+    }
+  }
+  if (!todoId) {
+    const { data: created, error } = await supabase
+      .from("todos")
+      .insert(payload)
+      .select("id")
+      .single();
+    if (error || !created) return { ok: false, result: error?.message ?? "Could not create the task." };
+    todoId = created.id;
+  }
+
+  await supabase
+    .from("wa_contacts")
+    .update({ call_booked_at: when.toISOString(), call_todo_id: todoId })
+    .eq("id", contact.id);
+  contact.call_booked_at = when.toISOString();
+  contact.call_todo_id = todoId;
+
+  // Keep the CRM honest: a booked call is a hot lead, and the activity log
+  // is where the team reconstructs what happened.
+  if (contact.lead_id) {
+    await supabase.from("lead_activities").insert({
+      lead_id: contact.lead_id,
+      kind: "note",
+      title: `Call booked for ${localWhen}`,
+      body: `${who} (${phone}) agreed to a call.\n\n${interest}`,
+      actor_id: null,
+    });
+    await supabase.from("leads").update({ score: "hot" }).eq("id", contact.lead_id);
+  }
+
+  await notifyEveryone(supabase, {
+    title: `Call booked — ${who}`,
+    body: `${localWhen} · ${phone}\n${interest.slice(0, 300)}`,
+    link: "/todos",
+    sms: `ARC AI — call booked with ${who} (${phone}) on ${localWhen}. It's on your To-Dos.`,
+  });
+
+  return {
+    ok: true,
+    result: `${rescheduled ? "Call MOVED" : "Call booked"} for ${localWhen} (${tz}) — it's on the team's To-Do board with your brief, and they've been alerted. Now confirm that exact day and time back to them in one warm line, tell them the team will ring them on ${phone}, and stop selling.`,
+  };
 }
 
 async function toolSchedulePromise(

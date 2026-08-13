@@ -100,11 +100,11 @@ export const WA_TOOL_CATALOG: WaToolMeta[] = [
     kind: "write",
   },
   {
-    key: "send_booking_link",
-    label: "Share meeting booking link",
+    key: "book_call",
+    label: "Book a call time (the close)",
     description:
-      "Fetches your active booking pages (Meetings) and shares a link so the contact can book a call.",
-    kind: "read",
+      "Agrees a real day and time for a phone call in the chat — no links, no video meetings — then puts a To-Do on your board due at exactly that moment, titled with who to ring and carrying what they're interested in as the notes. You get the usual task reminder before it.",
+    kind: "write",
   },
   {
     key: "create_proposal",

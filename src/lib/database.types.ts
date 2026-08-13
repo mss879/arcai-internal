@@ -2142,6 +2142,10 @@ export type Database = {
           agent_attempts: number;
           first_reply_sent_at: Timestamp | null;
           first_reply_seconds: number | null;
+          // 0072 — the agreed phone-call slot and the To-Do that carries it,
+          // so a reschedule updates the same task instead of stacking one.
+          call_booked_at: Timestamp | null;
+          call_todo_id: UUID | null;
           created_at: Timestamp;
           updated_at: Timestamp;
         };
@@ -2171,6 +2175,9 @@ export type Database = {
           agent_attempts?: number;
           first_reply_sent_at?: Timestamp | null;
           first_reply_seconds?: number | null;
+          // 0072 — agreed phone-call slot + the To-Do carrying it
+          call_booked_at?: Timestamp | null;
+          call_todo_id?: UUID | null;
           created_at?: Timestamp;
           updated_at?: Timestamp;
         };

@@ -1630,10 +1630,12 @@ function CampaignTab({
               </h2>
               <p className="text-xs text-slate-500">
                 When your Meta ad sends people to this WhatsApp number, they
-                land straight in the inbox. Turn this on and the agent opens
-                those conversations on the campaign — what&apos;s on offer, and
-                why it&apos;s worth it — instead of running generic discovery.
-                Everything it already knows about ARC still applies.
+                land straight in the inbox. Turn this on and the agent goes
+                hyper-focused for those leads: it sells ONLY the live
+                campaign — no service menus, no website discovery — prices it
+                from your pricing line, and closes for a booked call. Existing
+                conversations and everyone else are untouched, and switching
+                this off brings the normal agent straight back.
               </p>
             </div>
             <Toggle checked={enabled} onChange={toggleMode} label="Campaign mode" />
@@ -1691,6 +1693,12 @@ function CampaignTab({
                   {active.details.trim() ||
                     "No details written yet — the agent has nothing to pitch from."}
                 </p>
+                {active.pricing_note?.trim() && (
+                  <p className="mt-2 rounded-lg bg-emerald-50/60 px-3 py-2 text-[11px] leading-relaxed text-emerald-800 ring-1 ring-inset ring-emerald-100">
+                    <span className="font-medium">When they ask the price:</span>{" "}
+                    {active.pricing_note}
+                  </p>
+                )}
               </div>
             </div>
 
@@ -1910,6 +1918,9 @@ function CampaignModal({
 }) {
   const [name, setName] = React.useState(campaign?.name ?? "");
   const [details, setDetails] = React.useState(campaign?.details ?? "");
+  const [pricingNote, setPricingNote] = React.useState(
+    campaign?.pricing_note ?? "",
+  );
   const [firstReply, setFirstReply] = React.useState(campaign?.first_reply ?? "");
   const [file, setFile] = React.useState<File | null>(null);
   const [preview, setPreview] = React.useState<string | null>(
@@ -1949,6 +1960,7 @@ function CampaignModal({
       const input = {
         name,
         details,
+        pricing_note: pricingNote,
         first_reply: firstReply,
         image_url: imageUrl,
         image_path: imagePath,
@@ -2029,9 +2041,26 @@ function CampaignModal({
             value={details}
             onChange={(e) => setDetails(e.target.value)}
             placeholder={
-              "The service you're advertising, what's included, the price, who it's for, and anything you want the agent to push.\n\nThis is added to what the agent already knows about ARC — you don't need to repeat the usual packages."
+              "The offer you're advertising: what's included, who it's for, why it wins, and the goal of the conversation.\n\nWhile this campaign is live, the agent sells ONLY this to people arriving from the ad — so put everything it needs to close in here."
             }
           />
+        </label>
+
+        <label className="block space-y-1.5 text-xs font-medium text-slate-600">
+          When they ask the price
+          <Textarea
+            rows={3}
+            value={pricingNote}
+            onChange={(e) => setPricingNote(e.target.value)}
+            placeholder={
+              'e.g. Custom solution, every business is different — starts from Rs 150,000 one-time, no monthly fee; exact number comes after a quick scoping call.'
+            }
+          />
+          <span className="block text-[11px] font-normal text-slate-400">
+            The only pricing the agent is allowed to give for this offer. Leave
+            it blank and the agent answers price questions from the details box
+            above instead.
+          </span>
         </label>
 
         <label className="block space-y-1.5 text-xs font-medium text-slate-600">
@@ -2044,8 +2073,9 @@ function CampaignModal({
           />
           <span className="block text-[11px] font-normal text-slate-400">
             Fires the second someone messages from the ad — before the agent has
-            read anything. Keep it short and don&apos;t quote a price here; the
-            real reply follows a moment later.
+            read anything. It should introduce the agent as ARC&apos;s AI agent
+            and name the campaign; don&apos;t quote a price here — the real
+            reply follows a moment later.
           </span>
         </label>
       </div>

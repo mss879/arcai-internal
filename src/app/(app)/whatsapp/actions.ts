@@ -369,6 +369,10 @@ export async function saveCampaignModeAction(
 export type CampaignInput = {
   name: string;
   details: string;
+  // The only thing the agent may say when the price comes up (0068) —
+  // campaign offers are custom-quoted, so without this it would fall back
+  // to the website packages in the knowledge base.
+  pricing_note: string;
   first_reply: string;
   image_url: string | null;
   image_path: string | null;
@@ -390,6 +394,7 @@ export async function createCampaignAction(
   const { error } = await supabase.from("wa_campaigns").insert({
     name,
     details,
+    pricing_note: input.pricing_note.trim(),
     // Left blank? Draft it, so the instant line works out of the box.
     first_reply: input.first_reply.trim() || (await draftFirstReply(details)),
     image_url: input.image_url || null,
@@ -435,6 +440,7 @@ export async function updateCampaignAction(
     .update({
       name,
       details,
+      pricing_note: input.pricing_note.trim(),
       first_reply: input.first_reply.trim() || (await draftFirstReply(details)),
       image_url: input.image_url || null,
       image_path: input.image_path || null,
@@ -530,17 +536,18 @@ async function draftFirstReply(details: string): Promise<string | null> {
       [
         {
           role: "user",
-          content: `A Sri Lankan digital agency is running this WhatsApp ad campaign:
+          content: `ARC AI, a Sri Lankan AI & digital agency, is running this WhatsApp ad campaign:
 
 ${details.slice(0, 2000)}
 
-Someone just tapped the ad and messaged. Write the ONE short line that fires back instantly, before a salesperson has read anything they said.
+Someone just tapped the ad and sent their first message. Write the ONE short line ARC's AI agent fires back instantly, before it has read anything they said.
 
 Rules:
-- 1-2 sentences, max ~140 characters. Warm, human WhatsApp voice, contractions, at most one emoji.
-- Acknowledge the campaign so they know they reached the right place.
-- Signal a real reply is seconds away.
-- Do NOT ask a question, quote a price, or promise anything specific — a salesperson answers properly right after and must not be contradicted.
+- 1-2 sentences, max ~160 characters. Warm, human WhatsApp voice, contractions, at most one emoji.
+- It MUST introduce the sender as Arc, ARC AI's AI agent — openly an AI, never hiding it.
+- It MUST NOT imply a human is coming or that they're being "connected with someone" — the agent itself handles the whole conversation, and the details follow in a moment.
+- Name the campaign topic naturally so they know they've reached the right place about the thing they tapped.
+- Do NOT ask a question, quote a price, or promise anything specific — the full reply follows seconds later and must not be contradicted.
 - No markdown, no links.
 
 Reply ONLY with JSON: {"line":"..."}`,

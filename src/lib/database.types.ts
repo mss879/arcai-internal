@@ -2364,6 +2364,8 @@ export type Database = {
           details: string;
           // 0066 — the instant line the webhook fires on first contact
           first_reply: string | null;
+          // 0068 — the only thing the agent may say when price comes up
+          pricing_note: string;
           created_by: UUID | null;
           created_at: Timestamp;
           updated_at: Timestamp;
@@ -2378,6 +2380,8 @@ export type Database = {
           details?: string;
           // 0066 — the instant line the webhook fires on first contact
           first_reply?: string | null;
+          // 0068 — the only thing the agent may say when price comes up
+          pricing_note?: string;
           created_by?: UUID | null;
           created_at?: Timestamp;
           updated_at?: Timestamp;

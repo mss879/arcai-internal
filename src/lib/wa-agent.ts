@@ -512,26 +512,83 @@ type WaRunOutcome =
  * killed mid-flight (which would strand its lease). */
 const RUN_BUDGET_MS = 90_000;
 
+/** A quiet stretch this long earns a timeline marker in the thread; below
+ * it, messages read as one continuous exchange and a marker is noise. */
+const THREAD_GAP_MARKER_MS = 45 * 60_000;
+
+/** "25 minutes" / "4 hours 50 minutes" / "2 days 3 hours" — marker wording. */
+function describeGap(ms: number): string {
+  const totalMinutes = Math.round(ms / 60_000);
+  const days = Math.floor(totalMinutes / 1440);
+  const hours = Math.floor((totalMinutes % 1440) / 60);
+  const minutes = totalMinutes % 60;
+  const n = (count: number, word: string) =>
+    `${count} ${word}${count === 1 ? "" : "s"}`;
+  if (days) return n(days, "day") + (hours ? ` ${n(hours, "hour")}` : "");
+  if (hours) return n(hours, "hour") + (minutes ? ` ${n(minutes, "minute")}` : "");
+  return n(Math.max(minutes, 1), "minute");
+}
+
+/**
+ * The conversation as the model will see it — WITH a timeline.
+ *
+ * History arrives as bare text, so on its own the model cannot tell a
+ * "see you at 1 PM" agreed this morning from one sent two minutes ago —
+ * which is exactly how the agent once warmly re-confirmed a call five
+ * hours after the slot had passed. Whenever a real gap separates two
+ * messages (or the last message from right now), a marker states how much
+ * time went by and what the clock read after it, so stale agreements READ
+ * as stale and a "today" in an old message can't lie.
+ */
+async function fetchThread(
+  supabase: DB,
+  contactId: string,
+  timezone: string,
+): Promise<ChatMessage[]> {
+  const { data: history } = await supabase
+    .from("wa_messages")
+    .select("direction, body, created_at")
+    .eq("contact_id", contactId)
+    .order("created_at", { ascending: false })
+    .limit(HISTORY_MESSAGES);
+
+  const thread: ChatMessage[] = [];
+  let prevAt: number | null = null;
+  for (const m of (history ?? []).reverse()) {
+    if (!m.body.trim()) continue;
+    const at = new Date(m.created_at).getTime();
+    if (prevAt !== null && at - prevAt >= THREAD_GAP_MARKER_MS)
+      thread.push({
+        role: "system",
+        content: `⏱ ${describeGap(at - prevAt)} later — ${formatInTimezone(new Date(at), timezone)} (${timezone}).`,
+      });
+    thread.push({
+      role: m.direction === "in" ? ("user" as const) : ("assistant" as const),
+      content: m.body,
+    });
+    prevAt = at;
+  }
+  // The gap between the last message and NOW — without it, a touch composed
+  // days after the chat went quiet still reads like a live conversation.
+  if (prevAt !== null && Date.now() - prevAt >= THREAD_GAP_MARKER_MS)
+    thread.push({
+      role: "system",
+      content: `⏱ ${describeGap(Date.now() - prevAt)} pass with no messages — it is now ${formatInTimezone(new Date(), timezone)} (${timezone}).`,
+    });
+  return thread;
+}
+
 async function runWaAgent(
   supabase: DB,
   contact: WaContact,
   config: WaConfig,
   opts?: { voice?: boolean },
 ): Promise<WaRunOutcome> {
-  const { data: history } = await supabase
-    .from("wa_messages")
-    .select("direction, body, sent_by, created_at")
-    .eq("contact_id", contact.id)
-    .order("created_at", { ascending: false })
-    .limit(HISTORY_MESSAGES);
-
-  const thread: ChatMessage[] = (history ?? [])
-    .reverse()
-    .filter((m) => m.body.trim())
-    .map((m) => ({
-      role: m.direction === "in" ? ("user" as const) : ("assistant" as const),
-      content: m.body,
-    }));
+  const thread = await fetchThread(
+    supabase,
+    contact.id,
+    config.timezone || "Asia/Colombo",
+  );
 
   const allowed = new Set(config.allowed_tools ?? []);
   const tools = buildToolSchemas(allowed);
@@ -715,7 +772,7 @@ async function buildSystemPrompt(
   const tz = config.timezone || "Asia/Colombo";
   const known: string[] = [];
   known.push(
-    `Current date & time: ${formatInTimezone(new Date(), tz)} (${tz}) — resolve every relative time they mention ("Monday", "tomorrow", "the 25th", "next week") against this.`,
+    `Current date & time: ${formatInTimezone(new Date(), tz)} (${tz}) — resolve every relative time they mention ("Monday", "tomorrow", "the 25th", "next week") against this. The ⏱ markers in the conversation show real time passing between messages, so a time agreed in an older message may already be behind you: NEVER confirm, promise or "look forward to" a moment that has already passed — address it instead (did it happen? does it need a new time?).`,
   );
   known.push(`Phone: ${formatWaPhone(contact.wa_id)}`);
   if (name) known.push(`Name: ${name}`);
@@ -999,7 +1056,7 @@ Moves are forward-only; never park a dead conversation forward, and when they cl
     parts.push(
       callAt.getTime() > Date.now()
         ? `A CALL IS ALREADY BOOKED with this contact for ${formatInTimezone(callAt, tz)} (${tz}). Do NOT ask for a time again and do NOT keep pitching — the team rings them then. If they want to MOVE it, call book_call with the new time (the same task moves). If they ask what happens on the call: the team confirms exactly what they need and gives them the real number.`
-        : `A call with this contact was booked for ${formatInTimezone(callAt, tz)} (${tz}), which has now passed. If they mention it didn't happen, apologise once, warmly, and book a new time with book_call — never argue about it.`,
+        : `A call with this contact was booked for ${formatInTimezone(callAt, tz)} (${tz}) — that time has ALREADY PASSED. Never mention it as upcoming and never re-confirm it. If the chat doesn't tell you how the call went, ask warmly whether the team managed to reach them. If it never happened, apologise once — lightly, no grovelling — and lock in a fresh time with book_call; never argue about whose fault it was. If it DID happen, build on whatever comes next instead of re-pitching what the call already covered.`,
     );
   }
 
@@ -2452,19 +2509,11 @@ export async function sendWaResearchFollowup(
       result: "Post-research follow-up message",
     });
 
-    const { data: history } = await supabase
-      .from("wa_messages")
-      .select("direction, body")
-      .eq("contact_id", contact.id)
-      .order("created_at", { ascending: false })
-      .limit(HISTORY_MESSAGES);
-    const thread: ChatMessage[] = (history ?? [])
-      .reverse()
-      .filter((m) => m.body.trim())
-      .map((m) => ({
-        role: m.direction === "in" ? ("user" as const) : ("assistant" as const),
-        content: m.body,
-      }));
+    const thread = await fetchThread(
+      supabase,
+      contact.id,
+      config.timezone || "Asia/Colombo",
+    );
 
     const briefing = JSON.stringify(research.report ?? {}).slice(0, 4500);
     const messages: ChatMessage[] = [
@@ -2911,10 +2960,19 @@ async function toolBookCall(
     todoId = created.id;
   }
 
-  await supabase
+  // The stamp is what lets every FUTURE prompt see the booking (and lets the
+  // cadence hold its nudges until after the call) — if it fails silently the
+  // agent re-confirms stale slots hours after they passed. Usual cause of a
+  // failure here: migration 0072_wa_book_call not applied to this database.
+  const { error: stampError } = await supabase
     .from("wa_contacts")
     .update({ call_booked_at: when.toISOString(), call_todo_id: todoId })
     .eq("id", contact.id);
+  if (stampError)
+    console.error(
+      "[wa-agent] book_call: could not stamp call_booked_at (is migration 0072_wa_book_call applied?):",
+      stampError.message,
+    );
   contact.call_booked_at = when.toISOString();
   contact.call_todo_id = todoId;
 
@@ -3253,19 +3311,11 @@ async function sendPromiseTouch(
   const quoteLine = await buildQuoteStateLine(supabase, contact.lead_id);
   const nudge = `It's now the exact moment the customer asked you to come back to them: ${promise.summary}${promise.source_quote ? ` (their words: "${promise.source_quote}")` : ""}. Send ONE short, natural message that picks the conversation up right on that promise — reference what they said they'd do or what was supposed to happen, like a sharp human who simply remembered. NEVER say "just following up" and never mention schedules, reminders or systems. Human voice, max 3 sentences, end with exactly one easy question or next step.${quoteLine}`;
 
-  const { data: history } = await supabase
-    .from("wa_messages")
-    .select("direction, body")
-    .eq("contact_id", contact.id)
-    .order("created_at", { ascending: false })
-    .limit(HISTORY_MESSAGES);
-  const thread: ChatMessage[] = (history ?? [])
-    .reverse()
-    .filter((m) => m.body.trim())
-    .map((m) => ({
-      role: m.direction === "in" ? ("user" as const) : ("assistant" as const),
-      content: m.body,
-    }));
+  const thread = await fetchThread(
+    supabase,
+    contact.id,
+    config.timezone || "Asia/Colombo",
+  );
 
   const messages: ChatMessage[] = [
     { role: "system", content: await buildSystemPrompt(supabase, contact, config) },
@@ -3490,6 +3540,39 @@ export async function processDueWaFollowups(
     for (const contact of due ?? []) {
       out.processed++;
 
+      // A booked call owns the timeline. Chasing "you've gone quiet" while
+      // a call sits on the books reads oblivious — the call IS the next
+      // step — so the touch waits until a few hours AFTER the slot, where
+      // it lands as the natural "did the team reach you?" check-in
+      // (sendFollowupTouch composes that variant itself).
+      if (
+        contact.call_booked_at &&
+        new Date(contact.call_booked_at).getTime() > Date.now()
+      ) {
+        const resume = new Date(
+          new Date(contact.call_booked_at).getTime() + 3 * 3600_000,
+        ).toISOString();
+        // Compare-and-set, like the quiet-hours defer below: if they
+        // replied meanwhile (which clears the schedule), leave it be.
+        const { data: deferred } = await supabase
+          .from("wa_contacts")
+          .update({ next_followup_at: resume })
+          .eq("id", contact.id)
+          .eq("next_followup_at", contact.next_followup_at!)
+          .select("id");
+        if (deferred?.length) {
+          out.skipped++;
+          await logFollowup(
+            supabase,
+            contact.id,
+            (contact.followup_stage ?? 0) + 1,
+            true,
+            `Deferred to ${resume} — a call is booked for ${contact.call_booked_at}; the next touch is the post-call check-in`,
+          );
+        }
+        continue;
+      }
+
       // Quiet hours: nudges wait for morning (the agent still answers
       // customers 24/7 — this only time-shifts self-initiated touches).
       // Exception: they opened the quote within the last hour (the /q
@@ -3693,27 +3776,30 @@ async function sendFollowupTouch(
   config: WaConfig,
   touch: number,
 ): Promise<boolean> {
+  const tz = config.timezone || "Asia/Colombo";
   // Deal state sharpens the nudge: is a signable quote sitting unsigned?
   const quoteLine = await buildQuoteStateLine(supabase, contact.lead_id);
 
-  const nudge =
-    touch >= MAX_FOLLOWUP_TOUCHES
-      ? `The customer went quiet after your last message. This is follow-up touch 3 of 3 — the graceful breakup. Send ONE warm, zero-pressure goodbye: you get that now might not be the right time, the door stays open, they can pick this up whenever they're ready. No question at the end this time, no guilt. Max 2-3 sentences.${quoteLine}`
-      : `The customer went quiet after your last message. This is follow-up touch ${touch} of 3. Send ONE short, casual re-engagement message with a FRESH angle — never "just following up": reference something concrete you know about their business or website (from the chat, the audit, or your background knowledge) and tie it to a reason to act${touch === 1 ? ". Keep it light and helpful" : ". Add gentle urgency or a new benefit they haven't heard yet"}. Human voice, max 3 sentences, end with exactly one easy question or next step.${quoteLine}`;
+  // A booked call whose slot has passed in silence owns this touch: the only
+  // message a human would send is "did the team reach you?", not a fresh
+  // sales angle. State-free dedup: once ANYTHING lands after the slot (this
+  // touch included), last_message_at moves past call_booked_at and later
+  // touches go back to the normal cadence.
+  const callAt = contact.call_booked_at ? new Date(contact.call_booked_at) : null;
+  const callPassedUnspoken =
+    !!callAt &&
+    callAt.getTime() <= Date.now() &&
+    (!contact.last_message_at ||
+      new Date(contact.last_message_at).getTime() < callAt.getTime());
 
-  const { data: history } = await supabase
-    .from("wa_messages")
-    .select("direction, body")
-    .eq("contact_id", contact.id)
-    .order("created_at", { ascending: false })
-    .limit(HISTORY_MESSAGES);
-  const thread: ChatMessage[] = (history ?? [])
-    .reverse()
-    .filter((m) => m.body.trim())
-    .map((m) => ({
-      role: m.direction === "in" ? ("user" as const) : ("assistant" as const),
-      content: m.body,
-    }));
+  const nudge =
+    callAt && callPassedUnspoken
+      ? `A call with this customer was booked for ${formatInTimezone(callAt, tz)} (${tz}); that time has passed and nothing has been said here since. Send ONE warm, low-key check-in: did the team manage to reach them? If the call never happened, own it lightly — no grovelling — and offer to line up a fresh time. Never re-pitch the product and never speak of the old slot as if it's still ahead. Human voice, max 3 sentences, end with exactly one easy question.${quoteLine}`
+      : touch >= MAX_FOLLOWUP_TOUCHES
+        ? `The customer went quiet after your last message. This is follow-up touch 3 of 3 — the graceful breakup. Send ONE warm, zero-pressure goodbye: you get that now might not be the right time, the door stays open, they can pick this up whenever they're ready. No question at the end this time, no guilt. Max 2-3 sentences.${quoteLine}`
+        : `The customer went quiet after your last message. This is follow-up touch ${touch} of 3. Send ONE short, casual re-engagement message with a FRESH angle — never "just following up": reference something concrete you know about their business or website (from the chat, the audit, or your background knowledge) and tie it to a reason to act${touch === 1 ? ". Keep it light and helpful" : ". Add gentle urgency or a new benefit they haven't heard yet"}. Human voice, max 3 sentences, end with exactly one easy question or next step.${quoteLine}`;
+
+  const thread = await fetchThread(supabase, contact.id, tz);
 
   const messages: ChatMessage[] = [
     { role: "system", content: await buildSystemPrompt(supabase, contact, config) },

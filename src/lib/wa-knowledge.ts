@@ -79,23 +79,50 @@ A: Invoices carry YOUR bank details — customers pay you directly and the syste
 Q: Can I see the system working before I buy?
 A: You already are — this assistant is the same AI agent your customers would get on your website and WhatsApp.`;
 
+/** 60-second single-flight memo. A drain of several concurrent agent runs
+ * renders the knowledge base ONCE instead of once per run; the promise (not
+ * the string) is cached so concurrent callers share the in-flight render.
+ * Staleness bound: price edits and newly approved FAQ lessons reach the
+ * agent within ≤60s on other instances (the invalidation hook below clears
+ * the same-instance memo instantly). */
+let knowledgeMemo: { at: number; promise: Promise<string> } | null = null;
+const KNOWLEDGE_MEMO_TTL_MS = 60_000;
+
+/** Called after a pricing save so the editing instance re-renders at once. */
+export function invalidateAgentKnowledge(): void {
+  knowledgeMemo = null;
+}
+
 /**
  * Build the full knowledge base: static story + live PRICES from the
  * pricing catalog with the team's saved overrides layered on. Never throws —
  * a failed overrides read just falls back to catalog defaults.
  */
 export async function buildAgentKnowledge(supabase: DB): Promise<string> {
-  let overrides: PricingOverrides = {};
-  try {
-    const { data } = await supabase
-      .from("pricing_config")
-      .select("overrides")
-      .eq("id", 1)
-      .maybeSingle();
-    overrides = (data?.overrides ?? {}) as PricingOverrides;
-  } catch {
-    // Catalog defaults are always available.
-  }
+  if (knowledgeMemo && Date.now() - knowledgeMemo.at < KNOWLEDGE_MEMO_TTL_MS)
+    return knowledgeMemo.promise;
+  const promise = renderAgentKnowledge(supabase);
+  knowledgeMemo = { at: Date.now(), promise };
+  return promise;
+}
+
+async function renderAgentKnowledge(supabase: DB): Promise<string> {
+  // Both reads are independent — fetch concurrently, degrade independently
+  // (allSettled preserves the old per-query error isolation).
+  const [pricingRes, faqRes] = await Promise.allSettled([
+    supabase.from("pricing_config").select("overrides").eq("id", 1).maybeSingle(),
+    supabase
+      .from("wa_lessons")
+      .select("body")
+      .eq("status", "approved")
+      .eq("kind", "faq")
+      .order("decided_at", { ascending: false })
+      .limit(12),
+  ]);
+  const overrides: PricingOverrides =
+    pricingRes.status === "fulfilled"
+      ? ((pricingRes.value.data?.overrides ?? {}) as PricingOverrides)
+      : {};
 
   const groups = applyOverrides(overrides);
   const priceLines: string[] = ["PRICES (current — quote these exactly)"];
@@ -127,24 +154,14 @@ export async function buildAgentKnowledge(supabase: DB): Promise<string> {
 
   // FAQ gaps the nightly miner spotted in real chats ("let me get the team
   // to confirm that" moments), answered and APPROVED by the team in the
-  // Lessons queue. Never throws — a missing table (migration 0073 not yet
-  // applied) just leaves the section out.
+  // Lessons queue. A missing table (migration 0073 not yet applied) just
+  // leaves the section out — the query errors softly and faqs stays empty.
   let learnedFaqs = "";
-  try {
-    const { data: faqs } = await supabase
-      .from("wa_lessons")
-      .select("body")
-      .eq("status", "approved")
-      .eq("kind", "faq")
-      .order("decided_at", { ascending: false })
-      .limit(12);
-    if (faqs?.length) {
-      learnedFaqs = `\n\nTEAM-CONFIRMED FAQS (learned from real conversations — answer from these with confidence)\n${faqs
-        .map((f) => f.body.trim())
-        .join("\n")}`;
-    }
-  } catch {
-    // Optional section only.
+  const faqs = faqRes.status === "fulfilled" ? faqRes.value.data ?? [] : [];
+  if (faqs.length) {
+    learnedFaqs = `\n\nTEAM-CONFIRMED FAQS (learned from real conversations — answer from these with confidence)\n${faqs
+      .map((f) => f.body.trim())
+      .join("\n")}`;
   }
 
   return `${STATIC_KNOWLEDGE}\n\n${priceLines.join("\n")}${learnedFaqs}`;

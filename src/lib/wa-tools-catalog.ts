@@ -141,6 +141,13 @@ export const WA_TOOL_CATALOG: WaToolMeta[] = [
       "Pauses the AI for this conversation, flags it as needing attention and alerts the team to take over.",
     kind: "write",
   },
+  {
+    key: "opt_out",
+    label: "Honor opt-out requests",
+    description:
+      "When the customer clearly asks to stop being messaged — in any language or phrasing — stops all automated messaging for them, cancels scheduled follow-ups, closes the lead and alerts the team. Protects your number's Meta quality rating.",
+    kind: "write",
+  },
 ];
 
 export function waToolMeta(key: string): WaToolMeta | undefined {

@@ -69,6 +69,7 @@ import {
   deleteKeywordRuleAction,
   linkContactToCrmAction,
   markContactReadAction,
+  playgroundReply,
   saveCampaignModeAction,
   saveColdConfigAction,
   saveKeywordRuleAction,
@@ -1247,6 +1248,8 @@ function AgentTab({
         </section>
 
         <LessonsCard lessons={lessons} />
+
+        <PlaygroundCard />
 
         <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm">
           <h2 className="text-sm font-semibold text-slate-900">How it flows</h2>
@@ -2708,6 +2711,115 @@ function RevivalCard({
       <div className="mt-3 flex justify-end">
         <Button onClick={handleSave} disabled={saving}>
           {saving ? "Saving…" : "Save revival settings"}
+        </Button>
+      </div>
+    </section>
+  );
+}
+
+// ---- Playground (talk to the live brain, nothing sent or saved) ---------------
+
+const PLAYGROUND_MAX_TURNS = 20;
+
+function PlaygroundCard() {
+  const [turns, setTurns] = React.useState<
+    { role: "user" | "assistant"; content: string }[]
+  >([]);
+  const [input, setInput] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const listRef = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
+  }, [turns, busy]);
+
+  const atCap = turns.length >= PLAYGROUND_MAX_TURNS;
+
+  async function send() {
+    const text = input.trim();
+    if (!text || busy || atCap) return;
+    const next = [...turns, { role: "user" as const, content: text }];
+    setTurns(next);
+    setInput("");
+    setBusy(true);
+    const res = await playgroundReply(next);
+    setBusy(false);
+    if (res.ok)
+      setTurns([...next, { role: "assistant" as const, content: res.reply }]);
+    else toast.error(res.error);
+  }
+
+  return (
+    <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm">
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold text-slate-900">Playground</h2>
+        {turns.length > 0 && (
+          <button
+            className="text-[11px] font-medium text-slate-400 hover:text-slate-600"
+            onClick={() => setTurns([])}
+          >
+            Reset
+          </button>
+        )}
+      </div>
+      <p className="text-xs text-slate-500">
+        Talk to the agent&apos;s exact live brain — same persona, knowledge,
+        prices, approved lessons (and campaign focus when one is live). Nothing
+        is sent or saved; tools are off, so it can&apos;t book calls or create
+        quotes here.
+      </p>
+
+      <div
+        ref={listRef}
+        className="mt-3 max-h-72 space-y-2 overflow-y-auto rounded-xl bg-slate-50 p-3 ring-1 ring-inset ring-slate-200"
+      >
+        {turns.length === 0 && !busy && (
+          <p className="text-xs italic text-slate-400">
+            Say hi like a customer would — &quot;how much is a website?&quot;,
+            an objection, Sinhala, anything.
+          </p>
+        )}
+        {turns.map((t, i) => (
+          <div
+            key={i}
+            className={cn("flex", t.role === "user" ? "justify-end" : "justify-start")}
+          >
+            <div
+              className={cn(
+                "max-w-[85%] whitespace-pre-wrap rounded-2xl px-3 py-2 text-xs leading-5",
+                t.role === "user"
+                  ? "bg-primary-600 text-white"
+                  : "bg-white text-slate-800 ring-1 ring-slate-200",
+              )}
+            >
+              {t.content}
+            </div>
+          </div>
+        ))}
+        {busy && (
+          <div className="flex justify-start">
+            <div className="rounded-2xl bg-white px-3 py-2 text-xs italic text-slate-400 ring-1 ring-slate-200">
+              typing…
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="mt-2 flex gap-2">
+        <Input
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              void send();
+            }
+          }}
+          placeholder={atCap ? "Turn limit reached — reset to keep testing" : "Message the agent…"}
+          disabled={busy || atCap}
+        />
+        <Button onClick={() => void send()} disabled={busy || atCap || !input.trim()}>
+          <Send className="h-3.5 w-3.5" />
         </Button>
       </div>
     </section>

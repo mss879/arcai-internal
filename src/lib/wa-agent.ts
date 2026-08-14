@@ -609,17 +609,17 @@ async function runWaAgent(
   config: WaConfig,
   opts?: { voice?: boolean },
 ): Promise<WaRunOutcome> {
-  const thread = await fetchThread(
-    supabase,
-    contact.id,
-    config.timezone || "Asia/Colombo",
-  );
+  // Thread and prompt are independent reads — fetch them concurrently.
+  const [thread, system] = await Promise.all([
+    fetchThread(supabase, contact.id, config.timezone || "Asia/Colombo"),
+    buildSystemPrompt(supabase, contact, config),
+  ]);
 
   const allowed = new Set(config.allowed_tools ?? []);
   const tools = buildToolSchemas(allowed);
 
   const messages: ChatMessage[] = [
-    { role: "system", content: await buildSystemPrompt(supabase, contact, config) },
+    { role: "system", content: system },
     ...thread,
   ];
 
@@ -796,9 +796,30 @@ async function buildSystemPrompt(
   const name = contact.display_name || null;
   const tz = config.timezone || "Asia/Colombo";
   const known: string[] = [];
+  const localHour = hourInTimezone(tz, new Date());
+  const dayPart =
+    localHour >= 5 && localHour < 12
+      ? "morning"
+      : localHour >= 12 && localHour < 17
+        ? "afternoon"
+        : localHour >= 17 && localHour < 21
+          ? "evening"
+          : "late night";
   known.push(
-    `Current date & time: ${formatInTimezone(new Date(), tz)} (${tz}) — resolve every relative time they mention ("Monday", "tomorrow", "the 25th", "next week") against this. The ⏱ markers in the conversation show real time passing between messages, so a time agreed in an older message may already be behind you: NEVER confirm, promise or "look forward to" a moment that has already passed — address it instead (did it happen? does it need a new time?).`,
+    `Current date & time: ${formatInTimezone(new Date(), tz)} (${tz}) — resolve every relative time they mention ("Monday", "tomorrow", "the 25th", "next week") against this. The ⏱ markers in the conversation show real time passing between messages, so a time agreed in an older message may already be behind you: NEVER confirm, promise or "look forward to" a moment that has already passed — address it instead (did it happen? does it need a new time?). For them it is the ${dayPart} right now — if you open with a greeting, match it (never "good morning" at night), and never re-greet an ongoing conversation.`,
   );
+  // Working hours, straight from the quiet-hours config — so the agent
+  // never promises a 2 AM callback or books the team a graveyard slot.
+  if (
+    config.quiet_hours_enabled &&
+    config.quiet_hours_start !== config.quiet_hours_end
+  ) {
+    const from = ((config.quiet_hours_end % 24) + 24) % 24;
+    const until = ((config.quiet_hours_start % 24) + 24) % 24;
+    known.push(
+      `Team calling hours: the team rings customers between ${String(from).padStart(2, "0")}:00 and ${String(until).padStart(2, "0")}:00 (${tz}). Aim every proposed or confirmed call time inside that window; if they ask for a time outside it, warmly offer the nearest time within it instead. You still ANSWER messages 24/7 — only phone calls are bounded.`,
+    );
+  }
   known.push(`Phone: ${formatWaPhone(contact.wa_id)}`);
   if (name) known.push(`Name: ${name}`);
   else if (contact.profile_name)
@@ -806,14 +827,57 @@ async function buildSystemPrompt(
   known.push(contact.lead_id ? "CRM lead: linked" : "CRM lead: none yet");
   known.push(contact.client_id ? "Client profile: linked" : "Client profile: none yet");
 
-  // Lead, pipeline and the live campaign are fetched before anything else:
-  // when this contact is a campaign lead, the campaign doesn't just add a
-  // knowledge block — it reshapes the ENTIRE prompt (focus mode below).
-  const lead = contact.lead_id
-    ? await fetchLeadContext(supabase, contact.lead_id)
-    : null;
-  const stageRows = lead ? await fetchStageNames(supabase, lead.pipeline_id) : null;
-  const campaign = await activeCampaign(supabase, config);
+  // ONE parallel wave for everything the prompt reads — this used to be ~9
+  // sequential round-trips paid on every single reply. The only true data
+  // dependency (stage names need the lead's pipeline id) lives inside its
+  // own composite promise; the assembly below keeps its exact original
+  // order, so the rendered prompt is byte-identical to the sequential era.
+  // The campaign still reshapes the ENTIRE prompt when this is a campaign
+  // lead (focus mode below) — it just arrives concurrently now.
+  const [
+    { lead, stageRows },
+    campaign,
+    knowledge,
+    quoteState,
+    promisesRes,
+    mediaRes,
+    lessonsRes,
+  ] = await Promise.all([
+    (async () => {
+      const lead = contact.lead_id
+        ? await fetchLeadContext(supabase, contact.lead_id)
+        : null;
+      const stageRows = lead
+        ? await fetchStageNames(supabase, lead.pipeline_id)
+        : null;
+      return { lead, stageRows };
+    })(),
+    activeCampaign(supabase, config),
+    buildAgentKnowledge(supabase),
+    buildQuoteStateLine(supabase, contact.lead_id),
+    supabase
+      .from("wa_promises")
+      .select("id, summary, due_at")
+      .eq("contact_id", contact.id)
+      .eq("status", "pending")
+      .order("due_at")
+      .limit(5),
+    supabase
+      .from("wa_messages")
+      .select("body, message_type, created_at, meta")
+      .eq("contact_id", contact.id)
+      .eq("direction", "in")
+      .in("message_type", ["image", "document"])
+      .order("created_at", { ascending: false })
+      .limit(5),
+    supabase
+      .from("wa_lessons")
+      .select("kind, body")
+      .eq("status", "approved")
+      .neq("kind", "faq")
+      .order("decided_at", { ascending: false })
+      .limit(10),
+  ]);
   const brief = campaign ? campaignBrief(campaign) : null;
   // Focus mode: a live campaign with a written brief, talking to a lead who
   // came in under it (or is brand new / still untouched). The generic sales
@@ -986,6 +1050,7 @@ THE METHOD, every time: ACKNOWLEDGE it honestly (never "I understand your concer
 - Photos and files the customer sends appear in the chat as 📷/📄 lines with a short description — that's you seeing them. React to their content naturally; NEVER say you can't view images.
 - Bank slip / payment receipt: thank them warmly, tell them accounts is confirming it and the confirmation will land right here in this chat — do NOT declare the payment verified yourself, and do NOT re-ask for a slip they already sent. If it's the deposit, remind them the project kicks off the moment it's confirmed.`,
     `What you already know about this contact:\n${known.join("\n")}`,
+    `OPT-OUTS ARE SACRED. The moment they clearly ask to stop being messaged — any language, any phrasing — call opt_out, then send one short respectful goodbye and stop. Never argue, never "one last thing". BUT "not interested" on its own is a sales OBJECTION, not an opt-out — handle it with the objection method; only a clear "stop contacting me" intent is an opt-out.`,
   ];
 
   if (config.language_matching) parts.push(languageDirective(contact.language));
@@ -1005,8 +1070,8 @@ THE METHOD, every time: ACKNOWLEDGE it honestly (never "I understand your concer
   // very thing the agent used to pitch INSTEAD of the ad's offer.
   parts.push(
     focus
-      ? `KNOWLEDGE BASE (ARC's general services, packages & FAQs — BACKGROUND ONLY in this conversation: answer from it when they ask something general about ARC, but the campaign brief above is what you're selling. Never volunteer these packages or other services to a campaign lead unprompted):\n${await buildAgentKnowledge(supabase)}`
-      : `KNOWLEDGE BASE (services, pricing, FAQs — your ground truth):\n${await buildAgentKnowledge(supabase)}`,
+      ? `KNOWLEDGE BASE (ARC's general services, packages & FAQs — BACKGROUND ONLY in this conversation: answer from it when they ask something general about ARC, but the campaign brief above is what you're selling. Never volunteer these packages or other services to a campaign lead unprompted):\n${knowledge}`
+      : `KNOWLEDGE BASE (services, pricing, FAQs — your ground truth):\n${knowledge}`,
   );
   if (config.knowledge.trim())
     parts.push(
@@ -1088,16 +1153,9 @@ Moves are forward-only; never park a dead conversation forward, and when they cl
 
   // The live quote's fate — signed, declined, expired or awaiting signature —
   // steers every reply, not just the nudge composers.
-  const quoteState = await buildQuoteStateLine(supabase, contact.lead_id);
   if (quoteState) parts.push(quoteState);
 
-  const { data: promises } = await supabase
-    .from("wa_promises")
-    .select("id, summary, due_at")
-    .eq("contact_id", contact.id)
-    .eq("status", "pending")
-    .order("due_at")
-    .limit(5);
+  const { data: promises } = promisesRes;
   if (promises?.length) {
     const lines = promises.map(
       (p) => `- [${p.id}] due ${formatInTimezone(p.due_at, tz)} — ${p.summary}`,
@@ -1109,14 +1167,7 @@ Moves are forward-only; never park a dead conversation forward, and when they cl
 
   // Photos & files never age out of the agent's memory, even after the
   // 30-message history window scrolls past them.
-  const { data: mediaMsgs } = await supabase
-    .from("wa_messages")
-    .select("body, message_type, created_at, meta")
-    .eq("contact_id", contact.id)
-    .eq("direction", "in")
-    .in("message_type", ["image", "document"])
-    .order("created_at", { ascending: false })
-    .limit(5);
+  const { data: mediaMsgs } = mediaRes;
   if (mediaMsgs?.length) {
     const lines = [...mediaMsgs].reverse().map((m) => {
       const meta = (m.meta ?? {}) as {
@@ -1136,13 +1187,7 @@ Moves are forward-only; never park a dead conversation forward, and when they cl
   // moment the model wrote them; every lesson now queues in wa_lessons and
   // waits for the team's yes (faq-kind lessons render inside the knowledge
   // base instead — see buildAgentKnowledge).
-  const { data: lessons } = await supabase
-    .from("wa_lessons")
-    .select("kind, body")
-    .eq("status", "approved")
-    .neq("kind", "faq")
-    .order("decided_at", { ascending: false })
-    .limit(10);
+  const { data: lessons } = lessonsRes;
   if (lessons?.length) {
     const bullets = lessons.map((l) => `- ${l.body.trim()}`).join("\n");
     parts.push(
@@ -1151,6 +1196,34 @@ Moves are forward-only; never park a dead conversation forward, and when they cl
   }
 
   return parts.join("\n\n");
+}
+
+/**
+ * The Agent tab's Playground prompt: the EXACT live brain (persona,
+ * knowledge base with current prices, approved lessons, campaign focus if
+ * one is live) built for a synthetic brand-new contact that exists nowhere.
+ * buildSystemPrompt is a pure reader, so this performs zero writes; the
+ * random id makes the per-contact selects return empty, and lead_id: null
+ * skips the CRM reads. With campaign mode on, the playground runs FOCUS
+ * mode — faithful, since a brand-new stranger gets focus mode too.
+ */
+export async function buildPlaygroundPrompt(supabase: DB): Promise<string> {
+  const config = await getWaAgentConfig(supabase);
+  const fake = {
+    id: crypto.randomUUID(),
+    wa_id: "94700000000",
+    profile_name: null,
+    display_name: null,
+    lead_id: null,
+    client_id: null,
+    language: null,
+    campaign_id: null,
+    call_booked_at: null,
+    first_reply_sent_at: null,
+    agent_enabled: true,
+    do_not_contact: false,
+  } as unknown as WaContact;
+  return buildSystemPrompt(supabase, fake, config);
 }
 
 /** The linked lead's sales context, or null when the contact isn't in the
@@ -1509,6 +1582,9 @@ function buildToolSchemas(allowed: Set<string>): ToolSchema[] {
     handoff_human: fn("handoff_human", "Pause the AI for this chat and alert the team that a human must take over.", {
       reason: { type: "string", description: "Why the handoff is needed." },
     }, ["reason"]),
+    opt_out: fn("opt_out", "The customer clearly asked to stop being messaged (any language, any phrasing — 'please don't send me these anymore', a firm final refusal of further contact). Stops ALL automated messaging for them, cancels scheduled follow-ups, closes the lead and alerts the team. NOT for the 'not interested' objection — that's a conversation, not an opt-out.", {
+      reason: { type: "string", description: "Their request, verbatim-ish, so the team sees exactly what they said." },
+    }, ["reason"]),
     set_language: fn("set_language", "Set the language for this chat. English is the default, so you only call this to switch AWAY from English — when the customer clearly writes to you in Sinhala/Tamil (native script or romanized 'Singlish'/'Tanglish'), or explicitly asks you to reply in that language. Do NOT call it for a stray local word or a mostly-English message. Call it once when they genuinely switch, and again only if they clearly switch back.", {
       language: {
         type: "string",
@@ -1645,9 +1721,23 @@ async function executeWaTool(
           const who =
             contact.display_name || contact.profile_name || formatWaPhone(contact.wa_id);
           const reason = String(args.reason ?? "").slice(0, 140);
+          // The brief: whoever picks this up shouldn't have to open the
+          // thread to know what the customer just said. One small select,
+          // paid only when a handoff actually fires.
+          const { data: lastIn } = await supabase
+            .from("wa_messages")
+            .select("body")
+            .eq("contact_id", contact.id)
+            .eq("direction", "in")
+            .order("created_at", { ascending: false })
+            .limit(2);
+          const brief = (lastIn ?? [])
+            .reverse()
+            .map((m) => `"${m.body.slice(0, 150)}"`)
+            .join("\n");
           await notifyEveryone(supabase, {
             title: "WhatsApp — human takeover needed",
-            body: `${who} — ${reason}`,
+            body: `${who} — ${reason}${brief ? `\nTheir last messages:\n${brief}` : ""}`.slice(0, 450),
             link: "/whatsapp",
             sms: `ARCON: WhatsApp customer ${who} (${formatWaPhone(contact.wa_id)}) needs a human${reason ? ` — ${reason}` : ""}. AI is paused — open the inbox to take over.`,
           });
@@ -1664,6 +1754,17 @@ async function executeWaTool(
         return await toolSendQuote(supabase, contact, config, args);
       case "send_pricelist":
         return await toolSendPricelist(supabase, contact);
+      case "opt_out": {
+        // Bookkeeping only — the MODEL says the goodbye (their language,
+        // their tone), which still sends because sendAndLogWa doesn't gate
+        // on the flag; every FUTURE automated path does.
+        await markWaOptedOut(supabase, contact);
+        return {
+          ok: true,
+          result:
+            "Done — all automated messaging for them is stopped, follow-ups cancelled, team informed. Now send ONE short, warm, respectful goodbye in THEIR language — no pitch, no question, door open if they ever change their mind — and then nothing more.",
+        };
+      }
       default:
         return { ok: false, result: `Unknown tool "${name}".` };
     }
@@ -2528,6 +2629,16 @@ export async function sendWaResearchFollowup(
       .maybeSingle();
     if (!contact || !contact.agent_enabled) return;
 
+    // A booked call silences the agent: no unprompted "been thinking about
+    // your business" drop while the customer is simply waiting for the
+    // team to ring. The research still reaches the agent's brain via the
+    // prompt, so it comes up naturally if THEY write first.
+    if (
+      contact.call_booked_at &&
+      new Date(contact.call_booked_at).getTime() > Date.now()
+    )
+      return;
+
     const config = await getWaAgentConfig(supabase);
     if (!config.enabled || !isOpenAIConfigured()) return;
 
@@ -2548,15 +2659,14 @@ export async function sendWaResearchFollowup(
       result: "Post-research follow-up message",
     });
 
-    const thread = await fetchThread(
-      supabase,
-      contact.id,
-      config.timezone || "Asia/Colombo",
-    );
+    const [thread, system] = await Promise.all([
+      fetchThread(supabase, contact.id, config.timezone || "Asia/Colombo"),
+      buildSystemPrompt(supabase, contact, config),
+    ]);
 
     const briefing = JSON.stringify(research.report ?? {}).slice(0, 4500);
     const messages: ChatMessage[] = [
-      { role: "system", content: await buildSystemPrompt(supabase, contact, config) },
+      { role: "system", content: system },
       ...thread,
       {
         role: "system",
@@ -3017,6 +3127,20 @@ async function toolBookCall(
       ok: false,
       result: `That's more than ${MAX_CALL_DAYS} days away — too far to hold a slot. Agree something sooner, or use schedule_promise to check back nearer the time.`,
     };
+  // A slot inside quiet hours books the team a call nobody will make. Soft
+  // fail with the nearest workable time so the model renegotiates with the
+  // customer instead of silently rebooking. (nextQuietHoursEnd adds random
+  // jitter for nudge-spreading — walk plain hour boundaries here instead.)
+  if (config.quiet_hours_enabled && isQuietHours(config, when)) {
+    const suggest = new Date(when);
+    suggest.setMinutes(0, 0, 0);
+    for (let i = 0; i < 25 && isQuietHours(config, suggest); i++)
+      suggest.setTime(suggest.getTime() + 3600_000);
+    return {
+      ok: false,
+      result: `That time is outside the team's calling hours. The earliest workable slot after it is ${formatInTimezone(suggest, tz)} (${tz}) — offer that warmly, or ask what time within calling hours suits them.`,
+    };
+  }
 
   const who =
     contact.display_name || contact.profile_name || formatWaPhone(contact.wa_id);
@@ -3432,14 +3556,13 @@ async function sendPromiseTouch(
 ): Promise<boolean> {
   const nudge = `It's now the exact moment the customer asked you to come back to them: ${promise.summary}${promise.source_quote ? ` (their words: "${promise.source_quote}")` : ""}. Send ONE short, natural message that picks the conversation up right on that promise — reference what they said they'd do or what was supposed to happen, like a sharp human who simply remembered. NEVER say "just following up" and never mention schedules, reminders or systems. Human voice, max 3 sentences, end with exactly one easy question or next step.`;
 
-  const thread = await fetchThread(
-    supabase,
-    contact.id,
-    config.timezone || "Asia/Colombo",
-  );
+  const [thread, system] = await Promise.all([
+    fetchThread(supabase, contact.id, config.timezone || "Asia/Colombo"),
+    buildSystemPrompt(supabase, contact, config),
+  ]);
 
   const messages: ChatMessage[] = [
-    { role: "system", content: await buildSystemPrompt(supabase, contact, config) },
+    { role: "system", content: system },
     ...thread,
     { role: "system", content: nudge },
   ];
@@ -3620,10 +3743,36 @@ const QUOTE_FOLLOWUP_DELAY_HOURS: Record<number, number> = { 0: 24, 1: 72, 2: 12
 async function scheduleNextFollowup(supabase: DB, contactId: string): Promise<void> {
   const { data: c } = await supabase
     .from("wa_contacts")
-    .select("followup_stage, next_followup_at, do_not_contact, campaign_id, lead_id")
+    .select(
+      "followup_stage, next_followup_at, do_not_contact, campaign_id, lead_id, call_booked_at",
+    )
     .eq("id", contactId)
     .maybeSingle();
   if (!c || c.next_followup_at || c.do_not_contact) return;
+
+  // A BOOKED CALL SILENCES THE AGENT. Once a call is on the books the
+  // customer has said yes — every unprompted nudge before it ("any
+  // questions before our call? 😊") is noise that can only lose the deal.
+  // The agent still ANSWERS anything they send; it just never initiates.
+  // The one thing armed is the post-call check-in, 3h after the slot
+  // ("did the team reach you?" — sendFollowupTouch composes that variant).
+  // processDueWaFollowups keeps its fire-time defer as the backstop for
+  // calls booked AFTER a touch was already armed.
+  if (
+    c.call_booked_at &&
+    new Date(c.call_booked_at).getTime() > Date.now()
+  ) {
+    await supabase
+      .from("wa_contacts")
+      .update({
+        next_followup_at: new Date(
+          new Date(c.call_booked_at).getTime() + 3 * 3600_000,
+        ).toISOString(),
+      })
+      .eq("id", contactId);
+    return;
+  }
+
   let schedule = c.campaign_id
     ? CAMPAIGN_FOLLOWUP_DELAY_HOURS
     : FOLLOWUP_DELAY_HOURS;
@@ -3970,10 +4119,13 @@ async function sendFollowupTouch(
         ? `The customer went quiet after your last message. This is follow-up touch 3 of 3 — the graceful breakup. Send ONE warm, zero-pressure goodbye: you get that now might not be the right time, the door stays open, they can pick this up whenever they're ready. No question at the end this time, no guilt. Max 2-3 sentences.`
         : `The customer went quiet after your last message. This is follow-up touch ${touch} of 3. Send ONE short, casual re-engagement message with a FRESH angle — never "just following up": reference something concrete you know about their business or website (from the chat, the audit, or your background knowledge) and tie it to a reason to act${touch === 1 ? ". Keep it light and helpful" : ". Add gentle urgency or a new benefit they haven't heard yet"}. Human voice, max 3 sentences, end with exactly one easy question or next step.`;
 
-  const thread = await fetchThread(supabase, contact.id, tz);
+  const [thread, system] = await Promise.all([
+    fetchThread(supabase, contact.id, tz),
+    buildSystemPrompt(supabase, contact, config),
+  ]);
 
   const messages: ChatMessage[] = [
-    { role: "system", content: await buildSystemPrompt(supabase, contact, config) },
+    { role: "system", content: system },
     ...thread,
     { role: "system", content: nudge },
   ];
@@ -4038,6 +4190,12 @@ async function logFollowup(
 // Opt-out hardening — "stop" means stop, instantly and forever
 // ---------------------------------------------------------------------------
 
+// HARD phrases only — unambiguous "stop contacting me". "not interested"
+// deliberately does NOT belong here: it's the single most common sales
+// objection and the prompt's objection playbook exists to answer it; the
+// keyword path was closing those leads as lost before the model ever saw
+// the message. Nuanced or other-language requests are handled by the
+// model's opt_out tool instead.
 const OPT_OUT_PHRASES = [
   "stop",
   "unsubscribe",
@@ -4045,8 +4203,6 @@ const OPT_OUT_PHRASES = [
   "don't message",
   "dont message",
   "stop messaging",
-  "not interested",
-  "no longer interested",
   "remove me",
   "leave me alone",
   "එපා", // Sinhala: "no / don't"
@@ -4066,11 +4222,14 @@ export function detectWaOptOut(body: string): boolean {
 }
 
 /**
- * Flag the contact do-not-contact, kill the cadence, close the lead and say
- * one polite goodbye. Every automated send path checks the flag afterwards;
- * this protects the number's Meta quality rating (blocks hurt it badly).
+ * The opt-out bookkeeping, goodbye NOT included: flag do-not-contact, kill
+ * the cadence, cancel promises, close the lead, tell the team. Shared by the
+ * instant keyword path (which appends its canned goodbye) and the model's
+ * opt_out tool (where the MODEL says the goodbye, in the customer's own
+ * language). Every automated send path checks the flag afterwards; this
+ * protects the number's Meta quality rating (blocks hurt it badly).
  */
-export async function handleWaOptOut(supabase: DB, contact: WaContact): Promise<void> {
+export async function markWaOptedOut(supabase: DB, contact: WaContact): Promise<void> {
   await supabase
     .from("wa_contacts")
     .update({
@@ -4097,16 +4256,21 @@ export async function handleWaOptOut(supabase: DB, contact: WaContact): Promise<
     });
   }
 
+  await notifyEveryone(supabase, {
+    title: "WhatsApp opt-out",
+    body: `${contact.display_name || contact.profile_name || formatWaPhone(contact.wa_id)} asked not to be contacted — automated messaging stopped, lead closed as lost.`,
+    link: "/whatsapp",
+  });
+}
+
+/** The instant keyword path: bookkeeping + the canned goodbye. */
+export async function handleWaOptOut(supabase: DB, contact: WaContact): Promise<void> {
+  await markWaOptedOut(supabase, contact);
   // One polite goodbye — they just messaged us, so the window is open.
   await sendAndLogWa(supabase, {
     contact,
     body: "No problem at all — we won't message you again. If you ever change your mind, just drop us a text here anytime 👍",
     sentBy: "keyword",
-  });
-  await notifyEveryone(supabase, {
-    title: "WhatsApp opt-out",
-    body: `${contact.display_name || contact.profile_name || formatWaPhone(contact.wa_id)} asked not to be contacted — automated messaging stopped, lead closed as lost.`,
-    link: "/whatsapp",
   });
 }
 

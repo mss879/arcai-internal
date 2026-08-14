@@ -8,8 +8,9 @@ import {
   openaiChatJSON,
   OpenAIRateLimitError,
 } from "@/lib/ai/openai";
-import { fetchThread } from "@/lib/wa-agent";
+import { fetchThread, notifyEveryone } from "@/lib/wa-agent";
 import { localDateInTimezone } from "@/lib/wa-coaching";
+import { localMinutesOfDay } from "@/lib/wa-cold-outreach";
 
 type DB = SupabaseClient<Database>;
 
@@ -586,6 +587,112 @@ Fewer, sharper lessons beat filler. Return {"lessons": []} if the evidence is th
   }
   console.log(`[wa-insights] proposed ${rows.length} lessons for review`);
   return rows.length;
+}
+
+/**
+ * The morning agent digest — one push a day, no AI calls.
+ *
+ * Yesterday's scoreboard (new contacts, who replied, calls booked = agent
+ * wins, quotes out) plus what needs the team TODAY (flagged chats, lessons
+ * awaiting review, calls coming up in the next 24h). Mirrors the cold
+ * digest's window + claim-first pattern exactly: 08:30–11:00 local, one
+ * winner per day via CAS on agent_digest_sent_for.
+ */
+export async function processAgentDigest(
+  supabase: DB,
+): Promise<{ sent: boolean }> {
+  try {
+    const { data: config } = await supabase
+      .from("wa_agent_config")
+      .select("enabled, timezone, agent_digest_sent_for")
+      .eq("id", 1)
+      .maybeSingle();
+    if (!config?.enabled) return { sent: false };
+
+    const tz = config.timezone || "Asia/Colombo";
+    const minutes = localMinutesOfDay(tz);
+    if (minutes < 8 * 60 + 30 || minutes >= 11 * 60) return { sent: false };
+
+    const today = localDateInTimezone(tz);
+    if (config.agent_digest_sent_for === today) return { sent: false };
+
+    const { data: claimed } = await supabase
+      .from("wa_agent_config")
+      .update({ agent_digest_sent_for: today })
+      .eq("id", 1)
+      .or(`agent_digest_sent_for.is.null,agent_digest_sent_for.neq.${today}`)
+      .select("id");
+    if (!claimed?.length) return { sent: false };
+
+    const now = Date.now();
+    const since48h = new Date(now - 48 * 3600_000).toISOString();
+    const yesterday = localDateInTimezone(tz, new Date(now - 24 * 3600_000));
+    const onYesterday = (iso: string) => localDateInTimezone(tz, new Date(iso)) === yesterday;
+
+    const [contactsRes, inboundRes, logsRes, attentionRes, lessonsRes, upcomingRes] =
+      await Promise.all([
+        supabase
+          .from("wa_contacts")
+          .select("created_at")
+          .gte("created_at", since48h)
+          .limit(500),
+        supabase
+          .from("wa_messages")
+          .select("contact_id, created_at")
+          .eq("direction", "in")
+          .gte("created_at", since48h)
+          .limit(3000),
+        supabase
+          .from("wa_agent_logs")
+          .select("tool, created_at")
+          .in("tool", ["book_call", "send_quote"])
+          .eq("ok", true)
+          .gte("created_at", since48h)
+          .limit(200),
+        supabase
+          .from("wa_contacts")
+          .select("id", { count: "exact", head: true })
+          .eq("needs_attention", true),
+        supabase
+          .from("wa_lessons")
+          .select("id", { count: "exact", head: true })
+          .eq("status", "pending"),
+        supabase
+          .from("wa_contacts")
+          .select("id", { count: "exact", head: true })
+          .gt("call_booked_at", new Date(now).toISOString())
+          .lte("call_booked_at", new Date(now + 24 * 3600_000).toISOString()),
+      ]);
+
+    const newContacts = (contactsRes.data ?? []).filter((c) => onYesterday(c.created_at)).length;
+    const repliers = new Set(
+      (inboundRes.data ?? [])
+        .filter((m) => onYesterday(m.created_at))
+        .map((m) => m.contact_id),
+    ).size;
+    const yLogs = (logsRes.data ?? []).filter((l) => onYesterday(l.created_at));
+    const callsBooked = yLogs.filter((l) => l.tool === "book_call").length;
+    const quotesSent = yLogs.filter((l) => l.tool === "send_quote").length;
+
+    const lines = [
+      `Yesterday: ${newContacts} new contact${newContacts === 1 ? "" : "s"}, ${repliers} in conversation, ${callsBooked} call${callsBooked === 1 ? "" : "s"} booked 🎯, ${quotesSent} quote${quotesSent === 1 ? "" : "s"} sent.`,
+    ];
+    const needs: string[] = [];
+    if (upcomingRes.count) needs.push(`${upcomingRes.count} call${upcomingRes.count === 1 ? "" : "s"} coming up in the next 24h`);
+    if (attentionRes.count) needs.push(`${attentionRes.count} chat${attentionRes.count === 1 ? "" : "s"} waiting on a human`);
+    if (lessonsRes.count) needs.push(`${lessonsRes.count} lesson${lessonsRes.count === 1 ? "" : "s"} awaiting review`);
+    if (needs.length) lines.push(`Today: ${needs.join(" · ")}.`);
+
+    await notifyEveryone(supabase, {
+      title: "🤖 WhatsApp agent digest",
+      body: lines.join("\n"),
+      link: "/whatsapp",
+    });
+    return { sent: true };
+  } catch (e) {
+    console.error("[wa-insights] agent digest failed:", e);
+    return { sent: false };
+  }
 }
 
 /** Clamp helpers — the model's output never reaches the DB unvalidated. */

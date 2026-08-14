@@ -1011,7 +1011,7 @@ export async function processColdDigest(
 }
 
 /** Minutes since local midnight in the given timezone. */
-function localMinutesOfDay(timezone: string, at = new Date()): number {
+export function localMinutesOfDay(timezone: string, at = new Date()): number {
   try {
     const parts = new Intl.DateTimeFormat("en-US", {
       timeZone: timezone,

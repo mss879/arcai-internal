@@ -11,10 +11,13 @@ import type {
   WaVoiceReplies,
 } from "@/lib/types";
 import {
+  buildPlaygroundPrompt,
   cancelPendingWaPromises,
   linkWaContactToCrm,
   sendAndLogWa,
+  toWhatsAppText,
 } from "@/lib/wa-agent";
+import { isOpenAIConfigured, openaiChat } from "@/lib/ai/openai";
 import { WA_TOOL_CATALOG } from "@/lib/wa-tools-catalog";
 import { isWhatsAppConfigured } from "@/lib/whatsapp";
 
@@ -342,6 +345,59 @@ export async function toggleCoachingAction(
   if (error) return { ok: false, error: error.message };
   revalidatePath("/whatsapp");
   return { ok: true };
+}
+
+export type PlaygroundTurn = { role: "user" | "assistant"; content: string };
+
+/**
+ * The Agent tab's Playground: talk to the agent's EXACT live brain (same
+ * prompt, knowledge, prices, approved lessons, campaign focus) without
+ * WhatsApp, a real customer, or a single write — nothing is sent, logged or
+ * saved. Tools are deliberately disabled: this tests how the agent TALKS.
+ * Costs one model call per send, only when a human uses it.
+ */
+export async function playgroundReply(
+  turns: PlaygroundTurn[],
+): Promise<ActionResult<{ reply: string }>> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  if (!isOpenAIConfigured())
+    return { ok: false, error: "OpenAI key missing — the agent brain is offline." };
+
+  const clean = (Array.isArray(turns) ? turns : [])
+    .filter(
+      (t) =>
+        t &&
+        (t.role === "user" || t.role === "assistant") &&
+        typeof t.content === "string" &&
+        t.content.trim(),
+    )
+    .slice(-20)
+    .map((t) => ({ role: t.role, content: t.content.slice(0, 2000) }));
+  if (!clean.length || clean[clean.length - 1].role !== "user")
+    return { ok: false, error: "Type a message first." };
+
+  try {
+    const system = await buildPlaygroundPrompt(supabase);
+    const reply = await openaiChat(
+      [{ role: "system", content: system }, ...clean],
+      undefined,
+      {
+        model: process.env.OPENAI_WHATSAPP_MODEL?.trim() || undefined,
+        temperature: 0.6,
+      },
+    );
+    const text = toWhatsAppText(reply.content ?? "").trim();
+    return { ok: true, reply: text || "…" };
+  } catch (e) {
+    return {
+      ok: false,
+      error: e instanceof Error ? e.message : "The playground call failed.",
+    };
+  }
 }
 
 export type RevivalConfigInput = {

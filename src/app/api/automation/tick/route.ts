@@ -20,7 +20,7 @@ import { processPendingWaShowcases } from "@/lib/wa-showcase";
 import { processColdDigest, processColdOutreach } from "@/lib/wa-cold-outreach";
 import { processWaRevival } from "@/lib/wa-revival";
 import { processWaCoaching } from "@/lib/wa-coaching";
-import { processWaInsights } from "@/lib/wa-insights";
+import { processAgentDigest, processWaInsights } from "@/lib/wa-insights";
 import { isSmsConfigured } from "@/lib/sms";
 
 /**
@@ -91,6 +91,8 @@ export async function GET(request: Request) {
     // ≤2 per tick, mine lessons for the approve-first queue once the day's
     // scoring drains. See wa-insights.ts.
     const insights = await processWaInsights(supabase);
+    // One agent-scoreboard push per morning (08:30–11:00 local, CAS-gated).
+    const agentDigest = await processAgentDigest(supabase);
     const sms = isSmsConfigured()
       ? await processDueSmsRuns(supabase)
       : { processed: 0, sent: 0, failed: 0 };
@@ -115,6 +117,7 @@ export async function GET(request: Request) {
       revival,
       coaching,
       insights,
+      agentDigest,
     });
   } catch (e) {
     return NextResponse.json(

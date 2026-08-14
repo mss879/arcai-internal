@@ -6,6 +6,7 @@ import { getProfile } from "@/lib/auth";
 import { sendPricingEmail } from "@/lib/email";
 import type { PricingOverrides } from "@/lib/pricing-catalog";
 import { createClient } from "@/lib/supabase/server";
+import { invalidateAgentKnowledge } from "@/lib/wa-knowledge";
 
 type Result = { ok: true } | { ok: false; error: string };
 
@@ -33,6 +34,10 @@ export async function savePricing(overrides: PricingOverrides): Promise<Result> 
     .upsert({ id: 1, overrides: clean }, { onConflict: "id" });
 
   if (error) return { ok: false, error: error.message };
+
+  // The WhatsApp agent memoizes its rendered knowledge base for ≤60s —
+  // clear it so this instance quotes the new numbers immediately.
+  invalidateAgentKnowledge();
 
   revalidatePath("/pricing");
   return { ok: true };

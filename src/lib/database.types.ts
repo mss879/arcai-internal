@@ -2292,6 +2292,8 @@ export type Database = {
           revival_template_lang: string;
           revival_template_params: string[];
           revival_min_age_days: number;
+          // 0078 — morning agent digest claim stamp
+          agent_digest_sent_for: string | null;
         };
         Insert: {
           id?: number;
@@ -2345,6 +2347,8 @@ export type Database = {
           revival_template_lang?: string;
           revival_template_params?: string[];
           revival_min_age_days?: number;
+          // 0078 — morning agent digest claim stamp
+          agent_digest_sent_for?: string | null;
         };
         Update: Partial<
           Database["public"]["Tables"]["wa_agent_config"]["Insert"]

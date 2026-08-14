@@ -8,10 +8,10 @@ import type {
   WaAgentConfig,
   WaAgentLog,
   WaCampaign,
-  WaCoaching,
   WaColdOutreach,
   WaContact,
   WaKeywordRule,
+  WaLesson,
   WaMessage,
   WaPromise,
 } from "@/lib/types";
@@ -90,7 +90,7 @@ export default async function WhatsappPage() {
     pipelinesRes,
     stagesRes,
     automationsRes,
-    coachingRes,
+    lessonsRes,
     promisesRes,
     campaignsRes,
   ] = await Promise.all([
@@ -118,12 +118,13 @@ export default async function WhatsappPage() {
     supabase.from("pipelines").select("*").order("position").order("created_at"),
     supabase.from("pipeline_stages").select("*").order("position"),
     supabase.from("automations").select("*").order("created_at", { ascending: false }),
+    // The approve-first lesson queue: pending proposals + recent decisions.
+    // Errors (migration 0073 not yet applied) degrade to an empty list.
     supabase
-      .from("wa_coaching")
+      .from("wa_lessons")
       .select("*")
-      .order("week_start", { ascending: false })
-      .limit(1)
-      .maybeSingle(),
+      .order("created_at", { ascending: false })
+      .limit(60),
     supabase
       .from("wa_promises")
       .select("*")
@@ -225,7 +226,7 @@ export default async function WhatsappPage() {
       pipelines={(pipelinesRes.data ?? []) as Pipeline[]}
       stages={(stagesRes.data ?? []) as PipelineStage[]}
       automations={(automationsRes.data ?? []) as Automation[]}
-      coaching={(coachingRes.data as WaCoaching | null) ?? null}
+      lessons={(lessonsRes.data ?? []) as WaLesson[]}
       promises={(promisesRes.data ?? []) as WaPromise[]}
       coldRows={((coldRows ?? []) as WaColdOutreach[]).map((r) => ({
         ...r,

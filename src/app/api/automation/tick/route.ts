@@ -18,7 +18,9 @@ import { processAutoSendQueue, processDueOutreach } from "@/lib/lead-outreach";
 import { processPendingCarousels } from "@/lib/carousels";
 import { processPendingWaShowcases } from "@/lib/wa-showcase";
 import { processColdDigest, processColdOutreach } from "@/lib/wa-cold-outreach";
+import { processWaRevival } from "@/lib/wa-revival";
 import { processWaCoaching } from "@/lib/wa-coaching";
+import { processWaInsights } from "@/lib/wa-insights";
 import { isSmsConfigured } from "@/lib/sms";
 
 /**
@@ -81,8 +83,14 @@ export async function GET(request: Request) {
     // Cold outreach last — live conversations always beat opening new ones.
     const coldOutreach = await processColdOutreach(supabase);
     const coldDigest = await processColdDigest(supabase);
+    // Revival: one capped, template-only re-knock on aged dead threads.
+    const revival = await processWaRevival(supabase);
     // Self-gated to once a week (and one attempt a day) — see processWaCoaching.
     const coaching = await processWaCoaching(supabase);
+    // Nightly learning loop: enqueue ended conversations once a day, score
+    // ≤2 per tick, mine lessons for the approve-first queue once the day's
+    // scoring drains. See wa-insights.ts.
+    const insights = await processWaInsights(supabase);
     const sms = isSmsConfigured()
       ? await processDueSmsRuns(supabase)
       : { processed: 0, sent: 0, failed: 0 };
@@ -104,7 +112,9 @@ export async function GET(request: Request) {
       showcases,
       coldOutreach,
       coldDigest,
+      revival,
       coaching,
+      insights,
     });
   } catch (e) {
     return NextResponse.json(

@@ -125,5 +125,27 @@ export async function buildAgentKnowledge(supabase: DB): Promise<string> {
     }
   }
 
-  return `${STATIC_KNOWLEDGE}\n\n${priceLines.join("\n")}`;
+  // FAQ gaps the nightly miner spotted in real chats ("let me get the team
+  // to confirm that" moments), answered and APPROVED by the team in the
+  // Lessons queue. Never throws — a missing table (migration 0073 not yet
+  // applied) just leaves the section out.
+  let learnedFaqs = "";
+  try {
+    const { data: faqs } = await supabase
+      .from("wa_lessons")
+      .select("body")
+      .eq("status", "approved")
+      .eq("kind", "faq")
+      .order("decided_at", { ascending: false })
+      .limit(12);
+    if (faqs?.length) {
+      learnedFaqs = `\n\nTEAM-CONFIRMED FAQS (learned from real conversations — answer from these with confidence)\n${faqs
+        .map((f) => f.body.trim())
+        .join("\n")}`;
+    }
+  } catch {
+    // Optional section only.
+  }
+
+  return `${STATIC_KNOWLEDGE}\n\n${priceLines.join("\n")}${learnedFaqs}`;
 }

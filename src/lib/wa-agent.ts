@@ -43,6 +43,7 @@ import { WA_TOOL_CATALOG } from "@/lib/wa-tools-catalog";
 import {
   formatWaPhone,
   markWhatsAppRead,
+  sendWhatsAppDocument,
   sendWhatsAppTemplate,
   sendWhatsAppText,
 } from "@/lib/whatsapp";
@@ -355,16 +356,28 @@ async function sendCampaignFirstReply(
   if (!config.campaign_mode_enabled) return;
   if (contact.first_reply_sent_at || !contact.campaign_id) return;
 
+  // select("*") on purpose: naming first_reply_b would error the whole query
+  // (and silence every greeting) on a database where 0077 isn't applied yet.
   const { data: campaign } = await supabase
     .from("wa_campaigns")
-    .select("id, first_reply")
+    .select("*")
     .eq("status", "active")
     .limit(1)
     .maybeSingle();
   // A contact stamped with an older campaign isn't new — don't greet them.
   if (!campaign || campaign.id !== contact.campaign_id) return;
-  const line = campaign.first_reply?.trim();
-  if (!line) return;
+  const lineA = campaign.first_reply?.trim();
+  if (!lineA) return;
+
+  // A/B: when the campaign carries a variant B, split leads between the two
+  // lines DETERMINISTICALLY off the phone number (a retried webhook must
+  // pick the same variant, and Analytics compares the stamped groups). No
+  // variant B → everyone is 'a' and nothing changes.
+  const lineB = campaign.first_reply_b?.trim();
+  const digits = contact.wa_id.replace(/\D/g, "");
+  const variant: "a" | "b" =
+    lineB && Number(digits.slice(-1) || "0") % 2 === 1 ? "b" : "a";
+  const line = variant === "b" && lineB ? lineB : lineA;
 
   // Claim the right to send. The webhook's contact upsert returns a row
   // whether it inserted or conflicted, so two concurrent deliveries for the
@@ -377,6 +390,18 @@ async function sendCampaignFirstReply(
     .is("first_reply_sent_at", null)
     .select("id");
   if (!claimed?.length) return;
+
+  // Variant stamp is bookkeeping, NOT the critical path: if migration 0077
+  // hasn't landed yet this must never cost a lead their instant greeting.
+  const { error: variantError } = await supabase
+    .from("wa_contacts")
+    .update({ first_reply_variant: variant })
+    .eq("id", contact.id);
+  if (variantError)
+    console.error(
+      "[wa-agent] first-reply variant stamp failed (is migration 0077 applied?):",
+      variantError.message,
+    );
 
   await sendAndLogWa(supabase, { contact, body: line, sentBy: "automation" });
 }
@@ -540,7 +565,7 @@ function describeGap(ms: number): string {
  * time went by and what the clock read after it, so stale agreements READ
  * as stale and a "today" in an old message can't lie.
  */
-async function fetchThread(
+export async function fetchThread(
   supabase: DB,
   contactId: string,
   timezone: string,
@@ -879,6 +904,7 @@ PRICING PLAYBOOK (follow this EXACTLY whenever budget or packages come up):
   For a salon taking bookings all day I'd go Smart Business — the agent handles your admin, not just your questions. Want me to put a proper plan together? 😊"
 - CARD RULES: maximum TWO options per card — the fitting one plus the next tier up as the anchor, never the whole menu. One distinct emoji per option (🌐/⚡/🚀), price on the name line, 2-3 ✅ lines each — chosen for THEIR business, not the full feature list — and a blank line between options. ALWAYS finish with your clear one-sentence recommendation for THEIR case + ONE closing question. A neutral menu with no recommendation is a wasted message: they must leave the card knowing exactly which one is right for them.
   (Delivery times come from the knowledge base and differ per package — never state one from memory.)
+- THE FULL LIST, ON REQUEST ONLY: when they explicitly ask for the complete price list, a brochure, or "something to show my partner/boss", call send_pricelist — it drops the branded pricing PDF into the chat. It NEVER replaces the PRICE CARD for normal price talk, and after sending it you still close with your one-line recommendation + one question.
 
 BOOKING THE CALL (this is how you close — read it twice):
 - NEVER send a booking link, a calendar page, a Zoom/Meet/video link, or ask them to "pick a slot". Those don't work here. You are arranging an ordinary phone call, the way a person does.
@@ -1060,6 +1086,11 @@ Moves are forward-only; never park a dead conversation forward, and when they cl
     );
   }
 
+  // The live quote's fate — signed, declined, expired or awaiting signature —
+  // steers every reply, not just the nudge composers.
+  const quoteState = await buildQuoteStateLine(supabase, contact.lead_id);
+  if (quoteState) parts.push(quoteState);
+
   const { data: promises } = await supabase
     .from("wa_promises")
     .select("id, summary, due_at")
@@ -1100,17 +1131,22 @@ Moves are forward-only; never park a dead conversation forward, and when they cl
     );
   }
 
-  // Lessons the coaching analyzer learned from past won/lost conversations.
-  const { data: coaching } = await supabase
-    .from("wa_coaching")
-    .select("notes")
-    .eq("is_active", true)
-    .order("week_start", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (coaching?.notes?.trim()) {
+  // Lessons mined from the agent's own past conversations — but ONLY the
+  // ones a human approved. The old wa_coaching bullets self-applied the
+  // moment the model wrote them; every lesson now queues in wa_lessons and
+  // waits for the team's yes (faq-kind lessons render inside the knowledge
+  // base instead — see buildAgentKnowledge).
+  const { data: lessons } = await supabase
+    .from("wa_lessons")
+    .select("kind, body")
+    .eq("status", "approved")
+    .neq("kind", "faq")
+    .order("decided_at", { ascending: false })
+    .limit(10);
+  if (lessons?.length) {
+    const bullets = lessons.map((l) => `- ${l.body.trim()}`).join("\n");
     parts.push(
-      `LESSONS FROM YOUR OWN PAST DEALS (auto-learned weekly from what actually won and lost — these are evidence from real conversations, so apply them. They may sharpen how you pitch, handle objections and close; the only things they can never override are the catalog prices themselves and your discount authority):\n${coaching.notes.trim()}`,
+      `LESSONS FROM YOUR OWN PAST DEALS (mined from what actually won and lost, and approved by the team — apply them. They may sharpen how you pitch, handle objections and close; the only things they can never override are the catalog prices themselves and your discount authority):\n${bullets}`,
     );
   }
 
@@ -1465,6 +1501,7 @@ function buildToolSchemas(allowed: Set<string>): ToolSchema[] {
         description: "Discount in LKR — only after a genuine price objection. Automatically capped at the team's discount authority; 0 or omitted = no discount.",
       },
     }, ["project_type"]),
+    send_pricelist: fn("send_pricelist", "Deliver ARC's branded price-list PDF into this chat as a WhatsApp document (always current — it renders with the team's live price overrides). ONLY when the customer explicitly asks for the full price list / a brochure / something to forward to a partner or boss. Never call it to open price talk — the PRICE CARD does that.", {}),
     notify_team: fn("notify_team", "Send an urgent in-app + push notification to the whole team.", {
       title: { type: "string" },
       body: { type: "string" },
@@ -1625,6 +1662,8 @@ async function executeWaTool(
         return await toolCreateProposal(supabase, contact, args);
       case "send_quote":
         return await toolSendQuote(supabase, contact, config, args);
+      case "send_pricelist":
+        return await toolSendPricelist(supabase, contact);
       default:
         return { ok: false, result: `Unknown tool "${name}".` };
     }
@@ -2817,6 +2856,89 @@ function localToUtc(date: string, time: string, timezone: string): Date | null {
   return new Date(guess);
 }
 
+/**
+ * send_pricelist — the branded pricing PDF, straight into the chat.
+ *
+ * Renders FRESH on every call (the /pricing page's overrides may have
+ * changed an hour ago) but parks it at a per-day path with upsert, so a busy
+ * day of requests reuses one storage object. The bucket is the public
+ * showcase bucket the agent already delivers PDFs from. @react-pdf is
+ * dynamically imported so the webhook route never pays its cold-start cost —
+ * only an actual tool call does.
+ */
+async function toolSendPricelist(
+  supabase: DB,
+  contact: WaContact,
+): Promise<WaToolOutcome> {
+  const { renderPricingPdf } = await import("@/lib/pricing-pdf");
+  const { STORAGE_BUCKETS } = await import("@/lib/constants");
+
+  let overrides: Record<string, number> = {};
+  try {
+    const { data } = await supabase
+      .from("pricing_config")
+      .select("overrides")
+      .eq("id", 1)
+      .maybeSingle();
+    overrides = (data?.overrides ?? {}) as Record<string, number>;
+  } catch {
+    // Catalog defaults still make a correct PDF.
+  }
+
+  const dateLabel = new Date().toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+  const pdf = await renderPricingPdf({ overrides, dateLabel });
+
+  const day = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+  const path = `pricing/ARC-AI-Pricing-${day}.pdf`;
+  const { error: uploadError } = await supabase.storage
+    .from(STORAGE_BUCKETS.waShowcases)
+    .upload(path, pdf, { contentType: "application/pdf", upsert: true });
+  if (uploadError)
+    return { ok: false, result: `Could not prepare the PDF: ${uploadError.message}` };
+  const { data: pub } = supabase.storage
+    .from(STORAGE_BUCKETS.waShowcases)
+    .getPublicUrl(path);
+
+  const caption = "ARC AI — full price list 📋";
+  const sent = await sendWhatsAppDocument({
+    to: contact.wa_id,
+    link: pub.publicUrl,
+    filename: "ARC-AI-Pricing.pdf",
+    caption,
+  });
+  if (!sent.ok)
+    return { ok: false, result: `WhatsApp rejected the document: ${sent.error}` };
+
+  await supabase.from("wa_messages").insert({
+    contact_id: contact.id,
+    wa_message_id: sent.waMessageId,
+    direction: "out",
+    message_type: "document",
+    body: `📄 ${caption}`,
+    status: "sent",
+    sent_by: "agent",
+    meta: { document_url: pub.publicUrl, kind: "pricelist" },
+  });
+  await supabase
+    .from("wa_contacts")
+    .update({
+      last_message_at: new Date().toISOString(),
+      last_message_preview: `📄 ${caption}`,
+      last_direction: "out",
+    })
+    .eq("id", contact.id);
+
+  return {
+    ok: true,
+    result:
+      "Price list PDF delivered into the chat. Follow it with ONE short line recommending the package that fits THEIR case, ending with one question — don't re-type prices.",
+  };
+}
+
 /** "Tuesday, 14 Jul 2026, 15:30" in the workspace timezone — for prompts and tool results. */
 function formatInTimezone(at: Date | string, timezone: string): string {
   try {
@@ -3308,8 +3430,7 @@ async function sendPromiseTouch(
   config: WaConfig,
   promise: WaPromise,
 ): Promise<boolean> {
-  const quoteLine = await buildQuoteStateLine(supabase, contact.lead_id);
-  const nudge = `It's now the exact moment the customer asked you to come back to them: ${promise.summary}${promise.source_quote ? ` (their words: "${promise.source_quote}")` : ""}. Send ONE short, natural message that picks the conversation up right on that promise — reference what they said they'd do or what was supposed to happen, like a sharp human who simply remembered. NEVER say "just following up" and never mention schedules, reminders or systems. Human voice, max 3 sentences, end with exactly one easy question or next step.${quoteLine}`;
+  const nudge = `It's now the exact moment the customer asked you to come back to them: ${promise.summary}${promise.source_quote ? ` (their words: "${promise.source_quote}")` : ""}. Send ONE short, natural message that picks the conversation up right on that promise — reference what they said they'd do or what was supposed to happen, like a sharp human who simply remembered. NEVER say "just following up" and never mention schedules, reminders or systems. Human voice, max 3 sentences, end with exactly one easy question or next step.`;
 
   const thread = await fetchThread(
     supabase,
@@ -3490,17 +3611,33 @@ function waWindowClosesBefore(contact: WaContact, resume: Date): boolean {
   return Date.now() < closesAt && resume.getTime() >= closesAt;
 }
 
+/** An unsigned quote on the table tightens the clock: the first chase lands
+ * the NEXT DAY (while the quote is fresh and the expiry-urgency DEAL STATE
+ * still has road), not two days later like the generic cadence. */
+const QUOTE_FOLLOWUP_DELAY_HOURS: Record<number, number> = { 0: 24, 1: 72, 2: 120 };
+
 /** Arm the next touch after an agent send — never overwrites an earlier one. */
 async function scheduleNextFollowup(supabase: DB, contactId: string): Promise<void> {
   const { data: c } = await supabase
     .from("wa_contacts")
-    .select("followup_stage, next_followup_at, do_not_contact, campaign_id")
+    .select("followup_stage, next_followup_at, do_not_contact, campaign_id, lead_id")
     .eq("id", contactId)
     .maybeSingle();
   if (!c || c.next_followup_at || c.do_not_contact) return;
-  const schedule = c.campaign_id
+  let schedule = c.campaign_id
     ? CAMPAIGN_FOLLOWUP_DELAY_HOURS
     : FOLLOWUP_DELAY_HOURS;
+  // Campaign leads already run a tighter clock than the quote chase; for
+  // everyone else, a live unsigned quote switches to the 24h-first cadence.
+  if (!c.campaign_id && c.lead_id) {
+    const { data: openQuote } = await supabase
+      .from("quotes")
+      .select("id")
+      .eq("lead_id", c.lead_id)
+      .in("status", ["sent", "viewed"])
+      .limit(1);
+    if (openQuote?.length) schedule = QUOTE_FOLLOWUP_DELAY_HOURS;
+  }
   const hours = schedule[c.followup_stage ?? 0];
   if (!hours) return; // all touches sent — the cadence is over
   // A pending promise IS the next touch — never stack the generic cadence
@@ -3749,7 +3886,14 @@ async function followupSkipReason(
   return null;
 }
 
-/** One DEAL STATE line when a signable quote sits unsigned — sharpens a nudge. */
+/**
+ * One DEAL STATE line describing the lead's latest quote, whatever its fate
+ * — unsigned, declined, signed or expired. Goes into EVERY prompt build via
+ * buildSystemPrompt: it used to sharpen only the nudge composers, so the
+ * live reply run happily kept selling to people who had already signed, and
+ * never learned that someone declined (or why). Old outcomes age out —
+ * a signature is news for a week, a decline for two.
+ */
 async function buildQuoteStateLine(
   supabase: DB,
   leadId: string | null,
@@ -3757,16 +3901,45 @@ async function buildQuoteStateLine(
   if (!leadId) return "";
   const { data: q } = await supabase
     .from("quotes")
-    .select("quote_number, status, grand_total, currency, valid_until, viewed_at")
+    .select(
+      "quote_number, status, grand_total, currency, valid_until, viewed_at, accepted_at, declined_at, declined_reason",
+    )
     .eq("lead_id", leadId)
-    .in("status", ["sent", "viewed"])
+    .in("status", ["sent", "viewed", "accepted", "declined"])
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
   if (!q) return "";
+
+  const label = `quote ${q.quote_number} (${q.currency} ${Number(q.grand_total).toLocaleString()})`;
+
+  if (q.status === "accepted") {
+    const age = q.accepted_at ? Date.now() - new Date(q.accepted_at).getTime() : 0;
+    if (age > 7 * 86400_000) return "";
+    return `DEAL STATE: they SIGNED ${label}. STOP selling — congratulate once if you haven't already, tell them the deposit invoice (with our bank details) follows to start the work, and switch to kickoff mode: what we need from them (logo, photos, content, access). Never re-pitch what they already bought.`;
+  }
+
+  if (q.status === "declined") {
+    const age = q.declined_at ? Date.now() - new Date(q.declined_at).getTime() : 0;
+    if (age > 14 * 86400_000) return "";
+    return `DEAL STATE: they DECLINED ${label}${q.declined_reason ? ` — their reason: "${q.declined_reason}"` : " — no reason given"}. Recovery mode: acknowledge it warmly, isolate the real objection (price? timing? scope?), and only then offer ONE revised direction. Never re-send the same quote unprompted, never exceed your discount authority, never argue.`;
+  }
+
+  // sent / viewed — still unsigned.
   const justViewed =
     !!q.viewed_at && Date.now() - new Date(q.viewed_at).getTime() < 3600_000;
-  return `\nDEAL STATE: quote ${q.quote_number} (${q.currency} ${Number(q.grand_total).toLocaleString()}) is awaiting their signature${q.status === "viewed" ? " — they HAVE opened it" : " — not opened yet"}${justViewed ? ". They were looking at it just minutes ago — this is a hot moment, reference it naturally and invite questions" : ""}${q.valid_until ? `; it's valid until ${q.valid_until}` : ""}.`;
+  let expiry = "";
+  if (q.valid_until) {
+    const msLeft = new Date(`${q.valid_until}T23:59:59`).getTime() - Date.now();
+    if (msLeft < 0)
+      return `DEAL STATE: ${label} EXPIRED unsigned on ${q.valid_until}. Don't treat the old number as still live — if they're interested, refresh it with send_quote so the dates stay honest.`;
+    const daysLeft = Math.floor(msLeft / 86400_000);
+    expiry =
+      daysLeft <= 2
+        ? `; it EXPIRES ${daysLeft === 0 ? "TODAY" : daysLeft === 1 ? "tomorrow" : "in 2 days"} — worth one natural heads-up, never a pressure line`
+        : `; it's valid until ${q.valid_until}`;
+  }
+  return `DEAL STATE: ${label} is awaiting their signature${q.status === "viewed" ? " — they HAVE opened it" : " — not opened yet"}${justViewed ? ". They were looking at it just minutes ago — this is a hot moment, reference it naturally and invite questions" : ""}${expiry}.`;
 }
 
 /** Compose + send one AI follow-up touch (touch 2 goes out as a voice note). */
@@ -3777,8 +3950,6 @@ async function sendFollowupTouch(
   touch: number,
 ): Promise<boolean> {
   const tz = config.timezone || "Asia/Colombo";
-  // Deal state sharpens the nudge: is a signable quote sitting unsigned?
-  const quoteLine = await buildQuoteStateLine(supabase, contact.lead_id);
 
   // A booked call whose slot has passed in silence owns this touch: the only
   // message a human would send is "did the team reach you?", not a fresh
@@ -3794,10 +3965,10 @@ async function sendFollowupTouch(
 
   const nudge =
     callAt && callPassedUnspoken
-      ? `A call with this customer was booked for ${formatInTimezone(callAt, tz)} (${tz}); that time has passed and nothing has been said here since. Send ONE warm, low-key check-in: did the team manage to reach them? If the call never happened, own it lightly — no grovelling — and offer to line up a fresh time. Never re-pitch the product and never speak of the old slot as if it's still ahead. Human voice, max 3 sentences, end with exactly one easy question.${quoteLine}`
+      ? `A call with this customer was booked for ${formatInTimezone(callAt, tz)} (${tz}); that time has passed and nothing has been said here since. Send ONE warm, low-key check-in: did the team manage to reach them? If the call never happened, own it lightly — no grovelling — and offer to line up a fresh time. Never re-pitch the product and never speak of the old slot as if it's still ahead. Human voice, max 3 sentences, end with exactly one easy question.`
       : touch >= MAX_FOLLOWUP_TOUCHES
-        ? `The customer went quiet after your last message. This is follow-up touch 3 of 3 — the graceful breakup. Send ONE warm, zero-pressure goodbye: you get that now might not be the right time, the door stays open, they can pick this up whenever they're ready. No question at the end this time, no guilt. Max 2-3 sentences.${quoteLine}`
-        : `The customer went quiet after your last message. This is follow-up touch ${touch} of 3. Send ONE short, casual re-engagement message with a FRESH angle — never "just following up": reference something concrete you know about their business or website (from the chat, the audit, or your background knowledge) and tie it to a reason to act${touch === 1 ? ". Keep it light and helpful" : ". Add gentle urgency or a new benefit they haven't heard yet"}. Human voice, max 3 sentences, end with exactly one easy question or next step.${quoteLine}`;
+        ? `The customer went quiet after your last message. This is follow-up touch 3 of 3 — the graceful breakup. Send ONE warm, zero-pressure goodbye: you get that now might not be the right time, the door stays open, they can pick this up whenever they're ready. No question at the end this time, no guilt. Max 2-3 sentences.`
+        : `The customer went quiet after your last message. This is follow-up touch ${touch} of 3. Send ONE short, casual re-engagement message with a FRESH angle — never "just following up": reference something concrete you know about their business or website (from the chat, the audit, or your background knowledge) and tie it to a reason to act${touch === 1 ? ". Keep it light and helpful" : ". Add gentle urgency or a new benefit they haven't heard yet"}. Human voice, max 3 sentences, end with exactly one easy question or next step.`;
 
   const thread = await fetchThread(supabase, contact.id, tz);
 

@@ -162,6 +162,37 @@ Return JSON: { "notes": ["...", "..."] } — 5 to 8 short, specific coaching bul
     console.error("[wa-coaching] save failed:", error.message);
     return { ok: false };
   }
+
+  // The bullets no longer self-apply. wa_coaching keeps the weekly history
+  // (and the stats the Analytics tab reads), but what the agent actually
+  // follows is the approve-first wa_lessons queue — each fresh bullet lands
+  // there as `pending` for the team's yes. Exact repeats of anything already
+  // queued or approved are skipped.
+  const { data: existing } = await supabase
+    .from("wa_lessons")
+    .select("body")
+    .in("status", ["pending", "approved"]);
+  const seen = new Set(
+    (existing ?? []).map((l) => l.body.trim().toLowerCase()),
+  );
+  const rows = notes
+    .filter((n) => !seen.has(n.trim().toLowerCase()))
+    .map((n) => ({
+      kind: "playbook" as const,
+      title: n.length > 80 ? `${n.slice(0, 77)}…` : n,
+      body: n,
+      source: "weekly_coach" as const,
+      evidence: { stats } as unknown as Record<string, unknown>,
+    }));
+  if (rows.length) {
+    const { error: queueError } = await supabase.from("wa_lessons").insert(rows);
+    if (queueError)
+      console.error(
+        "[wa-coaching] lesson queue insert failed (is migration 0073 applied?):",
+        queueError.message,
+      );
+  }
+
   return { ok: true, notes: bullets };
 }
 
@@ -223,7 +254,7 @@ export async function processWaCoaching(
 }
 
 /** Calendar date in the workspace's timezone (YYYY-MM-DD). */
-function localDateInTimezone(timezone: string, at = new Date()): string {
+export function localDateInTimezone(timezone: string, at = new Date()): string {
   try {
     return new Intl.DateTimeFormat("en-CA", {
       timeZone: timezone,

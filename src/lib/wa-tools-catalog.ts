@@ -121,6 +121,13 @@ export const WA_TOOL_CATALOG: WaToolMeta[] = [
     kind: "write",
   },
   {
+    key: "send_pricelist",
+    label: "Send the price-list PDF",
+    description:
+      "Delivers the branded pricing PDF (the /pricing page's export, with your live price overrides) into the chat as a WhatsApp document — only when the customer explicitly asks for the full list or something to show a partner.",
+    kind: "write",
+  },
+  {
     key: "notify_team",
     label: "Notify the team",
     description:

@@ -344,6 +344,74 @@ export async function toggleCoachingAction(
   return { ok: true };
 }
 
+export type RevivalConfigInput = {
+  revival_enabled: boolean;
+  revival_daily_cap: number;
+  revival_template_name: string;
+  revival_template_lang: string;
+  revival_template_params: string[];
+  revival_min_age_days: number;
+};
+
+export async function saveRevivalConfigAction(
+  input: RevivalConfigInput,
+): Promise<ActionResult> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+
+  const { error } = await supabase.from("wa_agent_config").upsert(
+    {
+      id: 1,
+      revival_enabled: Boolean(input.revival_enabled),
+      revival_daily_cap: Math.min(
+        10,
+        Math.max(1, Math.round(Number(input.revival_daily_cap) || 3)),
+      ),
+      revival_template_name: input.revival_template_name.trim() || null,
+      revival_template_lang: input.revival_template_lang.trim() || "en",
+      revival_template_params: input.revival_template_params
+        .map((p) => p.trim())
+        .filter(Boolean)
+        .slice(0, 10),
+      revival_min_age_days: Math.min(
+        365,
+        Math.max(7, Math.round(Number(input.revival_min_age_days) || 30)),
+      ),
+    },
+    { onConflict: "id" },
+  );
+  if (error) return { ok: false, error: error.message };
+  revalidatePath("/whatsapp");
+  return { ok: true };
+}
+
+/** Approve / reject a mined lesson — or send it back to pending (un-approve).
+ * Only approved lessons ever reach the agent's live prompt. */
+export async function decideLessonAction(
+  id: string,
+  decision: "approved" | "rejected" | "pending",
+): Promise<ActionResult> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const { error } = await supabase
+    .from("wa_lessons")
+    .update({
+      status: decision,
+      decided_by: decision === "pending" ? null : user.id,
+      decided_at: decision === "pending" ? null : new Date().toISOString(),
+    })
+    .eq("id", id);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath("/whatsapp");
+  return { ok: true };
+}
+
 // ---------------------------------------------------------------------------
 // Campaign mode — the Meta ad the agent is currently selling
 // ---------------------------------------------------------------------------
@@ -374,6 +442,9 @@ export type CampaignInput = {
   // to the website packages in the knowledge base.
   pricing_note: string;
   first_reply: string;
+  // Optional A/B variant (0077): when set, new leads split 50/50 between the
+  // two instant lines and Analytics compares reply + booked-call rates.
+  first_reply_b: string;
   image_url: string | null;
   image_path: string | null;
 };
@@ -397,6 +468,8 @@ export async function createCampaignAction(
     pricing_note: input.pricing_note.trim(),
     // Left blank? Draft it, so the instant line works out of the box.
     first_reply: input.first_reply.trim() || (await draftFirstReply(details)),
+    // Variant B is never auto-drafted — an A/B test is a deliberate act.
+    first_reply_b: input.first_reply_b.trim() || null,
     image_url: input.image_url || null,
     image_path: input.image_path || null,
     image_summary: input.image_url ? await readAdImage(input.image_url) : null,
@@ -442,6 +515,7 @@ export async function updateCampaignAction(
       details,
       pricing_note: input.pricing_note.trim(),
       first_reply: input.first_reply.trim() || (await draftFirstReply(details)),
+      first_reply_b: input.first_reply_b.trim() || null,
       image_url: input.image_url || null,
       image_path: input.image_path || null,
       image_summary: summary,

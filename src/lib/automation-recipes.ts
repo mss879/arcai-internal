@@ -310,6 +310,38 @@ export const AUTOMATION_RECIPES: AutomationRecipe[] = [
     ],
   },
   {
+    id: "referral-ask",
+    name: "Referral ask, two weeks after payment 🤝",
+    description:
+      "A customer pays → two weeks later (when the work is real and the goodwill is warm) they get ONE friendly WhatsApp asking who else they know that needs this. The 24h window is long closed by then, so this REQUIRES a Meta-approved template — create one (e.g. 'referral_ask', category Marketing) in WhatsApp Manager and put its exact name in the step before activating.",
+    emoji: "🤝",
+    trigger: "payment_received",
+    trigger_config: {},
+    conditions: [],
+    steps: [
+      { kind: "wait", config: { minutes: 14 * 24 * 60 } },
+      {
+        kind: "send_whatsapp",
+        config: {
+          template_name: "referral_ask",
+          template_lang: "en",
+          template_params: ["{{name}}"],
+          message:
+            "Hey {{name}}! Hope everything's running smoothly on your side 😊 Quick one — if you know another business owner who'd love what we built for you, send them my way. We take great care of friends of clients 🤝",
+        },
+      },
+      {
+        kind: "create_task",
+        config: {
+          title: "Referral follow-through — {{full_name}}",
+          notes:
+            "The referral ask just went out to {{full_name}} (paid {{amount}} two weeks ago). If they name someone, get the intro moving the same day.",
+          due_in_days: 2,
+        },
+      },
+    ],
+  },
+  {
     id: "cold-prospect-first-touch",
     name: "Cold prospect first touch (WhatsApp)",
     description:

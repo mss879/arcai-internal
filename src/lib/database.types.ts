@@ -212,6 +212,25 @@ export type WaVoiceReplies = "off" | "match";
 export type WaPromiseStatus = "pending" | "sent" | "cancelled";
 /** Language matching — detected chat language incl. romanized variants (0055). */
 export type WaLanguage = "en" | "si" | "ta" | "si-latn" | "ta-latn";
+
+// 0073 — nightly conversation scoring + the approve-first lesson queue
+export type WaInsightStatus = "pending" | "scored" | "failed";
+export type WaInsightOutcome =
+  | "won"
+  | "call_booked"
+  | "quoted_pending"
+  | "open"
+  | "ghosted"
+  | "declined"
+  | "lost";
+export type WaLessonKind = "objection_rebuttal" | "faq" | "phrasing" | "playbook";
+export type WaLessonSource = "nightly_miner" | "weekly_coach" | "manual";
+export type WaLessonStatus = "pending" | "approved" | "rejected";
+
+// 0076 — revival of aged dead threads
+export type WaRevivalStatus = "queued" | "sent" | "replied" | "skipped" | "failed";
+// 0077 — campaign first-reply A/B
+export type WaFirstReplyVariant = "a" | "b";
 export type AutomationRunStatus =
   | "running"
   | "completed"
@@ -2146,6 +2165,8 @@ export type Database = {
           // so a reschedule updates the same task instead of stacking one.
           call_booked_at: Timestamp | null;
           call_todo_id: UUID | null;
+          // 0077 — which instant first reply they received (A/B)
+          first_reply_variant: WaFirstReplyVariant | null;
           created_at: Timestamp;
           updated_at: Timestamp;
         };
@@ -2178,6 +2199,8 @@ export type Database = {
           // 0072 — agreed phone-call slot + the To-Do carrying it
           call_booked_at?: Timestamp | null;
           call_todo_id?: UUID | null;
+          // 0077 — which instant first reply they received (A/B)
+          first_reply_variant?: WaFirstReplyVariant | null;
           created_at?: Timestamp;
           updated_at?: Timestamp;
         };
@@ -2259,6 +2282,16 @@ export type Database = {
           campaign_mode_enabled: boolean;
           // 0066 — once-a-day attempt gate for the weekly coaching run
           coaching_ran_for: string | null;
+          // 0073 — nightly insight scorer + lesson miner claim stamps
+          insights_ran_for: string | null;
+          lessons_ran_for: string | null;
+          // 0076 — revival of aged dead threads
+          revival_enabled: boolean;
+          revival_daily_cap: number;
+          revival_template_name: string | null;
+          revival_template_lang: string;
+          revival_template_params: string[];
+          revival_min_age_days: number;
         };
         Insert: {
           id?: number;
@@ -2302,6 +2335,16 @@ export type Database = {
           campaign_mode_enabled?: boolean;
           // 0066 — once-a-day attempt gate for the weekly coaching run
           coaching_ran_for?: string | null;
+          // 0073 — nightly insight scorer + lesson miner claim stamps
+          insights_ran_for?: string | null;
+          lessons_ran_for?: string | null;
+          // 0076 — revival of aged dead threads
+          revival_enabled?: boolean;
+          revival_daily_cap?: number;
+          revival_template_name?: string | null;
+          revival_template_lang?: string;
+          revival_template_params?: string[];
+          revival_min_age_days?: number;
         };
         Update: Partial<
           Database["public"]["Tables"]["wa_agent_config"]["Insert"]
@@ -2371,6 +2414,8 @@ export type Database = {
           details: string;
           // 0066 — the instant line the webhook fires on first contact
           first_reply: string | null;
+          // 0077 — optional A/B variant of that instant line
+          first_reply_b: string | null;
           // 0068 — the only thing the agent may say when price comes up
           pricing_note: string;
           created_by: UUID | null;
@@ -2387,6 +2432,8 @@ export type Database = {
           details?: string;
           // 0066 — the instant line the webhook fires on first contact
           first_reply?: string | null;
+          // 0077 — optional A/B variant of that instant line
+          first_reply_b?: string | null;
           // 0068 — the only thing the agent may say when price comes up
           pricing_note?: string;
           created_by?: UUID | null;
@@ -2604,12 +2651,137 @@ export type Database = {
         >;
         Relationships: [];
       };
+      wa_convo_insights: {
+        Row: {
+          id: UUID;
+          contact_id: UUID;
+          campaign_id: UUID | null;
+          lead_id: UUID | null;
+          convo_ended_at: Timestamp;
+          status: WaInsightStatus;
+          outcome: WaInsightOutcome | null;
+          stage_reached: string | null;
+          objections: string[];
+          questions_asked: string[];
+          buying_signals: string[];
+          faq_gaps: string[];
+          quality_flags: string[];
+          language: string | null;
+          messages_in: number;
+          messages_out: number;
+          summary: string | null;
+          attempts: number;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          contact_id: UUID;
+          campaign_id?: UUID | null;
+          lead_id?: UUID | null;
+          convo_ended_at: Timestamp;
+          status?: WaInsightStatus;
+          outcome?: WaInsightOutcome | null;
+          stage_reached?: string | null;
+          objections?: string[];
+          questions_asked?: string[];
+          buying_signals?: string[];
+          faq_gaps?: string[];
+          quality_flags?: string[];
+          language?: string | null;
+          messages_in?: number;
+          messages_out?: number;
+          summary?: string | null;
+          attempts?: number;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["wa_convo_insights"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      wa_lessons: {
+        Row: {
+          id: UUID;
+          kind: WaLessonKind;
+          title: string;
+          body: string;
+          evidence: Record<string, unknown>;
+          source: WaLessonSource;
+          status: WaLessonStatus;
+          decided_by: UUID | null;
+          decided_at: Timestamp | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          kind: WaLessonKind;
+          title: string;
+          body: string;
+          evidence?: Record<string, unknown>;
+          source?: WaLessonSource;
+          status?: WaLessonStatus;
+          decided_by?: UUID | null;
+          decided_at?: Timestamp | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["wa_lessons"]["Insert"]>;
+        Relationships: [];
+      };
+      wa_revival: {
+        Row: {
+          id: UUID;
+          contact_id: UUID;
+          picked_for: string;
+          status: WaRevivalStatus;
+          template_name: string | null;
+          template_lang: string | null;
+          wa_message_id: string | null;
+          sent_at: Timestamp | null;
+          replied_at: Timestamp | null;
+          error: string | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          contact_id: UUID;
+          picked_for: string;
+          status?: WaRevivalStatus;
+          template_name?: string | null;
+          template_lang?: string | null;
+          wa_message_id?: string | null;
+          sent_at?: Timestamp | null;
+          replied_at?: Timestamp | null;
+          error?: string | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["wa_revival"]["Insert"]>;
+        Relationships: [];
+      };
     };
     Views: Record<never, never>;
     Functions: {
       is_admin: {
         Args: { uid: UUID };
         Returns: boolean;
+      };
+      // 0074 — Analytics tab aggregates
+      wa_funnel_stats: {
+        Args: { p_since: Timestamp; p_campaign?: UUID | null };
+        Returns: Record<string, unknown>;
+      };
+      wa_daily_message_counts: {
+        Args: { p_since: Timestamp; p_timezone?: string };
+        Returns: { day: string; inbound: number; outbound: number }[];
+      };
+      wa_tool_stats: {
+        Args: { p_since: Timestamp };
+        Returns: { tool: string; total: number; ok_count: number }[];
       };
     };
     Enums: Record<never, never>;

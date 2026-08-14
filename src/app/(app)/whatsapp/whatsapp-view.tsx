@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import {
   AlertTriangle,
   Ban,
+  BarChart3,
   Bot,
   BotOff,
   CalendarClock,
@@ -27,6 +28,7 @@ import {
   Snowflake,
   Trash2,
   UserPlus,
+  X,
   Zap,
 } from "lucide-react";
 
@@ -50,10 +52,10 @@ import type {
   WaAgentLog,
   WaCampaign,
   WaCampaignStatus,
-  WaCoaching,
   WaColdOutreach,
   WaContact,
   WaKeywordRule,
+  WaLesson,
   WaMatchType,
   WaMessage,
   WaPromise,
@@ -62,6 +64,7 @@ import type {
 import type { CampaignStats } from "./page";
 import {
   createCampaignAction,
+  decideLessonAction,
   deleteCampaignAction,
   deleteKeywordRuleAction,
   linkContactToCrmAction,
@@ -69,15 +72,16 @@ import {
   saveCampaignModeAction,
   saveColdConfigAction,
   saveKeywordRuleAction,
+  saveRevivalConfigAction,
   saveWaConfigAction,
   sendWaMessageAction,
   setCampaignStatusAction,
   setContactOptOutAction,
-  toggleCoachingAction,
   toggleContactAgentAction,
   updateCampaignAction,
   type WaRuleInput,
 } from "./actions";
+import { waAnalytics, type WaAnalytics } from "./analytics-actions";
 
 // ---- helpers ----------------------------------------------------------------
 
@@ -131,7 +135,14 @@ const SENT_BY_LABEL: Record<string, string> = {
 
 // ---- main view ----------------------------------------------------------------
 
-type Tab = "inbox" | "agent" | "campaign" | "cold" | "keywords" | "activity";
+type Tab =
+  | "inbox"
+  | "agent"
+  | "campaign"
+  | "cold"
+  | "keywords"
+  | "activity"
+  | "analytics";
 
 /** A cold-outreach row with its lead's display label joined in. */
 type ColdRow = WaColdOutreach & { lead_label: string };
@@ -160,7 +171,7 @@ export function WhatsappView({
   pipelines,
   stages,
   automations,
-  coaching,
+  lessons,
   promises,
   coldRows,
   coldStats,
@@ -180,7 +191,7 @@ export function WhatsappView({
   pipelines: Pipeline[];
   stages: PipelineStage[];
   automations: Automation[];
-  coaching: WaCoaching | null;
+  lessons: WaLesson[];
   promises: WaPromise[];
   coldRows: ColdRow[];
   coldStats: ColdStats;
@@ -199,19 +210,22 @@ export function WhatsappView({
     "wa_promises",
     "wa_cold_outreach",
     "wa_campaigns",
+    "wa_lessons",
   ]);
   const [tab, setTab] = React.useState<Tab>("inbox");
 
   const attention = contacts.filter((c) => c.needs_attention).length;
   const unread = contacts.reduce((s, c) => s + (c.unread ?? 0), 0);
+  const pendingLessons = lessons.filter((l) => l.status === "pending").length;
 
   const TABS: { key: Tab; label: string; icon: React.ReactNode; badge?: number }[] = [
     { key: "inbox", label: "Inbox", icon: <Inbox className="h-4 w-4" />, badge: unread },
-    { key: "agent", label: "AI Agent", icon: <Bot className="h-4 w-4" /> },
+    { key: "agent", label: "AI Agent", icon: <Bot className="h-4 w-4" />, badge: pendingLessons },
     { key: "campaign", label: "Campaign", icon: <Megaphone className="h-4 w-4" /> },
     { key: "cold", label: "Cold Outreach", icon: <Snowflake className="h-4 w-4" /> },
     { key: "keywords", label: "Keywords", icon: <Zap className="h-4 w-4" /> },
     { key: "activity", label: "Agent Activity", icon: <ScrollText className="h-4 w-4" /> },
+    { key: "analytics", label: "Analytics", icon: <BarChart3 className="h-4 w-4" /> },
   ];
 
   return (
@@ -289,7 +303,7 @@ export function WhatsappView({
           config={config}
           pipelines={pipelines}
           stages={stages}
-          coaching={coaching}
+          lessons={lessons}
           waReady={waReady}
           aiReady={aiReady}
           appBaseUrl={appBaseUrl}
@@ -318,6 +332,7 @@ export function WhatsappView({
       )}
       {tab === "keywords" && <KeywordsTab rules={rules} automations={automations} />}
       {tab === "activity" && <ActivityTab logs={logs} contacts={contacts} />}
+      {tab === "analytics" && <AnalyticsTab />}
     </div>
   );
 }
@@ -805,7 +820,7 @@ function AgentTab({
   config,
   pipelines,
   stages,
-  coaching,
+  lessons,
   waReady,
   aiReady,
   appBaseUrl,
@@ -813,7 +828,7 @@ function AgentTab({
   config: WaAgentConfig | null;
   pipelines: Pipeline[];
   stages: PipelineStage[];
-  coaching: WaCoaching | null;
+  lessons: WaLesson[];
   waReady: boolean;
   aiReady: boolean;
   appBaseUrl: string;
@@ -1231,42 +1246,7 @@ function AgentTab({
           />
         </section>
 
-        <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm">
-          <div className="flex items-center justify-between gap-2">
-            <h2 className="text-sm font-semibold text-slate-900">Weekly coaching</h2>
-            {coaching && (
-              <Toggle
-                checked={coaching.is_active}
-                onChange={(v) => {
-                  void toggleCoachingAction(coaching.id, v).then((res) => {
-                    if (!res.ok) toast.error(res.error);
-                  });
-                }}
-                label={coaching.is_active ? "Applied" : "Muted"}
-              />
-            )}
-          </div>
-          <p className="text-xs text-slate-500">
-            Every Monday the agent studies its own conversations — what won, what
-            got ghosted — and coaches itself. The latest lessons are fed straight
-            into its brain.
-          </p>
-          {coaching ? (
-            <>
-              <p className="mt-3 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                Week of {coaching.week_start}
-              </p>
-              <pre className="mt-1 whitespace-pre-wrap font-sans text-xs leading-5 text-slate-700">
-                {coaching.notes}
-              </pre>
-            </>
-          ) : (
-            <p className="mt-3 text-xs italic text-slate-400">
-              No lessons yet — they appear after the first weekly digest run once
-              real conversations exist.
-            </p>
-          )}
-        </section>
+        <LessonsCard lessons={lessons} />
 
         <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm">
           <h2 className="text-sm font-semibold text-slate-900">How it flows</h2>
@@ -1524,6 +1504,8 @@ function ColdOutreachTab({
             {saving ? "Saving…" : "Save cold outreach settings"}
           </Button>
         </div>
+
+        <RevivalCard config={config} waReady={waReady} />
       </div>
 
       {/* Right — what's happening */}
@@ -1998,6 +1980,7 @@ function CampaignModal({
     campaign?.pricing_note ?? "",
   );
   const [firstReply, setFirstReply] = React.useState(campaign?.first_reply ?? "");
+  const [firstReplyB, setFirstReplyB] = React.useState(campaign?.first_reply_b ?? "");
   const [file, setFile] = React.useState<File | null>(null);
   const [preview, setPreview] = React.useState<string | null>(
     campaign?.image_url ?? null,
@@ -2038,6 +2021,7 @@ function CampaignModal({
         details,
         pricing_note: pricingNote,
         first_reply: firstReply,
+        first_reply_b: firstReplyB,
         image_url: imageUrl,
         image_path: imagePath,
       };
@@ -2152,6 +2136,20 @@ function CampaignModal({
             read anything. It should introduce the agent as ARC&apos;s AI agent
             and name the campaign; don&apos;t quote a price here — the real
             reply follows a moment later.
+          </span>
+        </label>
+
+        <label className="block space-y-1.5 text-xs font-medium text-slate-600">
+          Instant reply — variant B (optional A/B test)
+          <Textarea
+            rows={2}
+            value={firstReplyB}
+            onChange={(e) => setFirstReplyB(e.target.value)}
+            placeholder="Leave empty for no test. Fill it and new leads split 50/50 between the two lines."
+          />
+          <span className="block text-[11px] font-normal text-slate-400">
+            The Analytics tab compares reply rates and booked calls per variant
+            — give it a genuinely different angle, not a reworded copy.
           </span>
         </label>
       </div>
@@ -2568,6 +2566,786 @@ function ActivityTab({
           );
         })}
       </div>
+    </div>
+  );
+}
+
+// ---- Revival (re-open aged dead threads) --------------------------------------
+
+/**
+ * Revival config — lives on the Cold Outreach tab because it's the same
+ * muscle pointed the other way: cold opens NEW doors, revival knocks again
+ * on doors that once opened. Template-only (the 24h window is long dead),
+ * capped, once per contact per 90 days, and OFF until a template is set.
+ */
+function RevivalCard({
+  config,
+  waReady,
+}: {
+  config: WaAgentConfig | null;
+  waReady: boolean;
+}) {
+  const [form, setForm] = React.useState(() => ({
+    revival_enabled: config?.revival_enabled ?? false,
+    revival_daily_cap: config?.revival_daily_cap ?? 3,
+    revival_template_name: config?.revival_template_name ?? "",
+    revival_template_lang: config?.revival_template_lang ?? "en",
+    // Edited as one comma-separated line; split back on save.
+    revival_template_params: (config?.revival_template_params ?? []).join(", "),
+    revival_min_age_days: config?.revival_min_age_days ?? 30,
+  }));
+  const [saving, setSaving] = React.useState(false);
+
+  function set<K extends keyof typeof form>(key: K, value: (typeof form)[K]) {
+    setForm((f) => ({ ...f, [key]: value }));
+  }
+
+  async function handleSave() {
+    setSaving(true);
+    const res = await saveRevivalConfigAction({
+      ...form,
+      revival_template_params: form.revival_template_params
+        .split(",")
+        .map((p) => p.trim())
+        .filter(Boolean),
+    });
+    setSaving(false);
+    if (res.ok) toast.success("Revival settings saved.");
+    else toast.error(res.error);
+  }
+
+  return (
+    <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold text-slate-900">
+            Revival — wake up old conversations
+          </h2>
+          <p className="text-xs text-slate-500">
+            People who once talked to you but went quiet for the set age get ONE
+            approved-template knock — max {form.revival_daily_cap}/day, spread
+            out, never twice in 90 days, never on closed deals or booked calls.
+            Their reply lands back with the AI agent automatically.
+          </p>
+        </div>
+        <Toggle
+          checked={form.revival_enabled}
+          onChange={(v) => set("revival_enabled", v)}
+          label="Revival"
+        />
+      </div>
+
+      {!waReady && (
+        <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 ring-1 ring-inset ring-amber-200">
+          WhatsApp keys are missing — nothing can send until they&apos;re configured.
+        </p>
+      )}
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-3">
+        <label className="space-y-1.5 text-xs font-medium text-slate-600 sm:col-span-2">
+          Approved re-engagement template
+          <Input
+            value={form.revival_template_name}
+            onChange={(e) => set("revival_template_name", e.target.value)}
+            placeholder="e.g. revive_chat (Meta-approved, Marketing category)"
+          />
+        </label>
+        <label className="space-y-1.5 text-xs font-medium text-slate-600">
+          Template language
+          <Input
+            value={form.revival_template_lang}
+            onChange={(e) => set("revival_template_lang", e.target.value)}
+            placeholder="en"
+          />
+        </label>
+      </div>
+      <div className="mt-3 grid gap-3 sm:grid-cols-3">
+        <label className="space-y-1.5 text-xs font-medium text-slate-600 sm:col-span-1">
+          Template variables (comma-separated)
+          <Input
+            value={form.revival_template_params}
+            onChange={(e) => set("revival_template_params", e.target.value)}
+            placeholder="{{name}}"
+          />
+        </label>
+        <label className="space-y-1.5 text-xs font-medium text-slate-600">
+          Silent for at least (days)
+          <Input
+            type="number"
+            min={7}
+            max={365}
+            value={String(form.revival_min_age_days)}
+            onChange={(e) =>
+              set(
+                "revival_min_age_days",
+                Math.min(365, Math.max(7, Math.round(Number(e.target.value) || 30))),
+              )
+            }
+          />
+        </label>
+        <label className="space-y-1.5 text-xs font-medium text-slate-600">
+          Max per day
+          <Input
+            type="number"
+            min={1}
+            max={10}
+            value={String(form.revival_daily_cap)}
+            onChange={(e) =>
+              set(
+                "revival_daily_cap",
+                Math.min(10, Math.max(1, Math.round(Number(e.target.value) || 3))),
+              )
+            }
+          />
+        </label>
+      </div>
+      <p className="mt-1 text-[11px] text-slate-400">
+        {"{{name}}"} in a variable is replaced with the contact&apos;s name.
+        Marketing templates are frequency-capped by Meta — keep the daily cap
+        small.
+      </p>
+
+      <div className="mt-3 flex justify-end">
+        <Button onClick={handleSave} disabled={saving}>
+          {saving ? "Saving…" : "Save revival settings"}
+        </Button>
+      </div>
+    </section>
+  );
+}
+
+// ---- Lessons (the approve-first learning queue) -------------------------------
+
+const LESSON_KIND_META: Record<string, { label: string; className: string }> = {
+  objection_rebuttal: { label: "Objection", className: "bg-rose-50 text-rose-700 ring-rose-200" },
+  faq: { label: "FAQ", className: "bg-sky-50 text-sky-700 ring-sky-200" },
+  phrasing: { label: "Phrasing", className: "bg-violet-50 text-violet-700 ring-violet-200" },
+  playbook: { label: "Playbook", className: "bg-amber-50 text-amber-700 ring-amber-200" },
+};
+
+function LessonKindChip({ kind }: { kind: string }) {
+  const meta = LESSON_KIND_META[kind] ?? LESSON_KIND_META.playbook;
+  return (
+    <span
+      className={cn(
+        "shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1",
+        meta.className,
+      )}
+    >
+      {meta.label}
+    </span>
+  );
+}
+
+/**
+ * The agent's learning queue. Every night it studies its own finished
+ * conversations (a booked call = its win) and proposes lessons; the weekly
+ * coach feeds the same queue. NOTHING reaches the live prompt until a human
+ * approves it here — approved FAQ lessons go to the knowledge base, the rest
+ * into the "lessons from your own past deals" prompt block.
+ */
+function LessonsCard({ lessons }: { lessons: WaLesson[] }) {
+  const [busy, setBusy] = React.useState<string | null>(null);
+  const pending = lessons.filter((l) => l.status === "pending");
+  const approved = lessons.filter((l) => l.status === "approved");
+
+  const decide = (id: string, decision: "approved" | "rejected" | "pending") => {
+    setBusy(id);
+    void decideLessonAction(id, decision).then((res) => {
+      setBusy(null);
+      if (!res.ok) toast.error(res.error);
+    });
+  };
+
+  return (
+    <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm">
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold text-slate-900">Lessons</h2>
+        {pending.length > 0 && (
+          <Badge className="bg-amber-50 text-amber-700 ring-amber-200" dot="bg-amber-500">
+            {pending.length} awaiting review
+          </Badge>
+        )}
+      </div>
+      <p className="text-xs text-slate-500">
+        Every night the agent studies its own finished conversations — a booked
+        call counts as its win — and proposes lessons. Nothing reaches its brain
+        until you approve it here.
+      </p>
+
+      {pending.length > 0 && (
+        <div className="mt-3 space-y-2">
+          {pending.map((l) => (
+            <div
+              key={l.id}
+              className="rounded-xl border border-amber-200/70 bg-amber-50/40 p-3"
+            >
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <LessonKindChip kind={l.kind} />
+                    <span className="text-xs font-semibold text-slate-800">{l.title}</span>
+                  </div>
+                  <p className="mt-1 whitespace-pre-wrap text-xs leading-5 text-slate-700">
+                    {l.body}
+                  </p>
+                  {Object.keys(l.evidence ?? {}).length > 0 && (
+                    <details className="mt-1.5">
+                      <summary className="cursor-pointer text-[11px] font-medium text-slate-400 hover:text-slate-600">
+                        Evidence
+                      </summary>
+                      <pre className="mt-1 max-h-40 overflow-auto rounded-lg bg-white/80 p-2 text-[10px] leading-4 text-slate-600 ring-1 ring-slate-200">
+                        {JSON.stringify(l.evidence, null, 2)}
+                      </pre>
+                    </details>
+                  )}
+                </div>
+                <div className="flex shrink-0 items-center gap-1.5">
+                  <Button
+                    size="sm"
+                    disabled={busy === l.id}
+                    onClick={() => decide(l.id, "approved")}
+                  >
+                    <Check className="h-3.5 w-3.5" /> Approve
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={busy === l.id}
+                    onClick={() => decide(l.id, "rejected")}
+                  >
+                    <X className="h-3.5 w-3.5" /> Reject
+                  </Button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <p className="mt-4 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+        Active — the agent follows these ({approved.length})
+      </p>
+      {approved.length ? (
+        <div className="mt-1.5 space-y-1.5">
+          {approved.map((l) => (
+            <div key={l.id} className="flex items-start justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <LessonKindChip kind={l.kind} />
+                  <span className="whitespace-pre-wrap text-xs leading-5 text-slate-700">{l.body}</span>
+                </div>
+              </div>
+              <button
+                className="shrink-0 text-[11px] font-medium text-slate-400 hover:text-rose-600"
+                disabled={busy === l.id}
+                onClick={() => decide(l.id, "pending")}
+                title="Un-approve — back to the review queue"
+              >
+                Unapprove
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-1.5 text-xs italic text-slate-400">
+          Nothing approved yet — proposals appear here after the nightly run once
+          real conversations finish (needs migration 0073).
+        </p>
+      )}
+    </section>
+  );
+}
+
+// ---- Analytics ----------------------------------------------------------------
+
+const FUNNEL_TONES = {
+  base: "bg-slate-300",
+  win: "bg-emerald-500",
+  deal: "bg-primary-500",
+};
+
+function FunnelRow({
+  label,
+  value,
+  base,
+  tone = "base",
+}: {
+  label: string;
+  value: number;
+  base: number;
+  tone?: keyof typeof FUNNEL_TONES;
+}) {
+  const pct = base > 0 ? Math.round((value / base) * 100) : 0;
+  return (
+    <div className="flex items-center gap-3">
+      <div className="w-44 shrink-0 text-xs font-medium text-slate-600">{label}</div>
+      <div className="h-5 min-w-0 flex-1 overflow-hidden rounded-md bg-slate-100">
+        <div
+          className={cn("h-full rounded-md", FUNNEL_TONES[tone])}
+          style={{ width: `${value > 0 ? Math.max(pct, 3) : 0}%` }}
+        />
+      </div>
+      <div className="w-16 shrink-0 text-right text-xs font-semibold text-slate-800">
+        {value}
+        <span className="ml-1 font-normal text-slate-400">{base > 0 ? `${pct}%` : ""}</span>
+      </div>
+    </div>
+  );
+}
+
+function VolumeBars({ daily }: { daily: WaAnalytics["daily"] }) {
+  const max = Math.max(1, ...daily.map((d) => d.inbound + d.outbound));
+  return (
+    <div className="flex h-24 items-end gap-[2px]">
+      {daily.map((d) => (
+        <div
+          key={d.day}
+          title={`${d.day} — ${d.inbound} in · ${d.outbound} out`}
+          className="flex h-full min-w-0 flex-1 flex-col justify-end gap-[1px]"
+        >
+          <div
+            className="w-full rounded-sm bg-primary-400"
+            style={{ height: `${(d.outbound / max) * 100}%` }}
+          />
+          <div
+            className="w-full rounded-sm bg-emerald-400"
+            style={{ height: `${(d.inbound / max) * 100}%` }}
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function fmtCallSlot(iso: string): string {
+  return new Date(iso).toLocaleString([], {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+/** Lazily-loaded analytics: nothing is fetched until the tab opens, and the
+ * heavy lifting happens in SQL (migration 0074) — see analytics-actions.ts. */
+function AnalyticsTab() {
+  const [range, setRange] = React.useState<7 | 30 | 90>(30);
+  // One state cell keyed by range: "loading" is simply "no result for the
+  // range on screen yet", so the effect never calls setState synchronously.
+  const [result, setResult] = React.useState<{
+    range: number;
+    data: WaAnalytics | null;
+    error: string | null;
+  } | null>(null);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    waAnalytics(range)
+      .then((res) => {
+        if (cancelled) return;
+        setResult(
+          res.ok
+            ? { range, data: res.analytics, error: null }
+            : { range, data: null, error: res.error },
+        );
+      })
+      .catch(() => {
+        if (!cancelled)
+          setResult({ range, data: null, error: "Could not load analytics." });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [range]);
+
+  const loading = result?.range !== range;
+  const data = loading ? null : result?.data ?? null;
+  const error = loading ? null : result?.error ?? null;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-slate-500">
+          The agent&apos;s job is simple: give the info, book the call.{" "}
+          <span className="font-semibold text-slate-700">A booked call = an agent win.</span>{" "}
+          Everything after the call is the team&apos;s half of the funnel.
+        </p>
+        <div className="flex gap-1.5">
+          {([7, 30, 90] as const).map((r) => (
+            <button
+              key={r}
+              onClick={() => setRange(r)}
+              className={cn(
+                "rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
+                range === r
+                  ? "bg-primary-600 text-white"
+                  : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50",
+              )}
+            >
+              {r} days
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {loading && (
+        <div className="rounded-2xl border border-slate-200/80 bg-white p-10 text-center text-sm text-slate-400 shadow-sm">
+          Crunching the numbers…
+        </div>
+      )}
+      {!loading && error && (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-800">
+          {error}
+        </div>
+      )}
+
+      {!loading && !error && data && (
+        <>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+            <ColdStat
+              label="Agent wins (calls booked)"
+              value={data.funnel.agentWins}
+              tone="emerald"
+            />
+            <ColdStat
+              label="Agent win rate"
+              value={data.funnel.agentWinRate ? `${data.funnel.agentWinRate}%` : "0%"}
+              sub="contacts → call booked"
+              tone="emerald"
+            />
+            <ColdStat label="New contacts" value={data.funnel.contacts} />
+            <ColdStat
+              label="Median first reply"
+              value={fmtWait(data.funnel.medianFirstReply)}
+              sub={`p90 ${fmtWait(data.funnel.p90FirstReply)}`}
+            />
+            <ColdStat
+              label="Deals won"
+              value={data.funnel.won}
+              sub={data.funnel.revenue ? `Rs ${data.funnel.revenue.toLocaleString()}` : undefined}
+            />
+            <ColdStat
+              label="Needs a human"
+              value={data.needsAttention}
+              tone={data.needsAttention > 0 ? "amber" : "slate"}
+              sub={`${data.aiPaused} AI-paused · ${data.ghosted} ghosted`}
+            />
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm">
+              <h2 className="text-sm font-semibold text-slate-900">
+                Funnel — last {data.range} days
+              </h2>
+              <div className="mt-3 space-y-2">
+                <FunnelRow label="Contacts" value={data.funnel.contacts} base={data.funnel.contacts} />
+                <FunnelRow label="Replied" value={data.funnel.replied} base={data.funnel.contacts} />
+                <FunnelRow label="In CRM" value={data.funnel.inCrm} base={data.funnel.contacts} />
+                <FunnelRow
+                  label="📞 Call booked — agent win"
+                  value={data.funnel.agentWins}
+                  base={data.funnel.contacts}
+                  tone="win"
+                />
+                <FunnelRow label="Quoted" value={data.funnel.quoted} base={data.funnel.contacts} tone="deal" />
+                <FunnelRow label="Quote opened" value={data.funnel.quoteViewed} base={data.funnel.contacts} tone="deal" />
+                <FunnelRow label="Signed" value={data.funnel.signed} base={data.funnel.contacts} tone="deal" />
+                <FunnelRow label="Deal won" value={data.funnel.won} base={data.funnel.contacts} tone="deal" />
+              </div>
+              {data.funnel.declined > 0 && (
+                <p className="mt-2 text-[11px] text-slate-400">
+                  {data.funnel.declined} quote{data.funnel.declined === 1 ? "" : "s"} declined in this window.
+                </p>
+              )}
+            </section>
+
+            <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm">
+              <h2 className="text-sm font-semibold text-slate-900">Upcoming booked calls</h2>
+              {data.upcomingCalls.length ? (
+                <div className="mt-3 space-y-2">
+                  {data.upcomingCalls.map((c) => (
+                    <div key={c.contactId} className="flex items-center gap-3 rounded-xl bg-slate-50 px-3 py-2">
+                      <CalendarClock className="h-4 w-4 shrink-0 text-emerald-600" />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-xs font-semibold text-slate-800">{c.name}</p>
+                        <p className="text-[11px] text-slate-500">{fmtWa(c.phone)}</p>
+                      </div>
+                      <span className="shrink-0 text-xs font-medium text-emerald-700">
+                        {fmtCallSlot(c.at)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-3 text-xs italic text-slate-400">
+                  No calls on the books right now — wins land here the moment the
+                  agent locks a slot.
+                </p>
+              )}
+
+              <h2 className="mt-5 text-sm font-semibold text-slate-900">Follow-up engine</h2>
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                <ColdStat label="Touches sent" value={data.followupsSent} />
+                <ColdStat
+                  label="Chats revived"
+                  value={data.followupsRevived}
+                  sub={
+                    data.followupsSent
+                      ? `${Math.round((data.followupsRevived / data.followupsSent) * 100)}% reply within 48h`
+                      : undefined
+                  }
+                  tone="emerald"
+                />
+                <ColdStat label="Promises kept" value={data.promisesSent} sub="customer-named moments" />
+                <ColdStat
+                  label="Promise replies"
+                  value={data.promisesRevived}
+                  sub={
+                    data.promisesSent
+                      ? `${Math.round((data.promisesRevived / data.promisesSent) * 100)}% reply within 48h`
+                      : undefined
+                  }
+                  tone="emerald"
+                />
+              </div>
+              {data.revival && (
+                <p className="mt-2 text-[11px] text-slate-500">
+                  Revival knocks: {data.revival.sent} sent · {data.revival.replied} replied
+                  {data.revival.sent
+                    ? ` (${Math.round((data.revival.replied / data.revival.sent) * 100)}%)`
+                    : ""}
+                </p>
+              )}
+              {data.languages.length > 0 && (
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                  {data.languages.map(([lang, n]) => (
+                    <span
+                      key={lang}
+                      className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600"
+                    >
+                      {WA_LANGUAGE_LABELS[lang as keyof typeof WA_LANGUAGE_LABELS] ?? lang} · {n}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </section>
+          </div>
+
+          {data.abTest && (
+            <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm">
+              <h2 className="text-sm font-semibold text-slate-900">
+                First-reply A/B — {data.abTest.campaignName}
+              </h2>
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                {(["a", "b"] as const).map((v) => {
+                  const s = data.abTest![v];
+                  const pct = (n: number) =>
+                    s.contacts ? `${Math.round((n / s.contacts) * 100)}%` : "—";
+                  return (
+                    <div key={v} className="rounded-xl bg-slate-50 p-3 ring-1 ring-inset ring-slate-200">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        Variant {v.toUpperCase()}
+                      </p>
+                      <div className="mt-2 grid grid-cols-3 gap-2">
+                        <ColdStat label="Leads" value={s.contacts} />
+                        <ColdStat label="Replied" value={pct(s.replied)} sub={`${s.replied}`} />
+                        <ColdStat
+                          label="Calls booked"
+                          value={pct(s.wins)}
+                          sub={`${s.wins}`}
+                          tone="emerald"
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="mt-2 text-[11px] text-slate-400">
+                Verdicts need volume — treat differences as noise until each
+                variant has 100+ leads.
+              </p>
+            </section>
+          )}
+
+          <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold text-slate-900">Message volume</h2>
+              <p className="text-[11px] text-slate-400">
+                <span className="mr-2 inline-flex items-center gap-1"><span className="h-2 w-2 rounded-sm bg-emerald-400" /> customer</span>
+                <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-sm bg-primary-400" /> agent</span>
+              </p>
+            </div>
+            <div className="mt-3">
+              {data.daily.length ? (
+                <VolumeBars daily={data.daily} />
+              ) : (
+                <p className="text-xs italic text-slate-400">No messages in this window.</p>
+              )}
+            </div>
+          </section>
+
+          {data.campaigns.length > 0 && (
+            <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm">
+              <h2 className="text-sm font-semibold text-slate-900">
+                Campaigns — ranked by agent win rate (lifetime numbers)
+              </h2>
+              <div className="mt-3 overflow-x-auto">
+                <table className="w-full min-w-[640px] text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-[11px] uppercase tracking-wide text-slate-400">
+                      <th className="pb-2 pr-3 font-semibold">Campaign</th>
+                      <th className="pb-2 pr-3 font-semibold">Leads</th>
+                      <th className="pb-2 pr-3 font-semibold">Calls booked</th>
+                      <th className="pb-2 pr-3 font-semibold">Win rate</th>
+                      <th className="pb-2 pr-3 font-semibold">Quoted</th>
+                      <th className="pb-2 pr-3 font-semibold">Signed</th>
+                      <th className="pb-2 pr-3 font-semibold">Won</th>
+                      <th className="pb-2 font-semibold">Revenue</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.campaigns.map((c) => (
+                      <tr key={c.id} className="border-b border-slate-100 last:border-0">
+                        <td className="py-2 pr-3">
+                          <span className="font-medium text-slate-800">{c.name}</span>
+                          {c.status === "active" && (
+                            <span className="ml-1.5 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 ring-1 ring-emerald-200">
+                              live
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-2 pr-3 text-slate-600">{c.contacts}</td>
+                        <td className="py-2 pr-3 font-semibold text-emerald-700">{c.agentWins}</td>
+                        <td className="py-2 pr-3 text-slate-600">{c.agentWinRate}%</td>
+                        <td className="py-2 pr-3 text-slate-600">{c.quoted}</td>
+                        <td className="py-2 pr-3 text-slate-600">{c.signed}</td>
+                        <td className="py-2 pr-3 text-slate-600">{c.won}</td>
+                        <td className="py-2 text-slate-600">
+                          {c.revenue ? `Rs ${c.revenue.toLocaleString()}` : "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )}
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm">
+              <h2 className="text-sm font-semibold text-slate-900">
+                What conversations are teaching us
+              </h2>
+              {data.insights.scored ? (
+                <div className="mt-3 space-y-3 text-xs">
+                  <div className="flex flex-wrap gap-1.5">
+                    {Object.entries(data.insights.outcomes).map(([k, n]) => (
+                      <span
+                        key={k}
+                        className={cn(
+                          "rounded-full px-2 py-0.5 text-[11px] font-medium ring-1",
+                          k === "call_booked" || k === "won"
+                            ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
+                            : k === "ghosted" || k === "lost"
+                              ? "bg-rose-50 text-rose-700 ring-rose-200"
+                              : "bg-slate-50 text-slate-600 ring-slate-200",
+                        )}
+                      >
+                        {k.replace(/_/g, " ")} · {n}
+                      </span>
+                    ))}
+                  </div>
+                  {data.insights.topObjections.length > 0 && (
+                    <div>
+                      <p className="font-semibold text-slate-700">Top objections</p>
+                      <ul className="mt-1 space-y-0.5 text-slate-600">
+                        {data.insights.topObjections.slice(0, 5).map(([o, n]) => (
+                          <li key={o}>• {o} <span className="text-slate-400">×{n}</span></li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {data.insights.topFaqGaps.length > 0 && (
+                    <div>
+                      <p className="font-semibold text-slate-700">Questions the agent couldn&apos;t answer</p>
+                      <ul className="mt-1 space-y-0.5 text-slate-600">
+                        {data.insights.topFaqGaps.slice(0, 5).map(([o, n]) => (
+                          <li key={o}>• {o} <span className="text-slate-400">×{n}</span></li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {data.insights.dropOff.length > 0 && (
+                    <div>
+                      <p className="font-semibold text-slate-700">Where lost chats stalled</p>
+                      <ul className="mt-1 space-y-0.5 text-slate-600">
+                        {data.insights.dropOff.slice(0, 5).map(([s, n]) => (
+                          <li key={s}>• {s} <span className="text-slate-400">×{n}</span></li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {data.insights.topQualityFlags.length > 0 && (
+                    <div>
+                      <p className="font-semibold text-slate-700">Reply-quality flags</p>
+                      <ul className="mt-1 space-y-0.5 text-slate-600">
+                        {data.insights.topQualityFlags.map(([f, n]) => (
+                          <li key={f}>• {f.replace(/_/g, " ")} <span className="text-slate-400">×{n}</span></li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <p className="mt-3 text-xs italic text-slate-400">
+                  The nightly scorer hasn&apos;t produced insights yet — they appear
+                  the morning after conversations finish (needs migration 0073 and
+                  the automation tick running).
+                </p>
+              )}
+            </section>
+
+            <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm">
+              <h2 className="text-sm font-semibold text-slate-900">Tool usage</h2>
+              {data.tools.length ? (
+                <div className="mt-3 space-y-1.5">
+                  {data.tools.slice(0, 12).map((t) => {
+                    const label =
+                      WA_TOOL_CATALOG.find((m) => m.key === t.tool)?.label ?? t.tool;
+                    const okPct = t.total ? Math.round((t.ok / t.total) * 100) : 0;
+                    return (
+                      <div key={t.tool} className="flex items-center gap-2 text-xs">
+                        <span className="w-44 shrink-0 truncate font-medium text-slate-700">{label}</span>
+                        <div className="h-3.5 min-w-0 flex-1 overflow-hidden rounded bg-slate-100">
+                          <div
+                            className={cn(
+                              "h-full rounded",
+                              okPct >= 90 ? "bg-emerald-400" : okPct >= 60 ? "bg-amber-400" : "bg-rose-400",
+                            )}
+                            style={{
+                              width: `${Math.max(
+                                4,
+                                Math.round((t.total / Math.max(1, data.tools[0].total)) * 100),
+                              )}%`,
+                            }}
+                          />
+                        </div>
+                        <span className="w-20 shrink-0 text-right text-slate-500">
+                          {t.total} · {okPct}% ok
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="mt-3 text-xs italic text-slate-400">No tool calls in this window.</p>
+              )}
+            </section>
+          </div>
+        </>
+      )}
     </div>
   );
 }

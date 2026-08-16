@@ -6,6 +6,7 @@ import { format } from "date-fns";
 import { toast } from "sonner";
 import {
   Download,
+  FilePlus2,
   Loader2,
   Mic,
   Send,
@@ -18,10 +19,12 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useDictation } from "@/hooks/use-dictation";
 import {
+  FIRST_NOTICE_NUMBER,
   NOTICE_COMPANY,
   NOTICE_GREETING,
   NOTICE_SIGNOFF,
   displaySubject,
+  nextNoticeNumber,
   noticeParagraphs,
 } from "@/lib/notice";
 
@@ -41,7 +44,17 @@ export function NoticeGenerator({
   pastNotices?: SavedNotice[];
   clients?: ClientLite[];
 }) {
-  const [noticeNumber, setNoticeNumber] = React.useState("#00100");
+  // The notice number fills itself in: highest saved number + 1, exactly like
+  // the invoice generator. Once a notice is filed it keeps the number it went
+  // out under — "New notice" is what pulls the following one in.
+  const pastNumbers = pastNotices.map((n) => n.notice_number);
+  const [noticeNumber, setNoticeNumber] = React.useState(() =>
+    nextNoticeNumber(pastNumbers),
+  );
+  // What the next notice gets: everything saved plus whatever's on screen, so
+  // the series moves forward even before a save has refreshed the page data.
+  const nextNumber = nextNoticeNumber([...pastNumbers, noticeNumber]);
+
   const [noticeDate, setNoticeDate] = React.useState(
     format(new Date(), "yyyy-MM-dd"),
   );
@@ -52,6 +65,12 @@ export function NoticeGenerator({
   /** What the user dictated/typed — the raw intent the AI writes from. */
   const [rawInput, setRawInput] = React.useState("");
   const [loadedId, setLoadedId] = React.useState("");
+  /**
+   * The Past-notices row this on-screen notice is filed as — null until it's
+   * been saved. Re-saving (Download, then Send) updates that row rather than
+   * filing a second copy under the same number.
+   */
+  const [savedId, setSavedId] = React.useState<string | null>(null);
 
   const [writing, setWriting] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
@@ -72,22 +91,32 @@ export function NoticeGenerator({
     clearError();
   }, [dictationError, clearError]);
 
+  /** Clear the form for the next notice, with the next number filled in. */
+  const startNewNotice = () => {
+    setLoadedId("");
+    setSavedId(null);
+    setNoticeNumber(nextNumber);
+    setNoticeDate(format(new Date(), "yyyy-MM-dd"));
+    setToName("");
+    setToDetails("");
+    setSubject("");
+    setBody("");
+    setRawInput("");
+  };
+
   // Load a past notice back into the form — same "re-issue it" affordance the
   // invoice generator has. The blank option resets to a fresh notice.
   const loadPastNotice = (id: string) => {
     setLoadedId(id);
     const n = pastNotices.find((p) => p.id === id);
     if (!n) {
-      setNoticeNumber("#00100");
-      setNoticeDate(format(new Date(), "yyyy-MM-dd"));
-      setToName("");
-      setToDetails("");
-      setSubject("");
-      setBody("");
-      setRawInput("");
+      startNewNotice();
       return;
     }
-    setNoticeNumber(n.notice_number);
+    // Starting from a past notice files a fresh copy — the loaded row is left
+    // untouched, and this one goes out under the next number in the series.
+    setSavedId(null);
+    setNoticeNumber(nextNumber);
     setNoticeDate((n.notice_date || "").slice(0, 10));
     setToName(n.to_name || "");
     setToDetails(n.to_details || "");
@@ -163,9 +192,14 @@ export function NoticeGenerator({
     }
     setSaving(true);
     const payload = buildPayload();
-    const res = await saveNotice({ ...payload, source_input: rawInput });
+    const res = await saveNotice({
+      ...payload,
+      source_input: rawInput,
+      id: savedId ?? undefined,
+    });
     if (res.ok) {
-      toast.success("Saved to Past notices.");
+      setSavedId(res.id);
+      toast.success(`Saved to Past notices as ${payload.notice_number}.`);
       router.refresh();
     } else {
       toast.error(`Couldn't save: ${res.error}`);
@@ -188,11 +222,13 @@ export function NoticeGenerator({
     const res = await saveNotice({
       ...buildPayload(),
       source_input: rawInput,
+      id: savedId ?? undefined,
     });
     if (!res.ok) return null;
+    setSavedId(res.id);
     router.refresh();
     return res.id;
-  }, [buildPayload, rawInput, router]);
+  }, [buildPayload, rawInput, router, savedId]);
 
   const toLines = toDetails.split("\n").filter(Boolean);
   const displayDate = noticeDate
@@ -215,6 +251,13 @@ export function NoticeGenerator({
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {/* Only offered once the notice is filed, so it can't wipe a draft. */}
+          {savedId && (
+            <Button variant="outline" onClick={startNewNotice}>
+              <FilePlus2 className="h-4 w-4" />
+              New notice ({nextNumber})
+            </Button>
+          )}
           <Button
             variant="outline"
             onClick={() => setSendOpen(true)}
@@ -255,7 +298,7 @@ export function NoticeGenerator({
                 </select>
                 <p className="mt-1 text-[11px] text-slate-400">
                   Loads the notice&rsquo;s details so you can tweak it and send
-                  it out again.
+                  it out again — under the next notice number.
                 </p>
               </div>
             </section>
@@ -272,7 +315,7 @@ export function NoticeGenerator({
                   className={fieldCls}
                   value={noticeNumber}
                   onChange={(e) => setNoticeNumber(e.target.value)}
-                  placeholder="#00100"
+                  placeholder={FIRST_NOTICE_NUMBER}
                 />
               </div>
               <div>
@@ -285,6 +328,11 @@ export function NoticeGenerator({
                 />
               </div>
             </div>
+            <p className="mt-2 text-[11px] text-slate-400">
+              {savedId
+                ? `Filed as ${noticeNumber} — “New notice” starts ${nextNumber}.`
+                : "Follows on from the last notice — change it if you need to."}
+            </p>
           </section>
 
           <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[var(--shadow-card)]">

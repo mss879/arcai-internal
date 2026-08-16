@@ -53,13 +53,13 @@ export function invoiceBank(id: string | null | undefined): InvoiceBank {
 export const INVOICE_BANK = invoiceBank(DEFAULT_INVOICE_BANK_ID);
 
 /* ------------------------------------------------------------------ */
-/* Invoice numbering                                                    */
+/* Document numbering                                                   */
 /* ------------------------------------------------------------------ */
 
 /** Where the series starts when there isn't a single saved invoice yet. */
 export const FIRST_INVOICE_NUMBER = "#00200";
 
-type ParsedInvoiceNumber = {
+type ParsedDocumentNumber = {
   prefix: string;
   /** Zero-padded width of the numeric part, so "#00200" stays 5 digits wide. */
   width: number;
@@ -68,7 +68,7 @@ type ParsedInvoiceNumber = {
 };
 
 /** Split "#00200" into its "#" prefix and the 200 it counts from. */
-function parseInvoiceNumber(raw: string): ParsedInvoiceNumber | null {
+function parseDocumentNumber(raw: string): ParsedDocumentNumber | null {
   const match = /^(.*?)(\d+)(\D*)$/.exec((raw ?? "").trim());
   if (!match) return null;
   return {
@@ -80,21 +80,31 @@ function parseInvoiceNumber(raw: string): ParsedInvoiceNumber | null {
 }
 
 /**
- * The next number in the series: the highest number across every past invoice,
- * plus one, formatted exactly like that highest one ("#00204" → "#00205").
- * Numbers that carry no digits at all are skipped, and an empty history starts
- * the series at FIRST_INVOICE_NUMBER.
+ * The next number in a document series: the highest number across everything
+ * already filed, plus one, formatted exactly like that highest one ("#00204" →
+ * "#00205"). Numbers that carry no digits at all are skipped, and an empty
+ * history starts the series at `first`.
+ *
+ * Shared with notices (@/lib/notice) so both documents count the same way.
  */
-export function nextInvoiceNumber(existing: readonly string[]): string {
-  let highest: ParsedInvoiceNumber | null = null;
+export function nextDocumentNumber(
+  existing: readonly string[],
+  first: string,
+): string {
+  let highest: ParsedDocumentNumber | null = null;
   for (const raw of existing) {
-    const parsed = parseInvoiceNumber(raw);
+    const parsed = parseDocumentNumber(raw);
     if (!parsed) continue;
     if (!highest || parsed.value > highest.value) highest = parsed;
   }
-  if (!highest) return FIRST_INVOICE_NUMBER;
+  if (!highest) return first;
   const next = String(highest.value + 1).padStart(highest.width, "0");
   return `${highest.prefix}${next}${highest.suffix}`;
+}
+
+/** The next invoice number — the highest past one plus one. */
+export function nextInvoiceNumber(existing: readonly string[]): string {
+  return nextDocumentNumber(existing, FIRST_INVOICE_NUMBER);
 }
 
 export const INVOICE_SIGNOFF = {

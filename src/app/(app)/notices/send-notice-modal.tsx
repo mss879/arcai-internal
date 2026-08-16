@@ -60,13 +60,16 @@ export function SendNoticeModal({
   async function handleSend() {
     setSending(true);
     try {
+      // Snapshot the document as it stands the moment Send is clicked, so the
+      // copy that gets filed and the copy that gets emailed are the same one.
+      const notice = getNotice();
       // Persist first when sending from the generator, so the sent copy lands
       // in Past notices stamped with its recipient. A save failure isn't fatal
       // — the email is the point; it just goes out unstamped.
       const savedId = onSaved ? await onSaved() : null;
       const res = await sendNotice({
         id: noticeId ?? savedId ?? undefined,
-        notice: getNotice(),
+        notice,
         emails: [email],
         message,
       });

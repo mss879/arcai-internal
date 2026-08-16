@@ -1,4 +1,8 @@
-import { INVOICE_COMPANY, INVOICE_SIGNOFF } from "@/lib/invoice";
+import {
+  INVOICE_COMPANY,
+  INVOICE_SIGNOFF,
+  nextDocumentNumber,
+} from "@/lib/invoice";
 
 /**
  * A notice is the prose sibling of an invoice: identical letterhead, contact
@@ -16,6 +20,22 @@ export const NOTICE_SIGNOFF = INVOICE_SIGNOFF;
  * stored in the body, so it can never be edited away or duplicated by the AI.
  */
 export const NOTICE_GREETING = "Dear Client,";
+
+/* ------------------------------------------------------------------ */
+/* Notice numbering                                                     */
+/* ------------------------------------------------------------------ */
+
+/** Where the series starts when there isn't a single saved notice yet. */
+export const FIRST_NOTICE_NUMBER = "#00100";
+
+/**
+ * The next notice number: the highest number across every saved notice, plus
+ * one, formatted exactly like it ("#00104" → "#00105"). Counts the same way
+ * invoices do, so a notice never has to be numbered by hand.
+ */
+export function nextNoticeNumber(existing: readonly string[]): string {
+  return nextDocumentNumber(existing, FIRST_NOTICE_NUMBER);
+}
 
 /** Fallback subject when the user hasn't written (and AI hasn't proposed) one. */
 export const NOTICE_SUBJECT_FALLBACK = "NOTICE";

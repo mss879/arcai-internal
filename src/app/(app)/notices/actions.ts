@@ -19,7 +19,14 @@ export type SaveNoticeInput = {
 };
 
 export async function saveNotice(
-  input: SaveNoticeInput,
+  input: SaveNoticeInput & {
+    /**
+     * The row this notice is already filed as. Set on a re-save of the same
+     * document (Download, then Send) so it updates that row instead of filing
+     * a second copy under the same notice number.
+     */
+    id?: string;
+  },
 ): Promise<ActionResult<{ id: string }>> {
   const supabase = await createClient();
   const {
@@ -37,17 +44,34 @@ export async function saveNotice(
     return { ok: false, error: "The notice has no message yet." };
   }
 
+  const fields = {
+    notice_number: input.notice_number.trim(),
+    notice_date: input.notice_date,
+    to_name: input.to_name.trim(),
+    to_details: input.to_details,
+    subject: input.subject.trim(),
+    body: input.body,
+    source_input: input.source_input,
+  };
+
+  // Already filed: update that row. If it has since been deleted from Past
+  // notices the update matches nothing, and we fall through to a fresh insert.
+  if (input.id) {
+    const { data: updated } = await supabase
+      .from("notices")
+      .update(fields)
+      .eq("id", input.id)
+      .select("id")
+      .maybeSingle();
+    if (updated) {
+      revalidatePath("/notices");
+      return { ok: true, id: updated.id };
+    }
+  }
+
   const { data: inserted, error } = await supabase
     .from("notices")
-    .insert({
-      notice_number: input.notice_number.trim(),
-      notice_date: input.notice_date,
-      to_name: input.to_name.trim(),
-      to_details: input.to_details,
-      subject: input.subject.trim(),
-      body: input.body,
-      source_input: input.source_input,
-    })
+    .insert(fields)
     .select("id")
     .single();
 

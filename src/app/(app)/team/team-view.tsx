@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { format, formatDistanceToNow } from "date-fns";
 import { toast } from "sonner";
 import {
+  Activity,
   Calendar,
   ChevronRight,
   Copy,
@@ -46,12 +47,13 @@ import {
   updateMemberProfile,
   updateMemberRole,
 } from "./actions";
+import { ActivityModal } from "./activity-modal";
 
 type MemberCommission = Commission & {
   project?: { id: string; name: string } | null;
 };
 
-type MemberDevice = {
+export type MemberDevice = {
   id: string;
   user_id: string;
   label: string;
@@ -96,6 +98,7 @@ export function TeamView({
   const [toResetDevices, setToResetDevices] = React.useState<Profile | null>(
     null,
   );
+  const [activityFor, setActivityFor] = React.useState<Profile | null>(null);
 
   // Group commissions by member so each profile shows its own allocations.
   const commissionsByUser = React.useMemo(() => {
@@ -390,6 +393,14 @@ export function TeamView({
                 )}
                 {m.role === "member" && (
                   <DropdownItem
+                    icon={<Activity className="h-4 w-4" />}
+                    onClick={() => setActivityFor(m)}
+                  >
+                    Activity
+                  </DropdownItem>
+                )}
+                {m.role === "member" && (
+                  <DropdownItem
                     icon={<Smartphone className="h-4 w-4" />}
                     onClick={() => setToResetDevices(m)}
                   >
@@ -421,6 +432,12 @@ export function TeamView({
       />
 
       <EditMemberModal member={toEdit} onClose={() => setToEdit(null)} />
+
+      <ActivityModal
+        member={activityFor}
+        devices={activityFor ? devicesByUser.get(activityFor.id) ?? [] : []}
+        onClose={() => setActivityFor(null)}
+      />
 
       <ConfirmDialog
         open={!!toRemove}

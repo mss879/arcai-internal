@@ -2,6 +2,7 @@ import { Suspense } from "react";
 import { AppShell } from "@/components/layout/app-shell";
 import { DeviceTrustBanner } from "@/components/layout/device-trust-banner";
 import { Skeleton } from "@/components/ui/skeleton";
+import { bumpActivity } from "@/lib/activity";
 import { requireProfile } from "@/lib/auth";
 import { getDeviceStatus } from "@/lib/device-trust";
 import { createClient } from "@/lib/supabase/server";
@@ -39,6 +40,9 @@ async function AuthenticatedShell({
       .limit(20),
     // Members see the device-registration warning; admins are exempt.
     profile.role === "member" ? getDeviceStatus(profile.id) : null,
+    // Activity heartbeat for the admin login monitor (members only) —
+    // stretches the current login session's last_active_at, max once/minute.
+    profile.role === "member" ? bumpActivity(profile.id) : null,
   ]);
 
   return (

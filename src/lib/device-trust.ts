@@ -199,20 +199,28 @@ export const getDeviceStatus = cache(
 export async function registerDevice(
   userId: string,
   userAgent: string | null,
-): Promise<{ ok: true; label: string } | { ok: false; error: string }> {
+): Promise<
+  { ok: true; id: string; label: string } | { ok: false; error: string }
+> {
   if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
     return { ok: false, error: "Device registration isn't configured on the server." };
   }
   const token = newDeviceToken();
   const label = deviceLabelFromUA(userAgent);
-  const { error } = await createAdminClient().from("trusted_devices").insert({
-    user_id: userId,
-    token_hash: sha256(token),
-    label,
-    user_agent: userAgent,
-    last_used_at: new Date().toISOString(),
-  });
-  if (error) return { ok: false, error: error.message };
+  const { data, error } = await createAdminClient()
+    .from("trusted_devices")
+    .insert({
+      user_id: userId,
+      token_hash: sha256(token),
+      label,
+      user_agent: userAgent,
+      last_used_at: new Date().toISOString(),
+    })
+    .select("id")
+    .single();
+  if (error || !data) {
+    return { ok: false, error: error?.message ?? "Could not register device." };
+  }
   (await cookies()).set(deviceCookieName(userId), token, deviceCookieOptions());
-  return { ok: true, label };
+  return { ok: true, id: data.id, label };
 }

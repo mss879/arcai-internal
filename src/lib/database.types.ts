@@ -1261,6 +1261,38 @@ export type Database = {
         Update: Partial<Database["public"]["Tables"]["device_grace"]["Insert"]>;
         Relationships: [];
       };
+      login_sessions: {
+        Row: {
+          id: UUID;
+          user_id: UUID;
+          device_id: UUID | null;
+          device_label: string | null;
+          ip: string | null;
+          city: string | null;
+          region: string | null;
+          country: string | null;
+          user_agent: string | null;
+          logged_in_at: Timestamp;
+          last_active_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          user_id: UUID;
+          device_id?: UUID | null;
+          device_label?: string | null;
+          ip?: string | null;
+          city?: string | null;
+          region?: string | null;
+          country?: string | null;
+          user_agent?: string | null;
+          logged_in_at?: Timestamp;
+          last_active_at?: Timestamp;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["login_sessions"]["Insert"]
+        >;
+        Relationships: [];
+      };
       sms_workflows: {
         Row: {
           id: UUID;

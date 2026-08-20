@@ -1,8 +1,15 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { cookies, headers } from "next/headers";
 
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
+import {
+  deviceCookieName,
+  registerDevice,
+  sha256,
+} from "@/lib/device-trust";
 import { normalizePhone } from "@/lib/sms-utils";
 import type { Database } from "@/lib/database.types";
 import type { ActionResult } from "@/lib/types";
@@ -54,6 +61,61 @@ export async function changePassword(
   const supabase = await createClient();
   const { error } = await supabase.auth.updateUser({ password: newPassword });
   if (error) return { ok: false, error: error.message };
+  return { ok: true };
+}
+
+/**
+ * Register the CURRENT browser as the member's FIRST trusted device.
+ * From that moment only trusted devices can sign in; the second device
+ * joins via the SMS code on the login screen. Members can never remove
+ * devices — only admins reset them from the Team page.
+ */
+export async function trustDevice(): Promise<ActionResult> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+
+  const admin = createAdminClient();
+  const { data: prof } = await admin
+    .from("profiles")
+    .select("role")
+    .eq("id", user.id)
+    .maybeSingle();
+  if (prof?.role !== "member") {
+    return { ok: false, error: "Admins are exempt from device locking." };
+  }
+
+  const { data: devices, error } = await admin
+    .from("trusted_devices")
+    .select("id, token_hash")
+    .eq("user_id", user.id);
+  if (error) return { ok: false, error: error.message };
+
+  const raw = (await cookies()).get(deviceCookieName(user.id))?.value;
+  if (raw && (devices ?? []).some((d) => d.token_hash === sha256(raw))) {
+    return { ok: false, error: "This device is already trusted." };
+  }
+  if ((devices ?? []).length >= 2) {
+    return {
+      ok: false,
+      error: "You've already registered 2 devices — ask an admin to reset them.",
+    };
+  }
+  if ((devices ?? []).length >= 1) {
+    return {
+      ok: false,
+      error:
+        "Your first device is already registered. To add this one, log in here and tap “Text me a code”.",
+    };
+  }
+
+  const ua = (await headers()).get("user-agent");
+  const res = await registerDevice(user.id, ua);
+  if (!res.ok) return res;
+
+  revalidatePath("/profile");
   return { ok: true };
 }
 

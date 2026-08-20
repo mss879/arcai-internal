@@ -1217,6 +1217,50 @@ export type Database = {
         >;
         Relationships: [];
       };
+      trusted_devices: {
+        Row: {
+          id: UUID;
+          user_id: UUID;
+          token_hash: string;
+          label: string;
+          user_agent: string | null;
+          created_at: Timestamp;
+          last_used_at: Timestamp | null;
+        };
+        Insert: {
+          id?: UUID;
+          user_id: UUID;
+          token_hash: string;
+          label?: string;
+          user_agent?: string | null;
+          created_at?: Timestamp;
+          last_used_at?: Timestamp | null;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["trusted_devices"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      device_grace: {
+        Row: {
+          user_id: UUID;
+          started_at: Timestamp;
+          pair_code_hash: string | null;
+          pair_code_expires_at: Timestamp | null;
+          pair_code_attempts: number;
+          pair_code_sent_at: Timestamp | null;
+        };
+        Insert: {
+          user_id: UUID;
+          started_at?: Timestamp;
+          pair_code_hash?: string | null;
+          pair_code_expires_at?: Timestamp | null;
+          pair_code_attempts?: number;
+          pair_code_sent_at?: Timestamp | null;
+        };
+        Update: Partial<Database["public"]["Tables"]["device_grace"]["Insert"]>;
+        Relationships: [];
+      };
       sms_workflows: {
         Row: {
           id: UUID;

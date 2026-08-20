@@ -19,6 +19,10 @@ import type { Commission, Profile } from "@/lib/types";
 
 import { changePassword, updateProfile } from "./actions";
 import { PushToggle } from "./push-toggle";
+import {
+  TrustedDevicesCard,
+  type TrustedDeviceInfo,
+} from "./trusted-devices-card";
 
 type CommissionRow = Commission & {
   project?: { id: string; name: string } | null;
@@ -27,9 +31,14 @@ type CommissionRow = Commission & {
 export function ProfileView({
   profile,
   commissions,
+  trustedDevices,
+  phoneMask,
 }: {
   profile: Profile;
   commissions: CommissionRow[];
+  /** null for admins — they're exempt from the device lock. */
+  trustedDevices: TrustedDeviceInfo[] | null;
+  phoneMask: string | null;
 }) {
   const router = useRouter();
   const [fullName, setFullName] = React.useState(profile.full_name);
@@ -205,6 +214,13 @@ export function ProfileView({
               </Button>
             </div>
           </div>
+
+          {trustedDevices && (
+            <TrustedDevicesCard
+              devices={trustedDevices}
+              phoneMask={phoneMask}
+            />
+          )}
 
           <PushToggle />
         </div>

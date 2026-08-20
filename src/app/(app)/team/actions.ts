@@ -125,6 +125,28 @@ export async function updateMemberProfile(
   return { ok: true };
 }
 
+/**
+ * Wipe a member's trusted devices AND their 48h registration window.
+ * They can then sign in from anywhere again and get a fresh 48 hours to
+ * register new devices. Admin only — members can never remove devices.
+ */
+export async function resetMemberDevices(userId: string): Promise<ActionResult> {
+  await requireAdmin();
+  const svc = createAdminClient();
+  const { error: devicesError } = await svc
+    .from("trusted_devices")
+    .delete()
+    .eq("user_id", userId);
+  if (devicesError) return { ok: false, error: devicesError.message };
+  const { error: graceError } = await svc
+    .from("device_grace")
+    .delete()
+    .eq("user_id", userId);
+  if (graceError) return { ok: false, error: graceError.message };
+  revalidatePath("/team");
+  return { ok: true };
+}
+
 export async function removeMember(userId: string): Promise<ActionResult> {
   const admin = await requireAdmin();
   if (userId === admin.id) {

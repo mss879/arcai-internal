@@ -1,7 +1,9 @@
 import { Suspense } from "react";
 import { AppShell } from "@/components/layout/app-shell";
+import { DeviceTrustBanner } from "@/components/layout/device-trust-banner";
 import { Skeleton } from "@/components/ui/skeleton";
 import { requireProfile } from "@/lib/auth";
+import { getDeviceStatus } from "@/lib/device-trust";
 import { createClient } from "@/lib/supabase/server";
 
 /** Static shell painted while the profile + notifications resolve, so a
@@ -29,14 +31,27 @@ async function AuthenticatedShell({
   const profile = await requireProfile();
   const supabase = await createClient();
 
-  const { data: notifications } = await supabase
-    .from("notifications")
-    .select("id, type, title, body, link, read, created_at")
-    .order("created_at", { ascending: false })
-    .limit(20);
+  const [{ data: notifications }, deviceStatus] = await Promise.all([
+    supabase
+      .from("notifications")
+      .select("id, type, title, body, link, read, created_at")
+      .order("created_at", { ascending: false })
+      .limit(20),
+    // Members see the device-registration warning; admins are exempt.
+    profile.role === "member" ? getDeviceStatus(profile.id) : null,
+  ]);
 
   return (
     <AppShell profile={profile} notifications={notifications ?? []}>
+      {deviceStatus && (
+        <DeviceTrustBanner
+          devicesCount={deviceStatus.devices.length}
+          currentDeviceTrusted={deviceStatus.currentDeviceTrusted}
+          graceDeadline={deviceStatus.graceDeadline}
+          withinGrace={deviceStatus.withinGrace}
+          phoneOnFile={!!profile.phone}
+        />
+      )}
       {children}
     </AppShell>
   );

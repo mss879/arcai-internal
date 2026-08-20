@@ -2,6 +2,7 @@ import { cache } from "react";
 import { redirect } from "next/navigation";
 import type { User } from "@supabase/supabase-js";
 
+import { getDeviceStatus } from "@/lib/device-trust";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { usernameFromName } from "@/lib/utils";
@@ -91,7 +92,15 @@ export const getProfile = cache(async (): Promise<Profile | null> => {
     .eq("id", userId)
     .maybeSingle();
 
-  if (data) return data;
+  if (data) {
+    // Device lock: members may only use trusted devices (admins are exempt).
+    // A blocked member is treated as signed-out everywhere — pages redirect
+    // to /login and API routes 401 — until they sign in from a trusted device.
+    if (data.role === "member" && (await getDeviceStatus(data.id)).blocked) {
+      return null;
+    }
+    return data;
+  }
 
   // No profile row yet — fetch the full user object to self-heal.
   const {

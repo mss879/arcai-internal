@@ -9,12 +9,14 @@ import {
   ChevronRight,
   Copy,
   Mail,
+  MonitorSmartphone,
   MoreVertical,
   Pencil,
   Phone,
   Send,
   Shield,
   ShieldCheck,
+  Smartphone,
   Trash2,
   UserPlus,
   Users,
@@ -39,6 +41,7 @@ import type { Commission, Invitation, Profile, UserRole } from "@/lib/types";
 import {
   createInvite,
   removeMember,
+  resetMemberDevices,
   revokeInvite,
   updateMemberProfile,
   updateMemberRole,
@@ -48,20 +51,37 @@ type MemberCommission = Commission & {
   project?: { id: string; name: string } | null;
 };
 
+type MemberDevice = {
+  id: string;
+  user_id: string;
+  label: string;
+  created_at: string;
+  last_used_at: string | null;
+};
+
+type MemberGrace = { user_id: string; started_at: string };
+
+/** Keep in sync with GRACE_HOURS in src/lib/device-trust.ts (server-only). */
+const DEVICE_GRACE_HOURS = 48;
+
 export function TeamView({
   members,
   invitations,
   commissions,
+  trustedDevices,
+  deviceGrace,
   currentUserId,
   appBaseUrl,
 }: {
   members: Profile[];
   invitations: Invitation[];
   commissions: MemberCommission[];
+  trustedDevices: MemberDevice[];
+  deviceGrace: MemberGrace[];
   currentUserId: string;
   appBaseUrl: string;
 }) {
-  useRealtimeSyncTables(["profiles", "invitations"]);
+  useRealtimeSyncTables(["profiles", "invitations", "trusted_devices"]);
   const router = useRouter();
   const [email, setEmail] = React.useState("");
   const [role, setRole] = React.useState<UserRole>("member");
@@ -73,6 +93,9 @@ export function TeamView({
   const [toRemove, setToRemove] = React.useState<Profile | null>(null);
   const [selected, setSelected] = React.useState<Profile | null>(null);
   const [toEdit, setToEdit] = React.useState<Profile | null>(null);
+  const [toResetDevices, setToResetDevices] = React.useState<Profile | null>(
+    null,
+  );
 
   // Group commissions by member so each profile shows its own allocations.
   const commissionsByUser = React.useMemo(() => {
@@ -84,6 +107,22 @@ export function TeamView({
     }
     return map;
   }, [commissions]);
+
+  const devicesByUser = React.useMemo(() => {
+    const map = new Map<string, MemberDevice[]>();
+    for (const d of trustedDevices) {
+      const list = map.get(d.user_id);
+      if (list) list.push(d);
+      else map.set(d.user_id, [d]);
+    }
+    return map;
+  }, [trustedDevices]);
+
+  const graceByUser = React.useMemo(() => {
+    const map = new Map<string, MemberGrace>();
+    for (const g of deviceGrace) map.set(g.user_id, g);
+    return map;
+  }, [deviceGrace]);
 
   const pending = invitations.filter((i) => i.status === "pending");
   const adminCount = members.filter((m) => m.role === "admin").length;
@@ -349,6 +388,14 @@ export function TeamView({
                     Make member
                   </DropdownItem>
                 )}
+                {m.role === "member" && (
+                  <DropdownItem
+                    icon={<Smartphone className="h-4 w-4" />}
+                    onClick={() => setToResetDevices(m)}
+                  >
+                    Reset trusted devices
+                  </DropdownItem>
+                )}
                 <DropdownItem
                   destructive
                   icon={<Trash2 className="h-4 w-4" />}
@@ -365,6 +412,10 @@ export function TeamView({
       <MemberDetailModal
         member={selected}
         commissions={selected ? commissionsByUser.get(selected.id) ?? [] : []}
+        devices={selected ? devicesByUser.get(selected.id) ?? [] : []}
+        graceStartedAt={
+          selected ? graceByUser.get(selected.id)?.started_at ?? null : null
+        }
         isYou={selected?.id === currentUserId}
         onClose={() => setSelected(null)}
       />
@@ -382,6 +433,24 @@ export function TeamView({
           const res = await removeMember(toRemove.id);
           if (res.ok) {
             toast.success("Member removed");
+            router.refresh();
+          } else toast.error(res.error);
+        }}
+      />
+
+      <ConfirmDialog
+        open={!!toResetDevices}
+        onClose={() => setToResetDevices(null)}
+        title="Reset trusted devices"
+        description={`Reset ${
+          toResetDevices?.full_name || toResetDevices?.username
+        }'s trusted devices? Their registered devices will be removed and they'll get a fresh 48-hour window to register new ones.`}
+        confirmLabel="Reset devices"
+        onConfirm={async () => {
+          if (!toResetDevices) return;
+          const res = await resetMemberDevices(toResetDevices.id);
+          if (res.ok) {
+            toast.success("Trusted devices reset");
             router.refresh();
           } else toast.error(res.error);
         }}
@@ -497,14 +566,33 @@ function EditMemberModal({
 function MemberDetailModal({
   member,
   commissions,
+  devices,
+  graceStartedAt,
   isYou,
   onClose,
 }: {
   member: Profile | null;
   commissions: MemberCommission[];
+  devices: MemberDevice[];
+  graceStartedAt: string | null;
   isYou: boolean;
   onClose: () => void;
 }) {
+  const deviceStatus = React.useMemo(() => {
+    if (!member || member.role !== "member") return null;
+    if (devices.length >= 2) return "Locked to their 2 registered devices.";
+    if (devices.length === 1)
+      return "1 of 2 devices registered — the second joins via SMS code at login.";
+    if (!graceStartedAt)
+      return "Registration window hasn't started — begins at their next sign-in.";
+    const deadline = new Date(
+      new Date(graceStartedAt).getTime() + DEVICE_GRACE_HOURS * 3_600_000,
+    );
+    if (Date.now() < deadline.getTime())
+      return `Must trust a device by ${format(deadline, "MMM d, h:mm a")}.`;
+    return "Locked out — reset devices to grant a new 48-hour window.";
+  }, [member, devices, graceStartedAt]);
+
   const totals = React.useMemo(() => {
     const sum = (pred: (c: MemberCommission) => boolean) =>
       commissions.filter(pred).reduce((s, c) => s + Number(c.amount), 0);
@@ -572,6 +660,51 @@ function MemberDetailModal({
                 : "No phone — SMS alerts off"}
             </div>
           </div>
+
+          {/* Trusted devices (members only — admins are exempt) */}
+          {member.role === "member" && (
+            <div className="rounded-2xl border border-slate-200/80">
+              <div className="flex items-center gap-2 border-b border-slate-100 px-4 py-3">
+                <MonitorSmartphone className="h-4 w-4 text-primary-500" />
+                <h4 className="text-sm font-semibold text-slate-900">
+                  Trusted devices
+                </h4>
+                <span className="text-xs text-slate-400">
+                  ({devices.length}/2)
+                </span>
+              </div>
+              <div className="px-4 py-3">
+                {deviceStatus && (
+                  <p className="text-xs text-slate-500">{deviceStatus}</p>
+                )}
+                {!member.phone && devices.length < 2 && (
+                  <p className="mt-1 text-xs font-medium text-amber-600">
+                    No phone on file — SMS device codes can&apos;t be
+                    delivered.
+                  </p>
+                )}
+                {devices.length > 0 && (
+                  <ul className="mt-2.5 space-y-1.5">
+                    {devices.map((d) => (
+                      <li
+                        key={d.id}
+                        className="flex items-center justify-between gap-3 rounded-lg bg-slate-50 px-3 py-2"
+                      >
+                        <span className="text-sm font-medium text-slate-800">
+                          {d.label}
+                        </span>
+                        <span className="text-xs text-slate-400">
+                          Registered {format(new Date(d.created_at), "MMM d, yyyy")}
+                          {d.last_used_at &&
+                            ` · used ${format(new Date(d.last_used_at), "MMM d")}`}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Commission summary */}
           <div className="grid grid-cols-3 gap-3">

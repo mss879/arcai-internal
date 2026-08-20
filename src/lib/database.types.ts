@@ -1293,6 +1293,32 @@ export type Database = {
         >;
         Relationships: [];
       };
+      member_changes: {
+        Row: {
+          id: number;
+          user_id: UUID;
+          table_name: string;
+          op: "created" | "updated" | "deleted";
+          row_id: string | null;
+          label: string | null;
+          changed_fields: string[] | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: number;
+          user_id: UUID;
+          table_name: string;
+          op: "created" | "updated" | "deleted";
+          row_id?: string | null;
+          label?: string | null;
+          changed_fields?: string[] | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["member_changes"]["Insert"]
+        >;
+        Relationships: [];
+      };
       sms_workflows: {
         Row: {
           id: UUID;

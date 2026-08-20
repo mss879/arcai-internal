@@ -8,7 +8,12 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { sendInviteEmail } from "@/lib/email";
 import { normalizePhone } from "@/lib/sms-utils";
-import type { ActionResult, LoginSession, UserRole } from "@/lib/types";
+import type {
+  ActionResult,
+  LoginSession,
+  MemberChange,
+  UserRole,
+} from "@/lib/types";
 import type { Database } from "@/lib/database.types";
 
 /** Create an invitation and email a join link. Admin only. */
@@ -126,25 +131,48 @@ export async function updateMemberProfile(
 }
 
 /**
- * A member's login history for the admin Activity view — every sign-in of
- * the last 30 days with time, device, IP and location, newest first.
+ * A member's activity for the admin Activity view, last 30 days: every
+ * sign-in (time, device, IP, location) and every change they made
+ * (creates/updates/deletes captured by the member_changes audit trigger),
+ * newest first. The Analytics tab is computed client-side from both.
  */
 export async function getMemberActivity(
   userId: string,
-): Promise<ActionResult<{ sessions: LoginSession[] }>> {
+): Promise<
+  ActionResult<{ sessions: LoginSession[]; changes: MemberChange[] }>
+> {
   await requireAdmin();
   const supabase = await createClient();
   const sinceDate = new Date();
   sinceDate.setDate(sinceDate.getDate() - 30);
-  const { data, error } = await supabase
-    .from("login_sessions")
-    .select("*")
-    .eq("user_id", userId)
-    .gte("logged_in_at", sinceDate.toISOString())
-    .order("logged_in_at", { ascending: false })
-    .limit(300);
-  if (error) return { ok: false, error: error.message };
-  return { ok: true, sessions: (data ?? []) as LoginSession[] };
+  const since = sinceDate.toISOString();
+
+  const [sessionsRes, changesRes] = await Promise.all([
+    supabase
+      .from("login_sessions")
+      .select("*")
+      .eq("user_id", userId)
+      .gte("logged_in_at", since)
+      .order("logged_in_at", { ascending: false })
+      .limit(300),
+    supabase
+      .from("member_changes")
+      .select("*")
+      .eq("user_id", userId)
+      .gte("created_at", since)
+      .order("created_at", { ascending: false })
+      .limit(1000),
+  ]);
+  if (sessionsRes.error) return { ok: false, error: sessionsRes.error.message };
+  // Changes degrade gracefully while migration 0081 isn't applied yet.
+  const changes = changesRes.error
+    ? []
+    : ((changesRes.data ?? []) as MemberChange[]);
+  return {
+    ok: true,
+    sessions: (sessionsRes.data ?? []) as LoginSession[],
+    changes,
+  };
 }
 
 /**

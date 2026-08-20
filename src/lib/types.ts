@@ -8,6 +8,7 @@ export type Invitation = Tables["invitations"]["Row"];
 export type TrustedDevice = Tables["trusted_devices"]["Row"];
 export type DeviceGrace = Tables["device_grace"]["Row"];
 export type LoginSession = Tables["login_sessions"]["Row"];
+export type MemberChange = Tables["member_changes"]["Row"];
 export type Client = Tables["clients"]["Row"];
 export type Todo = Tables["todos"]["Row"];
 export type TodoMention = Tables["todo_mentions"]["Row"];

@@ -1,3 +1,4 @@
+import { requireAdmin } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { isOpenAIConfigured } from "@/lib/ai/openai";
 import { isSmsConfigured } from "@/lib/sms";
@@ -15,6 +16,9 @@ import { IntelligenceView } from "./intelligence-view";
 export const metadata = { title: "AI & Intelligence" };
 
 export default async function IntelligencePage() {
+  // Admin-only: members don't see this menu item, and typing the URL
+  // bounces them back to the dashboard.
+  await requireAdmin();
   const supabase = await createClient();
   const monthAgoDate = new Date();
   monthAgoDate.setDate(monthAgoDate.getDate() - 30);

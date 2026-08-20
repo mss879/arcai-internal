@@ -137,7 +137,9 @@ export function Sidebar({
         ) : (
           <div className="h-px bg-white/10 my-4 mx-2" />
         )}
-        {NAV.map((item) => (
+        {NAV.filter(
+          (item) => !item.adminOnly || profile.role === "admin",
+        ).map((item) => (
           <NavLink
             key={item.href}
             item={item}

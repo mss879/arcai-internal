@@ -26,6 +26,8 @@ export type NavItem = {
   label: string;
   href: string;
   icon: LucideIcon;
+  /** Hidden from members; the route must also gate itself server-side. */
+  adminOnly?: boolean;
 };
 
 export const NAV: NavItem[] = [
@@ -37,7 +39,12 @@ export const NAV: NavItem[] = [
   { label: "CRM Pipeline", href: "/crm", icon: KanbanSquare },
   { label: "Automation", href: "/automation", icon: Zap },
   { label: "Money & Finance", href: "/finance", icon: Landmark },
-  { label: "AI & Intelligence", href: "/intelligence", icon: BrainCircuit },
+  {
+    label: "AI & Intelligence",
+    href: "/intelligence",
+    icon: BrainCircuit,
+    adminOnly: true,
+  },
   { label: "Meetings", href: "/meetings", icon: CalendarClock },
   { label: "Payments", href: "/payments", icon: CreditCard },
   { label: "Invoices & Quotes", href: "/invoices", icon: FileText },

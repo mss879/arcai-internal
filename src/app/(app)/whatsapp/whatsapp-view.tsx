@@ -183,6 +183,7 @@ export function WhatsappView({
   waReady,
   aiReady,
   appBaseUrl,
+  isAdmin,
 }: {
   contacts: WaContact[];
   messages: WaMessage[];
@@ -203,6 +204,8 @@ export function WhatsappView({
   waReady: boolean;
   aiReady: boolean;
   appBaseUrl: string;
+  /** Members are locked to the Inbox tab; everything else is admin-only. */
+  isAdmin: boolean;
 }) {
   useRealtimeSyncTables([
     "wa_contacts",
@@ -214,6 +217,8 @@ export function WhatsappView({
     "wa_lessons",
   ]);
   const [tab, setTab] = React.useState<Tab>("inbox");
+  // Hard stop for members: whatever the state says, they only ever render Inbox.
+  const activeTab: Tab = isAdmin ? tab : "inbox";
 
   const attention = contacts.filter((c) => c.needs_attention).length;
   const unread = contacts.reduce((s, c) => s + (c.unread ?? 0), 0);
@@ -268,38 +273,41 @@ export function WhatsappView({
         </div>
       </div>
 
-      <div className="flex flex-wrap gap-2">
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            onClick={() => setTab(t.key)}
-            className={cn(
-              "inline-flex h-10 items-center gap-2 rounded-xl px-4 text-sm font-medium transition-colors",
-              tab === t.key
-                ? "bg-primary-600 text-white shadow-sm"
-                : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50",
-            )}
-          >
-            {t.icon}
-            {t.label}
-            {t.badge ? (
-              <span
-                className={cn(
-                  "rounded-full px-1.5 text-[11px] font-semibold",
-                  tab === t.key ? "bg-white/20 text-white" : "bg-emerald-100 text-emerald-700",
-                )}
-              >
-                {t.badge}
-              </span>
-            ) : null}
-          </button>
-        ))}
-      </div>
+      {/* Members only ever see the Inbox — no tab strip to switch away. */}
+      {isAdmin && (
+        <div className="flex flex-wrap gap-2">
+          {TABS.map((t) => (
+            <button
+              key={t.key}
+              onClick={() => setTab(t.key)}
+              className={cn(
+                "inline-flex h-10 items-center gap-2 rounded-xl px-4 text-sm font-medium transition-colors",
+                tab === t.key
+                  ? "bg-primary-600 text-white shadow-sm"
+                  : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50",
+              )}
+            >
+              {t.icon}
+              {t.label}
+              {t.badge ? (
+                <span
+                  className={cn(
+                    "rounded-full px-1.5 text-[11px] font-semibold",
+                    tab === t.key ? "bg-white/20 text-white" : "bg-emerald-100 text-emerald-700",
+                  )}
+                >
+                  {t.badge}
+                </span>
+              ) : null}
+            </button>
+          ))}
+        </div>
+      )}
 
-      {tab === "inbox" && (
+      {activeTab === "inbox" && (
         <InboxTab contacts={contacts} messages={messages} promises={promises} waReady={waReady} appBaseUrl={appBaseUrl} />
       )}
-      {tab === "agent" && (
+      {activeTab === "agent" && isAdmin && (
         <AgentTab
           config={config}
           pipelines={pipelines}
@@ -310,7 +318,7 @@ export function WhatsappView({
           appBaseUrl={appBaseUrl}
         />
       )}
-      {tab === "campaign" && (
+      {activeTab === "campaign" && isAdmin && (
         <CampaignTab
           config={config}
           campaigns={campaigns}
@@ -320,7 +328,7 @@ export function WhatsappView({
           aiReady={aiReady}
         />
       )}
-      {tab === "cold" && (
+      {activeTab === "cold" && isAdmin && (
         <ColdOutreachTab
           config={config}
           pipelines={pipelines}
@@ -331,9 +339,13 @@ export function WhatsappView({
           waReady={waReady}
         />
       )}
-      {tab === "keywords" && <KeywordsTab rules={rules} automations={automations} />}
-      {tab === "activity" && <ActivityTab logs={logs} contacts={contacts} />}
-      {tab === "analytics" && <AnalyticsTab />}
+      {activeTab === "keywords" && isAdmin && (
+        <KeywordsTab rules={rules} automations={automations} />
+      )}
+      {activeTab === "activity" && isAdmin && (
+        <ActivityTab logs={logs} contacts={contacts} />
+      )}
+      {activeTab === "analytics" && isAdmin && <AnalyticsTab />}
     </div>
   );
 }

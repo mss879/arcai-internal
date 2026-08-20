@@ -1,4 +1,5 @@
 import { isOpenAIConfigured } from "@/lib/ai/openai";
+import { requireProfile } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { previewColdQueue } from "@/lib/wa-cold-outreach";
 import type {
@@ -79,6 +80,8 @@ async function buildCampaignStats(
 }
 
 export default async function WhatsappPage() {
+  // Members only get the Inbox tab; everything else is admin-only.
+  const profile = await requireProfile();
   const supabase = await createClient();
 
   const [
@@ -240,6 +243,7 @@ export default async function WhatsappPage() {
       waReady={isWhatsAppConfigured()}
       aiReady={isOpenAIConfigured()}
       appBaseUrl={process.env.NEXT_PUBLIC_APP_URL ?? ""}
+      isAdmin={profile.role === "admin"}
     />
   );
 }

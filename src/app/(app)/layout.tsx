@@ -1,6 +1,8 @@
 import { Suspense } from "react";
 import { AppShell } from "@/components/layout/app-shell";
 import { DeviceTrustBanner } from "@/components/layout/device-trust-banner";
+import { PingListener } from "@/components/layout/ping-listener";
+import { ScreenshotSentry } from "@/components/layout/screenshot-sentry";
 import { Skeleton } from "@/components/ui/skeleton";
 import { bumpActivity } from "@/lib/activity";
 import { requireProfile } from "@/lib/auth";
@@ -47,6 +49,13 @@ async function AuthenticatedShell({
 
   return (
     <AppShell profile={profile} notifications={notifications ?? []}>
+      {profile.role === "member" && <ScreenshotSentry />}
+      {profile.role === "member" && (
+        <PingListener
+          userId={profile.id}
+          selfName={profile.full_name || profile.username}
+        />
+      )}
       {deviceStatus && (
         <DeviceTrustBanner
           devicesCount={deviceStatus.devices.length}

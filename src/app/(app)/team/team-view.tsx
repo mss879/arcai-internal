@@ -7,9 +7,9 @@ import { toast } from "sonner";
 import {
   Activity,
   Calendar,
-  ChevronRight,
   Copy,
   Mail,
+  MessageSquareText,
   MonitorSmartphone,
   MoreVertical,
   Pencil,
@@ -48,6 +48,7 @@ import {
   updateMemberRole,
 } from "./actions";
 import { ActivityModal } from "./activity-modal";
+import { PingModal } from "./ping-modal";
 
 type MemberCommission = Commission & {
   project?: { id: string; name: string } | null;
@@ -72,7 +73,9 @@ export function TeamView({
   commissions,
   trustedDevices,
   deviceGrace,
+  onlineUserIds,
   currentUserId,
+  currentUserName,
   appBaseUrl,
 }: {
   members: Profile[];
@@ -80,10 +83,13 @@ export function TeamView({
   commissions: MemberCommission[];
   trustedDevices: MemberDevice[];
   deviceGrace: MemberGrace[];
+  onlineUserIds: string[];
   currentUserId: string;
+  currentUserName: string;
   appBaseUrl: string;
 }) {
-  useRealtimeSyncTables(["profiles", "invitations", "trusted_devices"]);
+  // login_sessions heartbeats keep the "online now" dots fresh.
+  useRealtimeSyncTables(["profiles", "invitations", "trusted_devices", "login_sessions"]);
   const router = useRouter();
   const [email, setEmail] = React.useState("");
   const [role, setRole] = React.useState<UserRole>("member");
@@ -99,6 +105,9 @@ export function TeamView({
     null,
   );
   const [activityFor, setActivityFor] = React.useState<Profile | null>(null);
+  const [toMessage, setToMessage] = React.useState<Profile | null>(null);
+
+  const onlineSet = React.useMemo(() => new Set(onlineUserIds), [onlineUserIds]);
 
   // Group commissions by member so each profile shows its own allocations.
   const commissionsByUser = React.useMemo(() => {
@@ -289,135 +298,192 @@ export function TeamView({
         </div>
       )}
 
-      {/* Members */}
-      <div className="rounded-2xl border border-slate-200/80 bg-white shadow-[var(--shadow-card)]">
-        <div className="border-b border-slate-100 px-5 py-3.5">
-          <h2 className="text-sm font-semibold text-slate-900">
-            Members ({members.length})
-          </h2>
-        </div>
-        <ul className="divide-y divide-slate-50">
-          {members.map((m) => (
-            <li
-              key={m.id}
-              className="flex items-center gap-3 px-5 py-3.5 hover:bg-slate-50/60"
-            >
-              <button
-                type="button"
-                onClick={() => setSelected(m)}
-                className="-my-1.5 flex min-w-0 flex-1 items-center gap-3 rounded-lg py-1.5 text-left transition hover:opacity-80"
-                title="View member details"
+      {/* Members — a profile card each */}
+      <div>
+        <h2 className="mb-3 text-sm font-semibold text-slate-900">
+          Members ({members.length})
+        </h2>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          {members.map((m) => {
+            const commissionTotal = (commissionsByUser.get(m.id) ?? []).reduce(
+              (s, c) => s + Number(c.amount),
+              0,
+            );
+            const deviceCount = (devicesByUser.get(m.id) ?? []).length;
+            // Presence is only tracked for members (the activity heartbeat).
+            const online = m.role === "member" && onlineSet.has(m.id);
+            // hover/focus-within raise the card so its ⋮ menu, which can hang
+            // past the card's bottom edge, isn't painted under the next card.
+            return (
+              <div
+                key={m.id}
+                className="relative flex flex-col rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[var(--shadow-card)] transition hover:z-10 hover:-translate-y-0.5 hover:shadow-[var(--shadow-lift)] focus-within:z-10"
               >
-                <Avatar name={m.full_name} src={m.avatar_url} size="sm" />
-                <div className="min-w-0 flex-1">
-                  <p className="flex items-center gap-2 text-sm font-medium text-slate-900">
-                    <span className="truncate">{m.full_name || m.username}</span>
+                <div className="absolute right-2.5 top-2.5">
+                  <Dropdown
+                    trigger={
+                      <button className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700">
+                        <MoreVertical className="h-4 w-4" />
+                      </button>
+                    }
+                  >
+                    <DropdownItem
+                      icon={<Pencil className="h-4 w-4" />}
+                      onClick={() => setToEdit(m)}
+                    >
+                      Edit profile
+                    </DropdownItem>
+                    {m.role === "member" ? (
+                      <DropdownItem
+                        icon={<ShieldCheck className="h-4 w-4" />}
+                        onClick={async () => {
+                          const res = await updateMemberRole(m.id, "admin");
+                          if (res.ok) {
+                            toast.success("Promoted to admin");
+                            router.refresh();
+                          } else toast.error(res.error);
+                        }}
+                      >
+                        Make admin
+                      </DropdownItem>
+                    ) : (
+                      <DropdownItem
+                        icon={<Shield className="h-4 w-4" />}
+                        onClick={async () => {
+                          const res = await updateMemberRole(m.id, "member");
+                          if (res.ok) {
+                            toast.success("Changed to member");
+                            router.refresh();
+                          } else toast.error(res.error);
+                        }}
+                      >
+                        Make member
+                      </DropdownItem>
+                    )}
+                    {online && (
+                      <DropdownItem
+                        icon={<MessageSquareText className="h-4 w-4" />}
+                        onClick={() => setToMessage(m)}
+                      >
+                        Send pop-up message
+                      </DropdownItem>
+                    )}
+                    {m.role === "member" && (
+                      <DropdownItem
+                        icon={<Activity className="h-4 w-4" />}
+                        onClick={() => setActivityFor(m)}
+                      >
+                        Activity
+                      </DropdownItem>
+                    )}
+                    {m.role === "member" && (
+                      <DropdownItem
+                        icon={<Smartphone className="h-4 w-4" />}
+                        onClick={() => setToResetDevices(m)}
+                      >
+                        Reset trusted devices
+                      </DropdownItem>
+                    )}
+                    <DropdownItem
+                      destructive
+                      icon={<Trash2 className="h-4 w-4" />}
+                      onClick={() => setToRemove(m)}
+                    >
+                      Remove from workspace
+                    </DropdownItem>
+                  </Dropdown>
+                </div>
+
+                {/* Identity — the whole block opens the member's details */}
+                <button
+                  type="button"
+                  onClick={() => setSelected(m)}
+                  className="flex w-full flex-col items-center px-2 text-center"
+                  title="View member details"
+                >
+                  <span className="relative">
+                    <Avatar name={m.full_name} src={m.avatar_url} size="xl" />
+                    {online && (
+                      <span
+                        className="absolute bottom-0.5 right-0.5 block h-4 w-4 rounded-full bg-emerald-500 ring-[3px] ring-white"
+                        title="Online now"
+                      />
+                    )}
+                  </span>
+                  <p className="mt-3 flex max-w-full items-center gap-1.5">
+                    <span className="truncate text-base font-semibold text-slate-900">
+                      {m.full_name || m.username}
+                    </span>
                     {m.id === currentUserId && (
-                      <span className="text-xs font-normal text-slate-400">
+                      <span className="shrink-0 text-xs font-normal text-slate-400">
                         (you)
                       </span>
                     )}
                   </p>
-                  <p className="truncate text-xs text-slate-400">
-                    @{m.username} · {m.email}
-                    {m.phone ? ` · ${formatPhone(m.phone)}` : ""}
+                  <p className="max-w-full truncate text-xs text-slate-400">
+                    @{m.username}
+                    {m.title ? ` · ${m.title}` : ""}
+                  </p>
+                  <Badge
+                    className={cn(
+                      "mt-2.5",
+                      m.role === "admin"
+                        ? "bg-primary-50 text-primary-700 ring-primary-200"
+                        : "bg-slate-100 text-slate-600 ring-slate-200",
+                    )}
+                  >
+                    {m.role === "admin" ? (
+                      <ShieldCheck className="h-3 w-3" />
+                    ) : (
+                      <Shield className="h-3 w-3" />
+                    )}
+                    {m.role}
+                  </Badge>
+                </button>
+
+                {/* Contact */}
+                <div className="mt-4 space-y-1.5 border-t border-slate-100 pt-3.5 text-xs text-slate-500">
+                  <p className="flex items-center gap-2">
+                    <Mail className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                    <span className="truncate">{m.email}</span>
+                  </p>
+                  <p className="flex items-center gap-2">
+                    <Phone className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                    {m.phone ? (
+                      formatPhone(m.phone)
+                    ) : (
+                      <span className="text-slate-400">No phone on file</span>
+                    )}
                   </p>
                 </div>
-                <ChevronRight className="h-4 w-4 shrink-0 text-slate-300" />
-              </button>
-              {(() => {
-                const total = (commissionsByUser.get(m.id) ?? []).reduce(
-                  (s, c) => s + Number(c.amount),
-                  0,
-                );
-                return total > 0 ? (
-                  <span className="hidden shrink-0 items-center gap-1 text-xs font-medium text-slate-500 sm:flex">
-                    <Wallet className="h-3.5 w-3.5 text-slate-400" />
-                    {formatCurrency(total)}
-                  </span>
-                ) : null;
-              })()}
-              <Badge
-                className={cn(
-                  m.role === "admin"
-                    ? "bg-primary-50 text-primary-700 ring-primary-200"
-                    : "bg-slate-100 text-slate-600 ring-slate-200",
-                )}
-              >
-                {m.role === "admin" ? (
-                  <ShieldCheck className="h-3 w-3" />
-                ) : (
-                  <Shield className="h-3 w-3" />
-                )}
-                {m.role}
-              </Badge>
-              <Dropdown
-                trigger={
-                  <button className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700">
-                    <MoreVertical className="h-4 w-4" />
-                  </button>
-                }
-              >
-                <DropdownItem
-                  icon={<Pencil className="h-4 w-4" />}
-                  onClick={() => setToEdit(m)}
-                >
-                  Edit profile
-                </DropdownItem>
-                {m.role === "member" ? (
-                  <DropdownItem
-                    icon={<ShieldCheck className="h-4 w-4" />}
-                    onClick={async () => {
-                      const res = await updateMemberRole(m.id, "admin");
-                      if (res.ok) {
-                        toast.success("Promoted to admin");
-                        router.refresh();
-                      } else toast.error(res.error);
-                    }}
-                  >
-                    Make admin
-                  </DropdownItem>
-                ) : (
-                  <DropdownItem
-                    icon={<Shield className="h-4 w-4" />}
-                    onClick={async () => {
-                      const res = await updateMemberRole(m.id, "member");
-                      if (res.ok) {
-                        toast.success("Changed to member");
-                        router.refresh();
-                      } else toast.error(res.error);
-                    }}
-                  >
-                    Make member
-                  </DropdownItem>
-                )}
-                {m.role === "member" && (
-                  <DropdownItem
-                    icon={<Activity className="h-4 w-4" />}
-                    onClick={() => setActivityFor(m)}
-                  >
-                    Activity
-                  </DropdownItem>
-                )}
-                {m.role === "member" && (
-                  <DropdownItem
-                    icon={<Smartphone className="h-4 w-4" />}
-                    onClick={() => setToResetDevices(m)}
-                  >
-                    Reset trusted devices
-                  </DropdownItem>
-                )}
-                <DropdownItem
-                  destructive
-                  icon={<Trash2 className="h-4 w-4" />}
-                  onClick={() => setToRemove(m)}
-                >
-                  Remove from workspace
-                </DropdownItem>
-              </Dropdown>
-            </li>
-          ))}
-        </ul>
+
+                {/* Footer stats */}
+                <div className="mt-auto grid grid-cols-2 gap-3 border-t border-slate-100 pt-3.5">
+                  <div>
+                    <p className="flex items-center gap-1 text-[11px] text-slate-400">
+                      <Wallet className="h-3 w-3" /> Commission
+                    </p>
+                    <p className="mt-0.5 text-sm font-semibold text-slate-900">
+                      {formatCurrency(commissionTotal)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="flex items-center gap-1 text-[11px] text-slate-400">
+                      <MonitorSmartphone className="h-3 w-3" /> Devices
+                    </p>
+                    <p className="mt-0.5 text-sm font-semibold text-slate-900">
+                      {m.role === "admin" ? (
+                        <span className="text-slate-400">Exempt</span>
+                      ) : (
+                        `${deviceCount}/2`
+                      )}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       <MemberDetailModal
@@ -437,6 +503,12 @@ export function TeamView({
         member={activityFor}
         devices={activityFor ? devicesByUser.get(activityFor.id) ?? [] : []}
         onClose={() => setActivityFor(null)}
+      />
+
+      <PingModal
+        member={toMessage}
+        adminName={currentUserName}
+        onClose={() => setToMessage(null)}
       />
 
       <ConfirmDialog

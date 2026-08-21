@@ -27,7 +27,11 @@ export function PortalClient({
   project: Project;
   initialRequests: ProjectDocumentRequest[];
 }) {
-  const [requests, setRequests] = React.useState(initialRequests);
+  // Items the client said they don't have (n/a, 0084) stay off their page —
+  // showing them again would just nag.
+  const [requests, setRequests] = React.useState(
+    initialRequests.filter((r) => r.status !== "na"),
+  );
   const [uploadingId, setUploadingId] = React.useState<string | null>(null);
   const fileInputs = React.useRef<{ [key: string]: HTMLInputElement | null }>({});
 

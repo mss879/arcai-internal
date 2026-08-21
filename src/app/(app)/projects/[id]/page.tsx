@@ -179,6 +179,9 @@ export default async function ProjectDetailPage({
             shareToken={shareToken}
             requests={docRequestsRes.data || []}
             isProjectCompleted={project.status === "completed"}
+            serviceType={project.service_type ?? null}
+            hasClient={!!project.client_id}
+            onboardingStartedAt={project.onboarding_started_at ?? null}
           />
         </div>
       </div>

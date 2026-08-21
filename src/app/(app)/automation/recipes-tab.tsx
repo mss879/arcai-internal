@@ -23,7 +23,8 @@ export function RecipesTab() {
 
   return (
     <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-      {AUTOMATION_RECIPES.map((recipe) => (
+      {/* Delivery recipes live in their own gallery: Client Delivery → Automations. */}
+      {AUTOMATION_RECIPES.filter((r) => r.category !== "delivery").map((recipe) => (
         <div
           key={recipe.id}
           className="flex flex-col rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[var(--shadow-card)]"

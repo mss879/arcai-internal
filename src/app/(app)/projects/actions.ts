@@ -2,6 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 
+import { fireAutomationTrigger } from "@/lib/automation";
+import { buildPaymentEvent } from "@/lib/delivery";
 import { createClient } from "@/lib/supabase/server";
 import type {
   ActionResult,
@@ -77,8 +79,8 @@ export async function saveProject(input: ProjectInput): Promise<ActionResult> {
   };
 
   const { error } = input.id
-    ? await (supabase as any).from("projects").update(payload).eq("id", input.id)
-    : await (supabase as any).from("projects").insert(payload);
+    ? await supabase.from("projects").update(payload).eq("id", input.id)
+    : await supabase.from("projects").insert(payload);
 
   if (error) return { ok: false, error: error.message };
   revalidatePath("/projects");
@@ -123,11 +125,36 @@ export async function savePayment(input: PaymentInput): Promise<ActionResult> {
     receipt_path: input.receipt_path || null,
   };
 
-  const { error } = input.id
-    ? await supabase.from("payments").update(payload).eq("id", input.id)
-    : await supabase.from("payments").insert(payload);
+  // For an edit, know whether it was ALREADY paid — only a transition to
+  // paid (or a new paid row) is a payment event.
+  const { data: prior } = input.id
+    ? await supabase.from("payments").select("status").eq("id", input.id).maybeSingle()
+    : { data: null };
 
-  if (error) return { ok: false, error: error.message };
+  const saved = input.id
+    ? await supabase
+        .from("payments")
+        .update(payload)
+        .eq("id", input.id)
+        .select("id")
+        .single()
+    : await supabase.from("payments").insert(payload).select("id").single();
+
+  if (saved.error) return { ok: false, error: saved.error.message };
+
+  // 0085 — same cue as the Payments board: money landed on a project.
+  const becamePaid =
+    payload.status === "paid" && (!input.id || prior?.status !== "paid");
+  if (becamePaid && saved.data) {
+    const event = await buildPaymentEvent(supabase, {
+      projectId: input.project_id,
+      amountText: `${payload.currency} ${Number(input.amount).toLocaleString()}`,
+      source: "project_detail",
+      triggerKey: `project_payment:${saved.data.id}:paid`,
+    });
+    if (event) await fireAutomationTrigger(supabase, event);
+  }
+
   revalidatePath(`/projects/${input.project_id}`);
   revalidatePath("/projects");
   return { ok: true };

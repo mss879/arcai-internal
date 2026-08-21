@@ -2,6 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 
+import { fireAutomationTrigger } from "@/lib/automation";
+import { buildPaymentEvent } from "@/lib/delivery";
 import { createClient } from "@/lib/supabase/server";
 import type { ActionResult } from "@/lib/types";
 
@@ -53,12 +55,34 @@ export async function toggleCompanyPaymentPaid(
   } = await supabase.auth.getUser();
   if (!user) return { ok: false, error: "Not authenticated." };
 
+  // Read before write: firing payment_received needs the project link and
+  // whether this is genuinely a false→true flip (not a re-save).
+  const { data: prior } = await supabase
+    .from("company_payments")
+    .select("id, price_lkr, project_id, is_paid")
+    .eq("id", id)
+    .maybeSingle();
+
   const { error } = await supabase
     .from("company_payments")
     .update({ is_paid: isPaid })
     .eq("id", id);
 
   if (error) return { ok: false, error: error.message };
+
+  // 0085 — a project-linked payment flipping to PAID is the delivery
+  // system's cue (the "Payment received → full client onboarding" recipe
+  // filters on first_payment). The triggerKey makes un-tick/re-tick safe.
+  if (isPaid && prior && !prior.is_paid && prior.project_id) {
+    const event = await buildPaymentEvent(supabase, {
+      projectId: prior.project_id,
+      amountText: `LKR ${Number(prior.price_lkr).toLocaleString()}`,
+      source: "payments_board",
+      triggerKey: `company_payment:${id}:paid`,
+    });
+    if (event) await fireAutomationTrigger(supabase, event);
+  }
+
   revalidatePath("/payments");
   // Paid/unpaid is what the project balance counts — keep that board honest.
   revalidatePath("/projects");

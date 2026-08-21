@@ -148,6 +148,43 @@ export const WA_TOOL_CATALOG: WaToolMeta[] = [
       "When the customer clearly asks to stop being messaged — in any language or phrasing — stops all automated messaging for them, cancels scheduled follow-ups, closes the lead and alerts the team. Protects your number's Meta quality rating.",
     kind: "write",
   },
+  // --- Client Delivery onboarding mode (0086). These five only surface
+  // while a contact is in onboarding; the sales tools hide there in turn.
+  {
+    key: "get_asset_checklist",
+    label: "Read the asset checklist (onboarding)",
+    description:
+      "Reads the onboarding project's live checklist — what's required, what's already in — so the agent always knows exactly what to ask for next.",
+    kind: "read",
+  },
+  {
+    key: "file_asset",
+    label: "File received assets (onboarding)",
+    description:
+      "When the client sends their logo, photos or documents in the chat, attaches the file to the right checklist item and marks it received — the checklist in Client Delivery ticks itself in real time.",
+    kind: "write",
+  },
+  {
+    key: "skip_asset",
+    label: "Mark asset not applicable (onboarding)",
+    description:
+      "When the client genuinely doesn't have an item (no brand guide, no testimonials yet), marks it n/a with their reason so it stops blocking the build.",
+    kind: "write",
+  },
+  {
+    key: "send_portal_link",
+    label: "Send the upload page (onboarding)",
+    description:
+      "Drops the project's public upload page into the chat as a tappable button — for clients with many files or who prefer uploading from a computer.",
+    kind: "write",
+  },
+  {
+    key: "finish_onboarding",
+    label: "Close onboarding (onboarding)",
+    description:
+      "When every required item is collected, moves the project to the build stage, notifies the team and returns the chat to the normal agent.",
+    kind: "write",
+  },
 ];
 
 export function waToolMeta(key: string): WaToolMeta | undefined {

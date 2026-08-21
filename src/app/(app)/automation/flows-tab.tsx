@@ -23,6 +23,7 @@ import {
   STEP_META,
   TRIGGER_META,
 } from "@/lib/automation-meta";
+import { DELIVERY_STAGES, DELIVERY_STAGE_META } from "@/lib/constants";
 import { cn } from "@/lib/utils";
 import type {
   Automation,
@@ -71,6 +72,9 @@ const STEP_KINDS: AutomationStepKind[] = [
   "ai_agent",
   "enroll_sms_workflow",
   "webhook",
+  // Client Delivery (0085)
+  "start_wa_onboarding",
+  "set_delivery_stage",
 ];
 
 function newDraft(kind: AutomationStepKind): DraftStep {
@@ -83,7 +87,9 @@ function newDraft(kind: AutomationStepKind): DraftStep {
           ? { user_id: "all", title: "", body: "" }
           : kind === "ai_agent"
             ? { instruction: "", save_to: "ai_next_action" }
-            : {};
+            : kind === "set_delivery_stage"
+              ? { stage: "build" }
+              : {};
   return { key: crypto.randomUUID(), kind, config };
 }
 
@@ -546,6 +552,34 @@ function TriggerNode({
             value={Number(cfg.days_before ?? 2)}
             onChange={(days_before) => onConfigChange({ days_before })}
           />
+        )}
+
+        {trigger === "project_stage_changed" && (
+          <Select
+            value={String(cfg.stage ?? "")}
+            onChange={(e) => onConfigChange({ stage: e.target.value || undefined })}
+          >
+            <option value="">Moved to any stage</option>
+            {DELIVERY_STAGES.map((s) => (
+              <option key={s} value={s}>
+                {DELIVERY_STAGE_META[s].label}
+              </option>
+            ))}
+          </Select>
+        )}
+
+        {trigger === "payment_received" && (
+          <label className="inline-flex h-11 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 text-sm text-slate-700 shadow-sm">
+            <input
+              type="checkbox"
+              checked={!!cfg.first_payment}
+              onChange={(e) =>
+                onConfigChange({ first_payment: e.target.checked || undefined })
+              }
+              className="h-4 w-4 rounded border-slate-300 text-primary-600"
+            />
+            First payment on the project only
+          </label>
         )}
       </div>
     </div>
@@ -1074,6 +1108,30 @@ function StepNode({
               </option>
             ))}
           </Select>
+        )}
+
+        {draft.kind === "set_delivery_stage" && (
+          <Select
+            value={String(cfg.stage ?? "")}
+            onChange={(e) => onChange({ stage: e.target.value })}
+            className="max-w-sm"
+          >
+            <option value="">Pick delivery stage…</option>
+            {DELIVERY_STAGES.map((s) => (
+              <option key={s} value={s}>
+                {DELIVERY_STAGE_META[s].label}
+              </option>
+            ))}
+          </Select>
+        )}
+
+        {draft.kind === "start_wa_onboarding" && (
+          <p className="text-xs text-slate-400">
+            Needs a project on the run — pair it with a create_project step, or fire
+            from a payment/project trigger. Flips the client&apos;s WhatsApp thread
+            into asset-collection mode and sends the kickoff (Delivery → Settings
+            holds the message + template).
+          </p>
         )}
       </div>
     </div>

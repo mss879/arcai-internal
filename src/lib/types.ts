@@ -13,30 +13,13 @@ export type Client = Tables["clients"]["Row"];
 export type Todo = Tables["todos"]["Row"];
 export type TodoMention = Tables["todo_mentions"]["Row"];
 export type TodoSubtask = Tables["todo_subtasks"]["Row"];
-export type Project = Tables["projects"]["Row"] & {
-  total_value?: number;
-  deposit_paid?: number;
-  share_token?: string;
-  service_type?: string | null;
-  /** 0083 — the signed proposal and the invoice, uploaded onto the project. */
-  proposal_url?: string | null;
-  proposal_name?: string | null;
-  proposal_path?: string | null;
-  invoice_url?: string | null;
-  invoice_name?: string | null;
-  invoice_path?: string | null;
-};
-export type ProjectDocumentRequest = {
-  id: string;
-  project_id: string;
-  title: string;
-  description: string | null;
-  status: "pending" | "submitted";
-  file_url: string | null;
-  file_name: string | null;
-  submitted_at: string | null;
-  created_at: string;
-};
+// 0084 backfilled the Row type with every column (0016 portal, 0083 docs,
+// 0084 delivery), so the optional patch-object this used to carry is gone.
+export type Project = Tables["projects"]["Row"];
+export type ProjectDocumentRequest =
+  Tables["project_document_requests"]["Row"];
+export type DeliverySettings = Tables["delivery_settings"]["Row"];
+export type DeliveryEvent = Tables["delivery_events"]["Row"];
 export type Proposal = Omit<
   Tables["proposals"]["Row"],
   "selection" | "content"
@@ -166,6 +149,12 @@ export type {
   WaShowcaseStatus,
   WaVoiceReplies,
   WaCampaignStatus,
+  DeliveryStage,
+  AssetCategory,
+  AssetRequestStatus,
+  AssetRequestSource,
+  DeliveryEventKind,
+  WaContactMode,
 } from "@/lib/database.types";
 
 /** A todo joined with the profile it's assigned to. */

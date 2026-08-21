@@ -603,6 +603,31 @@ export async function fetchThread(
   return thread;
 }
 
+/** Tools that only make sense while SELLING — an onboarding contact has
+ * already paid, so every one of these is a way to accidentally re-pitch
+ * (or, for promises, to fire a sales-composed nudge at a client). */
+const SALES_ONLY_WA_TOOLS = [
+  "send_quote",
+  "create_proposal",
+  "send_showcase",
+  "send_pricelist",
+  "audit_website",
+  "research_contact",
+  "get_research",
+  "book_call",
+  "schedule_promise",
+  "cancel_promise",
+] as const;
+
+/** The delivery-coordinator toolkit (0086) — meaningless in a sales chat. */
+const ONBOARDING_ONLY_WA_TOOLS = [
+  "get_asset_checklist",
+  "file_asset",
+  "skip_asset",
+  "send_portal_link",
+  "finish_onboarding",
+] as const;
+
 async function runWaAgent(
   supabase: DB,
   contact: WaContact,
@@ -616,6 +641,12 @@ async function runWaAgent(
   ]);
 
   const allowed = new Set(config.allowed_tools ?? []);
+  // Mode gate: removing a tool from the set hides its schema AND blocks its
+  // dispatch (the loop below re-checks `allowed`), so the wrong brain can't
+  // even see the other mode's tools.
+  const offLimits =
+    contact.mode === "onboarding" ? SALES_ONLY_WA_TOOLS : ONBOARDING_ONLY_WA_TOOLS;
+  for (const t of offLimits) allowed.delete(t);
   const tools = buildToolSchemas(allowed);
 
   const messages: ChatMessage[] = [
@@ -839,6 +870,7 @@ async function buildSystemPrompt(
     campaign,
     knowledge,
     quoteState,
+    onboardingData,
     promisesRes,
     mediaRes,
     lessonsRes,
@@ -855,6 +887,23 @@ async function buildSystemPrompt(
     activeCampaign(supabase, config),
     buildAgentKnowledge(supabase),
     buildQuoteStateLine(supabase, contact.lead_id),
+    // 0086 — onboarding mode: the project + its live asset checklist.
+    (async () => {
+      if (contact.mode !== "onboarding" || !contact.onboarding_project_id)
+        return null;
+      const { data: project } = await supabase
+        .from("projects")
+        .select("id, name, share_token, service_type, delivery_stage")
+        .eq("id", contact.onboarding_project_id)
+        .maybeSingle();
+      if (!project) return null;
+      const { data: checklist } = await supabase
+        .from("project_document_requests")
+        .select("id, title, description, status, required, position")
+        .eq("project_id", project.id)
+        .order("position", { ascending: true });
+      return { project, checklist: checklist ?? [] };
+    })(),
     supabase
       .from("wa_promises")
       .select("id, summary, due_at")
@@ -879,21 +928,32 @@ async function buildSystemPrompt(
       .limit(10),
   ]);
   const brief = campaign ? campaignBrief(campaign) : null;
+  // Onboarding mode (0086) beats everything: this person already PAID, so
+  // neither the sales playbook nor a live campaign may touch them. Same
+  // REPLACE-not-append lesson as campaign focus below.
+  const onboarding = onboardingData
+    ? onboardingFocusBlocks(onboardingData.project, onboardingData.checklist, config)
+    : null;
   // Focus mode: a live campaign with a written brief, talking to a lead who
   // came in under it (or is brand new / still untouched). The generic sales
   // playbook is REPLACED, not appended to — real chats proved that one
   // campaign block at the end of a website-sales prompt still runs website
   // discovery at people who just tapped a specific ad.
   const focus =
-    campaign && brief && isCampaignLead(campaign, contact, lead, stageRows)
+    !onboarding &&
+    campaign &&
+    brief &&
+    isCampaignLead(campaign, contact, lead, stageRows)
       ? campaignFocusBlocks(campaign, brief, config)
       : null;
 
   const parts: string[] = [
-    focus
-      ? focus.identity
-      : `You are ${config.agent_name || "Arc"}, a sales consultant at ARC AI Agency — a Sri Lankan AI & digital agency. ARC builds business websites, e-commerce stores, runs social media marketing and sets up AI automations — but what it really sells is the Smart Website system (below). You're chatting with a potential customer on WhatsApp.`,
-    ...(focus ? [focus.brief] : [`THE PRODUCT — the Smart Website system (what you are really selling):
+    onboarding
+      ? onboarding.identity
+      : focus
+        ? focus.identity
+        : `You are ${config.agent_name || "Arc"}, a sales consultant at ARC AI Agency — a Sri Lankan AI & digital agency. ARC builds business websites, e-commerce stores, runs social media marketing and sets up AI automations — but what it really sells is the Smart Website system (below). You're chatting with a potential customer on WhatsApp.`,
+    ...(onboarding ? [onboarding.brief] : focus ? [focus.brief] : [`THE PRODUCT — the Smart Website system (what you are really selling):
 - Not "a website" — a system that RUNS the business's sales. The website captures every inquiry straight into the owner's own CRM pipeline, quotations and invoices are generated and e-signed right on the customer's phone, and AI agents answer customers on the website, on WhatsApp and on Instagram — with automatic follow-ups so no lead is ever forgotten.
 - ARC runs this exact system itself, and the prospect is experiencing it RIGHT NOW: you ARE the WhatsApp agent of that system. When it genuinely helps — they ask how it works, or they're impressed by the speed — say so naturally: "what your customers would get is exactly this: an assistant like me on your own website and WhatsApp, quoting and following up for you." Never as a gimmick, never twice in one conversation.
 - Sell outcomes, not pages: inquiries answered at 2am, quotes signed on the phone, zero forgotten follow-ups. A plain website is the entry point; the system is the real product.
@@ -908,7 +968,7 @@ async function buildSystemPrompt(
 - NEVER use an asterisk. Not one, not two — no bold, no markdown, no stars anywhere in your message. WhatsApp prints them literally and it looks broken and robotic to the customer. Write plain sentences the way a person texts. No # headers, no [text](url) links (paste the bare URL on its own line), no code fences. To make a longer message scannable use line breaks and the occasional ✅ instead.
 - BANNED: "As an AI", "I understand your concern", "Certainly!", "How may I assist you today", "I apologize for any inconvenience" — anything that smells like a call center or a bot. If someone directly asks if you're a bot, be honest and light: you're Arc, the agency's digital assistant, and a teammate can jump in anytime.
 - NEVER invent prices, discounts or delivery dates. Quote ONLY what's in the knowledge base; anything else → "let me get the team to confirm that."`,
-    focus ? focus.mission : `YOUR MISSION — learn everything, lead everything. You always hold the upper hand in the conversation: you ask the questions, you steer, and every message you send ends with exactly ONE question or a clear next step. Never leave a reply hanging with nothing to answer.
+    onboarding ? onboarding.mission : focus ? focus.mission : `YOUR MISSION — learn everything, lead everything. You always hold the upper hand in the conversation: you ask the questions, you steer, and every message you send ends with exactly ONE question or a clear next step. Never leave a reply hanging with nothing to answer.
 
 INFO CHECKLIST (collect in this order, one at a time, weaving it into natural chat — never interrogate):
 1. Their NAME — ask early.${config.ask_name ? " Get it before you go deep on requirements or send them anything." : ""} But it NEVER blocks an answer: if they open with a question, answer THAT first and ask their name in the same message. Making a warm lead identify themselves before you'll tell them anything is the fastest way to lose them.
@@ -928,7 +988,11 @@ THE MOMENT you have a plausibly-real name (and again when you learn company/emai
 - NEVER banter with a machine, thank it, or ask it questions. A real person will read this chat later and judge the whole company by what you wrote.
 - If the only inbound so far looks automated, reply with exactly [SILENT] — nothing is sent, the chat stays open, and when a real human writes you greet them fresh (with full context of why we reached out).
 - Genuinely unsure whether it's a bot or just a terse human? Send ONE short line meant for the human who'll read it later — "no rush at all, whenever a real person picks this up I've got something worth showing you 🙂" — never a question aimed at the bot.`,
-    ...(focus ? [focus.playbook, focus.objections] : [`IF THEY HAVE A WEBSITE:
+    ...(onboarding
+      ? [onboarding.playbook, onboarding.objections]
+      : focus
+        ? [focus.playbook, focus.objections]
+        : [`IF THEY HAVE A WEBSITE:
 - The moment they share the URL, call BOTH audit_website AND research_contact (same turn, before replying).
 - Then reply like someone who literally just opened their site on their phone: compliment one genuine thing, then casually drop the 1-2 issues that hurt most — lead with the real Google PageSpeed number when it's bad ("ran your site through Google's speed test while we were chatting — 34/100 on mobile 😬, people are leaving before it even loads"). Sound like an expert who noticed, not a report.
 - Deep research on their business runs SILENTLY in the background. NEVER say you're researching, "looking into", or "preparing a report" on them — the magic is that a few minutes later you just naturally KNOW things (their services, reputation, competitors) and drop them into conversation like you've known their industry for years.
@@ -1043,7 +1107,9 @@ THE METHOD, every time: ACKNOWLEDGE it honestly (never "I understand your concer
 "I'LL GET BACK TO YOU"
 - Don't just accept it. Pin something down: "no rush 👍 shall I check in Thursday?" — and if they name any time at all, call schedule_promise.
 - Never chase in-chat after that and never chase with a discount. The follow-up system re-engages them on its own.`]),
-    `PROMISES — never let a commitment slip:
+    onboarding
+      ? `WHEN THEY PROMISE TO SEND SOMETHING LATER ("I'll send the logo tomorrow", "photos this weekend"): acknowledge warmly and leave it — the system nudges them about missing items automatically, so never announce a reminder and never nag in-chat. If they name a blocking problem (files lost, designer unreachable), use schedule_followup so a HUMAN teammate picks it up.`
+      : `PROMISES — never let a commitment slip:
 - The moment the customer names a time or future event — "call me Monday", "I'll talk to my partner tonight", "salary comes on the 25th", "message me next week" — call schedule_promise in that SAME turn, then acknowledge it naturally in your reply ("perfect, I'll check in with you Monday 👍"). The system messages them for you at exactly that moment.
 - Also schedule one when they promise to DO something ("I'll send the logo tomorrow") — so you can gently nudge if it doesn't arrive.
 - Never schedule promises for things YOU are doing right now, and never tell them a "reminder" or "system" exists — you simply remember.
@@ -1057,9 +1123,10 @@ THE METHOD, every time: ACKNOWLEDGE it honestly (never "I understand your concer
 
   if (config.language_matching) parts.push(languageDirective(contact.language));
 
-  // Focus mode owns the opening (the brief says to open ON the offer) — the
-  // generic configured greeting would drag it back to "how can I help".
-  if (!focus && config.greeting.trim())
+  // Focus mode owns the opening (the brief says to open ON the offer), and
+  // onboarding opens on the project — the generic configured greeting would
+  // drag either back to "how can I help".
+  if (!focus && !onboarding && config.greeting.trim())
     parts.push(
       `When greeting a brand-new contact (no conversation history), base your opening message on this greeting:\n"${config.greeting.trim()}"`,
     );
@@ -1071,9 +1138,11 @@ THE METHOD, every time: ACKNOWLEDGE it honestly (never "I understand your concer
   // campaign lead it's demoted to background: the packages in it are the
   // very thing the agent used to pitch INSTEAD of the ad's offer.
   parts.push(
-    focus
-      ? `KNOWLEDGE BASE (ARC's general services, packages & FAQs — BACKGROUND ONLY in this conversation: answer from it when they ask something general about ARC (who we are, process, contact details) or explicitly name a different ARC service, but the campaign brief above is what you're selling. Its packages and prices belong to OTHER products — never quote them for this campaign, even when a package's name here resembles the campaign's name; "what packages do you have?" is answered from the campaign's own pricing rule, never from this catalog. Never volunteer these packages or other services to a campaign lead):\n${knowledge}`
-      : `KNOWLEDGE BASE (services, pricing, FAQs — your ground truth):\n${knowledge}`,
+    onboarding
+      ? `KNOWLEDGE BASE (ARC's general services, packages & FAQs — BACKGROUND ONLY: use it to answer general questions about ARC (who we are, process, contact details, what's included in what they bought). This client has ALREADY BOUGHT — never quote prices, never pitch packages or upgrades from it. If they ask about buying something ADDITIONAL, sound pleased, say the team will put the details together, and call notify_team — never sell it yourself mid-onboarding):\n${knowledge}`
+      : focus
+        ? `KNOWLEDGE BASE (ARC's general services, packages & FAQs — BACKGROUND ONLY in this conversation: answer from it when they ask something general about ARC (who we are, process, contact details) or explicitly name a different ARC service, but the campaign brief above is what you're selling. Its packages and prices belong to OTHER products — never quote them for this campaign, even when a package's name here resembles the campaign's name; "what packages do you have?" is answered from the campaign's own pricing rule, never from this catalog. Never volunteer these packages or other services to a campaign lead):\n${knowledge}`
+        : `KNOWLEDGE BASE (services, pricing, FAQs — your ground truth):\n${knowledge}`,
   );
   if (config.knowledge.trim())
     parts.push(
@@ -1083,8 +1152,9 @@ THE METHOD, every time: ACKNOWLEDGE it honestly (never "I understand your concer
   // Campaign mode, for everyone who is NOT a campaign lead: someone already
   // mid-deal didn't arrive through the ad, so the campaign is background
   // knowledge only — never a pitch that derails their own conversation.
-  // (Campaign leads got the full focus prompt up top instead.)
-  if (campaign && brief && !focus) {
+  // (Campaign leads got the full focus prompt up top instead; an onboarding
+  // client must never hear about the ad at all.)
+  if (campaign && brief && !focus && !onboarding) {
     parts.push(
       `LIVE CAMPAIGN — we're running Meta ads for "${campaign.name}" right now. You know the details if they bring it up:
 ${brief}
@@ -1117,8 +1187,9 @@ Do NOT steer this conversation toward it — this person is already in a live co
       })}`,
     );
     if (
-      lead.source === "prospecting" ||
-      (lead.tags ?? []).includes("WhatsApp Sent")
+      !onboarding &&
+      (lead.source === "prospecting" ||
+        (lead.tags ?? []).includes("WhatsApp Sent"))
     ) {
       parts.push(
         `COLD-OUTREACH CONTEXT: WE contacted THEM first — they're replying to our cold WhatsApp about their website. So: don't greet like an inbound stranger, don't ask what their business is (you already know — see the lead notes and research), and don't re-ask for basics. The INFO CHECKLIST's name-first rule does NOT apply here — never open by asking their name; lead with why we reached out and something specific from the research, and let names surface naturally once they engage. Watch hard for auto-responders on business numbers (see AUTO-REPLIES & BOTS — [SILENT] until a human appears). Slightly warmer, zero pressure — they didn't ask for this conversation, earn it.`,
@@ -1126,7 +1197,8 @@ Do NOT steer this conversation toward it — this person is already in a live co
     }
 
     // The pipeline's real stage names, so update_lead stage moves land.
-    if (stageRows?.length) {
+    // (Not for onboarding — the deal is WON; the board has nothing to track.)
+    if (!onboarding && stageRows?.length) {
       const currentName =
         stageRows.find((s) => s.id === lead.stage_id)?.name ?? "(none)";
       parts.push(
@@ -1154,8 +1226,10 @@ Moves are forward-only; never park a dead conversation forward, and when they cl
   }
 
   // The live quote's fate — signed, declined, expired or awaiting signature —
-  // steers every reply, not just the nudge composers.
-  if (quoteState) parts.push(quoteState);
+  // steers every reply, not just the nudge composers. Onboarding skips it:
+  // the deal-state coaching is sales language, and the paid project brief
+  // above already carries what matters.
+  if (quoteState && !onboarding) parts.push(quoteState);
 
   const { data: promises } = promisesRes;
   if (promises?.length) {
@@ -1190,7 +1264,7 @@ Moves are forward-only; never park a dead conversation forward, and when they cl
   // waits for the team's yes (faq-kind lessons render inside the knowledge
   // base instead — see buildAgentKnowledge).
   const { data: lessons } = lessonsRes;
-  if (lessons?.length) {
+  if (lessons?.length && !onboarding) {
     const bullets = lessons.map((l) => `- ${l.body.trim()}`).join("\n");
     parts.push(
       `LESSONS FROM YOUR OWN PAST DEALS (mined from what actually won and lost, and approved by the team — apply them. They may sharpen how you pitch, handle objections and close; the only things they can never override are the catalog prices themselves and your discount authority):\n${bullets}`,
@@ -1224,6 +1298,10 @@ export async function buildPlaygroundPrompt(supabase: DB): Promise<string> {
     first_reply_sent_at: null,
     agent_enabled: true,
     do_not_contact: false,
+    // 0086 — the playground previews the SALES brain (a brand-new stranger
+    // is never in onboarding); onboarding threads carry a real project.
+    mode: "sales",
+    onboarding_project_id: null,
   } as unknown as WaContact;
   return buildSystemPrompt(supabase, fake, config);
 }
@@ -1405,6 +1483,94 @@ THE MOMENT you have a plausibly-real name (and again when you learn company/emai
 
 "HOW DO I KNOW YOU'RE LEGIT?"
 - Take it relaxed — being comfortable with the question IS the answer. Give real structure: a scoping call first, a written signable quotation, a real team behind this chat they can talk to before any money moves. Then offer the call.`,
+  };
+}
+
+/**
+ * Onboarding focus mode (0086) — the delivery-coordinator brain for a
+ * contact whose project is being kicked off. Same REPLACE-not-append lesson
+ * campaign focus learned the hard way (see the comment above
+ * campaignFocusBlocks): 0065 bolted the campaign onto the sales prompt as
+ * one more block, and the checklist/pricing playbook around it kept dragging
+ * the model back into discovery-and-pitch. A PAYING client being re-pitched
+ * is worse than a campaign lead getting generic discovery — so onboarding
+ * swaps out identity, brief, mission, playbook and objections wholesale,
+ * demotes the knowledge base, and the sales tools aren't even in its kit.
+ */
+function onboardingFocusBlocks(
+  project: {
+    id: string;
+    name: string;
+    share_token: string | null;
+    service_type: string | null;
+    delivery_stage: string | null;
+  },
+  checklist: {
+    id: string;
+    title: string;
+    description: string | null;
+    status: string;
+    required: boolean;
+  }[],
+  config: WaConfig,
+): {
+  identity: string;
+  brief: string;
+  mission: string;
+  playbook: string;
+  objections: string;
+} {
+  const agentName = config.agent_name || "Arc";
+  const pending = checklist.filter((i) => i.status === "pending");
+  const lines = checklist.length
+    ? checklist
+        .map((i) => {
+          const state =
+            i.status === "submitted"
+              ? "✓ received"
+              : i.status === "na"
+                ? "n/a"
+                : i.required
+                  ? "PENDING (required)"
+                  : "pending (optional)";
+          return `- [${i.id}] ${i.title} — ${state}${i.description ? ` · ${i.description}` : ""}`;
+        })
+        .join("\n")
+    : "- (the checklist is empty — tell the team via notify_team)";
+
+  return {
+    identity: `You are ${agentName}, the delivery coordinator at ARC AI Agency — a Sri Lankan AI & digital agency. This customer has ALREADY PAID and their project is being kicked off. The sale is OVER: never pitch, never quote prices, never upsell, never send packages — your entire job is to collect what the team needs to build, keep them feeling looked after, and hand a complete pack to the builders. You're proudly an AI coordinator; a teammate can jump in anytime.`,
+
+    brief: `THE PROJECT YOU ARE ONBOARDING — "${project.name}"${project.service_type ? ` (${project.service_type.replaceAll("_", " ")})` : ""}.
+
+ASSET CHECKLIST (live — ids in brackets are what the tools take):
+${lines}
+
+${pending.length ? `Still needed: ${pending.filter((i) => i.required).map((i) => i.title).join(", ") || "only optional items"}.` : "Everything is collected."}`,
+
+    mission: `YOUR MISSION — collect every required checklist item, one at a time, and make it feel effortless:
+- Ask for ONE item per message, in plain human words ("could you send over your logo? a photo of it works too"), and explain in half a sentence why it helps when it isn't obvious.
+- THE MOMENT a 📷/📄 line appears in the chat, that IS their file — react to what's in it, then in the SAME turn call file_asset for the matching checklist item. Never say you can't view files, never ask them to re-send something they just sent.
+- If a file is unclear ("is this the logo or a product photo?"), ask ONE short clarifying question before filing.
+- They don't have an item ("no brand guide", "no product list yet")? Reassure them it's fine, call skip_asset with the reason, move on. Required items they'll have LATER ("logo is with my designer") stay pending — acknowledge and move to the next item; the system nudges them automatically.
+- Sending many files at once (photos, catalogs)? Offer the upload page with send_portal_link — everything lands in the right place from a computer.
+- Track progress with get_asset_checklist whenever unsure what's still missing. When every REQUIRED item is received or n/a, call finish_onboarding, thank them warmly, and tell them the build starts now.
+- Access details (hosting logins, page admin): if they paste credentials here, thank them and note it arrived — never read the values back into the chat.`,
+
+    playbook: `HOW TO RUN THE CONVERSATION:
+- Warm, brief, zero pressure — they're a client now, not a lead. Celebrate small wins ("logo's in, looking sharp 👌").
+- One item at a time. Never dump the whole checklist as a wall of text; if they ask what's needed overall, give the SHORT version (3-4 items max) and say you'll walk them through it.
+- Questions about their project (timeline, what happens next, who's building): answer from the project brief and general knowledge honestly — and when you don't know, say the team will confirm and call notify_team. Never invent dates.
+- Payment slips can still arrive here (balance payments): thank them, say accounts is confirming it, never declare it verified yourself.
+- They want to buy something EXTRA (another service, an add-on): sound pleased, say the team will put details together, call notify_team — never quote prices or pitch mid-onboarding.
+- Real frustration, complaints, refunds, legal, or "I want a human": call handoff_human, one short line that a teammate is jumping in, and stop.`,
+
+    objections: `WHEN COLLECTION STALLS (this is normal — handle it warmly, never nag):
+"I'll send it later / this weekend" — perfect, acknowledge and leave it; the system reminds them so you never have to chase in-chat.
+"I don't have a logo / photos / content" — completely fine: skip_asset what truly doesn't exist, and reassure them the team works with what they have ("plenty of our clients started without one").
+"Why do you need this?" — one honest sentence of why it makes THEIR site/campaign better, then re-ask.
+"Can't I just tell you instead of writing a document?" — YES: let them tell you right here in chat, and the text IS the asset — thank them and file_asset with a note summarising what they said.
+"This is a lot of work" — empathize, shrink it: point at the 2-3 required items that actually matter, offer the upload page, remind them the team handles everything else.`,
   };
 }
 
@@ -1597,6 +1763,20 @@ function buildToolSchemas(allowed: Set<string>): ToolSchema[] {
         description: "en = English · si = Sinhala script · ta = Tamil script · si-latn = Sinhala in English letters (\"Singlish\") · ta-latn = Tamil in English letters (\"Tanglish\").",
       },
     }, ["language"]),
+    // Onboarding mode only (0086) — see ONBOARDING_ONLY_WA_TOOLS.
+    get_asset_checklist: fn("get_asset_checklist", "Read the project's live asset checklist — every item with its id, whether it's required, and whether it's already received. Call it whenever you're unsure what's still missing.", {}),
+    file_asset: fn("file_asset", "Attach the customer's NEWEST photo/document (the latest 📷/📄 in this chat that isn't filed yet) to a checklist item and mark that item received. Call it in the SAME turn the file arrives. Also used when they give an asset as plain TEXT (their about-us story, contact details): pass a note summarising it.", {
+      item_id: { type: "string", description: "The checklist item's id (in [brackets] in the checklist)." },
+      item_title: { type: "string", description: "Or (part of) the item's title, when you don't have the id." },
+      note: { type: "string", description: "Optional context — e.g. the text they dictated instead of a file, or 'logo on white background'." },
+    }),
+    skip_asset: fn("skip_asset", "The customer doesn't have this checklist item and won't (no brand guide exists, no testimonials yet). Marks it not-applicable so it stops blocking completion. NOT for items they'll send later — those stay pending.", {
+      item_id: { type: "string", description: "The checklist item's id." },
+      item_title: { type: "string", description: "Or (part of) the item's title." },
+      reason: { type: "string", description: "Their reason, briefly." },
+    }, ["reason"]),
+    send_portal_link: fn("send_portal_link", "Drop the project's upload page into the chat as a tappable button — for customers with many files (photo sets, catalogs) or who prefer uploading from a computer. Everything they upload there files itself automatically.", {}),
+    finish_onboarding: fn("finish_onboarding", "Every REQUIRED checklist item is received or n/a → close onboarding: the project moves to the build stage, the team is notified, and this chat returns to normal. Refuses (and tells you what's missing) if required items are still pending.", {}),
   };
 
   return Array.from(allowed)
@@ -1769,6 +1949,29 @@ async function executeWaTool(
           result:
             "Done — all automated messaging for them is stopped, follow-ups cancelled, team informed. Now send ONE short, warm, respectful goodbye in THEIR language — no pitch, no question, door open if they ever change their mind — and then nothing more.",
         };
+      }
+      // Onboarding-mode tools (0086) — implemented in wa-onboarding.ts, and
+      // dynamically imported so the module graph stays acyclic (that module
+      // statically imports helpers from this one).
+      case "get_asset_checklist": {
+        const { toolGetAssetChecklist } = await import("@/lib/wa-onboarding");
+        return await toolGetAssetChecklist(supabase, contact);
+      }
+      case "file_asset": {
+        const { toolFileAsset } = await import("@/lib/wa-onboarding");
+        return await toolFileAsset(supabase, contact, args);
+      }
+      case "skip_asset": {
+        const { toolSkipAsset } = await import("@/lib/wa-onboarding");
+        return await toolSkipAsset(supabase, contact, args);
+      }
+      case "send_portal_link": {
+        const { toolSendPortalLink } = await import("@/lib/wa-onboarding");
+        return await toolSendPortalLink(supabase, contact);
+      }
+      case "finish_onboarding": {
+        const { toolFinishOnboarding } = await import("@/lib/wa-onboarding");
+        return await toolFinishOnboarding(supabase, contact);
       }
       default:
         return { ok: false, result: `Unknown tool "${name}".` };
@@ -3583,6 +3786,10 @@ async function promiseSkipReason(
   if (contact.do_not_contact) return "contact opted out";
   if (!contact.agent_enabled) return "agent is paused for this chat";
   if (contact.needs_attention) return "chat is flagged for a human";
+  // 0086 — promise touches are composed by the SALES brain; an onboarding
+  // client must never receive one (the delivery chaser owns their nudges).
+  if (contact.mode === "onboarding")
+    return "contact is in onboarding — the delivery flow owns this thread";
   if (contact.lead_id) {
     const { data: lead } = await supabase
       .from("leads")
@@ -3812,11 +4019,14 @@ async function scheduleNextFollowup(supabase: DB, contactId: string): Promise<vo
   const { data: c } = await supabase
     .from("wa_contacts")
     .select(
-      "followup_stage, next_followup_at, do_not_contact, campaign_id, lead_id, call_booked_at, post_call_checkin_sent_at",
+      "followup_stage, next_followup_at, do_not_contact, campaign_id, lead_id, call_booked_at, post_call_checkin_sent_at, mode",
     )
     .eq("id", contactId)
     .maybeSingle();
   if (!c || c.next_followup_at || c.do_not_contact) return;
+  // 0086 — onboarding threads belong to the delivery flow: the content
+  // chaser owns every nudge there, so the SALES cadence must never arm.
+  if (c.mode === "onboarding") return;
 
   // A BOOKED CALL SILENCES THE AGENT. Once a call is on the books the
   // customer has said yes — every unprompted nudge before it ("any
@@ -4104,6 +4314,9 @@ async function followupSkipReason(
   if (contact.do_not_contact) return "contact opted out";
   if (!contact.agent_enabled) return "agent is paused for this chat";
   if (contact.needs_attention) return "chat is flagged for a human";
+  // 0086 — the delivery chaser owns every nudge on an onboarding thread.
+  if (contact.mode === "onboarding")
+    return "contact is in onboarding — the delivery flow owns this thread";
   if ((contact.followup_stage ?? 0) >= MAX_FOLLOWUP_TOUCHES) return "cadence already complete";
   if (contact.last_direction !== "out") return "they already replied";
   {

@@ -5,6 +5,7 @@ import {
   processDueAutomationRuns,
   scanTimeBasedTriggers,
 } from "@/lib/automation";
+import { processDeliveryAutomations } from "@/lib/delivery";
 import { processFinanceReminders } from "@/lib/finance";
 import { processDueSmsRuns } from "@/lib/sms-automation";
 import { processTodoReminders } from "@/lib/todo-reminders";
@@ -65,6 +66,10 @@ export async function GET(request: Request) {
     const finance = await processFinanceReminders(supabase);
     const todos = await processTodoReminders(supabase);
     const meetings = await processMeetingReminders(supabase);
+    // Client Delivery (0084): the content chaser (missing-asset WhatsApp
+    // nudges, quiet-hours aware, ≤5 sends/tick) + stalled-project alerts.
+    // Fast DB work — the heavy AI paths live in the WA agent tick.
+    const delivery = await processDeliveryAutomations(supabase);
     const research = await processPendingResearch(supabase);
     const schedules = await processDueProspectSchedules(supabase);
     const prospecting = await processPendingProspectScans(supabase);
@@ -105,6 +110,7 @@ export async function GET(request: Request) {
       finance,
       todos,
       meetings,
+      delivery,
       research,
       schedules,
       prospecting,

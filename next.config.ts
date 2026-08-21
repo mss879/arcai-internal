@@ -4,6 +4,15 @@ const nextConfig: NextConfig = {
   // react-pdf ships its own font/PDF binaries — let Next require it at runtime
   // from node_modules instead of bundling it into the serverless function.
   serverExternalPackages: ["@react-pdf/renderer"],
+  experimental: {
+    serverActions: {
+      // The client portal uploads photos/PDFs through a server action; the
+      // default 1MB body limit fails any real photo with an opaque error.
+      // The action itself enforces a friendly 10MB cap — this is headroom
+      // for multipart overhead.
+      bodySizeLimit: "12mb",
+    },
+  },
   images: {
     // Avatars are uploaded to Supabase storage and rendered via next/image.
     remotePatterns: [

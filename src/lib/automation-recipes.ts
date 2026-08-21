@@ -16,6 +16,8 @@ export type AutomationRecipe = {
   description: string;
   /** Lucide icon name rendered by the recipes tab. */
   emoji: string;
+  /** Which gallery shows it: sales (default) or the Client Delivery hub. */
+  category?: "sales" | "delivery";
   trigger: AutomationTrigger;
   trigger_config: Record<string, unknown>;
   conditions: Record<string, unknown>[];
@@ -483,6 +485,268 @@ export const AUTOMATION_RECIPES: AutomationRecipe[] = [
         config: {
           message:
             "Hi {{name}}, we're all set on our side to get your project moving. Shall we lock things in this week? Reply here or call +94 77 185 2522. — ARC AI",
+        },
+      },
+    ],
+  },
+
+  // -------------------------------------------------------------------------
+  // Client Delivery recipes (0085) — surfaced in the Client Delivery hub's
+  // Automations tab. All opt-in: nothing here runs until it's installed.
+  // -------------------------------------------------------------------------
+  {
+    id: "delivery-payment-onboarding",
+    name: "Payment received → full client onboarding",
+    description:
+      "The FIRST payment recorded against a project (on the Payments board or the project itself) kicks off delivery hands-free: a project checklist is seeded, the WhatsApp agent flips into onboarding mode and starts collecting the logo, photos, content and access — plus a team task and a heads-up. Supersedes \"Deposit received 🚀\" for project-linked payments; prefer the Start onboarding button if you'd rather stay in control.",
+    emoji: "🤝",
+    category: "delivery",
+    trigger: "payment_received",
+    trigger_config: { first_payment: true },
+    conditions: [],
+    steps: [
+      { kind: "start_wa_onboarding", config: {} },
+      {
+        kind: "create_task",
+        config: {
+          title: "Onboarding started — {{full_name}} ({{project_name}})",
+          notes:
+            "First payment {{amount}} received. The WhatsApp agent is collecting assets — watch the checklist in Client Delivery and step in if it stalls.",
+          due_in_days: 2,
+        },
+      },
+      {
+        kind: "notify",
+        config: {
+          user_id: "all",
+          title: "Client onboarding started 🤝",
+          body: "{{full_name}} paid {{amount}} — WhatsApp asset collection is underway for {{project_name}}.",
+        },
+      },
+    ],
+  },
+  {
+    id: "delivery-assets-complete",
+    name: "All assets in → build kickoff",
+    description:
+      "The last required checklist item lands → the project moves to In build, the team gets the build task and everyone's notified. The client's milestone message goes out automatically with the stage change.",
+    emoji: "✅",
+    category: "delivery",
+    trigger: "assets_complete",
+    trigger_config: {},
+    conditions: [],
+    steps: [
+      { kind: "set_delivery_stage", config: { stage: "build" } },
+      {
+        kind: "create_task",
+        config: {
+          title: "Start the build — {{project_name}}",
+          notes:
+            "Every required asset for {{project_name}} is collected. Assign the build and set the internal deadline.",
+          due_in_days: 1,
+        },
+      },
+      {
+        kind: "notify",
+        config: {
+          user_id: "all",
+          title: "All assets collected ✅",
+          body: "{{project_name}} has everything — moved to In build.",
+        },
+      },
+    ],
+  },
+  {
+    id: "delivery-review-request",
+    name: "Design ready → client review request",
+    description:
+      "Moving a project to Client review automatically asks the client to take a look, with their portal link — and files a task to collect the feedback. Works as a WhatsApp free-text when they've written within 24h; add a template name in the step for older threads.",
+    emoji: "🎨",
+    category: "delivery",
+    trigger: "project_stage_changed",
+    trigger_config: { stage: "review" },
+    conditions: [],
+    steps: [
+      {
+        kind: "send_whatsapp",
+        config: {
+          message:
+            "Hi {{name}}! 🎨 Your design for {{project_name}} is ready for review. Take a look here: {{portal_link}} — reply with anything you'd like changed, or a simple 👍 if we're good to continue!",
+        },
+      },
+      {
+        kind: "create_task",
+        config: {
+          title: "Collect review feedback — {{project_name}}",
+          notes: "The review request went out. Chase the feedback and log revisions.",
+          due_in_days: 2,
+        },
+      },
+    ],
+  },
+  {
+    id: "delivery-handover",
+    name: "Delivered → congrats + handover",
+    description:
+      "Marking a project Delivered sends the client a warm congratulations on WhatsApp and reminds the team to send the handover pack (credentials, invoice, guide).",
+    emoji: "🎉",
+    category: "delivery",
+    trigger: "project_stage_changed",
+    trigger_config: { stage: "delivered" },
+    conditions: [],
+    steps: [
+      {
+        kind: "send_whatsapp",
+        config: {
+          message:
+            "🎉 Congratulations {{name}} — {{project_name}} is officially delivered! It's been a pleasure building this with you. Your handover pack (access details + guide) is on its way. Anything you need, we're one message away. — ARC AI",
+        },
+      },
+      {
+        kind: "create_task",
+        config: {
+          title: "Send handover pack — {{project_name}}",
+          notes: "Credentials, final invoice/receipt and the how-to guide.",
+          due_in_days: 1,
+        },
+      },
+    ],
+  },
+  {
+    id: "delivery-review-ask",
+    name: "Delivered → Google review ask ⭐",
+    description:
+      "Three days after delivery the client gets ONE friendly ask for a Google review. The 24h window is closed by then, so this REQUIRES a Meta-approved template — create one (e.g. 'arc_review_ask', category Marketing, {{1}} = name) in WhatsApp Manager, put its exact name in the step, and paste your Google review link into the message.",
+    emoji: "⭐",
+    category: "delivery",
+    trigger: "project_delivered",
+    trigger_config: {},
+    conditions: [],
+    steps: [
+      { kind: "wait", config: { minutes: 3 * 24 * 60 } },
+      {
+        kind: "send_whatsapp",
+        config: {
+          template_name: "arc_review_ask",
+          template_lang: "en",
+          template_params: ["{{name}}"],
+          message:
+            "Hi {{name}}! Hope you're loving the new {{project_name}} 🙌 If we earned it, a quick Google review would mean the world to our small team — it takes 30 seconds: [paste your Google review link]. Thank you! — ARC AI",
+        },
+      },
+      {
+        kind: "create_task",
+        config: {
+          title: "Review ask sent — {{full_name}}",
+          notes: "If they leave one, thank them personally. If not, one gentle nudge in a few days.",
+          due_in_days: 4,
+        },
+      },
+    ],
+  },
+  {
+    id: "delivery-testimonial",
+    name: "Delivered → testimonial capture 💬",
+    description:
+      "A week after delivery, ask the client for a couple of sentences on the experience — raw material for the website and proposals. Needs a Meta-approved template (e.g. 'arc_testimonial_ask') since the 24h window is closed by then.",
+    emoji: "💬",
+    category: "delivery",
+    trigger: "project_delivered",
+    trigger_config: {},
+    conditions: [],
+    steps: [
+      { kind: "wait", config: { minutes: 7 * 24 * 60 } },
+      {
+        kind: "send_whatsapp",
+        config: {
+          template_name: "arc_testimonial_ask",
+          template_lang: "en",
+          template_params: ["{{name}}"],
+          message:
+            "Hi {{name}}! Quick favour — could you share a sentence or two about working with us on {{project_name}}? We'd love to feature it (with your permission). Just reply here 🙏 — ARC AI",
+        },
+      },
+      {
+        kind: "create_task",
+        config: {
+          title: "Save {{full_name}}'s testimonial",
+          notes: "When they reply, save the quote to the testimonials doc and get permission to publish.",
+          due_in_days: 3,
+        },
+      },
+    ],
+  },
+  {
+    id: "delivery-aftercare",
+    name: "Delivered → 2-week aftercare check-in 🩺",
+    description:
+      "Two weeks after delivery: \"is everything running smoothly?\" Catches small issues before they become complaints — and often surfaces the next piece of work. Needs a Meta-approved template (e.g. 'arc_aftercare_checkin').",
+    emoji: "🩺",
+    category: "delivery",
+    trigger: "project_delivered",
+    trigger_config: {},
+    conditions: [],
+    steps: [
+      { kind: "wait", config: { minutes: 14 * 24 * 60 } },
+      {
+        kind: "send_whatsapp",
+        config: {
+          template_name: "arc_aftercare_checkin",
+          template_lang: "en",
+          template_params: ["{{name}}"],
+          message:
+            "Hi {{name}}! Two weeks in — how's {{project_name}} treating you? Everything running smoothly? If anything needs a tweak, reply here and we'll sort it. — ARC AI",
+        },
+      },
+    ],
+  },
+  {
+    id: "delivery-upsell",
+    name: "Delivered → upsell opportunity (30 days) 📈",
+    description:
+      "A month after delivery the team gets an upsell task: what's the natural next service for this client (website → social marketing, social → e-commerce…)? Internal only — nothing is sent to the client automatically.",
+    emoji: "📈",
+    category: "delivery",
+    trigger: "project_delivered",
+    trigger_config: {},
+    conditions: [],
+    steps: [
+      { kind: "wait", config: { minutes: 30 * 24 * 60 } },
+      {
+        kind: "create_task",
+        config: {
+          title: "Upsell call — {{full_name}}",
+          notes:
+            "{{project_name}} was delivered a month ago. What are they missing — social marketing, e-commerce, maintenance, AI automation? Prep the pitch and call.",
+          due_in_days: 2,
+        },
+      },
+      {
+        kind: "notify",
+        config: {
+          user_id: "all",
+          title: "Upsell window open 📈",
+          body: "{{full_name}} is 30 days post-delivery — time for the next-service conversation.",
+        },
+      },
+    ],
+  },
+  {
+    id: "delivery-client-welcome",
+    name: "New client welcome 👋",
+    description:
+      "The moment a client record is created they get a short welcome SMS — sets the tone before any project starts.",
+    emoji: "👋",
+    category: "delivery",
+    trigger: "client_created",
+    trigger_config: {},
+    conditions: [],
+    steps: [
+      {
+        kind: "send_sms",
+        config: {
+          message:
+            "Hi {{name}}, welcome to ARC AI! You're officially on our books — expect great things. Save this number; it's the fastest way to reach the team. — ARC AI",
         },
       },
     ],

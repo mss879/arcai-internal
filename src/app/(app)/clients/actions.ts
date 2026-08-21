@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 
+import { fireAutomationTrigger } from "@/lib/automation";
 import { createClient } from "@/lib/supabase/server";
 import type { ActionResult, ClientStatus } from "@/lib/types";
 
@@ -41,6 +42,22 @@ export async function saveClient(input: ClientInput): Promise<ActionResult<{ cli
   const { data, error } = await query.select().single();
 
   if (error) return { ok: false, error: error.message };
+
+  // 0085 — client_created was declared since 0032 but never fired anywhere;
+  // the delivery suite's welcome recipe finally listens for it.
+  if (!input.id && data) {
+    await fireAutomationTrigger(supabase, {
+      trigger: "client_created",
+      client: {
+        id: data.id,
+        name: data.name,
+        email: data.email,
+        phone: data.phone,
+      },
+      payload: { name: data.name, phone: data.phone, email: data.email },
+      triggerKey: `${data.id}:created`,
+    });
+  }
 
   revalidatePath("/clients");
   return { ok: true, client: data };

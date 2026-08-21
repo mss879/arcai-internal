@@ -18,6 +18,10 @@ import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/input";
 import type { ProjectDocumentRequest } from "@/lib/types";
 import {
+  seedChecklistAction,
+  startOnboardingManual,
+} from "@/app/(app)/delivery/actions";
+import {
   createDocumentRequest,
   deleteDocumentRequest,
   regenerateShareToken,
@@ -28,17 +32,41 @@ export function PortalSection({
   shareToken,
   requests = [],
   isProjectCompleted = false,
+  serviceType = null,
+  hasClient = false,
+  onboardingStartedAt = null,
 }: {
   projectId: string;
   shareToken: string;
   requests: ProjectDocumentRequest[];
   isProjectCompleted?: boolean;
+  serviceType?: string | null;
+  hasClient?: boolean;
+  onboardingStartedAt?: string | null;
 }) {
   const [copied, setCopied] = React.useState(false);
   const [loading, setLoading] = React.useState(false);
   const [title, setTitle] = React.useState("");
   const [desc, setDesc] = React.useState("");
   const [regenerating, setRegenerating] = React.useState(false);
+  const [seeding, setSeeding] = React.useState(false);
+  const [startingOnboarding, setStartingOnboarding] = React.useState(false);
+
+  async function handleSeed() {
+    setSeeding(true);
+    const res = await seedChecklistAction(projectId);
+    setSeeding(false);
+    if (res.ok) toast.success(`Checklist seeded — ${res.seeded} items added.`);
+    else toast.error(res.error);
+  }
+
+  async function handleStartOnboarding() {
+    setStartingOnboarding(true);
+    const res = await startOnboardingManual(projectId);
+    setStartingOnboarding(false);
+    if (res.ok) toast.success(res.detail ?? "Onboarding started.");
+    else toast.error(res.error);
+  }
 
   const portalUrl = React.useMemo(() => {
     if (typeof window === "undefined") return "";
@@ -158,6 +186,42 @@ export function PortalSection({
           Resources Timeline Request
         </h3>
 
+        {/* Delivery hooks: seed the service-type checklist in one click, and
+            hand the collection to the WhatsApp agent. */}
+        {!isProjectCompleted && (
+          <div className="mb-4 flex flex-wrap gap-2">
+            {requests.length === 0 && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleSeed}
+                loading={seeding}
+                className="text-xs"
+              >
+                <Plus className="h-3.5 w-3.5 mr-1" />
+                Seed checklist{serviceType ? " from template" : ""}
+              </Button>
+            )}
+            {hasClient && !onboardingStartedAt && (
+              <Button
+                size="sm"
+                onClick={handleStartOnboarding}
+                loading={startingOnboarding}
+                className="text-xs"
+              >
+                Start WhatsApp onboarding
+              </Button>
+            )}
+            {onboardingStartedAt && (
+              <span className="inline-flex items-center rounded-lg bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-600 ring-1 ring-inset ring-emerald-200">
+                <Check className="mr-1 h-3.5 w-3.5" />
+                Agent collecting since{" "}
+                {new Date(onboardingStartedAt).toLocaleDateString()}
+              </span>
+            )}
+          </div>
+        )}
+
         {requests.length === 0 ? (
           <p className="text-xs text-slate-400 py-6 text-center">
             No document requests created for this project yet. Use the form below to request assets from the client.
@@ -168,9 +232,11 @@ export function PortalSection({
               <div key={req.id} className="relative">
                 {/* Timeline Dot */}
                 <span className={`absolute -left-[31px] top-1.5 flex h-4 w-4 items-center justify-center rounded-full border-2 bg-white transition ${
-                  req.status === "submitted" 
-                    ? "border-emerald-500 bg-emerald-500" 
-                    : "border-slate-300"
+                  req.status === "submitted"
+                    ? "border-emerald-500 bg-emerald-500"
+                    : req.status === "na"
+                      ? "border-slate-300 bg-slate-300"
+                      : "border-slate-300"
                 }`}>
                   {req.status === "submitted" && (
                     <Check className="h-2 w-2 text-white" strokeWidth={4} />
@@ -199,9 +265,14 @@ export function PortalSection({
                           {req.submitted_at ? ` · ${new Date(req.submitted_at).toLocaleDateString()}` : ""}
                         </span>
                       </div>
+                    ) : req.status === "na" ? (
+                      <span className="mt-2 inline-block rounded-md bg-slate-50 px-1.5 py-0.5 border border-slate-200 text-[10px] font-semibold text-slate-500 uppercase">
+                        Not applicable
+                      </span>
                     ) : (
                       <span className="mt-2 inline-block rounded-md bg-amber-50 px-1.5 py-0.5 border border-amber-100 text-[10px] font-semibold text-amber-700 uppercase">
                         Waiting for Client
+                        {req.source === "team" && req.required === false ? " · optional" : ""}
                       </span>
                     )}
                   </div>

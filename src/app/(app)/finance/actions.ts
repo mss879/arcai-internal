@@ -123,6 +123,11 @@ export async function setInstallmentPaid(
           plan_title: plan.title,
           total: Number(plan.total) || 0,
           total_amount: `${plan.currency} ${Number(plan.total).toLocaleString()}`,
+          // 0085 — which surface recorded the money. Plans carry no project
+          // link, so first_payment stays unset here and the delivery-kickoff
+          // recipe (which filters on it) never fires from Finance; the
+          // legacy seq-1 deposit recipe still covers this path.
+          source: "finance",
         },
         triggerKey: `${id}:paid`,
       });

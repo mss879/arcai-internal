@@ -210,3 +210,57 @@ export const SERVICE_TYPE_LABELS: Record<string, string> = {
   ecommerce_website: "E-commerce Website",
   social_media_marketing: "Social Media Marketing",
 };
+
+/** Client Delivery pipeline (0084). Order = the board's column order.
+ * A project with delivery_stage NULL renders under "Not started". */
+export const DELIVERY_STAGES = [
+  "onboarding",
+  "assets",
+  "build",
+  "review",
+  "delivered",
+  "aftercare",
+] as const;
+
+export const DELIVERY_STAGE_META: Record<
+  (typeof DELIVERY_STAGES)[number],
+  { label: string; badge: string; clientLabel: string }
+> = {
+  onboarding: {
+    label: "Onboarding",
+    badge: "bg-primary-50 text-primary-600 ring-primary-200",
+    clientLabel: "Getting started",
+  },
+  assets: {
+    label: "Collecting assets",
+    badge: "bg-amber-50 text-amber-600 ring-amber-200",
+    clientLabel: "Collecting your content",
+  },
+  build: {
+    label: "In build",
+    badge: "bg-sky-50 text-sky-600 ring-sky-200",
+    clientLabel: "Building your project",
+  },
+  review: {
+    label: "Client review",
+    badge: "bg-violet-50 text-violet-600 ring-violet-200",
+    clientLabel: "Ready for your review",
+  },
+  delivered: {
+    label: "Delivered",
+    badge: "bg-emerald-50 text-emerald-600 ring-emerald-200",
+    clientLabel: "Delivered",
+  },
+  aftercare: {
+    label: "Aftercare",
+    badge: "bg-slate-100 text-slate-600 ring-slate-200",
+    clientLabel: "Aftercare",
+  },
+};
+
+export const ASSET_CATEGORY_LABELS: Record<string, string> = {
+  brand: "Brand",
+  content: "Content",
+  photos: "Photos",
+  access: "Access",
+};

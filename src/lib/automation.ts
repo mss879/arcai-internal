@@ -6,6 +6,8 @@ import type {
   AutomationTrigger,
   Database,
 } from "@/lib/database.types";
+import { appLink } from "@/lib/app-url";
+import { DELIVERY_STAGES } from "@/lib/constants";
 import { sendGenericEmail } from "@/lib/email";
 import { sendPushToUser } from "@/lib/push";
 import { sendSmsToUser } from "@/lib/sms-alerts";
@@ -52,6 +54,11 @@ export type TriggerEvent = {
     name: string;
     email?: string | null;
     phone?: string | null;
+  } | null;
+  /** The project this event is about (0085 — delivery triggers). */
+  project?: {
+    id: string;
+    name: string;
   } | null;
   /** Extra values exposed to message tokens as {{key}}. */
   payload?: Record<string, unknown>;
@@ -113,8 +120,15 @@ function matchesTriggerConfig(automation: Automation, event: TriggerEvent): bool
         .includes(keyword);
     }
     case "payment_received":
-      // Optional installment filter — seq 1 = "the deposit landed".
-      return !cfg.seq || Number(event.payload?.seq ?? 0) === Number(cfg.seq);
+      // Optional installment filter — seq 1 = "the deposit landed" — and the
+      // 0085 "first payment on the project" filter for delivery kickoffs.
+      if (cfg.seq && Number(event.payload?.seq ?? 0) !== Number(cfg.seq))
+        return false;
+      if (cfg.first_payment && !event.payload?.first_payment) return false;
+      return true;
+    case "project_stage_changed":
+      // No stage filter = any delivery-stage move.
+      return !cfg.stage || event.payload?.new_stage === cfg.stage;
     default:
       return true;
   }
@@ -195,18 +209,27 @@ async function enrollRun(
     event.client?.name ||
     payloadName;
 
+  // Project id/name ride in context too, so {{project_name}} works as a
+  // token everywhere without renderTokens learning anything new.
+  const context = { ...(event.payload ?? {}) } as Record<string, unknown>;
+  if (event.project) {
+    context.project_id = event.project.id;
+    context.project_name = event.project.name;
+  }
+
   const { data: run, error } = await supabase
     .from("automation_runs")
     .insert({
       automation_id: automation.id,
       lead_id: event.lead?.id ?? null,
       client_id: event.client?.id || event.lead?.client_id || null,
+      project_id: event.project?.id ?? null,
       subject_name: subjectName,
       subject_phone:
         event.lead?.contact_phone ?? event.client?.phone ?? payloadPhone,
       subject_email:
         event.lead?.contact_email ?? event.client?.email ?? payloadEmail,
-      context: (event.payload ?? {}) as Record<string, unknown>,
+      context,
       trigger_key: event.triggerKey ?? null,
     })
     .select("*")
@@ -539,9 +562,17 @@ function isNudgeTrigger(
 ): boolean {
   if (!trigger) return false;
   if (
-    ["lead_inactive", "invoice_unpaid", "installment_due", "cheque_due", "date_reached"].includes(
-      trigger,
-    )
+    [
+      "lead_inactive",
+      "invoice_unpaid",
+      "installment_due",
+      "cheque_due",
+      "date_reached",
+      // 0085 — post-delivery recipes are wait-then-message chains (review
+      // ask, testimonial, aftercare); by send time the client did nothing
+      // recent, so they must respect quiet hours like any other nudge.
+      "project_delivered",
+    ].includes(trigger)
   ) {
     return true;
   }
@@ -847,7 +878,11 @@ async function executeStep(
     case "notify": {
       const title = renderTokens(String(cfg.title ?? "Automation"), run, lead);
       const body = renderTokens(String(cfg.body ?? ""), run, lead);
-      const link = run.lead_id ? `/crm/lead/${run.lead_id}` : "/automation";
+      const link = run.project_id
+        ? `/projects/${run.project_id}`
+        : run.lead_id
+          ? `/crm/lead/${run.lead_id}`
+          : "/automation";
       let userIds: string[] = [];
       if (cfg.user_id && cfg.user_id !== "all") {
         userIds = [String(cfg.user_id)];
@@ -1164,17 +1199,59 @@ async function executeStep(
         String(ctx.plan_title ?? "").trim() ||
         `${run.subject_name || "New client"} — Website project`;
       const budget = Number(String(ctx.total ?? "")) || lead?.value || null;
-      const { error } = await supabase.from("projects").insert({
-        name,
-        description: `Created automatically when the deposit landed${run.subject_name ? ` — client: ${run.subject_name}` : ""}.`,
-        client_id: run.client_id,
-        status: "planning",
-        budget,
-        currency: "LKR",
-        start_date: new Date().toISOString().slice(0, 10),
-        created_by: null,
-      });
-      if (error) return { ok: false, detail: error.message };
+      const deliveryStage = String(cfg.delivery_stage ?? "");
+      const { data: project, error } = await supabase
+        .from("projects")
+        .insert({
+          name,
+          description: `Created automatically when the deposit landed${run.subject_name ? ` — client: ${run.subject_name}` : ""}.`,
+          client_id: run.client_id,
+          status: "planning",
+          budget,
+          total_value: Number(String(ctx.total ?? "")) || null,
+          service_type:
+            String(cfg.service_type ?? "").trim() ||
+            String(ctx.service_type ?? "").trim() ||
+            null,
+          delivery_stage: (DELIVERY_STAGES as readonly string[]).includes(
+            deliveryStage,
+          )
+            ? (deliveryStage as (typeof DELIVERY_STAGES)[number])
+            : null,
+          currency: "LKR",
+          start_date: new Date().toISOString().slice(0, 10),
+          created_by: null,
+        })
+        .select("id, name, share_token, service_type")
+        .single();
+      if (error || !project)
+        return { ok: false, detail: error?.message ?? "Project insert failed." };
+
+      // Seed the asset checklist from the service-type template right away,
+      // so a following start_wa_onboarding step has items to ask for.
+      if (cfg.seed_checklist) {
+        const { seedProjectChecklist } = await import("@/lib/wa-onboarding");
+        await seedProjectChecklist(supabase, project.id, project.service_type);
+      }
+
+      // Expose the project to later steps (start_wa_onboarding,
+      // set_delivery_stage) and to {{project_name}}/{{portal_link}} tokens.
+      const portalLink = project.share_token
+        ? appLink(`/public/project/${project.share_token}`)
+        : null;
+      const newContext = {
+        ...ctx,
+        project_id: project.id,
+        project_name: project.name,
+        ...(portalLink ? { portal_link: portalLink } : {}),
+      };
+      await supabase
+        .from("automation_runs")
+        .update({ context: newContext, project_id: project.id })
+        .eq("id", run.id);
+      run.context = newContext;
+      run.project_id = project.id;
+
       if (run.lead_id) {
         await supabase.from("lead_activities").insert({
           lead_id: run.lead_id,
@@ -1185,6 +1262,41 @@ async function executeStep(
         });
       }
       return { ok: true, detail: `Project "${name}"` };
+    }
+
+    case "start_wa_onboarding": {
+      const ctx = (run.context ?? {}) as Record<string, unknown>;
+      const projectId = run.project_id || String(ctx.project_id ?? "");
+      // Soft outcomes on purpose: this step usually sits mid-recipe, and the
+      // create_task/notify steps after it are exactly what should still run
+      // when the kickoff can't go out (no phone, no template…) — the human
+      // fallback. startWaOnboarding files its own crm_tasks in those cases.
+      if (!projectId)
+        return {
+          ok: true,
+          detail:
+            "Skipped — run has no project. Put a create_project step before this one, or fire from a project event.",
+        };
+      const { startWaOnboarding } = await import("@/lib/wa-onboarding");
+      const res = await startWaOnboarding(supabase, projectId);
+      return { ok: true, detail: res.detail };
+    }
+
+    case "set_delivery_stage": {
+      const ctx = (run.context ?? {}) as Record<string, unknown>;
+      const projectId = run.project_id || String(ctx.project_id ?? "");
+      if (!projectId) return { ok: true, detail: "Skipped — run has no project." };
+      const stage = String(cfg.stage ?? "");
+      if (!(DELIVERY_STAGES as readonly string[]).includes(stage))
+        return { ok: false, detail: `"${stage}" is not a delivery stage.` };
+      const { setProjectDeliveryStage } = await import("@/lib/delivery");
+      const res = await setProjectDeliveryStage(
+        supabase,
+        projectId,
+        stage as (typeof DELIVERY_STAGES)[number],
+        { actor: "automation" },
+      );
+      return { ok: res.ok, detail: res.detail };
     }
 
     default:

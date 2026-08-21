@@ -188,6 +188,9 @@ async function pickCandidate(
     .eq("agent_enabled", true)
     .eq("do_not_contact", false)
     .eq("needs_attention", false)
+    // 0086 — never revival-knock a client who's mid-onboarding: they're a
+    // PAYING customer in the delivery flow, not a gone-quiet prospect.
+    .eq("mode", "sales")
     .not("last_inbound_at", "is", null)
     .lte("last_message_at", cutoff)
     .order("last_message_at", { ascending: false })

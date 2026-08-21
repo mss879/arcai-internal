@@ -78,6 +78,26 @@ export const TRIGGER_META: Record<
     description:
       "An inbound WhatsApp message arrives. Add a keyword in the trigger config to only fire on messages containing it.",
   },
+  project_stage_changed: {
+    label: "Project stage changed",
+    description:
+      "A project moves to a new delivery stage (onboarding → assets → build → review → delivered → aftercare). Pick a stage to fire only on that one.",
+  },
+  project_delivered: {
+    label: "Project delivered",
+    description:
+      "A project's delivery stage lands on Delivered — the hook for review asks, testimonials, aftercare and upsells.",
+  },
+  asset_submitted: {
+    label: "Asset received",
+    description:
+      "A checklist item lands — the client uploaded it on the portal or sent it over WhatsApp.",
+  },
+  assets_complete: {
+    label: "All assets collected",
+    description:
+      "The LAST required checklist item arrives — everything needed to start the build is in. Fires once per project.",
+  },
 };
 
 export const STEP_META: Record<
@@ -165,6 +185,18 @@ export const STEP_META: Record<
     label: "Create project",
     description: "Spin up a project for the client (e.g. the moment the deposit lands).",
     tone: "bg-purple-600",
+  },
+  start_wa_onboarding: {
+    label: "Start WhatsApp onboarding",
+    description:
+      "Flip the client's WhatsApp thread into asset-collection mode and send the kickoff — the agent then collects logo, photos, content and access, and files everything against the project checklist.",
+    tone: "bg-green-700",
+  },
+  set_delivery_stage: {
+    label: "Set delivery stage",
+    description:
+      "Move the run's project to a delivery stage — fires the same milestone notifications as moving it on the board.",
+    tone: "bg-purple-500",
   },
   wait: {
     label: "Wait",

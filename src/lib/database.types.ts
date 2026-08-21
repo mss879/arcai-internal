@@ -170,7 +170,12 @@ export type AutomationTrigger =
   | "webhook"
   | "wa_message_received"
   | "quote_viewed"
-  | "payment_received";
+  | "payment_received"
+  // 0085 — Client Delivery
+  | "project_stage_changed"
+  | "project_delivered"
+  | "asset_submitted"
+  | "assets_complete";
 export type AutomationStepKind =
   | "send_sms"
   | "send_email"
@@ -188,7 +193,33 @@ export type AutomationStepKind =
   | "wait"
   | "send_whatsapp"
   | "convert_quote_to_invoice"
-  | "create_project";
+  | "create_project"
+  // 0085 — Client Delivery
+  | "start_wa_onboarding"
+  | "set_delivery_stage";
+/** Client Delivery pipeline (0084). NULL on projects = not started. */
+export type DeliveryStage =
+  | "onboarding"
+  | "assets"
+  | "build"
+  | "review"
+  | "delivered"
+  | "aftercare";
+export type AssetCategory = "brand" | "content" | "photos" | "access";
+export type AssetRequestStatus = "pending" | "submitted" | "na";
+export type AssetRequestSource = "portal" | "whatsapp" | "team";
+export type DeliveryEventKind =
+  | "kickoff"
+  | "stage_changed"
+  | "asset_submitted"
+  | "asset_filed"
+  | "asset_na"
+  | "chase_sent"
+  | "stalled_alert"
+  | "assets_complete"
+  | "milestone_sent";
+/** Which brain the WhatsApp agent runs for a contact (0086). */
+export type WaContactMode = "sales" | "onboarding";
 /** WhatsApp system (0048). */
 export type WaDirection = "in" | "out";
 export type WaMessageStatus =
@@ -452,6 +483,27 @@ export type Database = {
           due_date: string | null;
           created_by: UUID | null;
           created_at: Timestamp;
+          // 0016 — client portal
+          total_value: number | null;
+          deposit_paid: number | null;
+          share_token: UUID | null;
+          service_type: string | null;
+          // 0083 — attached proposal/invoice documents
+          proposal_url: string | null;
+          proposal_name: string | null;
+          proposal_path: string | null;
+          invoice_url: string | null;
+          invoice_name: string | null;
+          invoice_path: string | null;
+          // 0084 — Client Delivery pipeline
+          delivery_stage: DeliveryStage | null;
+          delivery_stage_changed_at: Timestamp | null;
+          /** When WhatsApp onboarding was kicked off — doubles as the
+           * one-kickoff-per-project claim. */
+          onboarding_started_at: Timestamp | null;
+          stalled_alerted_at: Timestamp | null;
+          chaser_paused: boolean;
+          updated_at: Timestamp;
         };
         Insert: {
           id?: UUID;
@@ -465,8 +517,127 @@ export type Database = {
           due_date?: string | null;
           created_by?: UUID | null;
           created_at?: Timestamp;
+          // 0016
+          total_value?: number | null;
+          deposit_paid?: number | null;
+          share_token?: UUID | null;
+          service_type?: string | null;
+          // 0083
+          proposal_url?: string | null;
+          proposal_name?: string | null;
+          proposal_path?: string | null;
+          invoice_url?: string | null;
+          invoice_name?: string | null;
+          invoice_path?: string | null;
+          // 0084
+          delivery_stage?: DeliveryStage | null;
+          delivery_stage_changed_at?: Timestamp | null;
+          onboarding_started_at?: Timestamp | null;
+          stalled_alerted_at?: Timestamp | null;
+          chaser_paused?: boolean;
+          updated_at?: Timestamp;
         };
         Update: Partial<Database["public"]["Tables"]["projects"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0016 — per-project asset checklist; 0084 grew it into the
+      // Client Delivery asset-collection engine.
+      project_document_requests: {
+        Row: {
+          id: UUID;
+          project_id: UUID;
+          title: string;
+          description: string | null;
+          status: AssetRequestStatus;
+          file_url: string | null;
+          file_name: string | null;
+          submitted_at: Timestamp | null;
+          created_at: Timestamp;
+          // 0084
+          category: AssetCategory | null;
+          required: boolean;
+          position: number;
+          source: AssetRequestSource;
+          wa_message_id: UUID | null;
+          file_size: number | null;
+          file_type: string | null;
+          chase_count: number;
+          last_chased_at: Timestamp | null;
+        };
+        Insert: {
+          id?: UUID;
+          project_id: UUID;
+          title: string;
+          description?: string | null;
+          status?: AssetRequestStatus;
+          file_url?: string | null;
+          file_name?: string | null;
+          submitted_at?: Timestamp | null;
+          created_at?: Timestamp;
+          category?: AssetCategory | null;
+          required?: boolean;
+          position?: number;
+          source?: AssetRequestSource;
+          wa_message_id?: UUID | null;
+          file_size?: number | null;
+          file_type?: string | null;
+          chase_count?: number;
+          last_chased_at?: Timestamp | null;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["project_document_requests"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      // 0084 — Client Delivery settings singleton (id = 1).
+      delivery_settings: {
+        Row: {
+          id: number;
+          chaser_enabled: boolean;
+          chaser_interval_days: number;
+          chaser_max_touches: number;
+          chaser_message: string;
+          chaser_template_name: string | null;
+          chaser_template_lang: string;
+          stalled_days: number;
+          stalled_alerts_enabled: boolean;
+          onboarding_template_name: string | null;
+          onboarding_template_lang: string;
+          welcome_message: string;
+          milestone_notify_enabled: boolean;
+          /** Per-stage client message overrides, keyed by DeliveryStage. */
+          milestone_messages: Record<string, string>;
+          review_ask_enabled: boolean;
+          google_review_url: string | null;
+          updated_at: Timestamp;
+        };
+        Insert: Partial<
+          Database["public"]["Tables"]["delivery_settings"]["Row"]
+        > & { id: number };
+        Update: Partial<Database["public"]["Tables"]["delivery_settings"]["Row"]>;
+        Relationships: [];
+      };
+      // 0084 — Client Delivery activity feed.
+      delivery_events: {
+        Row: {
+          id: UUID;
+          project_id: UUID;
+          kind: DeliveryEventKind;
+          detail: string | null;
+          actor: string | null;
+          meta: Record<string, unknown> | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          project_id: UUID;
+          kind: DeliveryEventKind;
+          detail?: string | null;
+          actor?: string | null;
+          meta?: Record<string, unknown> | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["delivery_events"]["Insert"]>;
         Relationships: [];
       };
       company_payments: {
@@ -1811,6 +1982,8 @@ export type Database = {
           automation_id: UUID;
           lead_id: UUID | null;
           client_id: UUID | null;
+          // 0085 — the project this run concerns, when the trigger knew it.
+          project_id: UUID | null;
           subject_name: string;
           subject_phone: string | null;
           subject_email: string | null;
@@ -1829,6 +2002,8 @@ export type Database = {
           automation_id: UUID;
           lead_id?: UUID | null;
           client_id?: UUID | null;
+          // 0085
+          project_id?: UUID | null;
           subject_name?: string;
           subject_phone?: string | null;
           subject_email?: string | null;
@@ -2276,6 +2451,11 @@ export type Database = {
           post_call_checkin_sent_at: Timestamp | null;
           // 0077 — which instant first reply they received (A/B)
           first_reply_variant: WaFirstReplyVariant | null;
+          // 0086 — which brain the agent runs for this thread. 'onboarding'
+          // = delivery coordinator collecting project assets; the sales
+          // machinery (follow-ups, promises, revival) skips the thread.
+          mode: WaContactMode;
+          onboarding_project_id: UUID | null;
           created_at: Timestamp;
           updated_at: Timestamp;
         };
@@ -2312,6 +2492,9 @@ export type Database = {
           post_call_checkin_sent_at?: Timestamp | null;
           // 0077 — which instant first reply they received (A/B)
           first_reply_variant?: WaFirstReplyVariant | null;
+          // 0086 — see the Row comment
+          mode?: WaContactMode;
+          onboarding_project_id?: UUID | null;
           created_at?: Timestamp;
           updated_at?: Timestamp;
         };

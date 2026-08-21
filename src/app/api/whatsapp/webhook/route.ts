@@ -240,7 +240,9 @@ async function handleMessages(supabase: DB, value: WaWebhookValue): Promise<void
       body = `📷 ${analysis?.description || "[photo]"}${caption ? ` — "${caption}"` : ""}`;
       meta = {
         image: true,
-        ...(media ? { image_url: media.url } : {}),
+        ...(media
+          ? { image_url: media.url, mime: media.mimeType, size: media.size }
+          : {}),
         ...(analysis ? { kind: analysis.kind, slip: analysis.slip } : {}),
       };
     } else if (message.type === "document" && message.document?.id) {
@@ -252,11 +254,28 @@ async function handleMessages(supabase: DB, value: WaWebhookValue): Promise<void
       );
       const filename = message.document.filename?.trim() || "document";
       const caption = message.document.caption?.trim();
-      body = `📄 [document] ${filename}${caption ? ` — "${caption}"` : ""}`;
+      // PDFs get READ (0086): text out, one-line AI summary in — so the
+      // agent genuinely knows what a brand guide, catalog or slip says
+      // instead of seeing only a filename.
+      const isPdf =
+        (media?.mimeType ?? message.document.mime_type ?? "").includes("pdf") ||
+        filename.toLowerCase().endsWith(".pdf");
+      const pdf =
+        media && isPdf ? await analyzeInboundPdf(media.data, filename) : null;
+      body = pdf
+        ? `📄 ${filename} — ${pdf.summary}${caption ? ` — "${caption}"` : ""}`
+        : `📄 [document] ${filename}${caption ? ` — "${caption}"` : ""}`;
       meta = {
         document: true,
         filename,
-        ...(media ? { document_url: media.url } : {}),
+        ...(media
+          ? { document_url: media.url, mime: media.mimeType, size: media.size }
+          : {}),
+        ...(pdf
+          ? { doc_kind: pdf.doc_kind, doc_summary: pdf.summary }
+          : media && isPdf
+            ? { doc_unreadable: true }
+            : {}),
       };
     } else if (message.type === "reaction") {
       // Tagged with the message it targets so the inbox can render it ON
@@ -343,12 +362,19 @@ async function handleMessages(supabase: DB, value: WaWebhookValue): Promise<void
         });
       }
 
-      // Payment-slip watch: a classified slip always alerts the team; an
-      // unreadable image or any document alerts only when an unpaid
-      // installment is actually waiting.
+      // Payment-slip watch: a classified slip always alerts the team — in
+      // ANY mode, so a balance payment mid-onboarding still surfaces. The
+      // fuzzy path is now only for media the analyzers couldn't read (0086:
+      // it used to be EVERY document, which meant a client's brand-guide
+      // PDF during onboarding pinged accounts) — and never in onboarding,
+      // where unclassified files are almost certainly assets.
       const kind = (meta as { kind?: string }).kind;
-      const certainSlip = kind === "payment_slip";
-      const maybeSlip = message.type === "document" || !kind;
+      const docKind = (meta as { doc_kind?: string }).doc_kind;
+      const certainSlip = kind === "payment_slip" || docKind === "payment_slip";
+      const maybeSlip =
+        contact.mode !== "onboarding" &&
+        ((message.type === "image" && !kind) ||
+          (message.type === "document" && !docKind));
       if (certainSlip || maybeSlip) {
         await handleInboundPaymentSlip(supabase, contact, {
           description: body,
@@ -406,9 +432,27 @@ type InboundSlip = {
 } | null;
 
 type ImageAnalysis = {
-  kind: "payment_slip" | "website" | "logo" | "product" | "other";
+  kind:
+    | "payment_slip"
+    | "website"
+    | "logo"
+    | "product"
+    | "brand_asset"
+    | "photo"
+    | "content_doc"
+    | "other";
   description: string;
   slip: InboundSlip;
+};
+
+type PdfAnalysis = {
+  doc_kind:
+    | "payment_slip"
+    | "brand_asset"
+    | "content_doc"
+    | "company_profile"
+    | "other";
+  summary: string;
 };
 
 /** Download inbound media and persist it to storage. Null on any failure —
@@ -418,7 +462,7 @@ async function ingestInboundMedia(
   contactId: string,
   mediaId: string,
   label: "image" | "document",
-): Promise<{ url: string; mimeType: string } | null> {
+): Promise<{ url: string; mimeType: string; size: number; data: Buffer } | null> {
   try {
     const { downloadWaMedia } = await import("@/lib/whatsapp");
     const media = await downloadWaMedia(mediaId);
@@ -435,7 +479,13 @@ async function ingestInboundMedia(
     const { data } = supabase.storage
       .from(STORAGE_BUCKETS.waMedia)
       .getPublicUrl(path);
-    return { url: data.publicUrl, mimeType: media.mimeType };
+    // The buffer rides along so PDF extraction needn't re-download.
+    return {
+      url: data.publicUrl,
+      mimeType: media.mimeType,
+      size: media.data.length,
+      data: media.data,
+    };
   } catch (e) {
     console.error(`[whatsapp] inbound ${label} ingest failed:`, e);
     return null;
@@ -460,13 +510,22 @@ async function analyzeInboundImage(url: string): Promise<ImageAnalysis | null> {
     const raw = await openaiVisionJSON(
       url,
       `You are analyzing a photo a customer sent to a web agency on WhatsApp. Reply ONLY with JSON:
-{"kind":"payment_slip"|"website"|"logo"|"product"|"other","description":"1-2 short sentences saying what the image shows — include any business names, amounts or important visible text","slip":null|{"amount":number|null,"currency":string|null,"date":string|null,"bank":string|null,"reference":string|null}}
-"payment_slip" = a bank transfer receipt, deposit slip or payment confirmation screenshot (fill "slip" from what's visible). "website" = a screenshot of a website or app.`,
+{"kind":"payment_slip"|"website"|"logo"|"product"|"brand_asset"|"photo"|"content_doc"|"other","description":"1-2 short sentences saying what the image shows — include any business names, amounts or important visible text","slip":null|{"amount":number|null,"currency":string|null,"date":string|null,"bank":string|null,"reference":string|null}}
+"payment_slip" = a bank transfer receipt, deposit slip or payment confirmation screenshot (fill "slip" from what's visible). "website" = a screenshot of a website or app. "logo" = a logo file/mark on its own. "brand_asset" = other brand material (colour palette, letterhead, brand-guide page). "photo" = a real-world photo of a business, products, team or premises. "content_doc" = a photographed/scanned page of text (menu, price list, about-us text).`,
       { timeoutMs: 20_000 },
     );
     const parsed = JSON.parse(raw) as Partial<ImageAnalysis>;
     const kind = (
-      ["payment_slip", "website", "logo", "product", "other"] as const
+      [
+        "payment_slip",
+        "website",
+        "logo",
+        "product",
+        "brand_asset",
+        "photo",
+        "content_doc",
+        "other",
+      ] as const
     ).includes(parsed.kind as ImageAnalysis["kind"])
       ? (parsed.kind as ImageAnalysis["kind"])
       : "other";
@@ -482,6 +541,57 @@ async function analyzeInboundImage(url: string): Promise<ImageAnalysis | null> {
     };
   } catch (e) {
     console.error("[whatsapp] image analysis failed:", e);
+    return null;
+  }
+}
+
+/**
+ * Read an inbound PDF (0086): extract its text with unpdf and have the AI
+ * classify + summarize it, so the agent knows what a brand guide, product
+ * catalog or payment confirmation actually SAYS. Null on any failure —
+ * scanned/image-only PDFs yield no text and degrade to the filename body.
+ * Must never throw: the webhook has to 200.
+ */
+async function analyzeInboundPdf(
+  data: Buffer,
+  filename: string,
+): Promise<PdfAnalysis | null> {
+  try {
+    const { isOpenAIConfigured, openaiChatJSON } = await import("@/lib/ai/openai");
+    if (!isOpenAIConfigured()) return null;
+
+    const { getDocumentProxy, extractText } = await import("unpdf");
+    const pdf = await getDocumentProxy(new Uint8Array(data));
+    if (pdf.numPages > 40) return null; // a 100-page catalog isn't summarizable here
+    const { text } = await extractText(pdf, { mergePages: true });
+    const excerpt = (text ?? "").replace(/\s+/g, " ").trim().slice(0, 8000);
+    if (excerpt.length < 40) return null; // scanned or empty
+
+    const raw = await openaiChatJSON(
+      [
+        {
+          role: "system",
+          content:
+            'A customer sent a PDF to a web agency on WhatsApp. From its extracted text, reply ONLY with JSON: {"doc_kind":"payment_slip"|"brand_asset"|"content_doc"|"company_profile"|"other","summary":"1-2 short sentences saying what the document is and the key facts in it (business names, what it contains, totals)"}. "payment_slip" = a bank transfer/payment confirmation. "brand_asset" = brand guidelines, logo specs, colour/font definitions. "content_doc" = website/marketing content: services, product catalogs, price lists, menus, testimonials. "company_profile" = an about-the-company document.',
+        },
+        {
+          role: "user",
+          content: `Filename: ${filename}\n\nExtracted text:\n${excerpt}`,
+        },
+      ],
+      { timeoutMs: 25_000, temperature: 0 },
+    );
+    const parsed = JSON.parse(raw) as Partial<PdfAnalysis>;
+    const docKind = (
+      ["payment_slip", "brand_asset", "content_doc", "company_profile", "other"] as const
+    ).includes(parsed.doc_kind as PdfAnalysis["doc_kind"])
+      ? (parsed.doc_kind as PdfAnalysis["doc_kind"])
+      : "other";
+    const summary = String(parsed.summary ?? "").trim();
+    if (!summary) return null;
+    return { doc_kind: docKind, summary: summary.slice(0, 300) };
+  } catch (e) {
+    console.error("[whatsapp] pdf analysis failed:", e);
     return null;
   }
 }

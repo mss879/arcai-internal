@@ -9,6 +9,8 @@ export type CompanyPaymentInput = {
   company_name: string;
   price_lkr: number;
   status: "pending" | "upcoming";
+  /** The project this payment settles (0083). Null = a standalone payment. */
+  project_id?: string | null;
 };
 
 export async function createCompanyPayment(
@@ -31,10 +33,13 @@ export async function createCompanyPayment(
     company_name: input.company_name.trim(),
     price_lkr: input.price_lkr,
     status: input.status,
+    project_id: input.project_id || null,
   });
 
   if (error) return { ok: false, error: error.message };
   revalidatePath("/payments");
+  // A linked payment moves the project's balance — refresh that board too.
+  if (input.project_id) revalidatePath("/projects");
   return { ok: true };
 }
 
@@ -55,6 +60,8 @@ export async function toggleCompanyPaymentPaid(
 
   if (error) return { ok: false, error: error.message };
   revalidatePath("/payments");
+  // Paid/unpaid is what the project balance counts — keep that board honest.
+  revalidatePath("/projects");
   return { ok: true };
 }
 
@@ -70,5 +77,6 @@ export async function deleteCompanyPayment(
   const { error } = await supabase.from("company_payments").delete().eq("id", id);
   if (error) return { ok: false, error: error.message };
   revalidatePath("/payments");
+  revalidatePath("/projects");
   return { ok: true };
 }

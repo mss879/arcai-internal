@@ -1,6 +1,6 @@
 # ARC AI — Full Pricing Sheet
 
-_Generated from the live source of truth (`src/lib/pricing-catalog.ts` and `src/lib/proposal.ts`) on 14 Aug 2026 — reflects the FINAL agreed pricing. These are the code defaults; the /pricing page can override any amount, and those overrides are what the agent quotes if set._
+_Generated from the live source of truth (`src/lib/pricing-catalog.ts` and `src/lib/proposal.ts`) on 14 Aug 2026 — reflects the FINAL agreed pricing. Updated 21 Aug 2026: Smart System Budget added (the Smart System now has two options). These are the code defaults; the /pricing page can override any amount, and those overrides are what the agent quotes if set._
 
 All prices in LKR. **Every current package is one-time with no monthly fee to ARC** — the client pays only their own AI/API usage, at cost. Hosting free forever under 1GB media.
 
@@ -12,6 +12,7 @@ All prices in LKR. **Every current package is one-time with no monthly fee to AR
 |---|---:|---:|---|---|---|
 | Smart Site | Rs 175,000 | 15 | Simple | Answers only | Website + CRM + AI answers |
 | Smart Business | Rs 250,000 | 25 | Advanced (lead scoring, roles) | Takes action | Invoices, proposals, customer emails |
+| Smart System Budget | Rs 150,000 | — | Included | WhatsApp (streamlined) | Agent + CRM + 1 automation; no website; no data gathering/analytics |
 | Smart System | from Rs 450,000 | 50 | Advanced | WhatsApp + Instagram | Auto lead follow-up, 3 custom automations |
 | E-Commerce Store | from Rs 150,000 | — | — | — | Store only; gateway + delivery included |
 | Smart Store System | from Rs 350,000 | — | Yes | Yes | Store + customer profiles + automations |
@@ -49,6 +50,17 @@ _Every package includes a CRM and an AI agent. One-time payment, no monthly fee 
   - Conversion-optimized design with strategic CTAs
 
   _Exact delivery timeline confirmed with your quote._
+
+#### Smart System Budget — The Essentials, One Automation
+
+- **Price: Rs 150,000 one-time**
+
+  - AI agent on your own WhatsApp number — answers & sells 24/7 (streamlined: no automatic data gathering or analytics)
+  - Smart CRM — every chat becomes a tracked lead in one pipeline
+  - 1 custom workflow automation of your choice
+  - English, Sinhala & Tamil — matches the customer's language
+
+  _No website included — the budget way into the Smart System. Upgrading later credits what you've paid toward the full system. (Quoted/proposed through the agent machinery: `project_type=agent`, `agent_platform=smart_system_budget`.)_
 
 #### Smart System **(Flagship)** — One Smart System. Every Next Step.
 
@@ -281,6 +293,7 @@ _Halo Media, powered by ARC AI. Monthly retainers._
 |---|---:|---|
 | WhatsApp AI Agent + CRM | Rs 175,000 | No monthly fee to ARC — the client pays only their own AI/API usage, at cost |
 | Instagram AI Agent + CRM | Rs 150,000 | No monthly fee to ARC — the client pays only their own AI/API usage, at cost |
+| Smart System Budget (agent-class, no website) | Rs 150,000 | No monthly fee to ARC — the client pays only their own AI/API usage, at cost |
 
 ### Aftercare & extras
 

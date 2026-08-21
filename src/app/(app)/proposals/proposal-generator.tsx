@@ -4,7 +4,7 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import { format } from "date-fns";
 import { toast } from "sonner";
-import { Download, Loader2, Mic, Plus, Sparkles, Square, Trash2 } from "lucide-react";
+import { Download, Loader2, Mic, Plus, Receipt, Sparkles, Square, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select, Textarea } from "@/components/ui/input";
@@ -28,6 +28,12 @@ import {
   type ProposalSelection,
 } from "@/lib/proposal";
 import type { Client } from "@/lib/types";
+
+import {
+  INVOICE_HANDOFF_PARAM,
+  INVOICE_HANDOFF_SOURCE,
+  stashInvoiceDraft,
+} from "@/lib/invoice-handoff";
 
 import { generateProposal, saveProposal } from "./actions";
 import { downloadProposalPdf } from "./download-pdf";
@@ -156,6 +162,44 @@ export function ProposalGenerator({ clients }: { clients: ClientLite[] }) {
     });
   }
 
+  /**
+   * Turn the finished proposal into an invoice: save it first (so the
+   * proposal itself is archived), then hand its customer and priced lines to
+   * the invoice generator, which renders them into the branded invoice
+   * template ready to review and download.
+   */
+  async function handleGenerateInvoice() {
+    if (!clientName.trim()) {
+      toast.error("Add a client name.");
+      return;
+    }
+    setSaving(true);
+    const saveRes = await saveProposal({
+      client_name: clientName,
+      project_name: projectName,
+      proposal_date: date,
+      selection,
+      content: cleaned,
+      grand_total: pricing.oneTimeTotal,
+    });
+    if (!saveRes.ok) toast.error(`Couldn't save the proposal: ${saveRes.error}`);
+
+    stashInvoiceDraft({
+      billToName: clientName.trim(),
+      billToDetails: "",
+      items: pricing.lineItems.map((l) => ({
+        item: l.label,
+        description: "",
+        total: l.amount,
+      })),
+      sourceLabel: projectName.trim() || `${clientName.trim()} proposal`,
+    });
+    setSaving(false);
+    router.push(
+      `/invoices?${INVOICE_HANDOFF_PARAM}=${INVOICE_HANDOFF_SOURCE}`,
+    );
+  }
+
   async function handleDownload() {
     if (!clientName.trim()) {
       toast.error("Add a client name.");
@@ -204,9 +248,18 @@ export function ProposalGenerator({ clients }: { clients: ClientLite[] }) {
           </p>
         </div>
         {generated && (
-          <Button onClick={handleDownload} loading={saving}>
-            <Download className="h-4 w-4" /> Download PDF
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="outline"
+              onClick={handleGenerateInvoice}
+              disabled={saving}
+            >
+              <Receipt className="h-4 w-4" /> Generate invoice
+            </Button>
+            <Button onClick={handleDownload} loading={saving}>
+              <Download className="h-4 w-4" /> Download PDF
+            </Button>
+          </div>
         )}
       </div>
 
@@ -301,6 +354,10 @@ export function ProposalGenerator({ clients }: { clients: ClientLite[] }) {
                       {
                         value: "instagram",
                         label: `Instagram — ${money(AGENT_PLANS.instagram.price)}`,
+                      },
+                      {
+                        value: "smart_system_budget",
+                        label: `System Budget — ${money(AGENT_PLANS.smart_system_budget.price)}`,
                       },
                     ]}
                     value={selection.agentPlatform ?? "whatsapp"}

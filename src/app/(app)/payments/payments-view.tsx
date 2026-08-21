@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
@@ -8,6 +9,7 @@ import {
   Check,
   Clock,
   CreditCard,
+  FolderKanban,
   MoreVertical,
   Plus,
   Search,
@@ -32,14 +34,36 @@ import {
 } from "./actions";
 import { useRealtimeSync } from "@/hooks/use-realtime-sync";
 
+function formatLKR(amount: number) {
+  return (
+    "Rs. " +
+    amount.toLocaleString("en-US", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })
+  );
+}
+
+/** The project columns the payments screen needs to show a balance. */
+export type ProjectLite = {
+  id: string;
+  name: string;
+  total_value: number | null;
+  deposit_paid: number | null;
+  currency: string | null;
+};
+
 type PaymentWithCreator = CompanyPayment & {
   creator?: Pick<MemberLite, "full_name" | "username" | "avatar_url"> | null;
+  project?: ProjectLite | null;
 };
 
 export function PaymentsView({
   payments,
+  projects = [],
 }: {
   payments: PaymentWithCreator[];
+  projects?: ProjectLite[];
 }) {
   useRealtimeSync("company_payments");
 
@@ -49,10 +73,35 @@ export function PaymentsView({
   const [toDelete, setToDelete] = React.useState<CompanyPayment | null>(null);
   const [activeTab, setActiveTab] = React.useState<"pending" | "upcoming">("pending");
 
+  // What each project still owes: its own total, less the deposit already
+  // recorded on the project, less every PAID payment booked against it.
+  // This is the number the projects board shows — computed the same way here
+  // so a payment row can say exactly what's left after it.
+  const balanceByProject = React.useMemo(() => {
+    const paidByProject = new Map<string, number>();
+    for (const p of payments) {
+      if (!p.project_id || !p.is_paid) continue;
+      paidByProject.set(
+        p.project_id,
+        (paidByProject.get(p.project_id) ?? 0) + Number(p.price_lkr),
+      );
+    }
+    const out = new Map<string, number>();
+    for (const proj of projects) {
+      const settled =
+        Number(proj.deposit_paid ?? 0) + (paidByProject.get(proj.id) ?? 0);
+      out.set(proj.id, Math.max(0, Number(proj.total_value ?? 0) - settled));
+    }
+    return out;
+  }, [payments, projects]);
+
   const filtered = payments.filter((p) => {
     const matchesTab = p.status === activeTab;
     const q = query.toLowerCase();
-    const matchesQuery = !q || p.company_name.toLowerCase().includes(q);
+    const matchesQuery =
+      !q ||
+      p.company_name.toLowerCase().includes(q) ||
+      (p.project?.name ?? "").toLowerCase().includes(q);
     return matchesTab && matchesQuery;
   });
 
@@ -74,13 +123,6 @@ export function PaymentsView({
   const totalPaid = payments
     .filter((p) => p.is_paid)
     .reduce((sum, p) => sum + Number(p.price_lkr), 0);
-
-  function formatLKR(amount: number) {
-    return "Rs. " + amount.toLocaleString("en-US", {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    });
-  }
 
   return (
     <div className="space-y-6">
@@ -233,6 +275,7 @@ export function PaymentsView({
               <tr className="border-b border-slate-100 text-left text-xs uppercase tracking-wide text-slate-400">
                 <th className="px-5 py-3.5 font-semibold">Company Name</th>
                 <th className="px-5 py-3.5 font-semibold">Price (LKR)</th>
+                <th className="px-5 py-3.5 font-semibold">Project / Balance left</th>
                 <th className="px-5 py-3.5 font-semibold">Recorded By</th>
                 <th className="px-5 py-3.5 font-semibold">Date</th>
                 <th className="px-5 py-3.5" />
@@ -279,6 +322,35 @@ export function PaymentsView({
                   </td>
                   <td className="px-5 py-3.5 font-semibold text-slate-900">
                     {formatLKR(Number(p.price_lkr))}
+                  </td>
+                  <td className="px-5 py-3.5">
+                    {p.project_id && p.project ? (
+                      <div className="min-w-0">
+                        <Link
+                          href={`/projects/${p.project.id}`}
+                          className="flex items-center gap-1.5 truncate font-medium text-primary-700 hover:underline"
+                        >
+                          <FolderKanban className="h-3.5 w-3.5 shrink-0" />
+                          {p.project.name}
+                        </Link>
+                        <p
+                          className={cn(
+                            "mt-0.5 text-xs font-semibold",
+                            (balanceByProject.get(p.project.id) ?? 0) > 0
+                              ? "text-amber-600"
+                              : "text-emerald-600",
+                          )}
+                        >
+                          {(balanceByProject.get(p.project.id) ?? 0) > 0
+                            ? `${formatLKR(balanceByProject.get(p.project.id) ?? 0)} left`
+                            : "Fully paid"}
+                        </p>
+                      </div>
+                    ) : (
+                      <span className="text-xs text-slate-300">
+                        Not linked to a project
+                      </span>
+                    )}
                   </td>
                   <td className="px-5 py-3.5">
                     {p.creator ? (
@@ -329,6 +401,8 @@ export function PaymentsView({
         open={creating}
         onClose={() => setCreating(false)}
         onSaved={() => router.refresh()}
+        projects={projects}
+        balanceByProject={balanceByProject}
       />
 
       <ConfirmDialog
@@ -356,21 +430,32 @@ function PaymentFormModal({
   open,
   onClose,
   onSaved,
+  projects,
+  balanceByProject,
 }: {
   open: boolean;
   onClose: () => void;
   onSaved: () => void;
+  projects: ProjectLite[];
+  balanceByProject: Map<string, number>;
 }) {
   const [pending, startTransition] = React.useTransition();
   const [companyName, setCompanyName] = React.useState("");
   const [priceLkr, setPriceLkr] = React.useState("");
   const [status, setStatus] = React.useState<"pending" | "upcoming">("pending");
+  const [projectId, setProjectId] = React.useState("");
+
+  const selectedProject = projects.find((p) => p.id === projectId) ?? null;
+  const outstanding = selectedProject
+    ? (balanceByProject.get(selectedProject.id) ?? 0)
+    : 0;
 
   React.useEffect(() => {
     if (open) {
       setCompanyName("");
       setPriceLkr("");
       setStatus("pending");
+      setProjectId("");
     }
   }, [open]);
 
@@ -390,6 +475,7 @@ function PaymentFormModal({
         company_name: companyName,
         price_lkr: parsedPrice,
         status,
+        project_id: projectId || null,
       });
       if (res.ok) {
         toast.success("Payment recorded successfully");
@@ -418,6 +504,55 @@ function PaymentFormModal({
       }
     >
       <div className="space-y-4">
+        <Field
+          label="Project"
+          hint="Link this payment to the project it settles — that's what keeps the project balance exact."
+        >
+          <Select
+            value={projectId}
+            onChange={(e) => {
+              const id = e.target.value;
+              setProjectId(id);
+              // Borrow the project's name so the row still reads well in the
+              // list, and offer what's still owed as the obvious amount.
+              const proj = projects.find((p) => p.id === id);
+              if (proj) {
+                if (!companyName.trim()) setCompanyName(proj.name);
+                const left = balanceByProject.get(proj.id) ?? 0;
+                if (!priceLkr.trim() && left > 0) setPriceLkr(String(left));
+              }
+            }}
+          >
+            <option value="">No project (standalone payment)</option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </Select>
+        </Field>
+
+        {selectedProject && (
+          <div className="flex items-center justify-between rounded-xl border border-slate-200/80 bg-slate-50 px-4 py-3">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                Balance left on this project
+              </p>
+              <p className="text-[11px] text-slate-400">
+                Total less the deposit and every payment already marked paid
+              </p>
+            </div>
+            <p
+              className={cn(
+                "text-base font-extrabold",
+                outstanding > 0 ? "text-amber-600" : "text-emerald-600",
+              )}
+            >
+              {formatLKR(outstanding)}
+            </p>
+          </div>
+        )}
+
         <Field label="Company Name" required>
           <Input
             value={companyName}

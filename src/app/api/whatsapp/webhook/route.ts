@@ -312,9 +312,12 @@ async function handleMessages(supabase: DB, value: WaWebhookValue): Promise<void
         last_message_preview: body.slice(0, 160),
         last_direction: "in",
         language,
-        // Any reply instantly clears the autonomous follow-up cadence.
+        // Any reply instantly clears the autonomous follow-up cadence —
+        // including the post-call hold, so the agent is free to work the
+        // conversation again the moment they actually speak to us.
         followup_stage: 0,
         next_followup_at: null,
+        post_call_checkin_sent_at: null,
       })
       .eq("id", contact.id);
     contact.profile_name = profileName ?? contact.profile_name;

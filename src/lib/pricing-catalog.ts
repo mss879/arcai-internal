@@ -116,6 +116,19 @@ export const PRICING_CATALOG: PricingGroup[] = [
         note: "Exact delivery timeline confirmed with your quote.",
       },
       {
+        key: "web_smart_system_budget",
+        name: "Smart System Budget",
+        tagline: "The Essentials — One Automation",
+        features: [
+          "AI agent on your own WhatsApp number — answers & sells 24/7 (streamlined: no automatic data gathering or analytics)",
+          "Smart CRM — every chat becomes a tracked lead in one pipeline",
+          "1 custom workflow automation of your choice",
+          "English, Sinhala & Tamil — matches the customer's language",
+        ],
+        prices: [{ key: "system.budget.onetime", label: "Price", amount: 150000, suffix: "one-time" }],
+        note: "No website included — the budget way into the Smart System. Upgrading later credits what you've paid toward the full system.",
+      },
+      {
         key: "web_smart_system",
         name: "Smart System",
         tagline: "One Smart System. Every Next Step.",

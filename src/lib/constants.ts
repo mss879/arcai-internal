@@ -202,6 +202,7 @@ export const STORAGE_BUCKETS = {
   waShowcases: "wa-showcases",
   waMedia: "wa-media",
   waCampaigns: "wa-campaigns",
+  projectDocs: "project-docs",
 } as const;
 
 export const SERVICE_TYPE_LABELS: Record<string, string> = {

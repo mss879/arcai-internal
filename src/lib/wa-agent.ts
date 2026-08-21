@@ -946,7 +946,9 @@ PRICING PLAYBOOK (follow this EXACTLY whenever budget or packages come up):
 - Never name a package without immediately giving its full picture from the knowledge base: price, what's included (pages, design level, CRM/AI, SEO — whatever the knowledge base lists), and delivery time if listed. A package name alone is a wasted message.
 - When they give a budget: recommend the package whose price is CLOSEST to it, presented in full. If their budget sits between two tiers, lead with the one just below and immediately show what the next one up adds.
 - ALWAYS anchor upward: right after the fitting package, show the next tier up with its price and the 2-3 extra benefits that matter for THEIR business — "for 40k more you'd also get the lead dashboard and the AI chat — for a shop taking orders on WhatsApp that's the bit that actually pays for itself." Make the upgrade feel like the sensible choice on its merits, never pushy.
-- NEVER invent social proof. No made-up client counts, no "most businesses your size choose this", no invented reviews or results. You do not have a portfolio to quote from — anchor on what the package DOES for them instead. If you're caught inventing a number the sale is gone.
+- THE SMART SYSTEM HAS TWO OPTIONS — Smart System Budget and the full Smart System, both priced in the knowledge base. Anyone asking about "the Smart System" (or a full automation setup) sees BOTH on one card — Budget as the way in, the full system as the anchor — plus your one-line recommendation for their case. When they ask for a specific product family instead (the WhatsApp agent, the Instagram agent, a business website, an online store), show THAT family's fitting package straight from the knowledge base with its natural next tier up — never answer a WhatsApp-agent question with a website card.
+- PACKAGES COMBINE — never say no to a mix. A website plus a WhatsApp or Instagram agent, a store plus extra automations, an agent added onto an existing site: any combination of knowledge-base packages is possible. Tell them it's absolutely possible, then call create_proposal with the main package as the project (type/tier) and every other agreed package as custom_items at exact knowledge-base prices — the team reviews the combined proposal (it lands on their board with everything this customer asked for) and sends it. NEVER stitch a multi-package deal into send_quote yourself: send_quote is ONE package plus small priced add-ons only.
+- NEVER invent social proof. No made-up client counts, no "most businesses your size choose this", no invented reviews or results. REAL past work lives in the TEAM NOTES portfolio — when they ask to see work, share 2-3 live sites from it that fit THEIR industry (with the results listed there, nothing more); beyond that list nothing exists, and if you're caught inventing a number the sale is gone.
 - Frame everything around THEIR goals, not features ("the CRM means every inquiry from the site lands in one place — no lost customers").
 - Never volunteer a cheaper tier. Only step down if they clearly push back on price — and when you do, mention exactly what they'd be giving up.
 - AUTOMATIONS ARE YOUR UPSELL CONVERSATION, NOT A LIST. When a store/e-commerce customer asks "what automations can you add" (or their pains invite it), don't recite a menu — BRAINSTORM with them around THEIR business: ask what eats their time (chasing orders? answering "where's my parcel"? customers who buy once and vanish?) and propose the automation that removes it, from the e-commerce automations in the knowledge base. Standard set comes with the Smart Store System; anything beyond is quoted per automation at the PRICES rate. A complex custom flow → "let me get the team to confirm that" + notify_team, never a guessed price.
@@ -1070,7 +1072,7 @@ THE METHOD, every time: ACKNOWLEDGE it honestly (never "I understand your concer
   // very thing the agent used to pitch INSTEAD of the ad's offer.
   parts.push(
     focus
-      ? `KNOWLEDGE BASE (ARC's general services, packages & FAQs — BACKGROUND ONLY in this conversation: answer from it when they ask something general about ARC, but the campaign brief above is what you're selling. Never volunteer these packages or other services to a campaign lead unprompted):\n${knowledge}`
+      ? `KNOWLEDGE BASE (ARC's general services, packages & FAQs — BACKGROUND ONLY in this conversation: answer from it when they ask something general about ARC (who we are, process, contact details) or explicitly name a different ARC service, but the campaign brief above is what you're selling. Its packages and prices belong to OTHER products — never quote them for this campaign, even when a package's name here resembles the campaign's name; "what packages do you have?" is answered from the campaign's own pricing rule, never from this catalog. Never volunteer these packages or other services to a campaign lead):\n${knowledge}`
       : `KNOWLEDGE BASE (services, pricing, FAQs — your ground truth):\n${knowledge}`,
   );
   if (config.knowledge.trim())
@@ -1337,12 +1339,15 @@ ${brief}${
       pricing
         ? `
 
-ONLY WHEN THEY ASK THE PRICE — do NOT bring this up on your own, not in your opening message, not while pitching, not "just so you know". Sell what it does for their business; the number comes out when THEY ask for it. The moment they do ask, answer straight away with exactly this and nothing beyond it (the website packages in the knowledge base are a DIFFERENT product — never quote those to a campaign lead):
+ONLY WHEN THEY ASK THE PRICE, THE PACKAGES OR THE OPTIONS — do NOT bring any of this up on your own, not in your opening message, not while pitching, not "just so you know". Sell what it does for their business; numbers and packages come out when THEY ask. The moment they do ask, answer straight away from exactly this and nothing beyond it — this block is this offer's ENTIRE price list, and if it names packages, those are the ONLY packages this offer has:
 ${pricing}`
-        : ""
+        : `
+
+WHEN THEY ASK THE PRICE, THE PACKAGES OR THE OPTIONS: this brief deliberately carries no figures and no package list — every setup is scoped by the team, and the real number comes out of a quick call. Say exactly that, warmly, and turn it into the close ("the team walks you through your exact setup and gives you the real number on a quick call — what time suits you?"). NEVER fill the gap with a number or a package from the knowledge base.`
     }
 
 RULES OF ENGAGEMENT:
+- THE KNOWLEDGE BASE'S PACKAGES AND PRICES ARE OFF-LIMITS in this conversation. Its catalog (website packages, e-commerce, AI add-ons, retainers) is a DIFFERENT product line — even when a catalog package's name resembles this campaign's name, it is NOT this offer and its price is NOT this offer's price. Never quote a catalog package or figure to a campaign lead — "what packages are available?" means THIS campaign's packages, answered from the pricing rule above. The knowledge base serves only general ARC facts here (who we are, process, contact details, FAQs) — the single exception is when they EXPLICITLY name a different ARC service ("do you also build websites?"): answer that briefly from it, then bring them back to this campaign.
 - This brief is your KNOWLEDGE, not a message to forward. NEVER paste the offer or its numbered list into one bulky message — you reveal it piece by piece across the conversation, each piece matched to what THEY just said. The full picture in one message is allowed exactly once, late, when they ask for the complete breakdown (max ~8 short lines).
 - Every brand-new conversation is a response to this ad. THE OPENING is 2-3 sentences: name the system they tapped in one outcome-loaded line, then ONE easy question about their business ("what kind of business are you running?"). Not the feature list, not the price, not a paragraph. NEVER open with generic discovery like "what kind of website or service are you looking for?" — tapping the ad already told you what they want.
 - "More info", "details?", "how much", "this", or a screenshot of the ad itself all mean THIS campaign. Pitch it — never describe the ad image back to them, never ask which service they mean, never list ARC's other services.
@@ -1367,7 +1372,7 @@ THE MOMENT you have a plausibly-real name (and again when you learn company/emai
 - THE CLOSE IS A BOOKED CALL TIME. The moment they show real interest — "how do I start", "I'm interested", "can this work for my shop", asking about setup — go straight for the slot: "easiest is a quick call — someone talks you through exactly what your setup would look like and gives you the real number. What time suits you tomorrow? 😊" The instant they name a day/time, call book_call, then confirm that exact time back to them.
 - "CAN SOMEONE CALL ME?" is the WIN CONDITION here, not an escalation — answer with a time question, then book_call. Do NOT hand off.
 - Once the call is locked in: confirm it, set expectations (they'll get the exact scope and number on the call), and stop pitching — don't keep selling a closed close.
-- send_quote only if they clearly agree to a specific price this brief itself states. A custom offer is quoted by the team after the call — never invent a quote to force a close.
+- send_quote ONLY if they clearly agree to a specific price this brief itself states AND the pricing rule doesn't route quoting to the team — the pricing rule always wins; when in doubt, the close is the CALL, and the team scopes their setup and sends the formal quote right after it. Never invent a quote to force a close.
 - DISCOUNTS: none exist on this offer unless the brief says so. Never hint that one might.
 - HUMAN WANTED = STOP SELLING is different from wanting a call: "is this a real person?", "I'd rather deal with a human", real frustration, complaints, refunds, legal — call handoff_human immediately, send ONE short line that a teammate will jump into this chat shortly, and STOP.`,
 
@@ -1379,7 +1384,7 @@ THE MOMENT you have a plausibly-real name (and again when you learn company/emai
 - Re-close on the call: "worth a quick 15-minute call to hear the exact number for your setup? No commitment."
 
 "JUST TELL ME THE PRICE" / "how much" as the opener
-- ANSWER IT in your first message, straight from WHEN PRICE COMES UP — the starting point, out loud, never "it depends" on its own and never a request for their name first.
+- ANSWER IT in your first message, straight from the pricing rule in your campaign brief — the starting point, out loud, never "it depends" on its own and never a request for their name first.
 - Then earn the detail in the SAME message: "what kind of business is it? I'll tell you exactly what your setup would include."
 
 "I'LL THINK ABOUT IT" / "need to ask my partner"
@@ -1508,13 +1513,13 @@ function buildToolSchemas(allowed: Set<string>): ToolSchema[] {
       project_type: { type: "string", enum: ["business", "ecommerce", "agent"], description: "What they're buying: business website, e-commerce store, or a standalone AI agent + CRM (no website)." },
       agent_platform: {
         type: "string",
-        enum: ["whatsapp", "instagram"],
-        description: "Which channel the standalone agent runs on (only when project_type=agent; default whatsapp). Both include the CRM and are one-time with no monthly fee — quote the exact figures from the knowledge base, never from memory.",
+        enum: ["whatsapp", "instagram", "smart_system_budget"],
+        description: "Which no-website package (only when project_type=agent; default whatsapp). whatsapp / instagram = the full standalone agents + CRM. smart_system_budget = the BUDGET Smart System: streamlined WhatsApp agent (no automatic data gathering or analytics) + smart CRM + ONE workflow automation. All one-time with no monthly fee — quote the exact figures from the knowledge base, never from memory.",
       },
       tier: {
         type: "string",
         enum: ["smart_site", "smart_business", "smart_system"],
-        description: "Business-website package tier (only when project_type=business; default smart_business). smart_site = 15 pages + CRM + answers-only AI agent; smart_business = 25 pages + advanced CRM (lead scoring, user roles) + agent that creates invoices/proposals and emails customers; smart_system = up to 50 pages + advanced SEO + WhatsApp & Instagram agents + automatic lead follow-up + 3 custom automations.",
+        description: "Business-website package tier (only when project_type=business; default smart_business). smart_site = 15 pages + CRM + answers-only AI agent; smart_business = 25 pages + advanced CRM (lead scoring, user roles) + agent that creates invoices/proposals and emails customers; smart_system = the FULL Smart System: up to 50 pages + advanced SEO + WhatsApp & Instagram agents + automatic lead follow-up + 3 custom automations. For the BUDGET Smart System (no website) use project_type=agent with agent_platform=smart_system_budget instead.",
       },
       platform: {
         type: "string",
@@ -1540,17 +1545,17 @@ function buildToolSchemas(allowed: Set<string>): ToolSchema[] {
       },
       project_name: { type: "string", description: "Short project name, e.g. 'Nimal Bakery Website'." },
     }, ["business_description", "project_type"]),
-    send_quote: fn("send_quote", "THE CLOSER. Create a real, signable quotation for the package the customer just AGREED to and deliver the e-sign link into this chat automatically. Only call when they clearly said yes to a specific package/price — never to test the waters.", {
-      project_type: { type: "string", enum: ["business", "ecommerce", "agent"], description: "What they agreed to: business website, e-commerce store, or a standalone AI agent + CRM (no website)." },
+    send_quote: fn("send_quote", "THE CLOSER. Create a real, signable quotation for the ONE package the customer just AGREED to and deliver the e-sign link into this chat automatically. Only call when they clearly said yes to a specific package/price — never to test the waters, and NEVER for a multi-package combo (a website plus an agent, etc.) — combos always go through create_proposal for team review.", {
+      project_type: { type: "string", enum: ["business", "ecommerce", "agent"], description: "What they agreed to: business website, e-commerce store, or a no-website package (standalone agent / budget Smart System)." },
       agent_platform: {
         type: "string",
-        enum: ["whatsapp", "instagram"],
-        description: "Which channel the standalone agent runs on (only when project_type=agent; default whatsapp).",
+        enum: ["whatsapp", "instagram", "smart_system_budget"],
+        description: "Which no-website package (only when project_type=agent; default whatsapp). whatsapp / instagram = the full standalone agents + CRM. smart_system_budget = the BUDGET Smart System: streamlined WhatsApp agent (no data gathering or analytics) + smart CRM + ONE workflow automation.",
       },
       tier: {
         type: "string",
         enum: ["smart_site", "smart_business", "smart_system"],
-        description: "Business-website package tier (only when project_type=business; default smart_business). smart_site = 15 pages + CRM + answers-only AI agent; smart_business = 25 pages + advanced CRM (lead scoring, user roles) + agent that creates invoices/proposals and emails customers; smart_system = up to 50 pages + advanced SEO + WhatsApp & Instagram agents + automatic lead follow-up + 3 custom automations.",
+        description: "Business-website package tier (only when project_type=business; default smart_business). smart_site = 15 pages + CRM + answers-only AI agent; smart_business = 25 pages + advanced CRM (lead scoring, user roles) + agent that creates invoices/proposals and emails customers; smart_system = the FULL Smart System: up to 50 pages + advanced SEO + WhatsApp & Instagram agents + automatic lead follow-up + 3 custom automations. For the BUDGET Smart System (no website) use project_type=agent with agent_platform=smart_system_budget instead.",
       },
       platform: {
         type: "string",
@@ -2302,8 +2307,9 @@ async function toolCreateProposal(
           ? "agent"
           : "business",
   };
-  if (String(args.agent_platform ?? "") === "instagram") {
-    selection.agentPlatform = "instagram";
+  const agentPlatform = String(args.agent_platform ?? "");
+  if (agentPlatform === "instagram" || agentPlatform === "smart_system_budget") {
+    selection.agentPlatform = agentPlatform;
   }
   const tier = String(args.tier ?? "");
   if (["smart_site", "smart_business", "smart_system"].includes(tier)) {
@@ -2374,6 +2380,38 @@ async function toolCreateProposal(
     notes: `Drafted by the WhatsApp agent from chat requirements. Total ${money(pricing.oneTimeTotal)}.`,
     due_at: new Date(Date.now() + 24 * 3600_000).toISOString(),
     created_by: null,
+  });
+
+  // The team plans the day from the calendar board (todos + meetings) — a
+  // CRM task alone never surfaces there. Every agent-drafted proposal gets a
+  // board task too, carrying exactly what the customer asked for (package
+  // combos included), so nobody reconstructs it from the chat.
+  const { data: boardOwner } = await supabase
+    .from("profiles")
+    .select("id")
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  await supabase.from("todos").insert({
+    title: `Review proposal — ${clientName} (${money(pricing.oneTimeTotal)})`,
+    description: [
+      `${clientName} wants: ${selectionSummary(selection)}${
+        selection.customFeatures.length
+          ? ` + ${selection.customFeatures.map((f) => f.name).join(", ")}`
+          : ""
+      }`,
+      "",
+      requirements.length
+        ? `What they asked for:\n${requirements.map((r) => `- ${r}`).join("\n")}`
+        : description,
+      "",
+      `Review & send: ${appLink("/proposals") ?? "/proposals"}`,
+    ].join("\n"),
+    due_date: new Date(Date.now() + 24 * 3600_000).toISOString(),
+    priority: "high" as const,
+    status: "todo" as const,
+    assigned_to: boardOwner?.id ?? null,
+    created_by: boardOwner?.id ?? null,
   });
   await notifyEveryone(supabase, {
     title: "WhatsApp agent drafted a proposal",
@@ -2454,8 +2492,9 @@ async function toolSendQuote(
           ? "agent"
           : "business",
   };
-  if (String(args.agent_platform ?? "") === "instagram") {
-    selection.agentPlatform = "instagram";
+  const agentPlatform = String(args.agent_platform ?? "");
+  if (agentPlatform === "instagram" || agentPlatform === "smart_system_budget") {
+    selection.agentPlatform = agentPlatform;
   }
   const tier = String(args.tier ?? "");
   if (["smart_site", "smart_business", "smart_system"].includes(tier)) {
@@ -3212,7 +3251,15 @@ async function toolBookCall(
   // failure here: migration 0072_wa_book_call not applied to this database.
   const { error: stampError } = await supabase
     .from("wa_contacts")
-    .update({ call_booked_at: when.toISOString(), call_todo_id: todoId })
+    .update({
+      call_booked_at: when.toISOString(),
+      call_todo_id: todoId,
+      // A fresh booking re-arms the one check-in — including when a call is
+      // rescheduled after an earlier one already had its check-in sent.
+      post_call_checkin_sent_at: null,
+      // 24 hours of silence starts now; the check-in is the only thing armed.
+      next_followup_at: postCallCheckinAt(when).toISOString(),
+    })
     .eq("id", contact.id);
   if (stampError)
     console.error(
@@ -3739,12 +3786,33 @@ function waWindowClosesBefore(contact: WaContact, resume: Date): boolean {
  * still has road), not two days later like the generic cadence. */
 const QUOTE_FOLLOWUP_DELAY_HOURS: Record<number, number> = { 0: 24, 1: 72, 2: 120 };
 
+/** A booked call buys 24 hours of complete silence, then exactly ONE
+ * check-in ("did the team reach you?") — and after that the agent never
+ * self-initiates again until the customer replies. */
+const POST_CALL_SILENCE_HOURS = 24;
+
+/** The earliest the single post-call check-in may fire: a full day after the
+ * slot, so "did the team reach you?" can only be asked once the call has
+ * actually been and gone. A fixed point in time — safe to compare against. */
+function postCallCheckinDue(callBookedAt: string | Date): Date {
+  return new Date(
+    new Date(callBookedAt).getTime() + POST_CALL_SILENCE_HOURS * 3600_000,
+  );
+}
+
+/** When to ARM that check-in. Never sooner than a full silent day from now,
+ * so a call booked for an hour ago still buys its 24 hours of quiet. */
+function postCallCheckinAt(callBookedAt: string | Date): Date {
+  const floor = Date.now() + POST_CALL_SILENCE_HOURS * 3600_000;
+  return new Date(Math.max(postCallCheckinDue(callBookedAt).getTime(), floor));
+}
+
 /** Arm the next touch after an agent send — never overwrites an earlier one. */
 async function scheduleNextFollowup(supabase: DB, contactId: string): Promise<void> {
   const { data: c } = await supabase
     .from("wa_contacts")
     .select(
-      "followup_stage, next_followup_at, do_not_contact, campaign_id, lead_id, call_booked_at",
+      "followup_stage, next_followup_at, do_not_contact, campaign_id, lead_id, call_booked_at, post_call_checkin_sent_at",
     )
     .eq("id", contactId)
     .maybeSingle();
@@ -3754,20 +3822,29 @@ async function scheduleNextFollowup(supabase: DB, contactId: string): Promise<vo
   // customer has said yes — every unprompted nudge before it ("any
   // questions before our call? 😊") is noise that can only lose the deal.
   // The agent still ANSWERS anything they send; it just never initiates.
-  // The one thing armed is the post-call check-in, 3h after the slot
-  // ("did the team reach you?" — sendFollowupTouch composes that variant).
+  //
+  // The ONE thing armed is the post-call check-in, a full day after the
+  // slot ("did the team reach you?" — sendFollowupTouch composes that
+  // variant). Once that check-in has gone out the cadence is over for
+  // good: the ball is in the customer's court, and only their reply
+  // (which clears the stamp in the webhook) starts the agent up again.
   // processDueWaFollowups keeps its fire-time defer as the backstop for
   // calls booked AFTER a touch was already armed.
+  // Asked once already — the ball is theirs. Nothing gets armed until they
+  // reply (their inbound clears the stamp in the webhook).
+  if (c.call_booked_at && c.post_call_checkin_sent_at) return;
+  // Call still ahead (or its check-in not yet due): the check-in is the only
+  // thing that may fire, and not a minute before its moment. Once that moment
+  // has passed and they've spoken to us since, this falls through to the
+  // normal cadence — which is what enforces the 3-touch cap and the breakup.
   if (
     c.call_booked_at &&
-    new Date(c.call_booked_at).getTime() > Date.now()
+    postCallCheckinDue(c.call_booked_at).getTime() > Date.now()
   ) {
     await supabase
       .from("wa_contacts")
       .update({
-        next_followup_at: new Date(
-          new Date(c.call_booked_at).getTime() + 3 * 3600_000,
-        ).toISOString(),
+        next_followup_at: postCallCheckinAt(c.call_booked_at).toISOString(),
       })
       .eq("id", contactId);
     return;
@@ -3828,16 +3905,32 @@ export async function processDueWaFollowups(
 
       // A booked call owns the timeline. Chasing "you've gone quiet" while
       // a call sits on the books reads oblivious — the call IS the next
-      // step — so the touch waits until a few hours AFTER the slot, where
-      // it lands as the natural "did the team reach you?" check-in
-      // (sendFollowupTouch composes that variant itself).
+      // step — so the touch waits a full day AFTER the slot, where it
+      // lands as the natural "did the team reach you?" check-in
+      // (sendFollowupTouch composes that variant itself). Anything armed
+      // after that single check-in is dropped: the agent stays silent
+      // until the customer speaks.
+      if (contact.call_booked_at && contact.post_call_checkin_sent_at) {
+        await supabase
+          .from("wa_contacts")
+          .update({ next_followup_at: null })
+          .eq("id", contact.id)
+          .eq("next_followup_at", contact.next_followup_at!);
+        out.skipped++;
+        await logFollowup(
+          supabase,
+          contact.id,
+          (contact.followup_stage ?? 0) + 1,
+          true,
+          "Dropped — the post-call check-in already went out; waiting for their reply",
+        );
+        continue;
+      }
       if (
         contact.call_booked_at &&
-        new Date(contact.call_booked_at).getTime() > Date.now()
+        postCallCheckinDue(contact.call_booked_at).getTime() > Date.now()
       ) {
-        const resume = new Date(
-          new Date(contact.call_booked_at).getTime() + 3 * 3600_000,
-        ).toISOString();
+        const resume = postCallCheckinDue(contact.call_booked_at).toISOString();
         // Compare-and-set, like the quiet-hours defer below: if they
         // replied meanwhile (which clears the schedule), leave it be.
         const { data: deferred } = await supabase
@@ -4114,7 +4207,7 @@ async function sendFollowupTouch(
 
   const nudge =
     callAt && callPassedUnspoken
-      ? `A call with this customer was booked for ${formatInTimezone(callAt, tz)} (${tz}); that time has passed and nothing has been said here since. Send ONE warm, low-key check-in: did the team manage to reach them? If the call never happened, own it lightly — no grovelling — and offer to line up a fresh time. Never re-pitch the product and never speak of the old slot as if it's still ahead. Human voice, max 3 sentences, end with exactly one easy question.`
+      ? `A call with this customer was booked for ${formatInTimezone(callAt, tz)} (${tz}); that time has passed and nothing has been said here since. Send ONE short, warm check-in and NOTHING more: did the team manage to reach them? That single question is the whole message — no pitch, no package talk, no offer to rebook, no second question, and never speak of the old slot as if it's still ahead. Human voice, max 2 sentences. This is the last message you will send them until they reply, so make it easy to answer.`
       : touch >= MAX_FOLLOWUP_TOUCHES
         ? `The customer went quiet after your last message. This is follow-up touch 3 of 3 — the graceful breakup. Send ONE warm, zero-pressure goodbye: you get that now might not be the right time, the door stays open, they can pick this up whenever they're ready. No question at the end this time, no guilt. Max 2-3 sentences.`
         : `The customer went quiet after your last message. This is follow-up touch ${touch} of 3. Send ONE short, casual re-engagement message with a FRESH angle — never "just following up": reference something concrete you know about their business or website (from the chat, the audit, or your background knowledge) and tie it to a reason to act${touch === 1 ? ". Keep it light and helpful" : ". Add gentle urgency or a new benefit they haven't heard yet"}. Human voice, max 3 sentences, end with exactly one easy question or next step.`;
@@ -4141,9 +4234,23 @@ async function sendFollowupTouch(
   }
   if (!text) return false;
 
+  // Stamp BEFORE sending: a crash between send and stamp would otherwise let
+  // the check-in fire a second time. The stamp is what makes it exactly one,
+  // and what silences every touch after it (scheduleNextFollowup bails on it).
+  const isPostCallCheckin = !!callAt && callPassedUnspoken;
+  if (isPostCallCheckin) {
+    await supabase
+      .from("wa_contacts")
+      .update({ post_call_checkin_sent_at: new Date().toISOString() })
+      .eq("id", contact.id);
+    contact.post_call_checkin_sent_at = new Date().toISOString();
+  }
+
   // Touch 2 lands as a voice note when the voice pipeline is on — a voice
-  // message from "a real person" gets heard. Falls back to plain text.
-  if (touch === 2 && config.voice_replies === "match") {
+  // message from "a real person" gets heard. Falls back to plain text. The
+  // post-call check-in is always plain text: it's one quiet question, not a
+  // performance.
+  if (touch === 2 && !isPostCallCheckin && config.voice_replies === "match") {
     const spoke = await sendVoiceReply(supabase, contact, text);
     if (spoke) {
       await scheduleNextFollowup(supabase, contact.id);

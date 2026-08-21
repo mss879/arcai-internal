@@ -476,6 +476,8 @@ export type Database = {
           price_lkr: number;
           status: "pending" | "upcoming";
           is_paid: boolean;
+          // 0083 — the project this payment settles. NULL = standalone.
+          project_id: UUID | null;
           created_by: UUID | null;
           created_at: Timestamp;
         };
@@ -485,6 +487,8 @@ export type Database = {
           price_lkr: number;
           status?: "pending" | "upcoming";
           is_paid?: boolean;
+          // 0083 — see the Row comment
+          project_id?: UUID | null;
           created_by?: UUID | null;
           created_at?: Timestamp;
         };
@@ -2267,6 +2271,9 @@ export type Database = {
           // so a reschedule updates the same task instead of stacking one.
           call_booked_at: Timestamp | null;
           call_todo_id: UUID | null;
+          // 0083 — the single post-call "did the team reach you?" check-in.
+          // Set = the agent has asked once and now waits for their reply.
+          post_call_checkin_sent_at: Timestamp | null;
           // 0077 — which instant first reply they received (A/B)
           first_reply_variant: WaFirstReplyVariant | null;
           created_at: Timestamp;
@@ -2301,6 +2308,8 @@ export type Database = {
           // 0072 — agreed phone-call slot + the To-Do carrying it
           call_booked_at?: Timestamp | null;
           call_todo_id?: UUID | null;
+          // 0083 — the single post-call check-in stamp (see the Row comment)
+          post_call_checkin_sent_at?: Timestamp | null;
           // 0077 — which instant first reply they received (A/B)
           first_reply_variant?: WaFirstReplyVariant | null;
           created_at?: Timestamp;

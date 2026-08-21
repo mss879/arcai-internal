@@ -32,6 +32,13 @@ export type ProjectInput = {
   total_value?: number | null;
   deposit_paid?: number | null;
   service_type?: string | null;
+  /** Uploaded documents (0083). Undefined = leave whatever is stored alone. */
+  proposal_url?: string | null;
+  proposal_name?: string | null;
+  proposal_path?: string | null;
+  invoice_url?: string | null;
+  invoice_name?: string | null;
+  invoice_path?: string | null;
 };
 
 export async function saveProject(input: ProjectInput): Promise<ActionResult> {
@@ -51,6 +58,22 @@ export async function saveProject(input: ProjectInput): Promise<ActionResult> {
     total_value: input.total_value ?? 0.00,
     deposit_paid: input.deposit_paid ?? 0.00,
     service_type: input.service_type || null,
+    // Documents are only written when the form actually passed them, so an
+    // edit that doesn't touch the uploads can never blank an existing file.
+    ...(input.proposal_url !== undefined
+      ? {
+          proposal_url: input.proposal_url,
+          proposal_name: input.proposal_name ?? null,
+          proposal_path: input.proposal_path ?? null,
+        }
+      : {}),
+    ...(input.invoice_url !== undefined
+      ? {
+          invoice_url: input.invoice_url,
+          invoice_name: input.invoice_name ?? null,
+          invoice_path: input.invoice_path ?? null,
+        }
+      : {}),
   };
 
   const { error } = input.id

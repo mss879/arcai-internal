@@ -18,6 +18,13 @@ export type Project = Tables["projects"]["Row"] & {
   deposit_paid?: number;
   share_token?: string;
   service_type?: string | null;
+  /** 0083 — the signed proposal and the invoice, uploaded onto the project. */
+  proposal_url?: string | null;
+  proposal_name?: string | null;
+  proposal_path?: string | null;
+  invoice_url?: string | null;
+  invoice_name?: string | null;
+  invoice_path?: string | null;
 };
 export type ProjectDocumentRequest = {
   id: string;

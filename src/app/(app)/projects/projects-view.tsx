@@ -7,10 +7,12 @@ import { toast } from "sonner";
 import { format } from "date-fns";
 import {
   ChevronDown,
+  FileText,
   FolderKanban,
   MoreVertical,
   Pencil,
   Plus,
+  Receipt,
   Trash2,
   Wallet,
 } from "lucide-react";
@@ -32,7 +34,24 @@ import { useRealtimeSyncTables } from "@/hooks/use-realtime-sync";
 type ProjectCard = Project & {
   client?: Pick<Client, "id" | "name" | "company"> | null;
   payments?: { amount: number; status: string }[];
+  /** Payments recorded on the Payments page against this project (0083). */
+  company_payments?: {
+    id: string;
+    price_lkr: number;
+    is_paid: boolean;
+    status: string;
+  }[];
 };
+
+/** Money in against a project: the deposit on the project itself plus every
+ * linked payment already marked paid. Shared by the card and the totals so
+ * both agree with what the Payments page shows. */
+function settledAmount(p: ProjectCard): number {
+  const linkedPaid = (p.company_payments ?? [])
+    .filter((cp) => cp.is_paid)
+    .reduce((sum, cp) => sum + Number(cp.price_lkr), 0);
+  return Number(p.deposit_paid ?? 0) + linkedPaid;
+}
 
 export function ProjectsView({
   projects,
@@ -41,7 +60,9 @@ export function ProjectsView({
   projects: ProjectCard[];
   clients: Pick<Client, "id" | "name" | "company">[];
 }) {
-  useRealtimeSyncTables(["projects", "payments"]);
+  // company_payments too: ticking a payment paid on /payments must move the
+  // balance here without a manual refresh.
+  useRealtimeSyncTables(["projects", "payments", "company_payments"]);
 
   const router = useRouter();
   const [creating, setCreating] = React.useState(false);
@@ -114,9 +135,15 @@ export function ProjectsView({
   const renderCard = (p: ProjectCard) => {
     const totalValue = Number(p.total_value) || 0;
     const deposit = Number(p.deposit_paid) || 0;
-    const balance = Math.max(0, totalValue - deposit);
+    // Received = the deposit plus every linked payment marked paid, so the
+    // balance moves the moment the team ticks a payment off on /payments.
+    const received = settledAmount(p);
+    const linkedPaidCount = (p.company_payments ?? []).filter(
+      (cp) => cp.is_paid,
+    ).length;
+    const balance = Math.max(0, totalValue - received);
     const pct = totalValue
-      ? Math.min(100, Math.round((deposit / totalValue) * 100))
+      ? Math.min(100, Math.round((received / totalValue) * 100))
       : 0;
     return (
       <div
@@ -168,12 +195,18 @@ export function ProjectsView({
           <div className="flex items-end justify-between gap-2 text-sm">
             <div className="min-w-0">
               <p className="text-[11px] font-medium uppercase tracking-wide text-slate-400">
-                Deposit paid
+                Received
               </p>
               <span className="inline-flex items-center gap-1.5 font-semibold text-slate-900">
                 <Wallet className="h-4 w-4 text-emerald-500" />
-                {formatCurrency(deposit, p.currency)}
+                {formatCurrency(received, p.currency)}
               </span>
+              {linkedPaidCount > 0 && (
+                <p className="text-[11px] text-slate-400">
+                  {formatCurrency(deposit, p.currency)} deposit +{" "}
+                  {linkedPaidCount} payment{linkedPaidCount === 1 ? "" : "s"}
+                </p>
+              )}
             </div>
             <div className="text-right">
               <p className="text-[11px] font-medium uppercase tracking-wide text-slate-400">
@@ -201,12 +234,37 @@ export function ProjectsView({
                 />
               </div>
               <p className="mt-1.5 text-xs text-slate-400">
-                {formatCurrency(deposit, p.currency)} of{" "}
+                {formatCurrency(received, p.currency)} of{" "}
                 {formatCurrency(totalValue, p.currency)} total
               </p>
             </>
           ) : null}
         </div>
+
+        {(p.proposal_url || p.invoice_url) && (
+          <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-100 pt-3">
+            {p.proposal_url && (
+              <a
+                href={p.proposal_url}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1.5 rounded-lg bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600 ring-1 ring-slate-200 transition hover:bg-white hover:text-primary-700"
+              >
+                <FileText className="h-3.5 w-3.5" /> Proposal
+              </a>
+            )}
+            {p.invoice_url && (
+              <a
+                href={p.invoice_url}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1.5 rounded-lg bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600 ring-1 ring-slate-200 transition hover:bg-white hover:text-primary-700"
+              >
+                <Receipt className="h-3.5 w-3.5" /> Invoice
+              </a>
+            )}
+          </div>
+        )}
       </div>
     );
   };

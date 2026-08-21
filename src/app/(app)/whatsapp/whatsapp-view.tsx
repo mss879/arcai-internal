@@ -12,6 +12,7 @@ import {
   CalendarClock,
   Check,
   CheckCheck,
+  GraduationCap,
   Handshake,
   Inbox,
   KanbanSquare,
@@ -204,7 +205,7 @@ export function WhatsappView({
   waReady: boolean;
   aiReady: boolean;
   appBaseUrl: string;
-  /** Members are locked to the Inbox tab; everything else is admin-only. */
+  /** Members see Inbox + Analytics; every other tab is admin-only. */
   isAdmin: boolean;
 }) {
   useRealtimeSyncTables([
@@ -217,8 +218,11 @@ export function WhatsappView({
     "wa_lessons",
   ]);
   const [tab, setTab] = React.useState<Tab>("inbox");
-  // Hard stop for members: whatever the state says, they only ever render Inbox.
-  const activeTab: Tab = isAdmin ? tab : "inbox";
+  // Hard stop for members: whatever the state says, they only ever render a
+  // tab they're allowed on — Inbox or Analytics.
+  const MEMBER_TABS: Tab[] = ["inbox", "analytics"];
+  const activeTab: Tab =
+    isAdmin || MEMBER_TABS.includes(tab) ? tab : "inbox";
 
   const attention = contacts.filter((c) => c.needs_attention).length;
   const unread = contacts.reduce((s, c) => s + (c.unread ?? 0), 0);
@@ -273,10 +277,10 @@ export function WhatsappView({
         </div>
       </div>
 
-      {/* Members only ever see the Inbox — no tab strip to switch away. */}
-      {isAdmin && (
-        <div className="flex flex-wrap gap-2">
-          {TABS.map((t) => (
+      {/* Members get a two-tab strip (Inbox + Analytics); admins get all of them. */}
+      <div className="flex flex-wrap gap-2">
+        {(isAdmin ? TABS : TABS.filter((t) => MEMBER_TABS.includes(t.key))).map(
+          (t) => (
             <button
               key={t.key}
               onClick={() => setTab(t.key)}
@@ -300,9 +304,9 @@ export function WhatsappView({
                 </span>
               ) : null}
             </button>
-          ))}
-        </div>
-      )}
+          ),
+        )}
+      </div>
 
       {activeTab === "inbox" && (
         <InboxTab contacts={contacts} messages={messages} promises={promises} waReady={waReady} appBaseUrl={appBaseUrl} />
@@ -345,7 +349,7 @@ export function WhatsappView({
       {activeTab === "activity" && isAdmin && (
         <ActivityTab logs={logs} contacts={contacts} />
       )}
-      {activeTab === "analytics" && isAdmin && <AnalyticsTab />}
+      {activeTab === "analytics" && <AnalyticsTab />}
     </div>
   );
 }
@@ -829,6 +833,13 @@ function StatusTicks({ status, error }: { status: string; error: string | null }
 
 // ---- AI Agent tab ---------------------------------------------------------------
 
+/** One consistent card shell for every block on this tab — the tab used to mix
+ * paddings and gaps, which is what made it read as cluttered. */
+const AGENT_SECTION =
+  "rounded-2xl border border-slate-200/80 bg-white p-6 shadow-sm";
+const AGENT_HEADING = "text-sm font-semibold text-slate-900";
+const AGENT_SUBHEADING = "mt-1 text-xs leading-5 text-slate-500";
+
 function AgentTab({
   config,
   pipelines,
@@ -900,385 +911,407 @@ function AgentTab({
   }
 
   return (
-    <div className="grid gap-4 xl:grid-cols-[1fr_360px]">
-      <div className="space-y-4">
-        {/* Behaviour */}
-        <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <h2 className="text-sm font-semibold text-slate-900">Agent behaviour</h2>
-              <p className="text-xs text-slate-500">
-                How the AI greets, qualifies and hands over new WhatsApp leads.
-              </p>
+    <div className="space-y-6">
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
+        <div className="space-y-6">
+          {/* Behaviour */}
+          <section className={AGENT_SECTION}>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 className={AGENT_HEADING}>Agent behaviour</h2>
+                <p className={AGENT_SUBHEADING}>
+                  How the AI greets, qualifies and hands over new WhatsApp leads.
+                </p>
+              </div>
+              <Toggle checked={form.enabled} onChange={(v) => set("enabled", v)} label="Agent on" />
             </div>
-            <Toggle checked={form.enabled} onChange={(v) => set("enabled", v)} label="Agent on" />
-          </div>
 
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <label className="space-y-1.5 text-xs font-medium text-slate-600">
-              Agent name
-              <Input
-                value={form.agent_name}
-                onChange={(e) => set("agent_name", e.target.value)}
-                placeholder="Arc"
-              />
-            </label>
-            <label className="space-y-1.5 text-xs font-medium text-slate-600">
-              Lead source label
-              <Input
-                value={form.lead_source}
-                onChange={(e) => set("lead_source", e.target.value)}
-                placeholder="whatsapp"
-              />
-            </label>
-          </div>
-
-          <label className="mt-3 block space-y-1.5 text-xs font-medium text-slate-600">
-            Extra persona / instructions (optional)
-            <Textarea
-              value={form.persona}
-              onChange={(e) => set("persona", e.target.value)}
-              rows={3}
-              placeholder="e.g. Always mention our July offer. Never discuss competitor pricing."
-            />
-          </label>
-
-          <div className="mt-3 flex flex-wrap gap-4">
-            <Toggle
-              checked={form.ask_name}
-              onChange={(v) => set("ask_name", v)}
-              label="Ask new contacts for their name"
-            />
-            <Toggle
-              checked={form.auto_create_lead}
-              onChange={(v) => set("auto_create_lead", v)}
-              label="Auto-create client + CRM lead"
-            />
-            <Toggle
-              checked={form.voice_replies === "match"}
-              onChange={(v) => set("voice_replies", v ? "match" : "off")}
-              label="Reply to voice notes with voice"
-            />
-            <Toggle
-              checked={form.language_matching}
-              onChange={(v) => set("language_matching", v)}
-              label="Match customer language (Sinhala / Tamil / Singlish)"
-            />
-          </div>
-
-          <div className="mt-3 grid gap-3 sm:grid-cols-2">
-            <label className="space-y-1.5 text-xs font-medium text-slate-600">
-              New leads land in pipeline
-              <Select
-                value={form.pipeline_id}
-                onChange={(e) => {
-                  set("pipeline_id", e.target.value);
-                  set("stage_id", "");
-                }}
-              >
-                <option value="">First pipeline (default)</option>
-                {pipelines.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </Select>
-            </label>
-            <label className="space-y-1.5 text-xs font-medium text-slate-600">
-              Stage
-              <Select
-                value={form.stage_id}
-                onChange={(e) => set("stage_id", e.target.value)}
-                disabled={!form.pipeline_id}
-              >
-                <option value="">First stage (default)</option>
-                {pipelineStages.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
-                ))}
-              </Select>
-            </label>
-          </div>
-        </section>
-
-        {/* Knowledge base */}
-        <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm">
-          <h2 className="text-sm font-semibold text-slate-900">
-            Extra notes for the agent (optional)
-          </h2>
-          <p className="text-xs text-slate-500">
-            The agent already knows the full Smart Website system — every
-            package, feature and FAQ, with live prices straight from your
-            Pricing page. Use this box only for extra facts or corrections;
-            anything written here overrides the built-in knowledge.
-          </p>
-          <Textarea
-            value={form.knowledge}
-            onChange={(e) => set("knowledge", e.target.value)}
-            rows={6}
-            className="mt-3 font-mono text-xs"
-            placeholder={
-              "e.g.\n- July offer: free logo with every Growth package\n- We don't build betting or crypto sites\n- Q: Do you work with clients outside Sri Lanka?\n  A: Yes — we invoice in USD via Stripe."
-            }
-          />
-        </section>
-
-        {/* Closing & follow-ups */}
-        <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <h2 className="text-sm font-semibold text-slate-900">Closing &amp; follow-ups</h2>
-              <p className="text-xs text-slate-500">
-                When a chat goes quiet the agent chases it itself — a nudge after 2
-                days, a fresh angle after 3 more, then a graceful goodbye. Any reply
-                cancels the cadence instantly; &quot;stop&quot; blocks them forever.
-              </p>
+            <div className="mt-5 grid gap-4 sm:grid-cols-2">
+              <label className="space-y-1.5 text-xs font-medium text-slate-600">
+                Agent name
+                <Input
+                  value={form.agent_name}
+                  onChange={(e) => set("agent_name", e.target.value)}
+                  placeholder="Arc"
+                />
+              </label>
+              <label className="space-y-1.5 text-xs font-medium text-slate-600">
+                Lead source label
+                <Input
+                  value={form.lead_source}
+                  onChange={(e) => set("lead_source", e.target.value)}
+                  placeholder="whatsapp"
+                />
+              </label>
             </div>
-            <Toggle
-              checked={form.followups_enabled}
-              onChange={(v) => set("followups_enabled", v)}
-              label="Autonomous follow-ups"
-            />
-          </div>
 
-          <div className="mt-4 grid gap-3 sm:grid-cols-3">
-            <label className="space-y-1.5 text-xs font-medium text-slate-600 sm:col-span-2">
-              Approved follow-up template (outside the 24h window)
-              <Input
-                value={form.followup_template_name}
-                onChange={(e) => set("followup_template_name", e.target.value)}
-                placeholder="e.g. friendly_checkin (Meta-approved template name)"
+            <label className="mt-4 block space-y-1.5 text-xs font-medium text-slate-600">
+              Extra persona / instructions (optional)
+              <Textarea
+                value={form.persona}
+                onChange={(e) => set("persona", e.target.value)}
+                rows={3}
+                placeholder="e.g. Always mention our July offer. Never discuss competitor pricing."
               />
             </label>
-            <label className="space-y-1.5 text-xs font-medium text-slate-600">
-              Template language
-              <Input
-                value={form.followup_template_lang}
-                onChange={(e) => set("followup_template_lang", e.target.value)}
-                placeholder="en"
+
+            <div className="mt-5 grid gap-3 rounded-xl bg-slate-50/70 p-4 sm:grid-cols-2">
+              <Toggle
+                checked={form.ask_name}
+                onChange={(v) => set("ask_name", v)}
+                label="Ask new contacts for their name"
               />
-            </label>
-          </div>
-          <p className="mt-1 text-[11px] text-slate-400">
-            No template? Chats past the 24h window get a task for the team instead
-            of an automated touch.
-          </p>
-
-          <label className="mt-4 block space-y-1.5 text-xs font-medium text-slate-600">
-            Discount authority (max % the agent may offer on a quote — 0 = none)
-            <Input
-              type="number"
-              min={0}
-              max={50}
-              value={String(form.max_autonomous_discount_pct)}
-              onChange={(e) =>
-                set(
-                  "max_autonomous_discount_pct",
-                  Math.min(50, Math.max(0, Math.round(Number(e.target.value) || 0))),
-                )
-              }
-              className="max-w-[120px]"
-            />
-          </label>
-          <p className="mt-1 text-[11px] text-slate-400">
-            Used at most once per deal, only on a real price objection, framed as a
-            sign-this-week incentive. The send-quote tool enforces the cap.
-          </p>
-
-          <div className="mt-4 flex items-center justify-between gap-3 border-t border-slate-100 pt-4">
-            <div>
-              <h3 className="text-xs font-semibold text-slate-900">Quiet hours for nudges</h3>
-              <p className="text-[11px] text-slate-400">
-                Follow-up nudges and cold outreach due in this window are delivered
-                next morning instead. The agent itself never sleeps — customer
-                replies are answered 24/7.
-              </p>
+              <Toggle
+                checked={form.auto_create_lead}
+                onChange={(v) => set("auto_create_lead", v)}
+                label="Auto-create client + CRM lead"
+              />
+              <Toggle
+                checked={form.voice_replies === "match"}
+                onChange={(v) => set("voice_replies", v ? "match" : "off")}
+                label="Reply to voice notes with voice"
+              />
+              <Toggle
+                checked={form.language_matching}
+                onChange={(v) => set("language_matching", v)}
+                label="Match customer language (Sinhala / Tamil / Singlish)"
+              />
             </div>
-            <Toggle
-              checked={form.quiet_hours_enabled}
-              onChange={(v) => set("quiet_hours_enabled", v)}
-              label="Quiet hours"
-            />
-          </div>
-          <div className="mt-3 grid gap-3 sm:grid-cols-3">
-            <label className="space-y-1.5 text-xs font-medium text-slate-600">
-              From (hour)
-              <Select
-                value={String(form.quiet_hours_start)}
-                onChange={(e) => set("quiet_hours_start", Number(e.target.value))}
-                disabled={!form.quiet_hours_enabled}
-              >
-                {Array.from({ length: 24 }, (_, h) => (
-                  <option key={h} value={h}>
-                    {String(h).padStart(2, "0")}:00
-                  </option>
-                ))}
-              </Select>
-            </label>
-            <label className="space-y-1.5 text-xs font-medium text-slate-600">
-              Until (hour)
-              <Select
-                value={String(form.quiet_hours_end)}
-                onChange={(e) => set("quiet_hours_end", Number(e.target.value))}
-                disabled={!form.quiet_hours_enabled}
-              >
-                {Array.from({ length: 24 }, (_, h) => (
-                  <option key={h} value={h}>
-                    {String(h).padStart(2, "0")}:00
-                  </option>
-                ))}
-              </Select>
-            </label>
-            <label className="space-y-1.5 text-xs font-medium text-slate-600">
-              Timezone
-              <Input
-                value={form.timezone}
-                onChange={(e) => set("timezone", e.target.value)}
-                placeholder="Asia/Colombo"
-                disabled={!form.quiet_hours_enabled}
-              />
-            </label>
-          </div>
-        </section>
 
-        {/* Tool permissions */}
-        <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm">
-          <h2 className="text-sm font-semibold text-slate-900">What the agent is allowed to do</h2>
-          <p className="text-xs text-slate-500">
-            Untick anything you want to keep human-only. The agent can only ever use
-            the ticked actions — every use is logged under Agent Activity.
-          </p>
-          <div className="mt-3 grid gap-2 sm:grid-cols-2">
-            {WA_TOOL_CATALOG.map((tool) => {
-              const on = form.allowed_tools.includes(tool.key);
-              return (
-                <button
-                  key={tool.key}
-                  type="button"
-                  onClick={() => toggleTool(tool.key)}
-                  className={cn(
-                    "flex items-start gap-3 rounded-xl border p-3 text-left transition-colors",
-                    on
-                      ? "border-primary-200 bg-primary-50/60"
-                      : "border-slate-200 bg-white opacity-70 hover:opacity-100",
-                  )}
+            <div className="mt-5 grid gap-4 sm:grid-cols-2">
+              <label className="space-y-1.5 text-xs font-medium text-slate-600">
+                New leads land in pipeline
+                <Select
+                  value={form.pipeline_id}
+                  onChange={(e) => {
+                    set("pipeline_id", e.target.value);
+                    set("stage_id", "");
+                  }}
                 >
-                  <span
+                  <option value="">First pipeline (default)</option>
+                  {pipelines.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </Select>
+              </label>
+              <label className="space-y-1.5 text-xs font-medium text-slate-600">
+                Stage
+                <Select
+                  value={form.stage_id}
+                  onChange={(e) => set("stage_id", e.target.value)}
+                  disabled={!form.pipeline_id}
+                >
+                  <option value="">First stage (default)</option>
+                  {pipelineStages.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </Select>
+              </label>
+            </div>
+          </section>
+
+          {/* Knowledge base */}
+          <section className={AGENT_SECTION}>
+            <h2 className={AGENT_HEADING}>
+              Extra notes for the agent (optional)
+            </h2>
+            <p className={AGENT_SUBHEADING}>
+              The agent already knows the full Smart Website system — every
+              package, feature and FAQ, with live prices straight from your
+              Pricing page. Use this box only for extra facts or corrections;
+              anything written here overrides the built-in knowledge.
+            </p>
+            <Textarea
+              value={form.knowledge}
+              onChange={(e) => set("knowledge", e.target.value)}
+              rows={6}
+              className="mt-4 font-mono text-xs"
+              placeholder={
+                "e.g.\n- July offer: free logo with every Growth package\n- We don't build betting or crypto sites\n- Q: Do you work with clients outside Sri Lanka?\n  A: Yes — we invoice in USD via Stripe."
+              }
+            />
+          </section>
+
+          {/* Closing & follow-ups */}
+          <section className={AGENT_SECTION}>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="max-w-xl">
+                <h2 className={AGENT_HEADING}>Closing &amp; follow-ups</h2>
+                <p className={AGENT_SUBHEADING}>
+                  When a chat goes quiet the agent chases it itself — a nudge after 2
+                  days, a fresh angle after 3 more, then a graceful goodbye. Any reply
+                  cancels the cadence instantly; &quot;stop&quot; blocks them forever.
+                </p>
+              </div>
+              <Toggle
+                checked={form.followups_enabled}
+                onChange={(v) => set("followups_enabled", v)}
+                label="Autonomous follow-ups"
+              />
+            </div>
+
+            <div className="mt-5 grid gap-4 sm:grid-cols-3">
+              <label className="space-y-1.5 text-xs font-medium text-slate-600 sm:col-span-2">
+                Approved follow-up template (outside the 24h window)
+                <Input
+                  value={form.followup_template_name}
+                  onChange={(e) => set("followup_template_name", e.target.value)}
+                  placeholder="e.g. friendly_checkin (Meta-approved template name)"
+                />
+              </label>
+              <label className="space-y-1.5 text-xs font-medium text-slate-600">
+                Template language
+                <Input
+                  value={form.followup_template_lang}
+                  onChange={(e) => set("followup_template_lang", e.target.value)}
+                  placeholder="en"
+                />
+              </label>
+            </div>
+            <p className="mt-2 text-[11px] leading-5 text-slate-400">
+              No template? Chats past the 24h window get a task for the team instead
+              of an automated touch.
+            </p>
+
+            <label className="mt-5 block space-y-1.5 text-xs font-medium text-slate-600">
+              Discount authority (max % the agent may offer on a quote — 0 = none)
+              <Input
+                type="number"
+                min={0}
+                max={50}
+                value={String(form.max_autonomous_discount_pct)}
+                onChange={(e) =>
+                  set(
+                    "max_autonomous_discount_pct",
+                    Math.min(50, Math.max(0, Math.round(Number(e.target.value) || 0))),
+                  )
+                }
+                className="max-w-[120px]"
+              />
+            </label>
+            <p className="mt-2 text-[11px] leading-5 text-slate-400">
+              Used at most once per deal, only on a real price objection, framed as a
+              sign-this-week incentive. The send-quote tool enforces the cap.
+            </p>
+
+            <div className="mt-6 flex flex-wrap items-start justify-between gap-3 border-t border-slate-100 pt-5">
+              <div className="max-w-xl">
+                <h3 className="text-xs font-semibold text-slate-900">Quiet hours for nudges</h3>
+                <p className="mt-1 text-[11px] leading-5 text-slate-400">
+                  Follow-up nudges and cold outreach due in this window are delivered
+                  next morning instead. The agent itself never sleeps — customer
+                  replies are answered 24/7.
+                </p>
+              </div>
+              <Toggle
+                checked={form.quiet_hours_enabled}
+                onChange={(v) => set("quiet_hours_enabled", v)}
+                label="Quiet hours"
+              />
+            </div>
+            <div className="mt-4 grid gap-4 sm:grid-cols-3">
+              <label className="space-y-1.5 text-xs font-medium text-slate-600">
+                From (hour)
+                <Select
+                  value={String(form.quiet_hours_start)}
+                  onChange={(e) => set("quiet_hours_start", Number(e.target.value))}
+                  disabled={!form.quiet_hours_enabled}
+                >
+                  {Array.from({ length: 24 }, (_, h) => (
+                    <option key={h} value={h}>
+                      {String(h).padStart(2, "0")}:00
+                    </option>
+                  ))}
+                </Select>
+              </label>
+              <label className="space-y-1.5 text-xs font-medium text-slate-600">
+                Until (hour)
+                <Select
+                  value={String(form.quiet_hours_end)}
+                  onChange={(e) => set("quiet_hours_end", Number(e.target.value))}
+                  disabled={!form.quiet_hours_enabled}
+                >
+                  {Array.from({ length: 24 }, (_, h) => (
+                    <option key={h} value={h}>
+                      {String(h).padStart(2, "0")}:00
+                    </option>
+                  ))}
+                </Select>
+              </label>
+              <label className="space-y-1.5 text-xs font-medium text-slate-600">
+                Timezone
+                <Input
+                  value={form.timezone}
+                  onChange={(e) => set("timezone", e.target.value)}
+                  placeholder="Asia/Colombo"
+                  disabled={!form.quiet_hours_enabled}
+                />
+              </label>
+            </div>
+          </section>
+
+          {/* Tool permissions */}
+          <section className={AGENT_SECTION}>
+            <h2 className={AGENT_HEADING}>What the agent is allowed to do</h2>
+            <p className={AGENT_SUBHEADING}>
+              Untick anything you want to keep human-only. The agent can only ever use
+              the ticked actions — every use is logged under Agent Activity.
+            </p>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              {WA_TOOL_CATALOG.map((tool) => {
+                const on = form.allowed_tools.includes(tool.key);
+                return (
+                  <button
+                    key={tool.key}
+                    type="button"
+                    onClick={() => toggleTool(tool.key)}
                     className={cn(
-                      "mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-md border",
+                      "flex items-start gap-3 rounded-xl border p-3 text-left transition-colors",
                       on
-                        ? "border-primary-600 bg-primary-600 text-white"
-                        : "border-slate-300 bg-white",
+                        ? "border-primary-200 bg-primary-50/60"
+                        : "border-slate-200 bg-white opacity-70 hover:opacity-100",
                     )}
                   >
-                    {on && <Check className="h-3.5 w-3.5" />}
-                  </span>
-                  <span>
-                    <span className="flex items-center gap-2 text-sm font-medium text-slate-900">
-                      {tool.label}
-                      <Badge
-                        className={
-                          tool.kind === "read"
-                            ? "bg-sky-50 text-sky-700 ring-sky-200"
-                            : "bg-amber-50 text-amber-700 ring-amber-200"
-                        }
-                      >
-                        {tool.kind}
-                      </Badge>
+                    <span
+                      className={cn(
+                        "mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-md border",
+                        on
+                          ? "border-primary-600 bg-primary-600 text-white"
+                          : "border-slate-300 bg-white",
+                      )}
+                    >
+                      {on && <Check className="h-3.5 w-3.5" />}
                     </span>
-                    <span className="mt-0.5 block text-xs leading-5 text-slate-500">
-                      {tool.description}
+                    <span>
+                      <span className="flex items-center gap-2 text-sm font-medium text-slate-900">
+                        {tool.label}
+                        <Badge
+                          className={
+                            tool.kind === "read"
+                              ? "bg-sky-50 text-sky-700 ring-sky-200"
+                              : "bg-amber-50 text-amber-700 ring-amber-200"
+                          }
+                        >
+                          {tool.kind}
+                        </Badge>
+                      </span>
+                      <span className="mt-0.5 block text-xs leading-5 text-slate-500">
+                        {tool.description}
+                      </span>
                     </span>
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </section>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
 
-        <div className="flex justify-end">
-          <Button onClick={handleSave} loading={saving}>
-            <Settings2 className="h-4 w-4" /> Save agent configuration
-          </Button>
+          <div className="sticky bottom-4 flex justify-end">
+            <Button onClick={handleSave} loading={saving} className="shadow-lg">
+              <Settings2 className="h-4 w-4" /> Save agent configuration
+            </Button>
+          </div>
+        </div>
+
+        {/* Live status + the settings that need their own room */}
+        <div className="space-y-6">
+          <section className={AGENT_SECTION}>
+            <h2 className={AGENT_HEADING}>Connection</h2>
+            <div className="mt-3 space-y-2">
+              <StatusRow
+                ok={waReady}
+                okLabel="WhatsApp API connected"
+                badLabel="WhatsApp API keys missing"
+              />
+              <StatusRow
+                ok={aiReady}
+                okLabel="OpenAI ready"
+                badLabel="OPENAI_API_KEY missing"
+              />
+            </div>
+            {!waReady && (
+              <p className="mt-3 text-[11px] leading-5 text-slate-400">
+                Add the WhatsApp keys to your environment, then point the Meta
+                webhook at{" "}
+                <code className="break-all rounded bg-slate-100 px-1 py-0.5 font-mono">
+                  {webhookUrl}
+                </code>
+                .
+              </p>
+            )}
+          </section>
+
+          <section className={AGENT_SECTION}>
+            <h2 className={AGENT_HEADING}>Greeting</h2>
+            <p className={AGENT_SUBHEADING}>
+              Tone-setter for brand-new contacts. The agent uses it as its opening style
+              (it still adapts to what the customer wrote).
+            </p>
+            <Textarea
+              value={form.greeting}
+              onChange={(e) => set("greeting", e.target.value)}
+              rows={4}
+              className="mt-4"
+            />
+          </section>
+
+          <PlaygroundCard />
+
+          <section className={AGENT_SECTION}>
+            <h2 className={AGENT_HEADING}>How it flows</h2>
+            <ul className="mt-3 space-y-2 text-xs leading-5 text-slate-600">
+              <li>1️⃣ New number messages in → agent greets &amp; asks their name</li>
+              <li>2️⃣ Name given → client profile + CRM lead created automatically</li>
+              <li>3️⃣ Agent qualifies, researches their business, answers from your knowledge base</li>
+              <li>4️⃣ Interested → booking link · Serious → proposal drafted for review</li>
+              <li>5️⃣ Wants a human → AI pauses &amp; the team is pinged</li>
+            </ul>
+          </section>
         </div>
       </div>
 
-      {/* Setup / status side panel */}
-      <div className="space-y-4">
-        <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm">
-          <h2 className="text-sm font-semibold text-slate-900">Connection setup</h2>
-          <ol className="mt-3 list-decimal space-y-2 pl-4 text-xs leading-5 text-slate-600">
-            <li>
-              Create a Meta app with the <b>WhatsApp</b> product (business.facebook.com),
-              add your business number and generate a permanent access token.
-            </li>
-            <li>
-              Add <code className="rounded bg-slate-100 px-1">WHATSAPP_ACCESS_TOKEN</code>,{" "}
-              <code className="rounded bg-slate-100 px-1">WHATSAPP_PHONE_NUMBER_ID</code>,{" "}
-              <code className="rounded bg-slate-100 px-1">WHATSAPP_VERIFY_TOKEN</code> and{" "}
-              <code className="rounded bg-slate-100 px-1">WHATSAPP_APP_SECRET</code> to{" "}
-              <code className="rounded bg-slate-100 px-1">.env.local</code> (and Netlify).
-            </li>
-            <li>
-              In WhatsApp → Configuration, set the webhook to
-              <code className="mt-1 block break-all rounded bg-slate-100 px-2 py-1 font-mono text-[11px]">
-                {webhookUrl}
-              </code>
-              with your verify token, and subscribe to the <b>messages</b> field.
-            </li>
-            <li>Send your number a WhatsApp message — it appears in the Inbox.</li>
-          </ol>
-          <div className="mt-3 flex flex-wrap gap-2">
-            <Badge
-              className={waReady ? "bg-emerald-50 text-emerald-700 ring-emerald-200" : "bg-amber-50 text-amber-700 ring-amber-200"}
-              dot={waReady ? "bg-emerald-500" : "bg-amber-500"}
-            >
-              {waReady ? "API keys detected" : "API keys missing"}
-            </Badge>
-            <Badge
-              className={aiReady ? "bg-emerald-50 text-emerald-700 ring-emerald-200" : "bg-amber-50 text-amber-700 ring-amber-200"}
-              dot={aiReady ? "bg-emerald-500" : "bg-amber-500"}
-            >
-              {aiReady ? "OpenAI ready" : "OPENAI_API_KEY missing"}
-            </Badge>
-          </div>
-        </section>
-
-        <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm">
-          <h2 className="text-sm font-semibold text-slate-900">Greeting</h2>
-          <p className="text-xs text-slate-500">
-            Tone-setter for brand-new contacts. The agent uses it as its opening style
-            (it still adapts to what the customer wrote).
-          </p>
-          <Textarea
-            value={form.greeting}
-            onChange={(e) => set("greeting", e.target.value)}
-            rows={4}
-            className="mt-3"
-          />
-        </section>
-
-        <LessonsCard lessons={lessons} />
-
-        <PlaygroundCard />
-
-        <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm">
-          <h2 className="text-sm font-semibold text-slate-900">How it flows</h2>
-          <ul className="mt-2 space-y-1.5 text-xs leading-5 text-slate-600">
-            <li>1️⃣ New number messages in → agent greets & asks their name</li>
-            <li>2️⃣ Name given → client profile + CRM lead created automatically</li>
-            <li>3️⃣ Agent qualifies, researches their business, answers from your knowledge base</li>
-            <li>4️⃣ Interested → booking link · Serious → proposal drafted for review</li>
-            <li>5️⃣ Wants a human → AI pauses & the team is pinged</li>
-          </ul>
-        </section>
-      </div>
+      {/* Lessons get the full width — they're prose, and the narrow sidebar
+          wrapped them to two words a line. */}
+      <LessonsCard lessons={lessons} />
     </div>
   );
 }
 
-// ---- Cold Outreach tab ----------------------------------------------------------
+/** One live connection indicator — a dot, a label, and nothing else. */
+function StatusRow({
+  ok,
+  okLabel,
+  badLabel,
+}: {
+  ok: boolean;
+  okLabel: string;
+  badLabel: string;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-xs font-medium ring-1",
+        ok
+          ? "bg-emerald-50/70 text-emerald-800 ring-emerald-200"
+          : "bg-amber-50/70 text-amber-800 ring-amber-200",
+      )}
+    >
+      <span
+        className={cn(
+          "h-2 w-2 shrink-0 rounded-full",
+          ok ? "bg-emerald-500" : "bg-amber-500",
+        )}
+      />
+      {ok ? okLabel : badLabel}
+    </div>
+  );
+}
+
+// ---- Cold Outreach tab ------------------------------------------------------
+
 
 function ColdOutreachTab({
   config,
@@ -2873,6 +2906,13 @@ function LessonsCard({ lessons }: { lessons: WaLesson[] }) {
   const pending = lessons.filter((l) => l.status === "pending");
   const approved = lessons.filter((l) => l.status === "approved");
 
+  // Open on whichever list has something in it — but only as the initial
+  // choice, so approving the last pending lesson doesn't yank the view away
+  // from under whoever is working through the queue.
+  const [view, setView] = React.useState<"pending" | "approved">(() =>
+    lessons.some((l) => l.status === "pending") ? "pending" : "approved",
+  );
+
   const decide = (id: string, decision: "approved" | "rejected" | "pending") => {
     setBusy(id);
     void decideLessonAction(id, decision).then((res) => {
@@ -2881,103 +2921,159 @@ function LessonsCard({ lessons }: { lessons: WaLesson[] }) {
     });
   };
 
+  const shown = view === "pending" ? pending : approved;
+
   return (
-    <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm">
-      <div className="flex items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold text-slate-900">Lessons</h2>
-        {pending.length > 0 && (
-          <Badge className="bg-amber-50 text-amber-700 ring-amber-200" dot="bg-amber-500">
-            {pending.length} awaiting review
-          </Badge>
-        )}
+    <section className={AGENT_SECTION}>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="max-w-2xl">
+          <div className="flex items-center gap-2">
+            <span className="grid h-8 w-8 place-items-center rounded-xl bg-amber-50 text-amber-600 ring-1 ring-amber-200">
+              <GraduationCap className="h-4 w-4" />
+            </span>
+            <h2 className={AGENT_HEADING}>Lessons</h2>
+          </div>
+          <p className={AGENT_SUBHEADING}>
+            Every night the agent studies its own finished conversations — a
+            booked call counts as its win — and proposes lessons. Nothing
+            reaches its brain until you approve it here.
+          </p>
+        </div>
+
+        <div className="inline-flex shrink-0 rounded-xl border border-slate-200 bg-white p-1">
+          <LessonViewTab
+            active={view === "pending"}
+            onClick={() => setView("pending")}
+            count={pending.length}
+            tone="amber"
+          >
+            Awaiting review
+          </LessonViewTab>
+          <LessonViewTab
+            active={view === "approved"}
+            onClick={() => setView("approved")}
+            count={approved.length}
+            tone="emerald"
+          >
+            Active
+          </LessonViewTab>
+        </div>
       </div>
-      <p className="text-xs text-slate-500">
-        Every night the agent studies its own finished conversations — a booked
-        call counts as its win — and proposes lessons. Nothing reaches its brain
-        until you approve it here.
-      </p>
 
-      {pending.length > 0 && (
-        <div className="mt-3 space-y-2">
-          {pending.map((l) => (
-            <div
-              key={l.id}
-              className="rounded-xl border border-amber-200/70 bg-amber-50/40 p-3"
-            >
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <LessonKindChip kind={l.kind} />
-                    <span className="text-xs font-semibold text-slate-800">{l.title}</span>
-                  </div>
-                  <p className="mt-1 whitespace-pre-wrap text-xs leading-5 text-slate-700">
-                    {l.body}
-                  </p>
-                  {Object.keys(l.evidence ?? {}).length > 0 && (
-                    <details className="mt-1.5">
-                      <summary className="cursor-pointer text-[11px] font-medium text-slate-400 hover:text-slate-600">
-                        Evidence
-                      </summary>
-                      <pre className="mt-1 max-h-40 overflow-auto rounded-lg bg-white/80 p-2 text-[10px] leading-4 text-slate-600 ring-1 ring-slate-200">
-                        {JSON.stringify(l.evidence, null, 2)}
-                      </pre>
-                    </details>
-                  )}
-                </div>
-                <div className="flex shrink-0 items-center gap-1.5">
-                  <Button
-                    size="sm"
-                    disabled={busy === l.id}
-                    onClick={() => decide(l.id, "approved")}
-                  >
-                    <Check className="h-3.5 w-3.5" /> Approve
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    disabled={busy === l.id}
-                    onClick={() => decide(l.id, "rejected")}
-                  >
-                    <X className="h-3.5 w-3.5" /> Reject
-                  </Button>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      <p className="mt-4 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-        Active — the agent follows these ({approved.length})
-      </p>
-      {approved.length ? (
-        <div className="mt-1.5 space-y-1.5">
-          {approved.map((l) => (
-            <div key={l.id} className="flex items-start justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2">
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <LessonKindChip kind={l.kind} />
-                  <span className="whitespace-pre-wrap text-xs leading-5 text-slate-700">{l.body}</span>
-                </div>
-              </div>
-              <button
-                className="shrink-0 text-[11px] font-medium text-slate-400 hover:text-rose-600"
-                disabled={busy === l.id}
-                onClick={() => decide(l.id, "pending")}
-                title="Un-approve — back to the review queue"
-              >
-                Unapprove
-              </button>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <p className="mt-1.5 text-xs italic text-slate-400">
-          Nothing approved yet — proposals appear here after the nightly run once
-          real conversations finish (needs migration 0073).
+      {shown.length === 0 ? (
+        <p className="mt-5 rounded-xl bg-slate-50 px-4 py-6 text-center text-xs text-slate-400">
+          {view === "pending"
+            ? "Nothing waiting — new proposals appear here after the nightly run."
+            : "Nothing approved yet. Approve a lesson and the agent starts applying it."}
         </p>
+      ) : (
+        <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {shown.map((l) => (
+            <article
+              key={l.id}
+              className={cn(
+                "flex flex-col rounded-xl border p-4",
+                view === "pending"
+                  ? "border-amber-200/70 bg-amber-50/30"
+                  : "border-slate-200 bg-slate-50/60",
+              )}
+            >
+              <div className="flex items-center gap-2">
+                <LessonKindChip kind={l.kind} />
+              </div>
+              <h3 className="mt-2 text-sm font-semibold leading-5 text-slate-900">
+                {l.title}
+              </h3>
+              <p className="mt-2 flex-1 whitespace-pre-wrap text-xs leading-6 text-slate-600">
+                {l.body}
+              </p>
+
+              {Object.keys(l.evidence ?? {}).length > 0 && (
+                <details className="mt-3">
+                  <summary className="cursor-pointer text-[11px] font-medium text-slate-400 hover:text-slate-600">
+                    Evidence
+                  </summary>
+                  <pre className="mt-1.5 max-h-40 overflow-auto rounded-lg bg-white p-2.5 text-[10px] leading-4 text-slate-600 ring-1 ring-slate-200">
+                    {JSON.stringify(l.evidence, null, 2)}
+                  </pre>
+                </details>
+              )}
+
+              <div className="mt-4 flex items-center gap-2 border-t border-slate-200/70 pt-3">
+                {view === "pending" ? (
+                  <>
+                    <Button
+                      size="sm"
+                      className="flex-1"
+                      disabled={busy === l.id}
+                      onClick={() => decide(l.id, "approved")}
+                    >
+                      <Check className="h-3.5 w-3.5" /> Approve
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={busy === l.id}
+                      onClick={() => decide(l.id, "rejected")}
+                    >
+                      <X className="h-3.5 w-3.5" /> Reject
+                    </Button>
+                  </>
+                ) : (
+                  <button
+                    className="text-[11px] font-medium text-slate-400 transition hover:text-rose-600"
+                    disabled={busy === l.id}
+                    onClick={() => decide(l.id, "pending")}
+                    title="Un-approve — back to the review queue"
+                  >
+                    Unapprove — send back to review
+                  </button>
+                )}
+              </div>
+            </article>
+          ))}
+        </div>
       )}
     </section>
+  );
+}
+
+function LessonViewTab({
+  active,
+  onClick,
+  count,
+  tone,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  count: number;
+  tone: "amber" | "emerald";
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-semibold transition-colors",
+        active ? "bg-primary-600 text-white shadow-sm" : "text-slate-500 hover:text-slate-800",
+      )}
+    >
+      {children}
+      <span
+        className={cn(
+          "rounded-full px-1.5 py-0.5 text-[11px] font-semibold",
+          active
+            ? "bg-white/25 text-white"
+            : tone === "amber"
+              ? "bg-amber-100 text-amber-700"
+              : "bg-emerald-100 text-emerald-700",
+        )}
+      >
+        {count}
+      </span>
+    </button>
   );
 }
 

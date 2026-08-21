@@ -27,7 +27,11 @@ export const PROPOSAL_SIGNOFF = {
 // ---- Selection -----------------------------------------------------------
 
 export type ProjectType = "business" | "ecommerce" | "agent";
-export type AgentPlatform = "whatsapp" | "instagram";
+/** "whatsapp" / "instagram" are the standalone channel agents.
+ * "smart_system_budget" rides the agent machinery too: the budget Smart
+ * System (streamlined WhatsApp agent + CRM + ONE automation, no website) —
+ * an agent-class product, so it quotes and proposes with no page counts. */
+export type AgentPlatform = "whatsapp" | "instagram" | "smart_system_budget";
 /** "smart_site" / "smart_business" / "smart_system" are the current lineup
  * (2026-08 repricing). "starter"–"scale" are LEGACY: old stored proposals
  * carry them and re-price on every render, so they must keep their original
@@ -332,6 +336,20 @@ export const AGENT_PLANS: Record<
       "Answers, qualifies, follows up & books 24/7 — English, Sinhala & Tamil",
       "Full CRM included — every chat becomes a tracked lead",
       "Automatic follow-ups so no lead is forgotten",
+    ],
+  },
+  smart_system_budget: {
+    key: "smart_system_budget",
+    name: "Smart System Budget",
+    price: 150000,
+    monthlyNote:
+      "No monthly fee to ARC — the client pays only their own AI/API usage, at cost",
+    features: [
+      "AI agent on your own WhatsApp number — answers & sells 24/7 (English, Sinhala & Tamil)",
+      "Streamlined agent — no automatic data gathering or analytics",
+      "Smart CRM — every chat becomes a tracked lead in one pipeline",
+      "1 custom workflow automation of your choice",
+      "No website — upgrading later credits what you've paid toward the full Smart System",
     ],
   },
 };

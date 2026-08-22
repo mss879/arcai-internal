@@ -247,3 +247,130 @@ export async function deleteCommission(
   revalidatePath("/profile");
   return { ok: true };
 }
+
+// --- Month carry-forward (0087) --------------------------------
+/**
+ * Pin a project to the month it was created, or let it carry forward.
+ *
+ * The board files an unfinished project under the CURRENT month (tagged with
+ * the month it started) so work in progress is never buried in a collapsed
+ * month from six months ago. Turning this off puts one project back where it
+ * was created — for something long-running that shouldn't crowd the board.
+ */
+export async function setProjectCarryForward(
+  id: string,
+  carryForward: boolean,
+): Promise<ActionResult> {
+  const { supabase, user } = await authed();
+  if (!user) return { ok: false, error: "Not authenticated." };
+
+  const { error } = await supabase
+    .from("projects")
+    .update({ carry_forward: carryForward })
+    .eq("id", id);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath("/projects");
+  revalidatePath(`/projects/${id}`);
+  return { ok: true };
+}
+
+// --- Additional expenses (0087) --------------------------------
+export type ProjectExpenseInput = {
+  id?: string;
+  project_id: string;
+  description: string;
+  detail?: string | null;
+  category?: string | null;
+  vendor?: string | null;
+  qty?: number | null;
+  unit_amount: number;
+  currency?: string;
+  incurred_on?: string | null;
+  billable?: boolean;
+  notes?: string | null;
+  receipt_path?: string | null;
+  receipt_url?: string | null;
+};
+
+export async function saveProjectExpense(
+  input: ProjectExpenseInput,
+): Promise<ActionResult> {
+  const { supabase, user } = await authed();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  if (!input.description?.trim())
+    return { ok: false, error: "Describe what the expense was for." };
+  if (!Number.isFinite(input.unit_amount) || input.unit_amount <= 0)
+    return { ok: false, error: "Enter a valid amount." };
+
+  const qty = input.qty && input.qty > 0 ? input.qty : 1;
+  const payload = {
+    project_id: input.project_id,
+    description: input.description.trim(),
+    detail: input.detail?.trim() || null,
+    category: input.category?.trim() || null,
+    vendor: input.vendor?.trim() || null,
+    qty,
+    unit_amount: input.unit_amount,
+    currency: input.currency || "LKR",
+    incurred_on: input.incurred_on || new Date().toISOString().slice(0, 10),
+    billable: input.billable ?? true,
+    notes: input.notes?.trim() || null,
+    // Only written when the form actually uploaded something, so editing an
+    // expense can't blank a receipt attached earlier.
+    ...(input.receipt_path !== undefined && input.receipt_path !== null
+      ? { receipt_path: input.receipt_path, receipt_url: input.receipt_url ?? null }
+      : {}),
+  };
+
+  const { error } = input.id
+    ? await supabase.from("project_expenses").update(payload).eq("id", input.id)
+    : await supabase.from("project_expenses").insert(payload);
+
+  if (error) return { ok: false, error: error.message };
+  revalidatePath(`/projects/${input.project_id}`);
+  revalidatePath("/projects");
+  return { ok: true };
+}
+
+export async function deleteProjectExpense(
+  id: string,
+  projectId: string,
+): Promise<ActionResult> {
+  const { supabase, user } = await authed();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const { error } = await supabase.from("project_expenses").delete().eq("id", id);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath(`/projects/${projectId}`);
+  return { ok: true };
+}
+
+/**
+ * Stamp expenses as billed (or clear the stamp).
+ *
+ * "Generate invoice" calls this for every expense it puts on the invoice, so
+ * the same extra cost can never be billed twice. It's reversible from the row
+ * menu — an invoice abandoned before download is undone with one click.
+ */
+export async function setProjectExpensesInvoiced(
+  ids: string[],
+  projectId: string,
+  invoiced: boolean,
+): Promise<ActionResult> {
+  const { supabase, user } = await authed();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  if (ids.length === 0) return { ok: true };
+
+  const { error } = await supabase
+    .from("project_expenses")
+    .update(
+      invoiced
+        ? { invoiced_at: new Date().toISOString(), invoiced_by: user.id }
+        : { invoiced_at: null, invoiced_by: null },
+    )
+    .in("id", ids);
+
+  if (error) return { ok: false, error: error.message };
+  revalidatePath(`/projects/${projectId}`);
+  revalidatePath("/projects");
+  return { ok: true };
+}

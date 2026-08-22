@@ -1,12 +1,12 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { format, formatDistanceToNow } from "date-fns";
+import { formatDistanceToNow } from "date-fns";
 import { toast } from "sonner";
 import {
   Activity,
-  Calendar,
   Copy,
   Mail,
   MessageSquareText,
@@ -33,7 +33,7 @@ import { Dropdown, DropdownItem } from "@/components/ui/dropdown";
 import { Field, Input, Select } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { PageHeader } from "@/components/ui/page-header";
-import { COMMISSION_STATUS_META } from "@/lib/constants";
+import { loansByUser, summariseMemberMoney, type LoanWithRepayments } from "@/lib/loans";
 import { formatPhone } from "@/lib/sms-utils";
 import { cn, formatCurrency } from "@/lib/utils";
 import { useRealtimeSyncTables } from "@/hooks/use-realtime-sync";
@@ -62,17 +62,12 @@ export type MemberDevice = {
   last_used_at: string | null;
 };
 
-type MemberGrace = { user_id: string; started_at: string };
-
-/** Keep in sync with GRACE_HOURS in src/lib/device-trust.ts (server-only). */
-const DEVICE_GRACE_HOURS = 48;
-
 export function TeamView({
   members,
   invitations,
   commissions,
+  loans,
   trustedDevices,
-  deviceGrace,
   onlineUserIds,
   currentUserId,
   currentUserName,
@@ -81,15 +76,24 @@ export function TeamView({
   members: Profile[];
   invitations: Invitation[];
   commissions: MemberCommission[];
+  /** 0088 — advances, so each card can show commission net of what's owed. */
+  loans: LoanWithRepayments[];
   trustedDevices: MemberDevice[];
-  deviceGrace: MemberGrace[];
   onlineUserIds: string[];
   currentUserId: string;
   currentUserName: string;
   appBaseUrl: string;
 }) {
-  // login_sessions heartbeats keep the "online now" dots fresh.
-  useRealtimeSyncTables(["profiles", "invitations", "trusted_devices", "login_sessions"]);
+  // login_sessions heartbeats keep the "online now" dots fresh; the loan
+  // tables keep each card's commission figure honest as money moves.
+  useRealtimeSyncTables([
+    "profiles",
+    "invitations",
+    "trusted_devices",
+    "login_sessions",
+    "member_loans",
+    "member_loan_repayments",
+  ]);
   const router = useRouter();
   const [email, setEmail] = React.useState("");
   const [role, setRole] = React.useState<UserRole>("member");
@@ -99,7 +103,6 @@ export function TeamView({
     emailSent: boolean;
   } | null>(null);
   const [toRemove, setToRemove] = React.useState<Profile | null>(null);
-  const [selected, setSelected] = React.useState<Profile | null>(null);
   const [toEdit, setToEdit] = React.useState<Profile | null>(null);
   const [toResetDevices, setToResetDevices] = React.useState<Profile | null>(
     null,
@@ -120,6 +123,8 @@ export function TeamView({
     return map;
   }, [commissions]);
 
+  const loansForUser = React.useMemo(() => loansByUser(loans), [loans]);
+
   const devicesByUser = React.useMemo(() => {
     const map = new Map<string, MemberDevice[]>();
     for (const d of trustedDevices) {
@@ -129,12 +134,6 @@ export function TeamView({
     }
     return map;
   }, [trustedDevices]);
-
-  const graceByUser = React.useMemo(() => {
-    const map = new Map<string, MemberGrace>();
-    for (const g of deviceGrace) map.set(g.user_id, g);
-    return map;
-  }, [deviceGrace]);
 
   const pending = invitations.filter((i) => i.status === "pending");
   const adminCount = members.filter((m) => m.role === "admin").length;
@@ -305,9 +304,10 @@ export function TeamView({
         </h2>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {members.map((m) => {
-            const commissionTotal = (commissionsByUser.get(m.id) ?? []).reduce(
-              (s, c) => s + Number(c.amount),
-              0,
+            // Commission earned, and what an unpaid advance leaves of it.
+            const money = summariseMemberMoney(
+              commissionsByUser.get(m.id) ?? [],
+              loansForUser.get(m.id) ?? [],
             );
             const deviceCount = (devicesByUser.get(m.id) ?? []).length;
             // Presence is only tracked for members (the activity heartbeat).
@@ -394,12 +394,11 @@ export function TeamView({
                   </Dropdown>
                 </div>
 
-                {/* Identity — the whole block opens the member's details */}
-                <button
-                  type="button"
-                  onClick={() => setSelected(m)}
+                {/* Identity — the whole block opens the member's own page */}
+                <Link
+                  href={`/team/${m.id}`}
                   className="flex w-full flex-col items-center px-2 text-center"
-                  title="View member details"
+                  title="Open their dashboard"
                 >
                   <span className="relative">
                     <Avatar name={m.full_name} src={m.avatar_url} size="xl" />
@@ -439,7 +438,7 @@ export function TeamView({
                     )}
                     {m.role}
                   </Badge>
-                </button>
+                </Link>
 
                 {/* Contact */}
                 <div className="mt-4 space-y-1.5 border-t border-slate-100 pt-3.5 text-xs text-slate-500">
@@ -464,8 +463,15 @@ export function TeamView({
                       <Wallet className="h-3 w-3" /> Commission
                     </p>
                     <p className="mt-0.5 text-sm font-semibold text-slate-900">
-                      {formatCurrency(commissionTotal)}
+                      {formatCurrency(money.commissionEarned)}
                     </p>
+                    {/* An advance is money already handed over — say so here
+                     * rather than letting the headline figure overstate it. */}
+                    {money.loansOutstanding > 0 && (
+                      <p className="text-[11px] font-medium text-amber-600">
+                        {formatCurrency(money.commissionAfterLoans)} after loan
+                      </p>
+                    )}
                   </div>
                   <div>
                     <p className="flex items-center gap-1 text-[11px] text-slate-400">
@@ -485,17 +491,6 @@ export function TeamView({
           })}
         </div>
       </div>
-
-      <MemberDetailModal
-        member={selected}
-        commissions={selected ? commissionsByUser.get(selected.id) ?? [] : []}
-        devices={selected ? devicesByUser.get(selected.id) ?? [] : []}
-        graceStartedAt={
-          selected ? graceByUser.get(selected.id)?.started_at ?? null : null
-        }
-        isYou={selected?.id === currentUserId}
-        onClose={() => setSelected(null)}
-      />
 
       <EditMemberModal member={toEdit} onClose={() => setToEdit(null)} />
 
@@ -652,234 +647,3 @@ function EditMemberModal({
   );
 }
 
-function MemberDetailModal({
-  member,
-  commissions,
-  devices,
-  graceStartedAt,
-  isYou,
-  onClose,
-}: {
-  member: Profile | null;
-  commissions: MemberCommission[];
-  devices: MemberDevice[];
-  graceStartedAt: string | null;
-  isYou: boolean;
-  onClose: () => void;
-}) {
-  const deviceStatus = React.useMemo(() => {
-    if (!member || member.role !== "member") return null;
-    if (devices.length >= 2) return "Locked to their 2 registered devices.";
-    if (devices.length === 1)
-      return "1 of 2 devices registered — the second joins via SMS code at login.";
-    if (!graceStartedAt)
-      return "Registration window hasn't started — begins at their next sign-in.";
-    const deadline = new Date(
-      new Date(graceStartedAt).getTime() + DEVICE_GRACE_HOURS * 3_600_000,
-    );
-    if (Date.now() < deadline.getTime())
-      return `Must trust a device by ${format(deadline, "MMM d, h:mm a")}.`;
-    return "Locked out — reset devices to grant a new 48-hour window.";
-  }, [member, devices, graceStartedAt]);
-
-  const totals = React.useMemo(() => {
-    const sum = (pred: (c: MemberCommission) => boolean) =>
-      commissions.filter(pred).reduce((s, c) => s + Number(c.amount), 0);
-    return {
-      total: sum(() => true),
-      paid: sum((c) => c.status === "paid"),
-      outstanding: sum((c) => c.status !== "paid"),
-    };
-  }, [commissions]);
-
-  return (
-    <Modal
-      open={!!member}
-      onClose={onClose}
-      title="Member details"
-      size="lg"
-    >
-      {member && (
-        <div className="space-y-6">
-          {/* Identity */}
-          <div className="flex items-center gap-4">
-            <Avatar name={member.full_name} src={member.avatar_url} size="lg" />
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
-                <h3 className="text-lg font-semibold text-slate-900">
-                  {member.full_name || member.username}
-                </h3>
-                {isYou && (
-                  <span className="text-xs font-normal text-slate-400">(you)</span>
-                )}
-                <Badge
-                  className={cn(
-                    member.role === "admin"
-                      ? "bg-primary-50 text-primary-700 ring-primary-200"
-                      : "bg-slate-100 text-slate-600 ring-slate-200",
-                  )}
-                >
-                  {member.role === "admin" ? (
-                    <ShieldCheck className="h-3 w-3" />
-                  ) : (
-                    <Shield className="h-3 w-3" />
-                  )}
-                  {member.role}
-                </Badge>
-              </div>
-              {member.title && (
-                <p className="text-sm text-slate-500">{member.title}</p>
-              )}
-              <p className="truncate text-xs text-slate-400">
-                @{member.username} · {member.email}
-              </p>
-            </div>
-          </div>
-
-          {/* Meta */}
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="flex items-center gap-2 rounded-xl bg-slate-50 px-3.5 py-2.5 text-sm text-slate-500">
-              <Calendar className="h-4 w-4 text-slate-400" />
-              Joined {format(new Date(member.created_at), "MMM d, yyyy")}
-            </div>
-            <div className="flex items-center gap-2 rounded-xl bg-slate-50 px-3.5 py-2.5 text-sm text-slate-500">
-              <Phone className="h-4 w-4 text-slate-400" />
-              {member.phone
-                ? formatPhone(member.phone)
-                : "No phone — SMS alerts off"}
-            </div>
-          </div>
-
-          {/* Trusted devices (members only — admins are exempt) */}
-          {member.role === "member" && (
-            <div className="rounded-2xl border border-slate-200/80">
-              <div className="flex items-center gap-2 border-b border-slate-100 px-4 py-3">
-                <MonitorSmartphone className="h-4 w-4 text-primary-500" />
-                <h4 className="text-sm font-semibold text-slate-900">
-                  Trusted devices
-                </h4>
-                <span className="text-xs text-slate-400">
-                  ({devices.length}/2)
-                </span>
-              </div>
-              <div className="px-4 py-3">
-                {deviceStatus && (
-                  <p className="text-xs text-slate-500">{deviceStatus}</p>
-                )}
-                {!member.phone && devices.length < 2 && (
-                  <p className="mt-1 text-xs font-medium text-amber-600">
-                    No phone on file — SMS device codes can&apos;t be
-                    delivered.
-                  </p>
-                )}
-                {devices.length > 0 && (
-                  <ul className="mt-2.5 space-y-1.5">
-                    {devices.map((d) => (
-                      <li
-                        key={d.id}
-                        className="flex items-center justify-between gap-3 rounded-lg bg-slate-50 px-3 py-2"
-                      >
-                        <span className="text-sm font-medium text-slate-800">
-                          {d.label}
-                        </span>
-                        <span className="text-xs text-slate-400">
-                          Registered {format(new Date(d.created_at), "MMM d, yyyy")}
-                          {d.last_used_at &&
-                            ` · used ${format(new Date(d.last_used_at), "MMM d")}`}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Commission summary */}
-          <div className="grid grid-cols-3 gap-3">
-            <SummaryCard label="Total" value={formatCurrency(totals.total)} accent />
-            <SummaryCard label="Paid out" value={formatCurrency(totals.paid)} />
-            <SummaryCard
-              label="Outstanding"
-              value={formatCurrency(totals.outstanding)}
-            />
-          </div>
-
-          {/* Commission list */}
-          <div className="rounded-2xl border border-slate-200/80">
-            <div className="flex items-center gap-2 border-b border-slate-100 px-4 py-3">
-              <Wallet className="h-4 w-4 text-primary-500" />
-              <h4 className="text-sm font-semibold text-slate-900">
-                Commissions
-              </h4>
-              <span className="text-xs text-slate-400">
-                ({commissions.length})
-              </span>
-            </div>
-            {commissions.length === 0 ? (
-              <p className="px-4 py-8 text-center text-sm text-slate-400">
-                No commissions allocated yet.
-              </p>
-            ) : (
-              <ul className="max-h-64 divide-y divide-slate-50 overflow-y-auto">
-                {commissions.map((c) => (
-                  <li
-                    key={c.id}
-                    className="flex items-center gap-3 px-4 py-3"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium text-slate-800">
-                        {c.project?.name ?? "—"}
-                      </p>
-                      <p className="text-xs text-slate-400">
-                        {format(new Date(c.created_at), "MMM d, yyyy")}
-                        {c.percentage != null && ` · ${c.percentage}%`}
-                      </p>
-                    </div>
-                    <Badge className={COMMISSION_STATUS_META[c.status].badge}>
-                      {COMMISSION_STATUS_META[c.status].label}
-                    </Badge>
-                    <p className="w-24 shrink-0 text-right text-sm font-semibold text-slate-900">
-                      {formatCurrency(Number(c.amount))}
-                    </p>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </div>
-      )}
-    </Modal>
-  );
-}
-
-function SummaryCard({
-  label,
-  value,
-  accent,
-}: {
-  label: string;
-  value: string;
-  accent?: boolean;
-}) {
-  return (
-    <div
-      className={cn(
-        "rounded-xl border p-3.5",
-        accent
-          ? "border-primary-200 bg-primary-50/60"
-          : "border-slate-200/80 bg-white",
-      )}
-    >
-      <p className="text-xs text-slate-500">{label}</p>
-      <p
-        className={cn(
-          "mt-1 text-lg font-semibold",
-          accent ? "text-primary-700" : "text-slate-900",
-        )}
-      >
-        {value}
-      </p>
-    </div>
-  );
-}

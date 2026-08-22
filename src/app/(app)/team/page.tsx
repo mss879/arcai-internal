@@ -1,4 +1,5 @@
 import { requireAdmin } from "@/lib/auth";
+import { attachRepayments } from "@/lib/loans";
 import { ONLINE_WINDOW_MS } from "@/lib/ping";
 import { createClient } from "@/lib/supabase/server";
 
@@ -10,8 +11,15 @@ export default async function TeamPage() {
   const profile = await requireAdmin();
   const supabase = await createClient();
 
-  const [membersRes, invitesRes, commissionsRes, devicesRes, graceRes, onlineRes] =
-    await Promise.all([
+  const [
+    membersRes,
+    invitesRes,
+    commissionsRes,
+    devicesRes,
+    onlineRes,
+    loansRes,
+    repaymentsRes,
+  ] = await Promise.all([
       supabase
         .from("profiles")
         .select("*")
@@ -29,7 +37,6 @@ export default async function TeamPage() {
         .from("trusted_devices")
         .select("id, user_id, label, created_at, last_used_at")
         .order("created_at", { ascending: true }),
-      supabase.from("device_grace").select("user_id, started_at"),
       // "Online now" = a session heartbeat within the last few minutes.
       supabase
         .from("login_sessions")
@@ -38,6 +45,12 @@ export default async function TeamPage() {
           "last_active_at",
           new Date(Date.now() - ONLINE_WINDOW_MS).toISOString(),
         ),
+      // 0088 — outstanding advances come off each card's commission figure.
+      supabase
+        .from("member_loans")
+        .select("*")
+        .order("issued_on", { ascending: false }),
+      supabase.from("member_loan_repayments").select("*"),
     ]);
 
   return (
@@ -46,8 +59,8 @@ export default async function TeamPage() {
       invitations={invitesRes.data ?? []}
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       commissions={(commissionsRes.data ?? []) as any}
+      loans={attachRepayments(loansRes.data ?? [], repaymentsRes.data ?? [])}
       trustedDevices={devicesRes.data ?? []}
-      deviceGrace={graceRes.data ?? []}
       onlineUserIds={Array.from(
         new Set((onlineRes.data ?? []).map((r) => r.user_id)),
       )}

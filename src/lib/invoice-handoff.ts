@@ -1,13 +1,17 @@
 /**
- * Proposal → Invoice handoff.
+ * Proposal / project → Invoice handoff.
  *
- * "Generate invoice" on a finished proposal carries that proposal's customer
- * and its priced line items across to the invoice generator, so the invoice
- * comes out of the branded template with the proposal's own numbers instead
- * of being retyped (and mistyped).
+ * "Generate invoice" carries a customer and their priced line items across to
+ * the invoice generator, so the invoice comes out of the branded template with
+ * the real numbers instead of being retyped (and mistyped). Two screens hand
+ * over today:
  *
- * The two screens are separate routes, so the draft rides in sessionStorage
- * for exactly one hop: the invoice page reads it once on mount and clears it.
+ *   • a finished proposal — its client and priced sections;
+ *   • a project's Additional expenses tab — the project's total value, each
+ *     billable extra cost, and what the client has already paid.
+ *
+ * The screens are separate routes, so the draft rides in sessionStorage for
+ * exactly one hop: the invoice page reads it once on mount and clears it.
  * Nothing is persisted — the invoice only becomes real when the team hits
  * Download, which saves it like any other invoice.
  */
@@ -17,11 +21,15 @@ export const INVOICE_HANDOFF_KEY = "arc:invoice-from-proposal";
 /** Marks the /invoices visit as one that should pick the draft up. */
 export const INVOICE_HANDOFF_PARAM = "from";
 export const INVOICE_HANDOFF_SOURCE = "proposal";
+export const INVOICE_HANDOFF_SOURCE_PROJECT = "project";
 
 export type InvoiceHandoffItem = {
   item: string;
   description: string;
   total: number;
+  /** Optional qty × rate, printed on the invoice when both are given. */
+  qty?: string;
+  rate?: string;
 };
 
 export type InvoiceHandoffDraft = {
@@ -30,6 +38,13 @@ export type InvoiceHandoffDraft = {
   items: InvoiceHandoffItem[];
   /** Shown as a note so whoever finishes the invoice knows where it came from. */
   sourceLabel: string;
+  /** Which screen handed over — only changes the wording of that note. */
+  sourceKind?: "proposal" | "project";
+  /**
+   * Money already received against this job. Pre-fills "Amount already paid",
+   * so the invoice's balance is the real balance, not the full total.
+   */
+  amountPaid?: number;
 };
 
 /** Stash a draft for the invoice generator to pick up on its next mount. */

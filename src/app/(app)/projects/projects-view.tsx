@@ -6,11 +6,14 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import {
+  CalendarClock,
   ChevronDown,
   FileText,
   FolderKanban,
+  History,
   MoreVertical,
   Pencil,
+  Pin,
   Plus,
   Receipt,
   Trash2,
@@ -28,8 +31,11 @@ import { PROJECT_STATUS_META } from "@/lib/constants";
 import { cn, formatCurrency } from "@/lib/utils";
 import type { Client, Project } from "@/lib/types";
 
-import { deleteProject } from "./actions";
+import { deleteProject, setProjectCarryForward } from "./actions";
 import { useRealtimeSyncTables } from "@/hooks/use-realtime-sync";
+
+/** Work that hasn't finished — the projects that carry into this month. */
+const OPEN_STATUSES = new Set(["planning", "active", "on_hold"]);
 
 type ProjectCard = Project & {
   client?: Pick<Client, "id" | "name" | "company"> | null;
@@ -52,6 +58,26 @@ function settledAmount(p: ProjectCard): number {
     .reduce((sum, cp) => sum + Number(cp.price_lkr), 0);
   return Number(p.deposit_paid ?? 0) + linkedPaid;
 }
+
+/**
+ * Where a project sits on the board (0087).
+ *
+ * A project is filed under the month it was created — except while it's still
+ * unfinished, when it rides along into the CURRENT month so work in progress
+ * is never buried in a collapsed month from six months ago. It keeps a
+ * "Continuing from June 2026" tag either way, and drops back to its own month
+ * the moment it's completed or cancelled.
+ */
+type PlacedProject = {
+  project: ProjectCard;
+  /** The month it was created — always its origin, whatever it's showing under. */
+  originKey: string;
+  originLabel: string;
+  /** Showing under the current month rather than its origin. */
+  carried: boolean;
+  /** Unfinished and created before this month — i.e. carry-forward applies. */
+  candidate: boolean;
+};
 
 export function ProjectsView({
   projects,
@@ -105,25 +131,65 @@ export function ProjectsView({
       .join(" + ");
   };
 
-  // Group projects by the month they were added (newest month first).
-  // `projects` already arrives ordered by created_at descending.
+  const currentMonthLabel = format(new Date(), "MMMM yyyy");
+
+  // Work out where each project belongs before grouping: its origin month,
+  // and whether it's carrying forward into this one.
+  const placed = React.useMemo<PlacedProject[]>(
+    () =>
+      projects.map((p) => {
+        const date = p.created_at ? new Date(p.created_at) : new Date();
+        const originKey = format(date, "yyyy-MM");
+        const open = OPEN_STATUSES.has(p.status);
+        const candidate = open && originKey < currentMonthKey;
+        return {
+          project: p,
+          originKey,
+          originLabel: format(date, "MMMM yyyy"),
+          // Default is to carry: a project saved before 0087 has no column
+          // value yet and should still surface where the team is working.
+          carried: candidate && p.carry_forward !== false,
+          candidate,
+        };
+      }),
+    [projects, currentMonthKey],
+  );
+
+  // Group by the month each project shows under, newest month first.
+  // `projects` already arrives ordered by created_at descending, so carried
+  // projects settle below this month's own at the bottom of the group.
   const monthGroups = React.useMemo(() => {
-    const groups: { key: string; label: string; projects: ProjectCard[] }[] = [];
-    const index = new Map<string, number>();
-    for (const p of projects) {
-      const date = p.created_at ? new Date(p.created_at) : new Date();
-      const key = format(date, "yyyy-MM");
-      const label = format(date, "MMMM yyyy");
-      let i = index.get(key);
-      if (i === undefined) {
-        i = groups.length;
-        index.set(key, i);
-        groups.push({ key, label, projects: [] });
-      }
-      groups[i].projects.push(p);
+    const map = new Map<string, PlacedProject[]>();
+    for (const item of placed) {
+      const key = item.carried ? currentMonthKey : item.originKey;
+      const bucket = map.get(key);
+      if (bucket) bucket.push(item);
+      else map.set(key, [item]);
     }
-    return groups;
-  }, [projects]);
+    return [...map.entries()]
+      .sort(([a], [b]) => b.localeCompare(a))
+      .map(([key, items]) => ({
+        key,
+        label: format(new Date(`${key}-01T00:00:00`), "MMMM yyyy"),
+        items,
+        carriedCount: items.filter((i) => i.carried).length,
+      }));
+  }, [placed, currentMonthKey]);
+
+  const toggleCarryForward = async (item: PlacedProject) => {
+    const next = !item.carried;
+    const res = await setProjectCarryForward(item.project.id, next);
+    if (res.ok) {
+      toast.success(
+        next
+          ? `Moved into ${currentMonthLabel}`
+          : `Pinned to ${item.originLabel}`,
+      );
+      router.refresh();
+    } else {
+      toast.error(res.error);
+    }
+  };
 
   // Most recent month open by default; once a newer month appears it opens at the top.
   const [collapsed, setCollapsed] = React.useState<Record<string, boolean>>({});
@@ -132,7 +198,8 @@ export function ProjectsView({
   const toggleMonth = (key: string, isFirst: boolean) =>
     setCollapsed((prev) => ({ ...prev, [key]: isOpen(key, isFirst) }));
 
-  const renderCard = (p: ProjectCard) => {
+  const renderCard = (item: PlacedProject) => {
+    const p = item.project;
     const totalValue = Number(p.total_value) || 0;
     const deposit = Number(p.deposit_paid) || 0;
     // Received = the deposit plus every linked payment marked paid, so the
@@ -151,9 +218,31 @@ export function ProjectsView({
         className="group relative flex flex-col rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[var(--shadow-card)] transition hover:shadow-[var(--shadow-lift)]"
       >
         <div className="flex items-start justify-between gap-2">
-          <Badge className={PROJECT_STATUS_META[p.status].badge}>
-            {PROJECT_STATUS_META[p.status].label}
-          </Badge>
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+            <Badge className={PROJECT_STATUS_META[p.status].badge}>
+              {PROJECT_STATUS_META[p.status].label}
+            </Badge>
+            {/* Where the work actually started — the whole point of letting
+             * an unfinished project ride into this month. */}
+            {item.carried && (
+              <Badge
+                className="bg-amber-50 text-amber-700 ring-amber-200"
+                title={`Started in ${item.originLabel} and still open, so it follows you into ${currentMonthLabel}.`}
+              >
+                <History className="h-3 w-3" />
+                Continuing from {item.originLabel}
+              </Badge>
+            )}
+            {item.candidate && !item.carried && (
+              <Badge
+                className="bg-slate-100 text-slate-500 ring-slate-200"
+                title={`Pinned here — it won't follow you into ${currentMonthLabel}.`}
+              >
+                <Pin className="h-3 w-3" />
+                Pinned
+              </Badge>
+            )}
+          </div>
           <Dropdown
             trigger={
               <button className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700">
@@ -167,6 +256,22 @@ export function ProjectsView({
             >
               Edit
             </DropdownItem>
+            {item.candidate && (
+              <DropdownItem
+                icon={
+                  item.carried ? (
+                    <Pin className="h-4 w-4" />
+                  ) : (
+                    <CalendarClock className="h-4 w-4" />
+                  )
+                }
+                onClick={() => toggleCarryForward(item)}
+              >
+                {item.carried
+                  ? `Pin to ${item.originLabel}`
+                  : `Move into ${currentMonthLabel}`}
+              </DropdownItem>
+            )}
             <DropdownItem
               destructive
               icon={<Trash2 className="h-4 w-4" />}
@@ -313,6 +418,12 @@ export function ProjectsView({
               <p className="mt-2 text-3xl font-extrabold text-slate-800 tracking-tight">
                 {formatSums(currentMonthSums)}
               </p>
+              {/* Deliberately NOT the sum of the month's group: that group also
+               * holds older projects still running, and counting them again
+               * every month would inflate what was actually booked. */}
+              <p className="mt-1 text-[11px] text-slate-400">
+                Projects started in {currentMonthLabel}
+              </p>
             </div>
           </div>
         </div>
@@ -344,13 +455,18 @@ export function ProjectsView({
                   aria-expanded={open}
                   className="flex w-full items-center justify-between gap-3 px-5 py-4 text-left transition hover:bg-slate-50"
                 >
-                  <div className="flex items-center gap-3">
+                  <div className="flex flex-wrap items-center gap-3">
                     <h2 className="text-base font-semibold text-slate-900">
                       {group.label}
                     </h2>
                     <Badge className="bg-slate-100 text-slate-600">
-                      {group.projects.length}
+                      {group.items.length}
                     </Badge>
+                    {group.carriedCount > 0 && (
+                      <span className="text-xs text-slate-400">
+                        incl. {group.carriedCount} continuing from earlier
+                      </span>
+                    )}
                   </div>
                   <ChevronDown
                     className={cn(
@@ -361,7 +477,7 @@ export function ProjectsView({
                 </button>
                 {open && (
                   <div className="grid grid-cols-1 gap-4 border-t border-slate-200/60 p-5 sm:grid-cols-2 xl:grid-cols-3">
-                    {group.projects.map((p) => renderCard(p))}
+                    {group.items.map((item) => renderCard(item))}
                   </div>
                 )}
               </div>

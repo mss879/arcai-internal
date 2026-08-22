@@ -18,6 +18,7 @@ export type TodoSubtask = Tables["todo_subtasks"]["Row"];
 export type Project = Tables["projects"]["Row"];
 export type ProjectDocumentRequest =
   Tables["project_document_requests"]["Row"];
+export type ProjectExpense = Tables["project_expenses"]["Row"];
 export type DeliverySettings = Tables["delivery_settings"]["Row"];
 export type DeliveryEvent = Tables["delivery_events"]["Row"];
 export type Proposal = Omit<
@@ -31,6 +32,8 @@ export type Payment = Tables["payments"]["Row"];
 export type Invoice = Tables["invoices"]["Row"];
 export type CompanyPayment = Tables["company_payments"]["Row"];
 export type Commission = Tables["commissions"]["Row"];
+export type MemberLoan = Tables["member_loans"]["Row"];
+export type MemberLoanRepayment = Tables["member_loan_repayments"]["Row"];
 export type Resource = Tables["resources"]["Row"];
 export type MeetingLink = Tables["meeting_links"]["Row"];
 export type MeetingBooking = Tables["meeting_bookings"]["Row"];
@@ -105,6 +108,8 @@ export type {
   PaymentStatus,
   WebsiteStatus,
   CommissionStatus,
+  MemberLoanStatus,
+  MemberLoanApproval,
   ClientStatus,
   ResourceKind,
   InviteStatus,

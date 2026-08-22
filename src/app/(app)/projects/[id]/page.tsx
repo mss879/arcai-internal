@@ -9,10 +9,15 @@ import {
   type CommissionRow,
 } from "@/components/projects/commissions-section";
 import {
+  ExpensesSection,
+  type ProjectExpenseRow,
+} from "@/components/projects/expenses-section";
+import {
   PaymentsSection,
   type PaymentRow,
 } from "@/components/projects/payments-section";
 import { PortalSection } from "./portal-section";
+import { ProjectTabs } from "./project-tabs";
 import { PROJECT_STATUS_META, STORAGE_BUCKETS, SERVICE_TYPE_LABELS } from "@/lib/constants";
 import { requireProfile } from "@/lib/auth";
 import { getMembers } from "@/lib/data";
@@ -29,11 +34,21 @@ export default async function ProjectDetailPage({
   const supabase = await createClient();
 
   // Run the auth check concurrently with the data queries (see dashboard).
-  const [profile, projectRes, paymentsRes, commissionsRes, members, docRequestsRes] = await Promise.all([
+  const [
+    profile,
+    projectRes,
+    paymentsRes,
+    commissionsRes,
+    members,
+    docRequestsRes,
+    expensesRes,
+    linkedPaymentsRes,
+  ] = await Promise.all([
     requireProfile(),
     (supabase as any)
       .from("projects")
-      .select("*, client:clients(id, name, company)")
+      // email/phone ride along so "Generate invoice" can fill in Bill to.
+      .select("*, client:clients(id, name, company, email, phone)")
       .eq("id", id)
       .maybeSingle(),
     supabase
@@ -54,6 +69,20 @@ export default async function ProjectDetailPage({
       .select("*")
       .eq("project_id", id)
       .order("created_at", { ascending: true }),
+    // 0087 — Additional expenses tab.
+    supabase
+      .from("project_expenses")
+      .select("*")
+      .eq("project_id", id)
+      .order("incurred_on", { ascending: false })
+      .order("created_at", { ascending: false }),
+    // 0083 — payments booked on /payments against this project. The same
+    // rows the projects board counts, so "already paid" agrees with the
+    // balance shown there.
+    supabase
+      .from("company_payments")
+      .select("id, price_lkr, is_paid")
+      .eq("project_id", id),
   ]);
 
   const project = projectRes.data;
@@ -79,18 +108,59 @@ export default async function ProjectDetailPage({
     }),
   );
 
+  // Supplier receipts on expenses live in the same private bucket as payment
+  // receipts, so they need the same short-lived signed link.
+  const expenses: ProjectExpenseRow[] = await Promise.all(
+    ((expensesRes.data ?? []) as ProjectExpenseRow[]).map(async (e) => {
+      if (!e.receipt_path) return e;
+      const { data } = await supabase.storage
+        .from(STORAGE_BUCKETS.receipts)
+        .createSignedUrl(e.receipt_path, 3600);
+      return { ...e, receiptUrl: data?.signedUrl ?? null };
+    }),
+  );
+
+  /** Billable extras still waiting to go on an invoice — the tab's badge. */
+  const unbilledExpenses = expenses.filter((e) => e.billable && !e.invoiced_at);
+
   const totalPaid = (paymentsRes.data ?? [])
     .filter((p) => p.status === "paid")
     .reduce((s, p) => s + Number(p.amount), 0);
-  const outstanding = project.budget
-    ? Math.max(0, Number(project.budget) - totalPaid)
-    : 0;
+  const paidProjectPayments = (paymentsRes.data ?? []).filter(
+    (p) => p.status === "paid",
+  ).length;
 
   const client = project.client as unknown as {
     id: string;
     name: string;
     company: string | null;
+    email: string | null;
+    phone: string | null;
   } | null;
+
+  // What the client has actually paid us, counted exactly the way the projects
+  // board counts it (0083): the deposit on the project plus every linked
+  // payment already ticked paid.
+  const depositPaid = Number(project.deposit_paid) || 0;
+  const linkedPaid = ((linkedPaymentsRes.data ?? []) as {
+    price_lkr: number;
+    is_paid: boolean;
+  }[]).filter((p) => p.is_paid);
+  const linkedPaidTotal = linkedPaid.reduce(
+    (s, p) => s + Number(p.price_lkr),
+    0,
+  );
+  const paidSummary = {
+    total: depositPaid + linkedPaidTotal,
+    breakdown:
+      linkedPaid.length > 0
+        ? `${formatCurrency(depositPaid, project.currency)} deposit + ${linkedPaid.length} linked payment${linkedPaid.length === 1 ? "" : "s"} (${formatCurrency(linkedPaidTotal, project.currency)})`
+        : `Deposit recorded on this project${depositPaid > 0 ? "" : " — nothing yet"}`,
+    otherPayments:
+      totalPaid > 0
+        ? { amount: totalPaid, count: paidProjectPayments }
+        : null,
+  };
 
   return (
     <div className="space-y-6">
@@ -148,8 +218,29 @@ export default async function ProjectDetailPage({
           {/* Financial Indicators Grid */}
           <div className="grid grid-cols-2 md:grid-cols-5 gap-4 text-right mt-2 pt-4 border-t border-slate-100">
             <Stat label="Total Value" value={formatCurrency(Number(project.total_value) || 0, project.currency)} />
-            <Stat label="Deposit Paid" value={formatCurrency(Number(project.deposit_paid) || 0, project.currency)} accent="emerald" />
-            <Stat label="Balance Due" value={formatCurrency(Math.max(0, (Number(project.total_value || 0) - Number(project.deposit_paid || 0))), project.currency)} accent="amber" />
+            <Stat
+              label="Received"
+              value={formatCurrency(paidSummary.total, project.currency)}
+              accent="emerald"
+              hint={
+                linkedPaid.length > 0
+                  ? `${formatCurrency(depositPaid, project.currency)} deposit + ${linkedPaid.length} payment${linkedPaid.length === 1 ? "" : "s"}`
+                  : "Deposit paid"
+              }
+            />
+            {/* Counted the same way the projects board counts it (0083), so
+             * the two screens can't disagree about what's still owed. */}
+            <Stat
+              label="Balance Due"
+              value={formatCurrency(
+                Math.max(
+                  0,
+                  (Number(project.total_value) || 0) - paidSummary.total,
+                ),
+                project.currency,
+              )}
+              accent="amber"
+            />
             <Stat label="Internal Budget" value={formatCurrency(Number(project.budget) || 0, project.currency)} />
             <Stat label="Budget Received" value={formatCurrency(totalPaid, project.currency)} />
           </div>
@@ -157,34 +248,63 @@ export default async function ProjectDetailPage({
       </div>
 
       {/* Main content split */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <div className="lg:col-span-2 space-y-6">
-          <PaymentsSection
+      <ProjectTabs
+        expenseBadge={
+          unbilledExpenses.length > 0 ? String(unbilledExpenses.length) : undefined
+        }
+        overview={
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+            <div className="lg:col-span-2 space-y-6">
+              <PaymentsSection
+                projectId={id}
+                currency={project.currency}
+                payments={payments}
+              />
+              <CommissionsSection
+                projectId={id}
+                currency={project.currency}
+                totalValue={Number(project.total_value) || 0}
+                isAdmin={profile.role === "admin"}
+                members={members}
+                commissions={
+                  (commissionsRes.data ?? []) as unknown as CommissionRow[]
+                }
+              />
+            </div>
+            <div>
+              <PortalSection
+                projectId={id}
+                shareToken={shareToken}
+                requests={docRequestsRes.data || []}
+                isProjectCompleted={project.status === "completed"}
+                serviceType={project.service_type ?? null}
+                hasClient={!!project.client_id}
+                onboardingStartedAt={project.onboarding_started_at ?? null}
+              />
+            </div>
+          </div>
+        }
+        expenses={
+          <ExpensesSection
             projectId={id}
-            currency={project.currency}
-            payments={payments}
-          />
-          <CommissionsSection
-            projectId={id}
+            projectName={project.name}
+            projectDetail={
+              (project.service_type
+                ? SERVICE_TYPE_LABELS[project.service_type] ||
+                  project.service_type
+                : project.description) ?? ""
+            }
             currency={project.currency}
             totalValue={Number(project.total_value) || 0}
-            isAdmin={profile.role === "admin"}
-            members={members}
-            commissions={(commissionsRes.data ?? []) as unknown as CommissionRow[]}
+            paid={paidSummary}
+            clientName={client?.name ?? ""}
+            clientDetails={[client?.company, client?.email, client?.phone]
+              .filter(Boolean)
+              .join("\n")}
+            expenses={expenses}
           />
-        </div>
-        <div>
-          <PortalSection
-            projectId={id}
-            shareToken={shareToken}
-            requests={docRequestsRes.data || []}
-            isProjectCompleted={project.status === "completed"}
-            serviceType={project.service_type ?? null}
-            hasClient={!!project.client_id}
-            onboardingStartedAt={project.onboarding_started_at ?? null}
-          />
-        </div>
-      </div>
+        }
+      />
     </div>
   );
 }
@@ -193,10 +313,12 @@ function Stat({
   label,
   value,
   accent,
+  hint,
 }: {
   label: string;
   value: string;
   accent?: "emerald" | "amber";
+  hint?: string;
 }) {
   const color =
     accent === "emerald"
@@ -208,6 +330,7 @@ function Stat({
     <div>
       <p className="text-xs font-medium text-slate-400">{label}</p>
       <p className={`mt-1 text-lg font-semibold ${color}`}>{value}</p>
+      {hint && <p className="mt-0.5 text-[11px] text-slate-400">{hint}</p>}
     </div>
   );
 }

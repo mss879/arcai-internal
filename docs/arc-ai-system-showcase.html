@@ -1,0 +1,870 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ARC OS — The AI-Powered Business & Sales Operating System</title>
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  
+  <style>
+    :root {
+      --bg-dark: #07090e;
+      --bg-card: rgba(15, 18, 28, 0.8);
+      --bg-card-hover: rgba(22, 27, 42, 0.9);
+      --border-subtle: rgba(255, 255, 255, 0.08);
+      --border-glow: rgba(6, 182, 212, 0.4);
+      --accent-cyan: #06b6d4;
+      --accent-violet: #8b5cf6;
+      --accent-emerald: #10b981;
+      --accent-amber: #f59e0b;
+      --accent-rose: #f43f5e;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --text-dim: #64748b;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg-dark);
+      color: var(--text-main);
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      overflow-x: hidden;
+      line-height: 1.6;
+      position: relative;
+    }
+
+    h1, h2, h3, h4, h5, h6, .font-heading {
+      font-family: 'Outfit', sans-serif;
+    }
+
+    /* Ambient Background Glows */
+    .ambient-glow-1 {
+      position: fixed;
+      top: -150px;
+      left: 20%;
+      width: 650px;
+      height: 650px;
+      background: radial-gradient(circle, rgba(139, 92, 246, 0.16) 0%, rgba(0, 0, 0, 0) 70%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .ambient-glow-2 {
+      position: fixed;
+      top: 45%;
+      right: -100px;
+      width: 750px;
+      height: 750px;
+      background: radial-gradient(circle, rgba(6, 182, 212, 0.14) 0%, rgba(0, 0, 0, 0) 70%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* Glassmorphic Container */
+    .glass-panel {
+      background: var(--bg-card);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+      border: 1px solid var(--border-subtle);
+      border-radius: 24px;
+      transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .glass-panel:hover {
+      border-color: rgba(255, 255, 255, 0.18);
+      transform: translateY(-3px);
+      box-shadow: 0 24px 48px -15px rgba(0, 0, 0, 0.6);
+    }
+
+    .glass-pill {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      backdrop-filter: blur(8px);
+      border-radius: 9999px;
+    }
+
+    /* Gradient Typography */
+    .gradient-text-cyan {
+      background: linear-gradient(135deg, #38bdf8 0%, #06b6d4 50%, #818cf8 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .gradient-text-violet {
+      background: linear-gradient(135deg, #c084fc 0%, #a855f7 50%, #6366f1 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .gradient-text-gold {
+      background: linear-gradient(135deg, #fde047 0%, #f59e0b 50%, #d97706 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    /* Glowing Border Effects */
+    .glow-border {
+      position: relative;
+    }
+    .glow-border::before {
+      content: '';
+      position: absolute;
+      inset: -1px;
+      border-radius: inherit;
+      padding: 1px;
+      background: linear-gradient(135deg, rgba(6, 182, 212, 0.7), rgba(139, 92, 246, 0.7), transparent);
+      -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+      -webkit-mask-composite: xor;
+      mask-composite: exclude;
+      pointer-events: none;
+    }
+
+    /* Premium Action Buttons */
+    .btn-primary {
+      background: linear-gradient(135deg, #06b6d4 0%, #3b82f6 100%);
+      color: #ffffff;
+      padding: 14px 32px;
+      border-radius: 14px;
+      font-weight: 700;
+      font-size: 15px;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      border: none;
+      cursor: pointer;
+      box-shadow: 0 4px 24px rgba(6, 182, 212, 0.4);
+      transition: all 0.25s ease;
+    }
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 36px rgba(6, 182, 212, 0.6);
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text-main);
+      padding: 14px 28px;
+      border-radius: 14px;
+      font-weight: 600;
+      font-size: 15px;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      border: 1px solid var(--border-subtle);
+      cursor: pointer;
+      backdrop-filter: blur(10px);
+      transition: all 0.25s ease;
+    }
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.1);
+      border-color: rgba(255, 255, 255, 0.25);
+      transform: translateY(-2px);
+    }
+
+    /* Layout Containers */
+    .container {
+      max-width: 1240px;
+      margin: 0 auto;
+      padding: 0 24px;
+      position: relative;
+      z-index: 10;
+    }
+
+    .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 28px; }
+    .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; }
+    .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 22px; }
+
+    @media (max-width: 992px) {
+      .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
+    }
+
+    /* Live Pulse Status */
+    .pulse-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--accent-emerald);
+      position: relative;
+      display: inline-block;
+    }
+    .pulse-dot::after {
+      content: '';
+      position: absolute;
+      inset: -4px;
+      border-radius: 50%;
+      background: var(--accent-emerald);
+      opacity: 0.5;
+      animation: pulseAnim 2s infinite;
+    }
+    @keyframes pulseAnim {
+      0% { transform: scale(1); opacity: 0.7; }
+      100% { transform: scale(2.2); opacity: 0; }
+    }
+
+    /* WhatsApp Phone Simulation */
+    .phone-frame {
+      background: #0d111a;
+      border: 4px solid #2d3748;
+      border-radius: 40px;
+      padding: 16px 12px;
+      box-shadow: 0 30px 70px -15px rgba(0, 0, 0, 0.95), 0 0 50px rgba(6, 182, 212, 0.2);
+      width: 100%;
+      max-width: 430px;
+      margin: 0 auto;
+      position: relative;
+    }
+    .phone-notch {
+      width: 140px;
+      height: 22px;
+      background: #1a202c;
+      border-bottom-left-radius: 16px;
+      border-bottom-right-radius: 16px;
+      margin: 0 auto 12px auto;
+    }
+    .chat-screen {
+      background: #0b141a;
+      background-image: radial-gradient(rgba(255,255,255,0.03) 1px, transparent 1px);
+      background-size: 22px 22px;
+      border-radius: 28px;
+      height: 520px;
+      overflow-y: auto;
+      padding: 16px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      font-size: 13.5px;
+    }
+    .bubble {
+      max-width: 86%;
+      padding: 12px 15px;
+      border-radius: 16px;
+      line-height: 1.5;
+      position: relative;
+      animation: fadeIn 0.3s ease-in-out;
+    }
+    .bubble-user {
+      align-self: flex-start;
+      background: #202c33;
+      color: #e9edef;
+      border-bottom-left-radius: 4px;
+    }
+    .bubble-agent {
+      align-self: flex-end;
+      background: #005c4b;
+      color: #e9edef;
+      border-bottom-right-radius: 4px;
+      box-shadow: 0 3px 10px rgba(0,0,0,0.3);
+    }
+    .bubble-time {
+      font-size: 10px;
+      color: rgba(255,255,255,0.6);
+      text-align: right;
+      margin-top: 5px;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .badge-action {
+      background: rgba(6, 182, 212, 0.18);
+      border: 1px solid rgba(6, 182, 212, 0.4);
+      color: #38bdf8;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 4px 10px;
+      border-radius: 8px;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      margin-bottom: 8px;
+    }
+
+    /* Range Slider */
+    input[type=range] {
+      -webkit-appearance: none;
+      width: 100%;
+      height: 8px;
+      background: #1e293b;
+      border-radius: 4px;
+      outline: none;
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: var(--accent-cyan);
+      cursor: pointer;
+      box-shadow: 0 0 14px var(--accent-cyan);
+    }
+
+    /* Interactive Tab Buttons */
+    .tab-btn {
+      padding: 12px 22px;
+      border-radius: 12px;
+      border: 1px solid var(--border-subtle);
+      background: rgba(255,255,255,0.03);
+      color: var(--text-muted);
+      font-weight: 600;
+      font-size: 14px;
+      cursor: pointer;
+      transition: all 0.25s ease;
+    }
+    .tab-btn:hover {
+      background: rgba(255,255,255,0.07);
+      color: #fff;
+    }
+    .tab-btn.active {
+      background: rgba(6, 182, 212, 0.15);
+      color: #38bdf8;
+      border-color: rgba(6, 182, 212, 0.45);
+      box-shadow: 0 0 20px rgba(6, 182, 212, 0.2);
+    }
+
+    /* Navigation Bar */
+    .nav-bar {
+      position: sticky;
+      top: 16px;
+      z-index: 100;
+      background: rgba(11, 15, 25, 0.85);
+      backdrop-filter: blur(20px);
+      border: 1px solid var(--border-subtle);
+      border-radius: 18px;
+      padding: 12px 28px;
+      margin: 16px auto 36px auto;
+      max-width: 1200px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    /* Stat Box */
+    .metric-card {
+      padding: 26px;
+      text-align: center;
+    }
+    .metric-value {
+      font-size: 44px;
+      font-weight: 900;
+      line-height: 1.1;
+      margin-bottom: 6px;
+    }
+    .metric-label {
+      font-size: 13px;
+      color: var(--text-muted);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    footer {
+      border-top: 1px solid var(--border-subtle);
+      padding: 60px 0 40px 0;
+      margin-top: 100px;
+      background: #05070a;
+      color: var(--text-dim);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Background Glows -->
+  <div class="ambient-glow-1"></div>
+  <div class="ambient-glow-2"></div>
+
+  <!-- Header Navigation -->
+  <div class="container">
+    <nav class="nav-bar">
+      <div style="display: flex; align-items: center; gap: 12px;">
+        <div style="width: 40px; height: 40px; border-radius: 12px; background: linear-gradient(135deg, #06b6d4, #8b5cf6); display: flex; align-items: center; justify-content: center; font-weight: 900; font-size: 22px; color: #fff;">A</div>
+        <div>
+          <div class="font-heading" style="font-weight: 800; font-size: 20px; letter-spacing: -0.02em; color: #fff;">ARC <span style="color: var(--accent-cyan);">OS</span></div>
+          <div style="font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.1em; font-weight: 600;">Autonomous Business Engine</div>
+        </div>
+      </div>
+
+      <div style="display: flex; gap: 24px; align-items: center;" class="nav-links">
+        <a href="#simulator" style="color: var(--text-muted); text-decoration: none; font-size: 14px; font-weight: 600;">Live Demo</a>
+        <a href="#features" style="color: var(--text-muted); text-decoration: none; font-size: 14px; font-weight: 600;">9 Core Features</a>
+        <a href="#comparison" style="color: var(--text-muted); text-decoration: none; font-size: 14px; font-weight: 600;">Before vs After</a>
+        <a href="#roi-calculator" style="color: var(--text-muted); text-decoration: none; font-size: 14px; font-weight: 600;">Time & Cost Savings</a>
+      </div>
+
+      <div style="display: flex; gap: 12px; align-items: center;">
+        <span class="glass-pill" style="padding: 6px 14px; font-size: 12px; color: #34d399; display: flex; align-items: center; gap: 8px; font-weight: 600;">
+          <span class="pulse-dot"></span> 24/7 AI Online
+        </span>
+        <a href="#simulator" class="btn-primary" style="padding: 10px 20px; font-size: 13px;">Explore System</a>
+      </div>
+    </nav>
+  </div>
+
+  <!-- Hero Header -->
+  <section style="padding: 40px 0 80px 0; text-align: center;">
+    <div class="container">
+      <div class="glass-pill" style="display: inline-flex; align-items: center; gap: 10px; padding: 8px 22px; margin-bottom: 26px;">
+        <span style="background: rgba(6, 182, 212, 0.2); color: #38bdf8; font-weight: 800; font-size: 11px; padding: 3px 9px; border-radius: 6px; text-transform: uppercase;">All-In-One Solution</span>
+        <span style="font-size: 13.5px; color: var(--text-muted); font-weight: 500;">Capture Every Lead • Eliminate Manual Admin • Accelerate Revenue</span>
+      </div>
+
+      <h1 style="font-size: clamp(38px, 6vw, 68px); font-weight: 900; line-height: 1.08; letter-spacing: -0.03em; margin-bottom: 24px; max-width: 1000px; margin-left: auto; margin-right: auto;">
+        Transform Your Business Into an <span class="gradient-text-cyan">Automated 24/7 Revenue Engine</span>
+      </h1>
+
+      <p style="font-size: clamp(16px, 2vw, 20px); color: var(--text-muted); max-width: 820px; margin: 0 auto 38px auto; font-weight: 400; line-height: 1.6;">
+        ARC OS replaces manual busywork with an intelligent, connected workspace: a <strong>24/7 trilingual WhatsApp sales rep</strong>, <strong>instant e-sign quote closers</strong>, <strong>automated invoicing</strong>, and <strong>AI social media generation</strong> working together seamlessly.
+      </p>
+
+      <div style="display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; margin-bottom: 54px;">
+        <a href="#simulator" class="btn-primary" style="font-size: 16px; padding: 16px 36px;">
+          <span>⚡ Try Live Interactive Demo</span>
+        </a>
+        <a href="#roi-calculator" class="btn-secondary" style="font-size: 16px; padding: 16px 32px;">
+          <span>📊 Calculate Time & Money Saved</span>
+        </a>
+      </div>
+
+      <!-- Quick Metrics Ribbon -->
+      <div class="glass-panel grid-4 glow-border" style="max-width: 1120px; margin: 0 auto;">
+        <div class="metric-card">
+          <div class="metric-value gradient-text-emerald" style="color: var(--accent-emerald);">&lt; 30s</div>
+          <div class="metric-label">24/7 Lead Response Time</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value gradient-text-cyan">3 Langs</div>
+          <div class="metric-label">English, Sinhala & Tamil</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value gradient-text-violet">140+ hrs</div>
+          <div class="metric-label">Staff Time Saved Per Month</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value gradient-text-gold">0 Leads</div>
+          <div class="metric-label">Forgotten or Left Behind</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Interactive Live Simulator Section -->
+  <section id="simulator" style="padding: 80px 0; background: rgba(0,0,0,0.35);">
+    <div class="container">
+      <div style="text-align: center; margin-bottom: 40px;">
+        <span class="glass-pill" style="padding: 6px 16px; font-size: 12px; color: var(--accent-cyan); text-transform: uppercase; font-weight: 700;">Interactive Demonstration</span>
+        <h2 style="font-size: 38px; font-weight: 800; margin-top: 12px; margin-bottom: 8px;">See ARC OS in Action</h2>
+        <p style="color: var(--text-muted); max-width: 640px; margin: 0 auto;">Select a real-world scenario below to see how the system engages customers, audits websites, answers in multiple languages, and closes sales automatically.</p>
+      </div>
+
+      <!-- Interactive Scenario Buttons -->
+      <div style="display: flex; justify-content: center; gap: 12px; margin-bottom: 34px; flex-wrap: wrap;">
+        <button class="tab-btn active" onclick="loadScenario('audit')">🔍 Live Website Audit & Redesign</button>
+        <button class="tab-btn" onclick="loadScenario('sinhala')">🇱🇰 Multilingual Inquiry & Price List</button>
+        <button class="tab-btn" onclick="loadScenario('quote_close')">✍️ 1-Click Digital Contract Close</button>
+        <button class="tab-btn" onclick="loadScenario('promise')">⏰ Automated Client Promise Follow-Up</button>
+      </div>
+
+      <div class="grid-2" style="align-items: center; gap: 44px;">
+        <!-- Left: Phone Simulator -->
+        <div>
+          <div class="phone-frame">
+            <div class="phone-notch"></div>
+            <!-- Header -->
+            <div style="display: flex; align-items: center; gap: 12px; padding: 6px 10px 14px 10px; border-bottom: 1px solid rgba(255,255,255,0.08);">
+              <div style="width: 38px; height: 38px; border-radius: 50%; background: linear-gradient(135deg, #06b6d4, #3b82f6); display: flex; align-items: center; justify-content: center; font-weight: 800; color: #fff;">A</div>
+              <div>
+                <div style="font-weight: 700; font-size: 15px; color: #fff;">ARC AI Sales Rep</div>
+                <div style="font-size: 11px; color: #34d399; font-weight: 600;">Active 24/7 • Instant Lead Response</div>
+              </div>
+            </div>
+            <!-- Chat Screen -->
+            <div class="chat-screen" id="chatScreen">
+              <!-- Dynamically populated via JS -->
+            </div>
+          </div>
+        </div>
+
+        <!-- Right: Business Value Explanation -->
+        <div class="glass-panel" style="padding: 34px;" id="telemetryPanel">
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 22px; border-bottom: 1px solid var(--border-subtle); padding-bottom: 16px;">
+            <div class="font-heading" style="font-weight: 700; font-size: 22px;">💼 What Just Happened For Your Business</div>
+            <span class="glass-pill" style="font-size: 11px; color: #34d399; padding: 4px 10px; font-weight: 700;">100% Automated</span>
+          </div>
+
+          <div id="telemetryDetails" style="display: flex; flex-direction: column; gap: 18px;">
+            <!-- Dynamically populated via JS -->
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Complete 9 Core Features Overview -->
+  <section id="features" style="padding: 90px 0;">
+    <div class="container">
+      <div style="text-align: center; margin-bottom: 54px;">
+        <span class="glass-pill" style="padding: 6px 16px; font-size: 12px; color: var(--accent-violet); text-transform: uppercase; font-weight: 700;">Complete Business Suite</span>
+        <h2 style="font-size: 38px; font-weight: 800; margin-top: 12px;">9 Powerful Modules. One Unified System.</h2>
+        <p style="color: var(--text-muted); max-width: 680px; margin: 0 auto;">Everything you need to discover new clients, qualify leads, close contracts, fulfill projects, and manage revenue.</p>
+      </div>
+
+      <div class="grid-3">
+        <!-- Feature 1 -->
+        <div class="glass-panel" style="padding: 30px;">
+          <div style="font-size: 32px; margin-bottom: 16px;">💬</div>
+          <h3 style="font-size: 21px; font-weight: 700; margin-bottom: 10px;">24/7 WhatsApp AI Sales Agent</h3>
+          <p style="font-size: 14.5px; color: var(--text-muted); line-height: 1.6;">Never lose an evening or weekend lead. Answers instantly in English, Sinhala, or Tamil, audits websites live, shares visual concepts, and books calls directly into your calendar.</p>
+        </div>
+
+        <!-- Feature 2 -->
+        <div class="glass-panel" style="padding: 30px;">
+          <div style="font-size: 32px; margin-bottom: 16px;">🎯</div>
+          <h3 style="font-size: 21px; font-weight: 700; margin-bottom: 10px;">Automated Lead Hunter & Radar</h3>
+          <p style="font-size: 14.5px; color: var(--text-muted); line-height: 1.6;">Scan any city or industry to discover real businesses. The system automatically detects missing websites, slow mobile pages, or outdated designs, and drafts personalized outreach pitches.</p>
+        </div>
+
+        <!-- Feature 3 -->
+        <div class="glass-panel" style="padding: 30px;">
+          <div style="font-size: 32px; margin-bottom: 16px;">📊</div>
+          <h3 style="font-size: 21px; font-weight: 700; margin-bottom: 10px;">Visual CRM & Deal Intelligence</h3>
+          <p style="font-size: 14.5px; color: var(--text-muted); line-height: 1.6;">Drag-and-drop pipeline board with automatic lead scoring (Hot, Warm, Cold). Gives your sales team a clear guide on who to call next so deals never stall or get forgotten.</p>
+        </div>
+
+        <!-- Feature 4 -->
+        <div class="glass-panel" style="padding: 30px;">
+          <div style="font-size: 32px; margin-bottom: 16px;">⚡</div>
+          <h3 style="font-size: 21px; font-weight: 700; margin-bottom: 10px;">Visual Workflow Automations</h3>
+          <p style="font-size: 14.5px; color: var(--text-muted); line-height: 1.6;">Put customer communication on autopilot. Automatically send follow-up text messages, welcome drips, and invoice payment reminders without anyone lifting a finger.</p>
+        </div>
+
+        <!-- Feature 5 -->
+        <div class="glass-panel" style="padding: 30px;">
+          <div style="font-size: 32px; margin-bottom: 16px;">✍️</div>
+          <h3 style="font-size: 21px; font-weight: 700; margin-bottom: 10px;">E-Sign Quotes & Deal Closer</h3>
+          <p style="font-size: 14.5px; color: var(--text-muted); line-height: 1.6;">Create digital proposals clients can sign on their phones. Get notified the second they open the quote, and automatically generate the project and first invoice the moment they sign.</p>
+        </div>
+
+        <!-- Feature 6 -->
+        <div class="glass-panel" style="padding: 30px;">
+          <div style="font-size: 32px; margin-bottom: 16px;">💳</div>
+          <h3 style="font-size: 21px; font-weight: 700; margin-bottom: 10px;">Financial Ops & Invoicing</h3>
+          <p style="font-size: 14.5px; color: var(--text-muted); line-height: 1.6;">Generate beautiful PDF invoices with your company seal in seconds. Track milestone installments, post-dated cheques, operational expenses, and team commission splits in one place.</p>
+        </div>
+
+        <!-- Feature 7 -->
+        <div class="glass-panel" style="padding: 30px;">
+          <div style="font-size: 32px; margin-bottom: 16px;">🎨</div>
+          <h3 style="font-size: 21px; font-weight: 700; margin-bottom: 10px;">AI Content Studio & Carousels</h3>
+          <p style="font-size: 14.5px; color: var(--text-muted); line-height: 1.6;">Create high-converting multi-slide social media carousels effortlessly. The AI writes the copy, formats headlines, and renders high-definition slide graphics matching your brand style.</p>
+        </div>
+
+        <!-- Feature 8 -->
+        <div class="glass-panel" style="padding: 30px;">
+          <div style="font-size: 32px; margin-bottom: 16px;">🎙️</div>
+          <h3 style="font-size: 21px; font-weight: 700; margin-bottom: 10px;">Voice-Powered Executive Copilot</h3>
+          <p style="font-size: 14.5px; color: var(--text-muted); line-height: 1.6;">Speak directly to your business system. Ask for pending invoices, create team tasks, search client details, or check daily priorities out loud using natural voice commands.</p>
+        </div>
+
+        <!-- Feature 9 -->
+        <div class="glass-panel" style="padding: 30px;">
+          <div style="font-size: 32px; margin-bottom: 16px;">🌐</div>
+          <h3 style="font-size: 21px; font-weight: 700; margin-bottom: 10px;">Client Portal & Meeting Booker</h3>
+          <p style="font-size: 14.5px; color: var(--text-muted); line-height: 1.6;">Provide clients with a transparent progress link to track project milestones, receipts, and deliverables. Share simple meeting booking links with automated SMS reminder alerts.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Before vs After Comparison -->
+  <section id="comparison" style="padding: 80px 0; background: rgba(0,0,0,0.3);">
+    <div class="container">
+      <div style="text-align: center; margin-bottom: 50px;">
+        <span class="glass-pill" style="padding: 6px 16px; font-size: 12px; color: var(--accent-amber); text-transform: uppercase; font-weight: 700;">Business Transformation</span>
+        <h2 style="font-size: 38px; font-weight: 800; margin-top: 12px;">Running Manually vs Running on ARC OS</h2>
+        <p style="color: var(--text-muted); max-width: 600px; margin: 0 auto;">See the direct difference ARC OS makes in daily operations and team efficiency.</p>
+      </div>
+
+      <div class="grid-2">
+        <!-- Manual Business -->
+        <div class="glass-panel" style="padding: 34px; border-color: rgba(244, 63, 94, 0.25); background: rgba(244, 63, 94, 0.03);">
+          <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 22px;">
+            <span style="background: rgba(244, 63, 94, 0.2); color: #fb7185; padding: 4px 12px; border-radius: 6px; font-weight: 800; font-size: 12px;">THE MANUAL HEADACHE</span>
+          </div>
+          <ul style="list-style: none; display: flex; flex-direction: column; gap: 16px; font-size: 14.5px; color: var(--text-muted);">
+            <li style="display: flex; gap: 12px; align-items: flex-start;">
+              <span style="color: #f43f5e; font-size: 18px;">❌</span>
+              <span><strong>Slow Lead Response:</strong> Inquiries after 6 PM or on weekends wait until Monday, losing deals to competitors.</span>
+            </li>
+            <li style="display: flex; gap: 12px; align-items: flex-start;">
+              <span style="color: #f43f5e; font-size: 18px;">❌</span>
+              <span><strong>Forgotten Commitments:</strong> Clients who say "call me next Tuesday" get buried in WhatsApp chats and forgotten.</span>
+            </li>
+            <li style="display: flex; gap: 12px; align-items: flex-start;">
+              <span style="color: #f43f5e; font-size: 18px;">❌</span>
+              <span><strong>Manual Proposal Lag:</strong> Writing proposals and invoices takes hours of manual formatting in Word and Excel.</span>
+            </li>
+            <li style="display: flex; gap: 12px; align-items: flex-start;">
+              <span style="color: #f43f5e; font-size: 18px;">❌</span>
+              <span><strong>Scattered Information:</strong> Client notes, payment receipts, and project tasks are spread across 5 different apps.</span>
+            </li>
+          </ul>
+        </div>
+
+        <!-- ARC OS Business -->
+        <div class="glass-panel glow-border" style="padding: 34px; border-color: rgba(6, 182, 212, 0.45); background: rgba(6, 182, 212, 0.04);">
+          <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 22px;">
+            <span style="background: rgba(6, 182, 212, 0.2); color: #38bdf8; padding: 4px 12px; border-radius: 6px; font-weight: 800; font-size: 12px;">THE ARC OS ADVANTAGE</span>
+          </div>
+          <ul style="list-style: none; display: flex; flex-direction: column; gap: 16px; font-size: 14.5px; color: var(--text-main);">
+            <li style="display: flex; gap: 12px; align-items: flex-start;">
+              <span style="color: #34d399; font-size: 18px;">✅</span>
+              <span><strong>Sub-30s Engagement:</strong> Inbound leads are greeted, answered, audited, and scheduled instantly 24/7/365.</span>
+            </li>
+            <li style="display: flex; gap: 12px; align-items: flex-start;">
+              <span style="color: #34d399; font-size: 18px;">✅</span>
+              <span><strong>Exact-Moment Follow-Up:</strong> The AI remembers customer promises and sends customized follow-ups at the exact minute requested.</span>
+            </li>
+            <li style="display: flex; gap: 12px; align-items: flex-start;">
+              <span style="color: #34d399; font-size: 18px;">✅</span>
+              <span><strong>1-Click Digital Closers:</strong> Send mobile-friendly e-sign quotes that automatically trigger projects and invoices upon signing.</span>
+            </li>
+            <li style="display: flex; gap: 12px; align-items: flex-start;">
+              <span style="color: #34d399; font-size: 18px;">✅</span>
+              <span><strong>Centralized Control:</strong> CRM, messages, contracts, invoices, content, and client portal unified under one roof.</span>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Interactive Time & Savings Calculator -->
+  <section id="roi-calculator" style="padding: 80px 0;">
+    <div class="container">
+      <div class="glass-panel glow-border" style="padding: 50px 40px; background: linear-gradient(180deg, rgba(15, 23, 42, 0.85) 0%, rgba(7, 9, 14, 0.98) 100%);">
+        <div style="text-align: center; margin-bottom: 44px;">
+          <span class="glass-pill" style="padding: 6px 16px; font-size: 12px; color: var(--accent-emerald); text-transform: uppercase; font-weight: 700;">Business Impact Estimator</span>
+          <h2 style="font-size: 38px; font-weight: 800; margin-top: 10px;">See How Much Time & Overhead You Save</h2>
+          <p style="color: var(--text-muted); max-width: 600px; margin: 0 auto;">Adjust the sliders below to estimate the monthly hours and revenue recovered by your team.</p>
+        </div>
+
+        <div class="grid-2" style="gap: 44px; align-items: center;">
+          <!-- Controls -->
+          <div style="display: flex; flex-direction: column; gap: 28px;">
+            <div>
+              <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
+                <label style="font-size: 15px; font-weight: 600;">Monthly Customer Inquiries</label>
+                <span id="leadCountDisplay" style="color: var(--accent-cyan); font-weight: 800; font-size: 16px;">120 Leads</span>
+              </div>
+              <input type="range" id="leadRange" min="20" max="1000" step="10" value="120" oninput="updateROI()" />
+            </div>
+
+            <div>
+              <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
+                <label style="font-size: 15px; font-weight: 600;">Sales & Administration Staff Size</label>
+                <span id="teamCountDisplay" style="color: var(--accent-cyan); font-weight: 800; font-size: 16px;">4 Staff Members</span>
+              </div>
+              <input type="range" id="teamRange" min="1" max="25" step="1" value="4" oninput="updateROI()" />
+            </div>
+
+            <div>
+              <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
+                <label style="font-size: 15px; font-weight: 600;">Average Deal / Project Value</label>
+                <span id="dealSizeDisplay" style="color: var(--accent-cyan); font-weight: 800; font-size: 16px;">$1,200</span>
+              </div>
+              <input type="range" id="dealRange" min="200" max="8000" step="100" value="1200" oninput="updateROI()" />
+            </div>
+          </div>
+
+          <!-- Impact Card -->
+          <div class="glass-panel" style="padding: 36px; background: rgba(6, 182, 212, 0.05); border-color: rgba(6, 182, 212, 0.35);">
+            <div style="font-size: 13px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700; margin-bottom: 8px;">Estimated Monthly Business Value Recovered</div>
+            <div id="annualValueDisplay" class="font-heading" style="font-size: 46px; font-weight: 900; color: #34d399; line-height: 1.1; margin-bottom: 26px;">132 Hours / mo</div>
+
+            <div style="display: flex; flex-direction: column; gap: 16px; font-size: 14.5px;">
+              <div style="display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 10px;">
+                <span style="color: var(--text-muted);">Admin & Follow-up Time Saved:</span>
+                <strong id="hoursSavedMonthly" style="color: var(--accent-cyan);">132 hrs / month</strong>
+              </div>
+              <div style="display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 10px;">
+                <span style="color: var(--text-muted);">Estimated Extra Deals (30s Instant Response):</span>
+                <strong id="extraDealsMonthly" style="color: var(--accent-emerald);">+3.6 deals / mo</strong>
+              </div>
+              <div style="display: flex; justify-content: space-between; padding-top: 6px;">
+                <span style="color: var(--text-muted);">Estimated Monthly Revenue Expansion:</span>
+                <strong id="twelveMonthNet" style="color: #fde047; font-size: 18px; font-weight: 800;">+$4,320 / mo</strong>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA / Next Steps -->
+  <section style="padding: 70px 0; text-align: center;">
+    <div class="container">
+      <div class="glass-panel glow-border" style="padding: 60px 30px; max-width: 900px; margin: 0 auto; background: radial-gradient(circle, rgba(139, 92, 246, 0.1) 0%, rgba(15, 18, 28, 0.8) 100%);">
+        <h2 style="font-size: 38px; font-weight: 800; margin-bottom: 16px;">Ready to Automate Your Business Operations?</h2>
+        <p style="color: var(--text-muted); font-size: 17px; max-width: 620px; margin: 0 auto 34px auto;">
+          Experience how ARC OS captures every customer inquiry, saves over 100 hours of admin time, and accelerates revenue on complete autopilot.
+        </p>
+        <a href="#simulator" class="btn-primary" style="font-size: 16px; padding: 16px 40px;">
+          <span>Schedule a Private System Walkthrough</span>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer>
+    <div class="container" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 20px;">
+      <div>
+        <div class="font-heading" style="font-size: 20px; font-weight: 800; color: #fff; margin-bottom: 4px;">ARC <span style="color: var(--accent-cyan);">OS</span></div>
+        <div style="font-size: 13px; color: var(--text-dim);">The Autonomous Business & Agency Operating System. All rights reserved.</div>
+      </div>
+
+      <div style="display: flex; gap: 26px; font-size: 13.5px;">
+        <a href="#simulator" style="color: var(--text-muted); text-decoration: none;">Interactive Demo</a>
+        <a href="#features" style="color: var(--text-muted); text-decoration: none;">Features</a>
+        <a href="#roi-calculator" style="color: var(--text-muted); text-decoration: none;">Savings Calculator</a>
+      </div>
+    </div>
+  </footer>
+
+  <!-- JavaScript Simulator & Calculator Logic -->
+  <script>
+    const scenarios = {
+      audit: {
+        chat: [
+          { role: 'user', text: "Hi! We run an online jewelry brand (www.lanka-gems.com), but our website isn't converting visitors into buyers. Can you help?" },
+          { role: 'agent', actionBadge: 'Audited lanka-gems.com in 1.5 seconds', text: "Hello! 👋 I just ran an instant technical review of lanka-gems.com:\n\n• Mobile Speed: Slow (takes 4.8s on phones)\n• Checkout Flow: Not optimized for 1-click mobile purchasing\n• Search Visibility: Missing key product tags\n\nFixing these can increase your online sales by over 2x! Would you like to see a custom visual preview of how we would redesign your homepage?" },
+          { role: 'user', text: "That was incredible! Yes, please show me." },
+          { role: 'agent', actionBadge: 'Generated Custom Visual Redesign Preview', text: "🎨 Here is a custom concept preview we created for Lanka Gems featuring a modern dark luxury layout and instant 1-tap WhatsApp checkout!\n\nWould you like our team to schedule a quick 10-minute walkthrough call?" }
+        ],
+        businessImpact: [
+          { title: "⚡ Instant Customer Impress", desc: "The AI proves your authority within 30 seconds by analyzing their exact website while they are hot and interested." },
+          { title: "📥 Automatic CRM Lead Creation", desc: "Automatically logged 'Lanka Gems' as an active, high-priority lead in your sales pipeline with all contact details." },
+          { title: "🖼️ Visual Proof Delivery", desc: "Sends custom visual mockups directly into the conversation to excite the buyer before your team even picks up the phone." }
+        ]
+      },
+      sinhala: {
+        chat: [
+          { role: 'user', text: "Mage clothing shop ekata website ekak hadaganna one. Gana kiyada?" },
+          { role: 'agent', actionBadge: 'Responded in Friendly Native Sinhala', text: "Ayubowan! 🙏 Ape E-Commerce Store package eka one-time payment ekak lesa labenawa (no monthly fee).\n\nMekata online payment gateway, delivery tracking, mobile-first design saha CRM system ekath labenawa.\n\nOyage shop eke items kiyak vithara sell karannada hithan inne?" },
+          { role: 'user', text: "Items 50k wage thiyenawa. Mata pricing details ewanna puluwanda?" },
+          { role: 'agent', actionBadge: 'Dispatched Branded PDF Price List', text: "Niyamai! Menna ape sampurna pricing catalogue eka (PDF) ewwa 📄.\n\nSmart Store package eka thama oyata hariyanne. Api podi call ekak dagamuda detail katha karanna?" }
+        ],
+        businessImpact: [
+          { title: "🇱🇰 Multilingual Inclusivity", desc: "Contextually switches between English, Sinhala, and Tamil so you never lose a client due to language barriers." },
+          { title: "📄 Automated Document Delivery", desc: "Instantly sends branded price lists and brochures as downloadable PDF documents in chat." },
+          { title: "🎯 Automatic Qualification", desc: "Discovers product count, business scope, and customer budget before booking the call." }
+        ]
+      },
+      quote_close: {
+        chat: [
+          { role: 'user', text: "We loved the proposal and want to proceed with the Smart Business package. Can you send the contract?" },
+          { role: 'agent', actionBadge: 'Generated Signable E-Quotation Link', text: "Fantastic! 🚀 I have prepared your official digital agreement.\n\nYou can review the deliverables and sign digitally on your phone in 30 seconds:\n👉 https://arcai.agency/q/smart-biz-108\n\nThe moment you sign, our onboarding team and first invoice are generated automatically." },
+          { role: 'user', text: "Just signed it on my phone! ✅" },
+          { role: 'agent', actionBadge: 'Executed Automated Deal-Closing Loop', text: "🎉 Congratulations and welcome! Your contract is confirmed.\n\n• Project Created: Smart Business Build #108\n• Invoice Generated: INV-2026-089 (Emailed to you)\n\nOur technical lead will reach out tomorrow at 10:00 AM for the project kickoff!" }
+        ],
+        businessImpact: [
+          { title: "👀 Live Viewing Alert", desc: "Alerts your team the exact second a client opens the quote so you know when they are reviewing it." },
+          { title: "✍️ Mobile Finger Signature", desc: "No printing, scanning, or PDF hassle. Clients sign in seconds on mobile." },
+          { title: "🚀 100% Automated Onboarding", desc: "Moves deal to 'Won', creates project milestones, and emails the first deposit invoice with zero manual effort." }
+        ]
+      },
+      promise: {
+        chat: [
+          { role: 'user', text: "I'm interested in getting this system, but I'm currently traveling. Please message me on Monday morning at 9am." },
+          { role: 'agent', actionBadge: 'Scheduled Exact Promise: Monday at 09:00 AM', text: "Understood! Safe travels. I've scheduled a reminder and will message you on Monday at 9:00 AM sharp with everything you need. Have a wonderful trip!" },
+          { role: 'agent', actionBadge: 'Executed Automatically on Monday 09:00 AM', text: "Good morning! 👋 Checking in as promised regarding the setup of your business system. Let me know when you have 5 minutes for a quick chat today!" }
+        ],
+        businessImpact: [
+          { title: "⏰ Customer Promise Precision", desc: "The AI listens for customer commitments ('call me Monday', 'after the 25th') and follows up at that exact moment." },
+          { title: "🛑 Zero Annoying Spam", desc: "Automatically pauses generic reminder messages so the customer receives only respectful, timely follow-up." },
+          { title: "🔒 Zero Leads Forgotten", desc: "No more sticky notes or forgotten reminders. Every client commitment is tracked automatically." }
+        ]
+      }
+    };
+
+    function loadScenario(key) {
+      const buttons = document.querySelectorAll('.tab-btn');
+      buttons.forEach(btn => btn.classList.remove('active'));
+      event.target.classList.add('active');
+
+      const scenario = scenarios[key];
+      const chatScreen = document.getElementById('chatScreen');
+      const telemetryDetails = document.getElementById('telemetryDetails');
+
+      chatScreen.innerHTML = '';
+      telemetryDetails.innerHTML = '';
+
+      scenario.chat.forEach((msg) => {
+        const bubble = document.createElement('div');
+        bubble.className = `bubble ${msg.role === 'user' ? 'bubble-user' : 'bubble-agent'}`;
+        
+        let badgeHtml = '';
+        if (msg.actionBadge) {
+          badgeHtml = `<div class="badge-action">⚙️ ${msg.actionBadge}</div>`;
+        }
+
+        bubble.innerHTML = `
+          ${badgeHtml}
+          <div>${msg.text.replace(/\n/g, '<br/>')}</div>
+          <div class="bubble-time">Just now ✓✓</div>
+        `;
+        chatScreen.appendChild(bubble);
+      });
+
+      scenario.businessImpact.forEach(item => {
+        const box = document.createElement('div');
+        box.style.padding = '14px 16px';
+        box.style.background = 'rgba(255, 255, 255, 0.03)';
+        box.style.border = '1px solid rgba(255, 255, 255, 0.06)';
+        box.style.borderRadius = '12px';
+        box.innerHTML = `
+          <div style="font-size: 14.5px; font-weight: 700; color: #38bdf8; margin-bottom: 4px;">${item.title}</div>
+          <div style="font-size: 13px; color: var(--text-muted); line-height: 1.5;">${item.desc}</div>
+        `;
+        telemetryDetails.appendChild(box);
+      });
+    }
+
+    function updateROI() {
+      const leads = parseInt(document.getElementById('leadRange').value);
+      const team = parseInt(document.getElementById('teamRange').value);
+      const dealSize = parseInt(document.getElementById('dealRange').value);
+
+      document.getElementById('leadCountDisplay').innerText = `${leads} Leads`;
+      document.getElementById('teamCountDisplay').innerText = `${team} Staff Members`;
+      document.getElementById('dealSizeDisplay').innerText = `$${dealSize.toLocaleString()}`;
+
+      const hoursSavedPerMonth = Math.round(team * 33);
+      const extraDeals = (leads * 0.03).toFixed(1);
+      const extraRevenue = Math.round(extraDeals * dealSize);
+
+      document.getElementById('hoursSavedMonthly').innerText = `${hoursSavedPerMonth} hrs / month`;
+      document.getElementById('extraDealsMonthly').innerText = `+${extraDeals} deals / mo`;
+      document.getElementById('twelveMonthNet').innerText = `+$${extraRevenue.toLocaleString()} / mo`;
+      document.getElementById('annualValueDisplay').innerText = `${hoursSavedPerMonth} Hours / mo`;
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+      loadScenario('audit');
+      updateROI();
+    });
+  </script>
+</body>
+</html>

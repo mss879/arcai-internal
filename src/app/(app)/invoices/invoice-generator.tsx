@@ -68,12 +68,16 @@ export function InvoiceGenerator({
   // Which past invoice / quote the form was loaded from (controls the pickers only).
   const [loadedId, setLoadedId] = React.useState("");
   const [loadedQuoteId, setLoadedQuoteId] = React.useState("");
-  /** Set when the form was filled from a proposal via "Generate invoice". */
-  const [fromProposal, setFromProposal] = React.useState<string | null>(null);
+  /** Set when the form was filled by a "Generate invoice" handoff. */
+  const [handedOver, setHandedOver] = React.useState<{
+    label: string;
+    kind: "proposal" | "project";
+  } | null>(null);
 
-  // Pick up a proposal handed over by the Proposals screen. Runs once, on
-  // mount: the draft is consumed from sessionStorage so a later refresh
-  // starts from a clean invoice instead of silently re-filling this one.
+  // Pick up a draft handed over by the Proposals screen or a project's
+  // Additional expenses tab. Runs once, on mount: the draft is consumed from
+  // sessionStorage so a later refresh starts from a clean invoice instead of
+  // silently re-filling this one.
   React.useEffect(() => {
     const draft = takeInvoiceDraft();
     if (!draft) return;
@@ -83,13 +87,23 @@ export function InvoiceGenerator({
       ...emptyLineItem(),
       item: it.item,
       description: it.description,
-      // The proposal's figure is authoritative — carry it as the row total
+      qty: it.qty ?? "",
+      rate: it.rate ?? "",
+      // The source's figure is authoritative — carry it as the row total
       // rather than re-deriving it from qty × rate.
       totalManual: true,
       total: String(it.total),
     }));
     setItems(loaded.length ? loaded : [emptyLineItem()]);
-    setFromProposal(draft.sourceLabel);
+    // Money already received rides along, so "Balance remaining" is the real
+    // balance the moment the page opens.
+    if (draft.amountPaid && draft.amountPaid > 0) {
+      setAmountPaid(String(draft.amountPaid));
+    }
+    setHandedOver({
+      label: draft.sourceLabel,
+      kind: draft.sourceKind ?? "proposal",
+    });
   }, []);
 
   // Load a saved invoice's details into the form so the user can re-issue it
@@ -248,18 +262,19 @@ export function InvoiceGenerator({
         </Button>
       </div>
 
-      {fromProposal && (
+      {handedOver && (
         <div className="no-print flex items-start gap-3 rounded-2xl border border-primary-200 bg-primary-50/60 p-4">
           <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-white text-primary-600 ring-1 ring-primary-200">
             <FileText className="h-4 w-4" />
           </span>
           <div className="text-sm">
             <p className="font-semibold text-slate-900">
-              Built from the proposal — {fromProposal}
+              Built from the {handedOver.kind} — {handedOver.label}
             </p>
             <p className="text-slate-500">
-              The customer and pricing came straight from that proposal. Check
-              the invoice number, add anything already paid, then download.
+              {handedOver.kind === "project"
+                ? "The project total, its additional expenses and everything already paid came straight from that project. Check the invoice number, then download."
+                : "The customer and pricing came straight from that proposal. Check the invoice number, add anything already paid, then download."}
             </p>
           </div>
         </div>

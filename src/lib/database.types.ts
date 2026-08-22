@@ -24,6 +24,10 @@ export type ProjectStatus =
 export type PaymentStatus = "pending" | "paid" | "overdue";
 export type WebsiteStatus = "in_progress" | "waiting_client" | "launched";
 export type CommissionStatus = "pending" | "approved" | "paid";
+/** 0088 — staff advances. Tracks repayment, not authorisation. */
+export type MemberLoanStatus = "outstanding" | "repaid" | "written_off";
+/** 0089 — whether the loan was actually granted. Only `approved` is deducted. */
+export type MemberLoanApproval = "pending" | "approved" | "declined";
 export type ResourceKind = "file" | "link";
 export type BookingStatus = "confirmed" | "cancelled";
 export type NotificationType =
@@ -504,6 +508,9 @@ export type Database = {
           stalled_alerted_at: Timestamp | null;
           chaser_paused: boolean;
           updated_at: Timestamp;
+          /** 0087 — while unfinished, list under the CURRENT month tagged
+           * with the month it was created. False pins it to that month. */
+          carry_forward: boolean;
         };
         Insert: {
           id?: UUID;
@@ -536,8 +543,66 @@ export type Database = {
           stalled_alerted_at?: Timestamp | null;
           chaser_paused?: boolean;
           updated_at?: Timestamp;
+          // 0087
+          carry_forward?: boolean;
         };
         Update: Partial<Database["public"]["Tables"]["projects"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0087 — "Additional expenses": costs a project picks up after it
+      // was quoted, billable ones feeding the Generate-invoice button.
+      project_expenses: {
+        Row: {
+          id: UUID;
+          project_id: UUID;
+          /** Becomes the invoice line item. */
+          description: string;
+          /** The longer text printed under the line item. */
+          detail: string | null;
+          category: string | null;
+          vendor: string | null;
+          qty: number;
+          unit_amount: number;
+          /** qty × unit_amount, maintained by Postgres — never written. */
+          amount: number;
+          currency: string;
+          incurred_on: string;
+          /** False = a cost the agency absorbs; never offered to an invoice. */
+          billable: boolean;
+          /** Stamped when it goes onto an invoice — the no-double-billing guard. */
+          invoiced_at: Timestamp | null;
+          invoiced_by: UUID | null;
+          receipt_url: string | null;
+          receipt_path: string | null;
+          notes: string | null;
+          created_by: UUID | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          project_id: UUID;
+          description: string;
+          detail?: string | null;
+          category?: string | null;
+          vendor?: string | null;
+          qty?: number;
+          unit_amount?: number;
+          currency?: string;
+          incurred_on?: string;
+          billable?: boolean;
+          invoiced_at?: Timestamp | null;
+          invoiced_by?: UUID | null;
+          receipt_url?: string | null;
+          receipt_path?: string | null;
+          notes?: string | null;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["project_expenses"]["Insert"]
+        >;
         Relationships: [];
       };
       // 0016 — per-project asset checklist; 0084 grew it into the
@@ -962,6 +1027,80 @@ export type Database = {
           created_at?: Timestamp;
         };
         Update: Partial<Database["public"]["Tables"]["commissions"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0088 — advances paid to a member, netted off their commission until
+      // repaid. `status` is maintained by a database trigger, never by hand.
+      member_loans: {
+        Row: {
+          id: UUID;
+          user_id: UUID;
+          amount: number;
+          currency: string;
+          reason: string | null;
+          issued_on: string;
+          due_on: string | null;
+          status: MemberLoanStatus;
+          note: string | null;
+          issued_by: UUID | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+          // 0089 — approval, separate from the repayment status above.
+          approval: MemberLoanApproval;
+          approved_at: Timestamp | null;
+          approved_by: UUID | null;
+          /** Set when the approval SMS went out — the send-once guard. */
+          approval_notified_at: Timestamp | null;
+        };
+        Insert: {
+          id?: UUID;
+          user_id: UUID;
+          amount: number;
+          currency?: string;
+          reason?: string | null;
+          issued_on?: string;
+          due_on?: string | null;
+          status?: MemberLoanStatus;
+          note?: string | null;
+          issued_by?: UUID | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+          // 0089
+          approval?: MemberLoanApproval;
+          approved_at?: Timestamp | null;
+          approved_by?: UUID | null;
+          approval_notified_at?: Timestamp | null;
+        };
+        Update: Partial<Database["public"]["Tables"]["member_loans"]["Insert"]>;
+        Relationships: [];
+      };
+      member_loan_repayments: {
+        Row: {
+          id: UUID;
+          loan_id: UUID;
+          /** Copied from the loan by a trigger — never set by the app. */
+          user_id: UUID;
+          amount: number;
+          paid_on: string;
+          method: string | null;
+          note: string | null;
+          recorded_by: UUID | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          loan_id: UUID;
+          user_id?: UUID;
+          amount: number;
+          paid_on?: string;
+          method?: string | null;
+          note?: string | null;
+          recorded_by?: UUID | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["member_loan_repayments"]["Insert"]
+        >;
         Relationships: [];
       };
       resources: {

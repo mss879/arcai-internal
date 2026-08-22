@@ -8,12 +8,12 @@ import { format } from "date-fns";
 import {
   CalendarClock,
   ChevronDown,
+  EyeOff,
   FileText,
   FolderKanban,
   History,
   MoreVertical,
   Pencil,
-  Pin,
   Plus,
   Receipt,
   Trash2,
@@ -60,24 +60,28 @@ function settledAmount(p: ProjectCard): number {
 }
 
 /**
- * Where a project sits on the board (0087).
+ * Where a project shows on the board (0087).
  *
- * A project is filed under the month it was created — except while it's still
- * unfinished, when it rides along into the CURRENT month so work in progress
- * is never buried in a collapsed month from six months ago. It keeps a
- * "Continuing from June 2026" tag either way, and drops back to its own month
- * the moment it's completed or cancelled.
+ * A project ALWAYS stays in the month it was created — that month is a record
+ * and nothing is taken out of it. On top of that, while it's still unfinished
+ * it also appears under the CURRENT month, as a tinted copy tagged with where
+ * it came from, so work in progress isn't buried in a collapsed month from six
+ * months ago. Two places, one project. The copy disappears the moment the
+ * project is completed or cancelled; the original never moves.
  */
 type PlacedProject = {
   project: ProjectCard;
-  /** The month it was created — always its origin, whatever it's showing under. */
+  /** The month it was created — where it always lives. */
   originKey: string;
   originLabel: string;
-  /** Showing under the current month rather than its origin. */
+  /** Also being shown under the current month. */
   carried: boolean;
   /** Unfinished and created before this month — i.e. carry-forward applies. */
   candidate: boolean;
 };
+
+/** One card on the board. `echo` marks the copy under the current month. */
+type GroupItem = PlacedProject & { echo: boolean };
 
 export function ProjectsView({
   projects,
@@ -155,16 +159,21 @@ export function ProjectsView({
     [projects, currentMonthKey],
   );
 
-  // Group by the month each project shows under, newest month first.
-  // `projects` already arrives ordered by created_at descending, so carried
-  // projects settle below this month's own at the bottom of the group.
+  // Group for display, newest month first. Every project goes into the month
+  // it was created — that group is never thinned out — and an unfinished one
+  // ALSO gets a copy under the current month. `projects` already arrives
+  // ordered by created_at descending, so those copies land after this month's
+  // own projects, at the bottom of the group.
   const monthGroups = React.useMemo(() => {
-    const map = new Map<string, PlacedProject[]>();
-    for (const item of placed) {
-      const key = item.carried ? currentMonthKey : item.originKey;
+    const map = new Map<string, GroupItem[]>();
+    const push = (key: string, item: GroupItem) => {
       const bucket = map.get(key);
       if (bucket) bucket.push(item);
       else map.set(key, [item]);
+    };
+    for (const item of placed) {
+      push(item.originKey, { ...item, echo: false });
+      if (item.carried) push(currentMonthKey, { ...item, echo: true });
     }
     return [...map.entries()]
       .sort(([a], [b]) => b.localeCompare(a))
@@ -172,7 +181,7 @@ export function ProjectsView({
         key,
         label: format(new Date(`${key}-01T00:00:00`), "MMMM yyyy"),
         items,
-        carriedCount: items.filter((i) => i.carried).length,
+        carriedCount: items.filter((i) => i.echo).length,
       }));
   }, [placed, currentMonthKey]);
 
@@ -182,8 +191,8 @@ export function ProjectsView({
     if (res.ok) {
       toast.success(
         next
-          ? `Moved into ${currentMonthLabel}`
-          : `Pinned to ${item.originLabel}`,
+          ? `Now also showing under ${currentMonthLabel}`
+          : `Only showing under ${item.originLabel}`,
       );
       router.refresh();
     } else {
@@ -198,7 +207,7 @@ export function ProjectsView({
   const toggleMonth = (key: string, isFirst: boolean) =>
     setCollapsed((prev) => ({ ...prev, [key]: isOpen(key, isFirst) }));
 
-  const renderCard = (item: PlacedProject) => {
+  const renderCard = (item: GroupItem, groupKey: string) => {
     const p = item.project;
     const totalValue = Number(p.total_value) || 0;
     const deposit = Number(p.deposit_paid) || 0;
@@ -214,32 +223,32 @@ export function ProjectsView({
       : 0;
     return (
       <div
-        key={p.id}
-        className="group relative flex flex-col rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[var(--shadow-card)] transition hover:shadow-[var(--shadow-lift)]"
+        // The same project can be on the board twice — once in its own month,
+        // once as this month's copy — so the key has to say which card it is.
+        key={`${groupKey}:${p.id}`}
+        className={cn(
+          "group relative flex flex-col rounded-2xl border p-5 shadow-[var(--shadow-card)] transition hover:shadow-[var(--shadow-lift)]",
+          // The copy is tinted so it reads as "carried over" at a glance and
+          // is never mistaken for a project started this month.
+          item.echo
+            ? "border-amber-200/70 bg-amber-50/40"
+            : "border-slate-200/80 bg-white",
+        )}
       >
         <div className="flex items-start justify-between gap-2">
           <div className="flex min-w-0 flex-wrap items-center gap-1.5">
             <Badge className={PROJECT_STATUS_META[p.status].badge}>
               {PROJECT_STATUS_META[p.status].label}
             </Badge>
-            {/* Where the work actually started — the whole point of letting
-             * an unfinished project ride into this month. */}
-            {item.carried && (
+            {/* Only the copy is tagged. The card in its own month is left
+             * exactly as it was, so that month still reads as its record. */}
+            {item.echo && (
               <Badge
-                className="bg-amber-50 text-amber-700 ring-amber-200"
-                title={`Started in ${item.originLabel} and still open, so it follows you into ${currentMonthLabel}.`}
+                className="bg-amber-100/80 text-amber-800 ring-amber-300/70"
+                title={`Still open, so it also shows here. Its own card is still under ${item.originLabel}.`}
               >
                 <History className="h-3 w-3" />
-                Continuing from {item.originLabel}
-              </Badge>
-            )}
-            {item.candidate && !item.carried && (
-              <Badge
-                className="bg-slate-100 text-slate-500 ring-slate-200"
-                title={`Pinned here — it won't follow you into ${currentMonthLabel}.`}
-              >
-                <Pin className="h-3 w-3" />
-                Pinned
+                From {item.originLabel}
               </Badge>
             )}
           </div>
@@ -260,7 +269,7 @@ export function ProjectsView({
               <DropdownItem
                 icon={
                   item.carried ? (
-                    <Pin className="h-4 w-4" />
+                    <EyeOff className="h-4 w-4" />
                   ) : (
                     <CalendarClock className="h-4 w-4" />
                   )
@@ -268,8 +277,8 @@ export function ProjectsView({
                 onClick={() => toggleCarryForward(item)}
               >
                 {item.carried
-                  ? `Pin to ${item.originLabel}`
-                  : `Move into ${currentMonthLabel}`}
+                  ? `Stop showing under ${currentMonthLabel}`
+                  : `Also show under ${currentMonthLabel}`}
               </DropdownItem>
             )}
             <DropdownItem
@@ -464,7 +473,8 @@ export function ProjectsView({
                     </Badge>
                     {group.carriedCount > 0 && (
                       <span className="text-xs text-slate-400">
-                        incl. {group.carriedCount} continuing from earlier
+                        + {group.carriedCount} carried over from earlier
+                        months
                       </span>
                     )}
                   </div>
@@ -477,7 +487,7 @@ export function ProjectsView({
                 </button>
                 {open && (
                   <div className="grid grid-cols-1 gap-4 border-t border-slate-200/60 p-5 sm:grid-cols-2 xl:grid-cols-3">
-                    {group.items.map((item) => renderCard(item))}
+                    {group.items.map((item) => renderCard(item, group.key))}
                   </div>
                 )}
               </div>

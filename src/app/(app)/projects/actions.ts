@@ -250,12 +250,14 @@ export async function deleteCommission(
 
 // --- Month carry-forward (0087) --------------------------------
 /**
- * Pin a project to the month it was created, or let it carry forward.
+ * Whether an unfinished project also shows under the current month.
  *
- * The board files an unfinished project under the CURRENT month (tagged with
- * the month it started) so work in progress is never buried in a collapsed
- * month from six months ago. Turning this off puts one project back where it
- * was created — for something long-running that shouldn't crowd the board.
+ * Its card in the month it was created never moves — that month stays a
+ * record of what was booked. This controls the extra, tinted copy the board
+ * puts under the CURRENT month so work in progress isn't buried in a
+ * collapsed month from six months ago. Turning it off leaves the project
+ * visible only in its own month, for something long-running that shouldn't
+ * crowd the board.
  */
 export async function setProjectCarryForward(
   id: string,

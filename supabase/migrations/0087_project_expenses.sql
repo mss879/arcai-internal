@@ -9,14 +9,15 @@
 --   1. CARRY FORWARD — the board groups projects by the month
 --      they were created, so a June project still being built in
 --      August is only findable by scrolling back to June.
---      `carry_forward` (default TRUE) lets an unfinished project
---      — status not completed/cancelled — list under the CURRENT
---      month instead, tagged "Continuing from June 2026" so the
---      month it really started in is never lost. Set it FALSE to
---      pin one project back to its creation month (the old
---      behaviour, now per-project). Once a project is completed
---      or cancelled it files itself back under the month it was
---      created, whatever this column says.
+--      `carry_forward` (default TRUE) makes an unfinished project
+--      — status not completed/cancelled — ALSO appear under the
+--      CURRENT month, as a tinted copy tagged "From June 2026".
+--      Nothing is taken out of June: its own card stays exactly
+--      where it was, so that month still reads as the record of
+--      what was booked. Set the column FALSE to suppress the
+--      copy for one long-running project that shouldn't crowd the
+--      board. The copy also disappears on its own once the
+--      project is completed or cancelled.
 --
 --   2. PROJECT_EXPENSES — the "Additional expenses" tab. Every
 --      cost a project picks up after it was quoted (a plugin
@@ -37,7 +38,7 @@ alter table public.projects
   add column if not exists carry_forward boolean not null default true;
 
 comment on column public.projects.carry_forward is
-  'TRUE (default) = while unfinished, this project lists under the CURRENT month on the Projects board, tagged with the month it was created. FALSE = pinned to its creation month. Completed/cancelled projects always file under their creation month.';
+  'TRUE (default) = while unfinished, this project ALSO appears under the current month on the Projects board, as a copy tagged with the month it was created. Its card in that month is never removed. FALSE = shown only in its own month. Completed/cancelled projects never get the copy.';
 
 -- 2. Additional expenses -------------------------------------
 create table if not exists public.project_expenses (

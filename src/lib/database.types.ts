@@ -266,6 +266,15 @@ export type ProjectAnomalyKind =
   | "payment_over_value"
   | "expense_no_receipt";
 export type ProjectAnomalyStatus = "open" | "dismissed" | "fixed";
+// 0100 — recurring income
+export type RecurringIncomeCategory =
+  | "retainer"
+  | "hosting"
+  | "maintenance"
+  | "subscription"
+  | "rent"
+  | "other";
+export type RecurringIncomeStatus = "pending" | "received" | "skipped";
 export type AssetRequestStatus = "pending" | "submitted" | "na";
 export type AssetRequestSource = "portal" | "whatsapp" | "team";
 // 0094 grew this list with the portal/review/approval/change events.
@@ -902,6 +911,84 @@ export type Database = {
           created_at?: Timestamp;
         };
         Update: Partial<Database["public"]["Tables"]["client_login_codes"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0100 — the money that simply turns up every month.
+      recurring_income: {
+        Row: {
+          id: UUID;
+          label: string;
+          client_id: UUID | null;
+          /** Attribution only — never added to the project's `received`. */
+          project_id: UUID | null;
+          amount: number;
+          currency: string;
+          day_of_month: number;
+          category: RecurringIncomeCategory;
+          is_active: boolean;
+          started_on: string;
+          ended_on: string | null;
+          last_run_on: string | null;
+          notes: string | null;
+          created_by: UUID | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          label: string;
+          client_id?: UUID | null;
+          project_id?: UUID | null;
+          amount?: number;
+          currency?: string;
+          day_of_month?: number;
+          category?: RecurringIncomeCategory;
+          is_active?: boolean;
+          started_on?: string;
+          ended_on?: string | null;
+          last_run_on?: string | null;
+          notes?: string | null;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["recurring_income"]["Insert"]>;
+        Relationships: [];
+      };
+      recurring_income_entries: {
+        Row: {
+          id: UUID;
+          income_id: UUID;
+          /** The month this covers, always the 1st. */
+          period: string;
+          due_date: string;
+          /** Copied at generation, so a price change can't restate history. */
+          amount: number;
+          currency: string;
+          status: RecurringIncomeStatus;
+          received_on: string | null;
+          received_by: UUID | null;
+          note: string | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          income_id: UUID;
+          period: string;
+          due_date: string;
+          amount?: number;
+          currency?: string;
+          status?: RecurringIncomeStatus;
+          received_on?: string | null;
+          received_by?: UUID | null;
+          note?: string | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["recurring_income_entries"]["Insert"]
+        >;
         Relationships: [];
       };
       project_templates: {
@@ -3007,6 +3094,8 @@ export type Database = {
           currency: string;
           payment_method: string | null;
           tax_amount: number;
+          /** 0100 — the project this cost belongs to. NULL = overhead. */
+          project_id: UUID | null;
           created_by: UUID | null;
           created_at: Timestamp;
         };
@@ -3020,6 +3109,8 @@ export type Database = {
           currency?: string;
           payment_method?: string | null;
           tax_amount?: number;
+          // 0100
+          project_id?: UUID | null;
           created_by?: UUID | null;
           created_at?: Timestamp;
         };

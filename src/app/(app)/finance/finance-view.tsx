@@ -1,15 +1,20 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { toast } from "sonner";
 import {
   Banknote,
   CalendarClock,
+  CheckCircle2,
   Download,
   FileSpreadsheet,
+  FolderKanban,
   Landmark,
+  Pencil,
   Plus,
   Receipt,
+  RefreshCw,
   Trash2,
   TrendingDown,
   TrendingUp,
@@ -28,6 +33,9 @@ import type {
   Cheque,
   ChequeStatus,
   Expense,
+  RecurringIncome,
+  RecurringIncomeCategory,
+  RecurringIncomeEntry,
   ExpenseCategory,
   Payment,
   PaymentInstallment,
@@ -43,12 +51,39 @@ import {
   saveExpense,
   setChequeStatus,
   setInstallmentPaid,
+  deleteRecurringIncome,
+  saveRecurringIncome,
+  setIncomeEntryStatus,
+  setRecurringIncomeActive,
   type ChequeInput,
   type ExpenseInput,
+  type RecurringIncomeInput,
 } from "./actions";
 
-type Tab = "overview" | "installments" | "cheques" | "expenses" | "tax";
+type Tab =
+  | "overview"
+  | "recurring"
+  | "installments"
+  | "cheques"
+  | "expenses"
+  | "tax";
 type ClientLite = { id: string; name: string; company: string | null };
+/** 0100 — just enough of a project to tag a cost or an arrangement to it. */
+export type ProjectLite = { id: string; name: string; clientName: string | null };
+
+/** 0100 — an arrangement with this month's entry alongside it. */
+export type RecurringRow = RecurringIncome & {
+  entries: RecurringIncomeEntry[];
+};
+
+const INCOME_CATEGORIES: { value: RecurringIncomeCategory; label: string }[] = [
+  { value: "retainer", label: "Retainer" },
+  { value: "hosting", label: "Hosting & domains" },
+  { value: "maintenance", label: "Maintenance & care" },
+  { value: "subscription", label: "Subscription" },
+  { value: "rent", label: "Rent received" },
+  { value: "other", label: "Other" },
+];
 
 const EXPENSE_CATEGORIES: { value: ExpenseCategory; label: string }[] = [
   { value: "salaries", label: "Salaries" },
@@ -78,6 +113,8 @@ export function FinanceView({
   expenses,
   paidPayments,
   clients,
+  projects,
+  recurring,
 }: {
   plans: PaymentPlan[];
   installments: PaymentInstallment[];
@@ -85,12 +122,20 @@ export function FinanceView({
   expenses: Expense[];
   paidPayments: Payment[];
   clients: ClientLite[];
+  projects: ProjectLite[];
+  recurring: RecurringRow[];
 }) {
   useRealtimeSync("payment_plans");
   useRealtimeSync("payment_installments");
   useRealtimeSync("cheques");
   useRealtimeSync("expenses");
   const [tab, setTab] = React.useState<Tab>("overview");
+
+  // 0100 — entries the tick has generated but nobody has ticked off. This is
+  // the number that answers "did this month's money actually arrive".
+  const pendingIncome = recurring.flatMap((r) =>
+    r.entries.filter((e) => e.status === "pending"),
+  );
 
   const pendingInstallments = installments.filter((i) => i.status === "pending");
   const pendingCheques = cheques.filter((c) => c.status === "pending");
@@ -105,6 +150,14 @@ export function FinanceView({
       <div className="inline-flex flex-wrap gap-1 rounded-xl border border-slate-200 bg-white p-1 shadow-sm">
         <TabButton active={tab === "overview"} onClick={() => setTab("overview")} icon={<Landmark className="h-4 w-4" />}>
           Overview
+        </TabButton>
+        <TabButton
+          active={tab === "recurring"}
+          onClick={() => setTab("recurring")}
+          icon={<RefreshCw className="h-4 w-4" />}
+          count={pendingIncome.length}
+        >
+          Recurring
         </TabButton>
         <TabButton
           active={tab === "installments"}
@@ -140,13 +193,23 @@ export function FinanceView({
           cheques={cheques}
           expenses={expenses}
           paidPayments={paidPayments}
+          recurring={recurring}
+        />
+      )}
+      {tab === "recurring" && (
+        <RecurringTab
+          rows={recurring}
+          clients={clients}
+          projects={projects}
         />
       )}
       {tab === "installments" && (
         <InstallmentsTab plans={plans} installments={installments} clients={clients} />
       )}
       {tab === "cheques" && <ChequesTab cheques={cheques} clients={clients} />}
-      {tab === "expenses" && <ExpensesTab expenses={expenses} />}
+      {tab === "expenses" && (
+        <ExpensesTab expenses={expenses} projects={projects} />
+      )}
       {tab === "tax" && (
         <TaxTab installments={installments} plans={plans} expenses={expenses} paidPayments={paidPayments} />
       )}
@@ -202,11 +265,13 @@ function OverviewTab({
   cheques,
   expenses,
   paidPayments,
+  recurring,
 }: {
   installments: PaymentInstallment[];
   cheques: Cheque[];
   expenses: Expense[];
   paidPayments: Payment[];
+  recurring: RecurringRow[];
 }) {
   const now = new Date();
   const thisMonth = now.toISOString().slice(0, 7);
@@ -220,6 +285,17 @@ function OverviewTab({
     ...installments
       .filter((i) => i.status === "paid")
       .map((i) => ({ date: (i.paid_at ?? i.due_date).slice(0, 10), amount: Number(i.amount) })),
+    // 0100 — RECEIVED recurring months only. A pending entry is a promise,
+    // and a promise in a cash-flow chart is how a month looks fine right up
+    // until payroll.
+    ...recurring.flatMap((r) =>
+      r.entries
+        .filter((e) => e.status === "received")
+        .map((e) => ({
+          date: (e.received_on ?? e.due_date).slice(0, 10),
+          amount: Number(e.amount),
+        })),
+    ),
   ];
   const outflows = expenses.map((e) => ({ date: e.expense_date, amount: Number(e.amount) }));
 
@@ -232,6 +308,16 @@ function OverviewTab({
   const pendingChequesIn = cheques
     .filter((c) => c.status === "pending" && c.direction === "received")
     .reduce((s, c) => s + Number(c.amount), 0);
+
+  // 0100 — what the standing arrangements are worth every month, and how much
+  // of THIS month has not landed yet.
+  const monthlyRecurring = recurring
+    .filter((r) => r.is_active)
+    .reduce((sum, r) => sum + Number(r.amount), 0);
+  const recurringOutstanding = recurring
+    .flatMap((r) => r.entries)
+    .filter((e) => e.status === "pending" && monthKey(e.due_date) === thisMonth)
+    .reduce((sum, e) => sum + Number(e.amount), 0);
 
   // Last 6 months in/out.
   const months: string[] = [];
@@ -274,10 +360,34 @@ function OverviewTab({
         />
         <StatCard
           label="Still to collect"
-          value={formatCurrency(pendingInstallmentsTotal + pendingChequesIn)}
-          hint="pending installments + cheques"
+          value={formatCurrency(
+            pendingInstallmentsTotal + pendingChequesIn + recurringOutstanding,
+          )}
+          hint="installments + cheques + this month's recurring"
         />
       </div>
+
+      {/* 0100 — recurring revenue is the number that makes a quiet month
+          survivable, so it gets its own line rather than being folded away. */}
+      {monthlyRecurring > 0 && (
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-2xl border border-emerald-200/70 bg-emerald-50/50 px-5 py-3.5">
+          <RefreshCw className="h-4 w-4 shrink-0 text-emerald-600" />
+          <p className="text-sm text-slate-700">
+            <span className="font-semibold text-emerald-700">
+              {formatCurrency(monthlyRecurring)}
+            </span>{" "}
+            arrives every month from standing arrangements.
+          </p>
+          {recurringOutstanding > 0 && (
+            <p className="text-sm text-amber-700">
+              <span className="font-semibold">
+                {formatCurrency(recurringOutstanding)}
+              </span>{" "}
+              of this month hasn&apos;t landed yet.
+            </p>
+          )}
+        </div>
+      )}
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
         <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[var(--shadow-card)]">
@@ -943,7 +1053,448 @@ function ChequeModal({
 
 // ---- Expenses -------------------------------------------------------------------
 
-function ExpensesTab({ expenses }: { expenses: Expense[] }) {
+/* ------------------------------------------------------------------ */
+/* Recurring income (0100)                                             */
+/*                                                                     */
+/* The arrangement is the promise; the entry is the fact. Only received */
+/* entries reach the cash-flow chart — a promise in a chart is how a    */
+/* month looks fine right up until payroll.                            */
+/* ------------------------------------------------------------------ */
+
+function RecurringTab({
+  rows,
+  clients,
+  projects,
+}: {
+  rows: RecurringRow[];
+  clients: ClientLite[];
+  projects: ProjectLite[];
+}) {
+  const [editing, setEditing] = React.useState<RecurringRow | null>(null);
+  const [creating, setCreating] = React.useState(false);
+  const [toDelete, setToDelete] = React.useState<RecurringRow | null>(null);
+  const [busy, setBusy] = React.useState<string | null>(null);
+
+  const thisMonth = new Date().toISOString().slice(0, 7);
+
+  // Everything the tick has generated and nobody has answered for, oldest
+  // first — that ordering IS the chase list.
+  const outstanding = rows
+    .flatMap((r) => r.entries.map((e) => ({ entry: e, row: r })))
+    .filter((x) => x.entry.status === "pending")
+    .sort((a, b) => a.entry.due_date.localeCompare(b.entry.due_date));
+
+  const active = rows.filter((r) => r.is_active);
+  const monthly = active.reduce((sum, r) => sum + Number(r.amount), 0);
+
+  async function mark(id: string, status: "received" | "skipped") {
+    setBusy(id);
+    const res = await setIncomeEntryStatus(id, status);
+    setBusy(null);
+    if (res.ok) {
+      toast.success(status === "received" ? "Marked received." : "Skipped this month.");
+    } else toast.error(res.error);
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-slate-500">
+          {active.length === 0
+            ? "Nothing recurring yet."
+            : `${active.length} arrangement${active.length === 1 ? "" : "s"} · ${formatCurrency(monthly)} a month`}
+        </p>
+        <Button onClick={() => setCreating(true)}>
+          <Plus className="h-4 w-4" /> Add recurring income
+        </Button>
+      </div>
+
+      {/* What is owed right now — the reason to open this tab. */}
+      {outstanding.length > 0 && (
+        <div className="overflow-hidden rounded-2xl border border-amber-200 bg-white shadow-[var(--shadow-card)]">
+          <div className="border-b border-amber-100 bg-amber-50/70 px-5 py-3">
+            <h3 className="text-sm font-semibold text-amber-800">
+              Waiting to land ({outstanding.length})
+            </h3>
+            <p className="text-xs text-amber-700">
+              Generated automatically on each arrangement&apos;s day. Marking one
+              received is what puts it in the profit figure.
+            </p>
+          </div>
+          <ul className="divide-y divide-slate-100">
+            {outstanding.map(({ entry, row }) => {
+              const late = entry.due_date < new Date().toISOString().slice(0, 10);
+              return (
+                <li
+                  key={entry.id}
+                  className="flex flex-wrap items-center gap-x-3 gap-y-2 px-5 py-3"
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium text-slate-800">
+                      {row.label}
+                    </p>
+                    <p className="text-xs text-slate-400">
+                      {new Date(`${entry.period}T00:00:00`).toLocaleDateString(
+                        "en-US",
+                        { month: "long", year: "numeric" },
+                      )}{" "}
+                      · due {entry.due_date}
+                      {late && (
+                        <span className="ml-1 font-semibold text-rose-600">
+                          — overdue
+                        </span>
+                      )}
+                    </p>
+                  </div>
+                  <span className="text-sm font-semibold tabular-nums text-slate-800">
+                    {formatCurrency(Number(entry.amount), entry.currency)}
+                  </span>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => mark(entry.id, "skipped")}
+                      loading={busy === entry.id}
+                    >
+                      Skip
+                    </Button>
+                    <Button
+                      size="sm"
+                      onClick={() => mark(entry.id, "received")}
+                      loading={busy === entry.id}
+                    >
+                      <CheckCircle2 className="h-4 w-4" /> Received
+                    </Button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+
+      {rows.length === 0 ? (
+        <EmptyState
+          icon={<RefreshCw className="h-6 w-6" />}
+          title="No recurring income set up"
+          description="Hosting, care plans and social-media retainers arrive every month and are invisible until someone types them in. Set one up and each month generates itself."
+          action={
+            <Button onClick={() => setCreating(true)}>
+              <Plus className="h-4 w-4" /> Add the first one
+            </Button>
+          }
+        />
+      ) : (
+        <div className="space-y-2">
+          {rows.map((r) => {
+            const thisMonthEntry = r.entries.find(
+              (e) => e.period.slice(0, 7) === thisMonth,
+            );
+            const received = r.entries.filter((e) => e.status === "received");
+            const client = clients.find((c) => c.id === r.client_id);
+            return (
+              <div
+                key={r.id}
+                className={cn(
+                  "flex flex-wrap items-center gap-x-3 gap-y-2 rounded-2xl border bg-white px-4 py-3 shadow-[var(--shadow-card)]",
+                  r.is_active ? "border-slate-200/80" : "border-slate-200/60 opacity-60",
+                )}
+              >
+                <Badge className="bg-slate-100 capitalize text-slate-600 ring-slate-200">
+                  {r.category}
+                </Badge>
+                <button onClick={() => setEditing(r)} className="min-w-0 text-left">
+                  <span className="block truncate text-sm font-medium text-slate-800 hover:text-primary-600">
+                    {r.label}
+                  </span>
+                  <span className="block truncate text-xs text-slate-400">
+                    {[
+                      client?.name,
+                      `on the ${r.day_of_month}${ordinal(r.day_of_month)}`,
+                      received.length
+                        ? `${received.length} month${received.length === 1 ? "" : "s"} received`
+                        : "nothing received yet",
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </span>
+                </button>
+
+                {r.project_id && (
+                  <Link
+                    href={`/projects/${r.project_id}`}
+                    className="inline-flex items-center gap-1 rounded-md bg-primary-50 px-1.5 py-0.5 text-[11px] font-medium text-primary-700 transition hover:bg-primary-100"
+                    title="Shown here for reporting — it does not change the project's received figure."
+                  >
+                    <FolderKanban className="h-3 w-3" />
+                    {projects.find((p) => p.id === r.project_id)?.name ?? "Project"}
+                  </Link>
+                )}
+
+                {thisMonthEntry?.status === "received" && (
+                  <Badge className="bg-emerald-50 text-emerald-700 ring-emerald-200">
+                    This month in
+                  </Badge>
+                )}
+                {!r.is_active && (
+                  <Badge className="bg-slate-100 text-slate-500 ring-slate-200">
+                    Paused
+                  </Badge>
+                )}
+
+                <span className="ml-auto flex items-center gap-2">
+                  <span className="text-sm font-semibold tabular-nums text-slate-800">
+                    {formatCurrency(Number(r.amount), r.currency)}
+                    <span className="text-xs font-normal text-slate-400">/mo</span>
+                  </span>
+                  <button
+                    onClick={async () => {
+                      const res = await setRecurringIncomeActive(r.id, !r.is_active);
+                      if (res.ok)
+                        toast.success(r.is_active ? "Paused." : "Running again.");
+                      else toast.error(res.error);
+                    }}
+                    className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+                    aria-label={r.is_active ? "Pause" : "Resume"}
+                    title={
+                      r.is_active
+                        ? "Stop generating months. History is kept."
+                        : "Start generating months again."
+                    }
+                  >
+                    <RefreshCw className="h-4 w-4" />
+                  </button>
+                  <button
+                    onClick={() => setEditing(r)}
+                    className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+                    aria-label="Edit"
+                  >
+                    <Pencil className="h-4 w-4" />
+                  </button>
+                  <button
+                    onClick={() => setToDelete(r)}
+                    className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-500"
+                    aria-label="Delete"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <RecurringModal
+        open={creating || editing !== null}
+        row={editing}
+        clients={clients}
+        projects={projects}
+        onClose={() => {
+          setCreating(false);
+          setEditing(null);
+        }}
+      />
+      <ConfirmDialog
+        open={toDelete !== null}
+        onClose={() => setToDelete(null)}
+        onConfirm={async () => {
+          if (!toDelete) return;
+          const res = await deleteRecurringIncome(toDelete.id);
+          if (res.ok) toast.success("Removed, along with its months.");
+          else toast.error(res.error);
+        }}
+        title="Delete this arrangement?"
+        description="Every month it has generated goes with it, including the ones already marked received. To stop it without losing the history, pause it instead."
+      />
+    </div>
+  );
+}
+
+function RecurringModal({
+  open,
+  row,
+  clients,
+  projects,
+  onClose,
+}: {
+  open: boolean;
+  row: RecurringRow | null;
+  clients: ClientLite[];
+  projects: ProjectLite[];
+  onClose: () => void;
+}) {
+  const [label, setLabel] = React.useState("");
+  const [clientId, setClientId] = React.useState("");
+  const [projectId, setProjectId] = React.useState("");
+  const [amount, setAmount] = React.useState("");
+  const [day, setDay] = React.useState("1");
+  const [category, setCategory] =
+    React.useState<RecurringIncomeCategory>("retainer");
+  const [endedOn, setEndedOn] = React.useState("");
+  const [notes, setNotes] = React.useState("");
+  const [submitting, setSubmitting] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!open) return;
+    setLabel(row?.label ?? "");
+    setClientId(row?.client_id ?? "");
+    setProjectId(row?.project_id ?? "");
+    setAmount(row ? String(row.amount) : "");
+    setDay(row ? String(row.day_of_month) : "1");
+    setCategory(row?.category ?? "retainer");
+    setEndedOn(row?.ended_on ?? "");
+    setNotes(row?.notes ?? "");
+  }, [open, row]);
+
+  async function handleSave() {
+    setSubmitting(true);
+    const input: RecurringIncomeInput = {
+      id: row?.id,
+      label,
+      client_id: clientId || null,
+      project_id: projectId || null,
+      amount: Number(amount) || 0,
+      day_of_month: Number(day) || 1,
+      category,
+      ended_on: endedOn || null,
+      notes: notes || null,
+    };
+    const res = await saveRecurringIncome(input);
+    setSubmitting(false);
+    if (res.ok) {
+      toast.success(row ? "Updated." : "Set up — the first month generates on its day.");
+      onClose();
+    } else toast.error(res.error);
+  }
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={row ? "Edit recurring income" : "Add recurring income"}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose} disabled={submitting}>
+            Cancel
+          </Button>
+          <Button
+            onClick={handleSave}
+            loading={submitting}
+            disabled={!label.trim() || !(Number(amount) > 0)}
+          >
+            {row ? "Save changes" : "Set it up"}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        <Field label="What is it?" required>
+          <Input
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            placeholder="e.g. Cafe Aroma — hosting & care"
+          />
+        </Field>
+
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Field label="Amount a month (Rs.)" required>
+            <Input
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              inputMode="decimal"
+            />
+          </Field>
+          <Field label="Arrives on the">
+            <Select value={day} onChange={(e) => setDay(e.target.value)}>
+              {Array.from({ length: 28 }, (_, i) => i + 1).map((d) => (
+                <option key={d} value={d}>
+                  {d}
+                  {ordinal(d)}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Kind">
+            <Select
+              value={category}
+              onChange={(e) =>
+                setCategory(e.target.value as RecurringIncomeCategory)
+              }
+            >
+              {INCOME_CATEGORIES.map((c) => (
+                <option key={c.value} value={c.value}>
+                  {c.label}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Client">
+            <Select value={clientId} onChange={(e) => setClientId(e.target.value)}>
+              <option value="">No client</option>
+              {clients.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Project (optional)">
+            <Select value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+              <option value="">Not tied to a project</option>
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        </div>
+        <p className="-mt-2 text-xs leading-relaxed text-slate-400">
+          Naming a project is for reporting only. Monthly hosting is not part of
+          that build&apos;s contract value, so a received month never changes the
+          project&apos;s <span className="font-medium text-slate-500">received</span>{" "}
+          figure — it is company income and it is counted as company income.
+        </p>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Ends on (optional)">
+            <Input
+              type="date"
+              value={endedOn}
+              onChange={(e) => setEndedOn(e.target.value)}
+            />
+          </Field>
+          <Field label="Notes">
+            <Input value={notes} onChange={(e) => setNotes(e.target.value)} />
+          </Field>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/** 1st, 2nd, 3rd, 4th — for a day-of-month label. */
+function ordinal(n: number): string {
+  if (n % 100 >= 11 && n % 100 <= 13) return "th";
+  return ["th", "st", "nd", "rd"][n % 10] ?? "th";
+}
+
+function ExpensesTab({
+  expenses,
+  projects,
+}: {
+  expenses: Expense[];
+  projects: ProjectLite[];
+}) {
+  const projectName = React.useCallback(
+    (id: string | null) => projects.find((p) => p.id === id)?.name ?? null,
+    [projects],
+  );
+
   const [editing, setEditing] = React.useState<Expense | null>(null);
   const [creating, setCreating] = React.useState(false);
   const [toDelete, setToDelete] = React.useState<Expense | null>(null);
@@ -993,6 +1544,16 @@ function ExpensesTab({ expenses }: { expenses: Expense[] }) {
               </button>
               {exp.vendor && <span className="text-xs text-slate-400">· {exp.vendor}</span>}
               <span className="text-xs text-slate-400">· {exp.expense_date}</span>
+              {/* 0100 — a tagged cost eats that project's margin, so say which. */}
+              {exp.project_id && projectName(exp.project_id) && (
+                <Link
+                  href={`/projects/${exp.project_id}`}
+                  className="inline-flex items-center gap-1 rounded-md bg-primary-50 px-1.5 py-0.5 text-[11px] font-medium text-primary-700 transition hover:bg-primary-100"
+                >
+                  <FolderKanban className="h-3 w-3" />
+                  {projectName(exp.project_id)}
+                </Link>
+              )}
               <span className="ml-auto flex items-center gap-2">
                 <span className="text-sm font-semibold text-slate-800">
                   {formatCurrency(Number(exp.amount))}
@@ -1013,6 +1574,7 @@ function ExpensesTab({ expenses }: { expenses: Expense[] }) {
       <ExpenseModal
         open={creating || editing !== null}
         expense={editing}
+        projects={projects}
         onClose={() => {
           setCreating(false);
           setEditing(null);
@@ -1032,10 +1594,12 @@ function ExpensesTab({ expenses }: { expenses: Expense[] }) {
 function ExpenseModal({
   open,
   expense,
+  projects,
   onClose,
 }: {
   open: boolean;
   expense: Expense | null;
+  projects: ProjectLite[];
   onClose: () => void;
 }) {
   const [expenseDate, setExpenseDate] = React.useState("");
@@ -1045,6 +1609,7 @@ function ExpenseModal({
   const [amount, setAmount] = React.useState("");
   const [taxAmount, setTaxAmount] = React.useState("0");
   const [method, setMethod] = React.useState("");
+  const [projectId, setProjectId] = React.useState("");
   const [submitting, setSubmitting] = React.useState(false);
 
   React.useEffect(() => {
@@ -1056,6 +1621,7 @@ function ExpenseModal({
     setAmount(expense ? String(expense.amount) : "");
     setTaxAmount(expense ? String(expense.tax_amount) : "0");
     setMethod(expense?.payment_method ?? "");
+    setProjectId(expense?.project_id ?? "");
   }, [open, expense]);
 
   async function handleSave() {
@@ -1069,6 +1635,7 @@ function ExpenseModal({
       amount: Number(amount) || 0,
       tax_amount: Number(taxAmount) || 0,
       payment_method: method || null,
+      project_id: projectId || null,
     };
     const res = await saveExpense(input);
     setSubmitting(false);
@@ -1134,6 +1701,26 @@ function ExpenseModal({
             <Input value={method} onChange={(e) => setMethod(e.target.value)} placeholder="Card / cash / bank" />
           </Field>
         </div>
+
+        {/* 0100 — the link that makes project margin honest. */}
+        <Field label="Against a project">
+          <Select value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+            <option value="">General overhead — not a project cost</option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+                {p.clientName ? ` · ${p.clientName}` : ""}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <p className="-mt-2 text-xs leading-relaxed text-slate-400">
+          Tagging a cost here counts it against that project&apos;s margin as an{" "}
+          <span className="font-medium text-slate-500">absorbed</span> cost — we
+          paid it and we are not re-billing it. A cost you intend to put on the
+          client&apos;s invoice belongs on the project&apos;s Additional expenses
+          tab instead, where it can be marked billable.
+        </p>
       </div>
     </Modal>
   );

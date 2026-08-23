@@ -26,6 +26,7 @@ export function MarginCard({
   cap,
   labourHours,
   hasCostRates,
+  financeCosts,
 }: {
   margin: MarginBreakdown;
   currency: string;
@@ -34,6 +35,11 @@ export function MarginCard({
   labourHours: number;
   /** False when nobody on the project has an hourly cost — labour reads as 0. */
   hasCostRates: boolean;
+  /** 0100 — costs booked in Money & Finance against this project. They are
+   *  inside `margin` already; they are named here because they do NOT appear
+   *  on the Additional expenses tab, and a cost that moves the margin without
+   *  showing up anywhere is how a number stops being trusted. */
+  financeCosts: { description: string; amount: number; incurred_on: string }[];
 }) {
   const showPercent = marginIsMeaningful(margin);
   const tone = showPercent ? marginTone(margin.percent) : "unknown";
@@ -124,6 +130,14 @@ export function MarginCard({
             value={-margin.absorbedExpenses}
             currency={currency}
             negative
+            hint={
+              financeCosts.length
+                ? `Includes ${formatCurrency(
+                    financeCosts.reduce((sum, c) => sum + c.amount, 0),
+                    currency,
+                  )} booked in Money & Finance`
+                : undefined
+            }
           />
           <Line
             label="Costs re-billed"

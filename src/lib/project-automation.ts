@@ -80,11 +80,16 @@ async function runBudgetAlerts(db: DB, result: ProjectAutomationResult) {
     const cap = Number(project.expense_cap ?? project.budget ?? 0);
     if (cap <= 0) continue;
 
-    const { data: expenses } = await db
-      .from("project_expenses")
-      .select("amount")
-      .eq("project_id", project.id);
-    const spend = (expenses ?? []).reduce((s, e) => s + Number(e.amount ?? 0), 0);
+    // 0100 — both ledgers. A cap that ignores the hosting bill booked in
+    // Finance is a cap that never trips on the projects that need it to.
+    const [{ data: expenses }, { data: financeCosts }] = await Promise.all([
+      db.from("project_expenses").select("amount").eq("project_id", project.id),
+      db.from("expenses").select("amount").eq("project_id", project.id),
+    ]);
+    const spend = [...(expenses ?? []), ...(financeCosts ?? [])].reduce(
+      (s, e) => s + Number(e.amount ?? 0),
+      0,
+    );
     if (spend <= cap) continue;
 
     await notifyTeam(db, {

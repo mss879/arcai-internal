@@ -5,6 +5,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { isOpenAIConfigured, openaiChatJSON } from "@/lib/ai/openai";
 import { SERVICE_TYPE_LABELS } from "@/lib/constants";
 import type { Database } from "@/lib/database.types";
+import { projectCostsByProject } from "@/lib/project-costs";
 import { balanceDue, projectMargin, settledAmount } from "@/lib/projects";
 
 type DB = SupabaseClient<Database>;
@@ -73,11 +74,10 @@ export async function askProjects(
     return { ok: false, error: "There are no projects to ask about yet." };
 
   const ids = rows.map((r) => r.id);
-  const [{ data: expenses }, { data: commissions }] = await Promise.all([
-    supabase
-      .from("project_expenses")
-      .select("project_id, amount, billable, category, description, incurred_on")
-      .in("project_id", ids),
+  // 0100 — both ledgers, so "what did we spend on hosting" finds the hosting
+  // bills whichever screen they were entered on.
+  const [costsByProject, { data: commissions }] = await Promise.all([
+    projectCostsByProject(supabase, ids),
     supabase
       .from("commissions")
       .select("project_id, amount, percentage, basis")
@@ -98,7 +98,7 @@ export async function askProjects(
       payments: r.payments ?? [],
       company_payments: r.company_payments ?? [],
     });
-    const mine = (expenses ?? []).filter((e) => e.project_id === r.id);
+    const mine = costsByProject.get(r.id) ?? [];
     const margin = projectMargin({
       totalValue: Number(r.total_value) || 0,
       expenses: mine,

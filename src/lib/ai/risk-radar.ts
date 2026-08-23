@@ -77,7 +77,13 @@ export async function processRiskRadar(supabase: DB): Promise<RiskRadarResult> {
   if (!rows?.length) return result;
 
   const ids = rows.map((r) => r.id);
-  const [{ data: assets }, { data: tasks }, { data: milestones }, { data: expenses }] =
+  const [
+    { data: assets },
+    { data: tasks },
+    { data: milestones },
+    { data: financeCosts },
+    { data: expenses },
+  ] =
     await Promise.all([
       supabase
         .from("project_document_requests")
@@ -90,6 +96,11 @@ export async function processRiskRadar(supabase: DB): Promise<RiskRadarResult> {
       supabase
         .from("project_milestones")
         .select("project_id, status, due_date")
+        .in("project_id", ids),
+      // 0100 — Finance costs count against the cap the same as project ones.
+      supabase
+        .from("expenses")
+        .select("project_id, amount")
         .in("project_id", ids),
       supabase
         .from("project_expenses")
@@ -126,7 +137,7 @@ export async function processRiskRadar(supabase: DB): Promise<RiskRadarResult> {
         m.due_date &&
         Date.parse(`${m.due_date}T23:59:59Z`) < todayMs,
     ).length;
-    const spend = (expenses ?? [])
+    const spend = [...(expenses ?? []), ...(financeCosts ?? [])]
       .filter((e) => e.project_id === r.id)
       .reduce((sum, e) => sum + Number(e.amount ?? 0), 0);
 

@@ -72,7 +72,9 @@ src/app/public/review/[token]/      the review form
 src/lib/projects.ts                 THE money + health maths (client-safe)
 src/lib/project-events.ts           the six project automation triggers, fired from one place
 src/lib/project-templates.ts        plan-template seeding, shared by the button and the step
+src/lib/project-costs.ts            THE cost merge — project_expenses + tagged Finance expenses
 src/lib/project-history.ts          THE historical maths — medians, outcomes (feeds AI-1/2/6)
+src/lib/recurring-income.ts         monthly hosting/retainer income generation (0100)
 src/lib/project-anomalies.ts        rule-based duplicate/anomaly guards (AI-9)
 src/lib/project-export.ts           CSV + the export row shape (VIEW-5)
 src/lib/ai/project-brief.ts         AI-1   src/lib/ai/project-estimate.ts   AI-2
@@ -131,16 +133,25 @@ These were each learned the hard way. Breaking one is a real bug, not a style ch
    Use Tailwind v4 `@container` + `@md:`. A `sm:grid-cols-3` inside a ~340px rail is what once
    clipped a date field to "23/08/2".
 
-8. **A `"use client"` module's exports become CLIENT REFERENCES when a Server Component
+8. **A project's COSTS live in two ledgers, and both count.** `project_expenses` (raised on
+   the project, usually billable extras) and `expenses` where `project_id` is set (0100 — the
+   company ledger: hosting, ads, software). `projectMargin()` takes one list, so
+   **`src/lib/project-costs.ts` is the only place they are merged** — seven surfaces show margin
+   or spend, and each doing its own merge is how they drift. A Finance cost is always
+   `billable: false`: the agency paid it and is not re-billing it. Anything headed for the
+   client's invoice belongs in `project_expenses`, so the two can never double-count. The
+   invoice generator and the anomaly guard deliberately read `project_expenses` ONLY.
+
+9. **A `"use client"` module's exports become CLIENT REFERENCES when a Server Component
    imports them.** A plain helper exported from a client component and called on the server
    throws at runtime — and `tsc` and `next build` both pass. Type-only imports
    (`import { X, type Y }`) are erased and always safe; anything else callable must live in a
    server-safe module.
 
-9. **Don't call `Date.now()` / `new Date()` during render** — `react-hooks/purity` forbids it. Use
+10. **Don't call `Date.now()` / `new Date()` during render** — `react-hooks/purity` forbids it. Use
    `date-fns` (`startOfToday()`, `isBefore`, `differenceInCalendarDays`).
 
-10. **Margin is admin-only**, matching commissions. `profiles.hourly_cost` is never shown to the
+11. **Margin is admin-only**, matching commissions. `profiles.hourly_cost` is never shown to the
    member it belongs to. And margin is **hidden entirely until costs exist** — with none recorded
    it always reads 100%, which is an empty cost sheet dressed as a result
    (`marginIsMeaningful()`).
@@ -161,7 +172,7 @@ These were each learned the hard way. Breaking one is a real bug, not a style ch
 
 ## 5. What's already built (don't rebuild it)
 
-**Migrations `0090`–`0099`.** All applied to production **except `0095`–`0099`**.
+**Migrations `0090`–`0100`.** `0095`–`0099` are applied; **`0100` is not yet.**
 `0095` re-adds `invoices.stamp` — apply it, or the DEPOSIT PAID stamp won't print. `0096`
 (theme 6), `0097` (theme 7) and `0098` (theme 5) **must all be applied before the next
 push**: the tick filters on `projects.automation_paused` every run, the board reads
@@ -181,6 +192,7 @@ are additive and safe to run against the currently-live build.
 | `0097` | VIEW: `project_views` (saved board filters) |
 | `0098` | AI: `project_lessons`, `project_anomalies`, `projects.risk_*` + `scope_checked_at`, `project_change_requests.ai_flagged` |
 | `0099` | BIG: `projects.lead_id/quote_id/proposal_id`, `proposals.lead_id/client_id/quote_id/project_id`, `client_login_codes`, `clients.portal_last_login_at` |
+| `0100` | Finance ↔ Projects: `expenses.project_id`, `recurring_income` + `recurring_income_entries` |
 
 **Themes 1–4, all 45 items.** In short:
 

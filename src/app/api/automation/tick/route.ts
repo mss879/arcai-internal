@@ -11,6 +11,7 @@ import { processProjectAnomalies } from "@/lib/project-anomalies";
 import { processRiskRadar } from "@/lib/ai/risk-radar";
 import { processScopeScans } from "@/lib/ai/scope-creep";
 import { processFinanceReminders } from "@/lib/finance";
+import { processRecurringIncome } from "@/lib/recurring-income";
 import { processDueSmsRuns } from "@/lib/sms-automation";
 import { processTodoReminders } from "@/lib/todo-reminders";
 import { processMeetingReminders } from "@/lib/meeting-reminders";
@@ -36,6 +37,8 @@ import { isSmsConfigured } from "@/lib/sms";
  *   - advances due automation runs (waits, drips)
  *   - advances due SMS workflow runs (the SMS page's own automations)
  *   - sends built-in finance reminders (installments + cheque alerts)
+ *   - generates this month's recurring income entries (hosting, retainers,
+ *     care plans) so a month that never arrived is visible
  *   - sends task deadline reminders 5 hours before a to-do is due
  *   - processes queued CRM prospect-research reports (and retries any
  *     that got stuck when a serverless run timed out mid-report)
@@ -71,6 +74,9 @@ export async function GET(request: Request) {
     const enrolled = await scanTimeBasedTriggers(supabase);
     const automation = await processDueAutomationRuns(supabase);
     const finance = await processFinanceReminders(supabase);
+    // 0100 — materialise this month's hosting/retainer/care income so a
+    // missed month is visible instead of silent.
+    const recurringIncome = await processRecurringIncome(supabase);
     const todos = await processTodoReminders(supabase);
     const meetings = await processMeetingReminders(supabase);
     // Client Delivery (0084): the content chaser (missing-asset WhatsApp
@@ -125,6 +131,7 @@ export async function GET(request: Request) {
       automation,
       sms,
       finance,
+      recurringIncome,
       todos,
       meetings,
       delivery,

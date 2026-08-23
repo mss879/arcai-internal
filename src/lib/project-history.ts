@@ -3,6 +3,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { Database } from "@/lib/database.types";
+import { projectCostsByProject } from "@/lib/project-costs";
 import { balanceDue, projectMargin, settledAmount } from "@/lib/projects";
 
 type DB = SupabaseClient<Database>;
@@ -80,11 +81,10 @@ export async function finishedProjects(
   if (!rows?.length) return [];
 
   const ids = rows.map((r) => r.id);
-  const [{ data: expenses }, { data: commissions }] = await Promise.all([
-    supabase
-      .from("project_expenses")
-      .select("project_id, amount, billable")
-      .in("project_id", ids),
+  // 0100 — both ledgers, or every benchmark under-reports what the work cost
+  // and the estimates it feeds quote too low.
+  const [costsByProject, { data: commissions }] = await Promise.all([
+    projectCostsByProject(supabase, ids),
     supabase
       .from("commissions")
       .select("project_id, amount, percentage, basis")
@@ -99,7 +99,7 @@ export async function finishedProjects(
       payments: r.payments ?? [],
       company_payments: r.company_payments ?? [],
     });
-    const mine = (expenses ?? []).filter((e) => e.project_id === r.id);
+    const mine = costsByProject.get(r.id) ?? [];
     const myCommissions = (commissions ?? []).filter((c) => c.project_id === r.id);
 
     const margin = projectMargin({

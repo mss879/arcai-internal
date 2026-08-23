@@ -26,6 +26,10 @@ export type ProjectSavedView = Tables["project_views"]["Row"];
 export type ProjectLesson = Tables["project_lessons"]["Row"];
 /** 0098 — a rule-based duplicate/anomaly flag (AI-9). */
 export type ProjectAnomaly = Tables["project_anomalies"]["Row"];
+/** 0100 — a standing monthly income arrangement. */
+export type RecurringIncome = Tables["recurring_income"]["Row"];
+/** 0100 — one month of a recurring arrangement. */
+export type RecurringIncomeEntry = Tables["recurring_income_entries"]["Row"];
 export type ProjectTemplateItem = Tables["project_template_items"]["Row"];
 export type ProjectMilestone = Tables["project_milestones"]["Row"];
 export type ProjectMember = Tables["project_members"]["Row"];
@@ -177,6 +181,9 @@ export type {
   ProjectLessonStatus,
   ProjectAnomalyKind,
   ProjectAnomalyStatus,
+  // 0100
+  RecurringIncomeCategory,
+  RecurringIncomeStatus,
   AssetRequestStatus,
   AssetRequestSource,
   DeliveryEventKind,

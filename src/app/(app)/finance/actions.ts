@@ -9,6 +9,8 @@ import type {
   ChequeDirection,
   ChequeStatus,
   ExpenseCategory,
+  RecurringIncomeCategory,
+  RecurringIncomeStatus,
 } from "@/lib/database.types";
 
 // --- Payment plans ---------------------------------------------
@@ -219,6 +221,8 @@ export type ExpenseInput = {
   amount: number;
   tax_amount: number;
   payment_method?: string | null;
+  /** 0100 — the project this cost belongs to. NULL = general overhead. */
+  project_id?: string | null;
 };
 
 export async function saveExpense(input: ExpenseInput): Promise<ActionResult> {
@@ -234,6 +238,7 @@ export async function saveExpense(input: ExpenseInput): Promise<ActionResult> {
     amount: input.amount,
     tax_amount: input.tax_amount || 0,
     payment_method: input.payment_method?.trim() || null,
+    project_id: input.project_id || null,
   };
 
   const { error } = input.id
@@ -241,12 +246,139 @@ export async function saveExpense(input: ExpenseInput): Promise<ActionResult> {
     : await supabase.from("expenses").insert(base);
   if (error) return { ok: false, error: error.message };
   revalidatePath("/finance");
+  // The cost lands on that project's margin the moment it is saved, so the
+  // project's own pages have to be re-rendered too.
+  if (base.project_id) {
+    revalidatePath(`/projects/${base.project_id}`);
+    revalidatePath("/projects");
+  }
   return { ok: true };
 }
 
 export async function deleteExpense(id: string): Promise<ActionResult> {
   const supabase = await createClient();
   const { error } = await supabase.from("expenses").delete().eq("id", id);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath("/finance");
+  return { ok: true };
+}
+
+// --- Recurring income (0100) -------------------------------------
+//
+// The standing arrangement, not the money: each month's actual receipt is a
+// recurring_income_entries row the tick generates and a person marks off.
+
+export type RecurringIncomeInput = {
+  id?: string;
+  label: string;
+  client_id?: string | null;
+  project_id?: string | null;
+  amount: number;
+  currency?: string;
+  day_of_month: number;
+  category: RecurringIncomeCategory;
+  started_on?: string;
+  ended_on?: string | null;
+  notes?: string | null;
+  is_active?: boolean;
+};
+
+export async function saveRecurringIncome(
+  input: RecurringIncomeInput,
+): Promise<ActionResult> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+
+  if (!input.label.trim()) return { ok: false, error: "Give it a name." };
+  if (!(input.amount > 0)) return { ok: false, error: "Enter the monthly amount." };
+  if (input.day_of_month < 1 || input.day_of_month > 28)
+    return {
+      ok: false,
+      error: "Pick a day between 1 and 28 — later days don't exist in every month.",
+    };
+
+  const base = {
+    label: input.label.trim(),
+    client_id: input.client_id || null,
+    project_id: input.project_id || null,
+    amount: input.amount,
+    currency: input.currency || "LKR",
+    day_of_month: input.day_of_month,
+    category: input.category,
+    started_on: input.started_on || new Date().toISOString().slice(0, 10),
+    ended_on: input.ended_on || null,
+    notes: input.notes?.trim() || null,
+    ...(input.is_active !== undefined ? { is_active: input.is_active } : {}),
+  };
+
+  const { error } = input.id
+    ? await supabase.from("recurring_income").update(base).eq("id", input.id)
+    : await supabase
+        .from("recurring_income")
+        .insert({ ...base, created_by: user.id });
+  if (error) return { ok: false, error: error.message };
+  revalidatePath("/finance");
+  return { ok: true };
+}
+
+export async function setRecurringIncomeActive(
+  id: string,
+  isActive: boolean,
+): Promise<ActionResult> {
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("recurring_income")
+    .update({ is_active: isActive })
+    .eq("id", id);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath("/finance");
+  return { ok: true };
+}
+
+/**
+ * Delete an arrangement.
+ *
+ * Cascades its entries, which is right: they are the record of a promise that
+ * no longer exists. Ending it (`ended_on`) is the move that keeps the history —
+ * the UI offers that first.
+ */
+export async function deleteRecurringIncome(id: string): Promise<ActionResult> {
+  const supabase = await createClient();
+  const { error } = await supabase.from("recurring_income").delete().eq("id", id);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath("/finance");
+  return { ok: true };
+}
+
+export async function setIncomeEntryStatus(
+  id: string,
+  status: RecurringIncomeStatus,
+  opts?: { amount?: number; note?: string | null },
+): Promise<ActionResult> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+
+  const received = status === "received";
+  const { error } = await supabase
+    .from("recurring_income_entries")
+    .update({
+      status,
+      // A month can land short or late; the entry records what actually
+      // arrived rather than what was promised.
+      ...(opts?.amount !== undefined && opts.amount > 0
+        ? { amount: opts.amount }
+        : {}),
+      received_on: received ? new Date().toISOString().slice(0, 10) : null,
+      received_by: received ? user.id : null,
+      note: opts?.note?.trim() || null,
+    })
+    .eq("id", id);
   if (error) return { ok: false, error: error.message };
   revalidatePath("/finance");
   return { ok: true };

@@ -1,5 +1,6 @@
 import { allEstimates } from "@/lib/ai/project-estimate";
 import { requireProfile } from "@/lib/auth";
+import { allFinanceProjectCosts } from "@/lib/project-costs";
 import { getMembers } from "@/lib/data";
 import { createClient } from "@/lib/supabase/server";
 
@@ -26,6 +27,7 @@ export default async function ProjectReportsPage({
     members,
     projectsRes,
     expensesRes,
+    financeCosts,
     commissionsRes,
     timeRes,
     teamRes,
@@ -44,6 +46,8 @@ export default async function ProjectReportsPage({
       .is("deleted_at", null)
       .order("created_at", { ascending: false }),
     supabase.from("project_expenses").select("project_id, amount, billable, category"),
+    // 0100 — the company ledger's share of each project's cost.
+    allFinanceProjectCosts(supabase),
     supabase
       .from("commissions")
       .select("project_id, amount, percentage, basis"),
@@ -65,6 +69,14 @@ export default async function ProjectReportsPage({
     allEstimates(supabase),
   ]);
 
+  // 0100 — both cost ledgers. Finance costs carry no project-expense category,
+  // so they land under the breakdown's "other" rather than pretending to one
+  // they never had.
+  const reportExpenses = [
+    ...(expensesRes.data ?? []),
+    ...financeCosts.map((c) => ({ ...c, category: null })),
+  ];
+
   return (
     <ReportsView
       isAdmin={profile.role === "admin"}
@@ -72,7 +84,7 @@ export default async function ProjectReportsPage({
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       projects={(projectsRes.data ?? []) as any}
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      expenses={(expensesRes.data ?? []) as any}
+      expenses={reportExpenses as any}
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       commissions={(commissionsRes.data ?? []) as any}
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

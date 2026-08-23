@@ -10,6 +10,7 @@ import {
   type ProjectRunRow,
 } from "@/components/projects/automation-section";
 import { AiToolsCard } from "@/components/projects/ai-tools-card";
+import { FinanceCostsCard } from "@/components/projects/finance-costs-card";
 import { ChainCard, type ChainLink } from "@/components/projects/chain-card";
 import {
   ClientMessageCard,
@@ -54,6 +55,7 @@ import {
   SERVICE_TYPE_LABELS,
 } from "@/lib/constants";
 import { isOpenAIConfigured } from "@/lib/ai/openai";
+import { projectCosts } from "@/lib/project-costs";
 import { requireProfile } from "@/lib/auth";
 import { getMembers } from "@/lib/data";
 import {
@@ -494,10 +496,17 @@ export default async function ProjectDetailPage({
     (e) => (costByUser.get(e.user_id) ?? 0) > 0,
   );
 
+  // 0100 — costs booked against this project in Money & Finance. Absorbed, so
+  // they eat the margin without appearing on the client's invoice; the
+  // Additional expenses tab is where a re-billable cost belongs.
+  const financeCosts = await projectCosts(supabase, id).then((rows) =>
+    rows.filter((r) => r.source === "finance"),
+  );
+
   const commissions = (commissionsRes.data ?? []) as unknown as CommissionRow[];
   const margin = projectMargin({
     totalValue,
-    expenses,
+    expenses: [...expenses, ...financeCosts],
     // A percentage commission is only worth what the client has actually paid.
     commissions: commissions.map((c) => ({
       amount: commissionEarned(c, received),
@@ -891,6 +900,17 @@ export default async function ProjectDetailPage({
                   .join("\n")}
                 expenses={expenses}
               />
+              {/* 0100 — what Finance booked against this project. Read-only:
+                  Finance owns those rows. */}
+              <FinanceCostsCard
+                rows={financeCosts.map((c) => ({
+                  description: c.description,
+                  amount: c.amount,
+                  category: c.category,
+                  incurred_on: c.incurred_on,
+                }))}
+                currency={project.currency}
+              />
               <CommissionsSection
                 projectId={id}
                 currency={project.currency}
@@ -909,6 +929,7 @@ export default async function ProjectDetailPage({
                   cap={Number(project.expense_cap ?? project.budget ?? 0) || null}
                   labourHours={labourMinutes / 60}
                   hasCostRates={hasCostRates}
+                  financeCosts={financeCosts}
                 />
               )}
               <ScheduleCard

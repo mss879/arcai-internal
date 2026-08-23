@@ -1,4 +1,5 @@
 import { requireProfile } from "@/lib/auth";
+import { allFinanceProjectCosts } from "@/lib/project-costs";
 import { createClient } from "@/lib/supabase/server";
 
 import { ProjectsView, type ProjectCard } from "./projects-view";
@@ -40,6 +41,7 @@ export default async function ProjectsPage({
     projectsRes,
     clientsRes,
     expensesRes,
+    financeCosts,
     membersRes,
     tasksRes,
     assetsRes,
@@ -51,6 +53,8 @@ export default async function ProjectsPage({
     projectQuery.order("created_at", { ascending: false }),
     supabase.from("clients").select("id, name, company").order("name"),
     supabase.from("project_expenses").select("project_id, amount, billable"),
+    // 0100 — Finance costs tagged to a project count against its margin too.
+    allFinanceProjectCosts(supabase),
     supabase
       .from("project_members")
       .select(
@@ -90,7 +94,7 @@ export default async function ProjectsPage({
       projects={(projectsRes.data ?? []) as any as ProjectCard[]}
       clients={clientsRes.data ?? []}
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      expenses={(expensesRes.data ?? []) as any}
+      expenses={[...(expensesRes.data ?? []), ...financeCosts] as any}
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       team={(membersRes.data ?? []) as any}
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

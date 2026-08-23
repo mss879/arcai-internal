@@ -38,13 +38,24 @@ export default async function PublicInvoicePage({
     .from("invoices")
     // Explicit list. `project_id`, `created_by` and `recipient_email` are
     // deliberately absent — none of them are the client's business.
+    //
+    // `stamp` is fetched separately below: it lives in a migration (0024)
+    // that some databases never ran, and one missing presentation column
+    // must not turn a client's invoice link into a 404.
     .select(
-      "invoice_number, invoice_date, bill_to_name, bill_to_details, items, grand_total, due_today, amount_paid, stamp, bank_account",
+      "invoice_number, invoice_date, bill_to_name, bill_to_details, items, grand_total, due_today, amount_paid, bank_account",
     )
     .eq("share_token", token)
     .maybeSingle();
 
   if (!invoice) notFound();
+
+  const { data: stampRow } = await supabase
+    .from("invoices")
+    .select("stamp")
+    .eq("share_token", token)
+    .maybeSingle();
+  const stamp = stampRow?.stamp ?? null;
 
   const bank = invoiceBank(invoice.bank_account);
 
@@ -57,11 +68,11 @@ export default async function PublicInvoicePage({
     grandTotal: Number(invoice.grand_total) || 0,
     amountPaid: Number(invoice.amount_paid) || 0,
     dueToday: Number(invoice.due_today) || 0,
-    stampSrc: stampImage(invoice.stamp),
+    stampSrc: stampImage(stamp),
     stampLabel:
-      invoice.stamp === "deposit_paid"
+      stamp === "deposit_paid"
         ? "Deposit paid"
-        : invoice.stamp === "payment_received"
+        : stamp === "payment_received"
           ? "Payment received"
           : null,
     company: {

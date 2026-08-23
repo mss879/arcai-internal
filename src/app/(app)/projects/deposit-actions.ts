@@ -147,7 +147,6 @@ export async function confirmDeposit(
       // What they've paid, and therefore what the stamp is for.
       amount_paid: received,
       due_today: Math.max(0, total - received),
-      stamp: "deposit_paid",
       project_id: projectId,
       recipient_email: client?.email ?? null,
       created_by: user.id,
@@ -157,6 +156,19 @@ export async function confirmDeposit(
 
   if (error || !invoice) {
     return { ok: false, error: error?.message ?? "Couldn't create the invoice." };
+  }
+
+  // The stamp goes on in its own write, the way saveInvoice has always done
+  // it: `invoices.stamp` (0024) is absent on databases that never ran that
+  // migration, and an invoice that prints without its rubber stamp is a much
+  // better outcome than a confirmation that fails outright. 0095 adds the
+  // column back; this keeps working either way.
+  const { error: stampError } = await supabase
+    .from("invoices")
+    .update({ stamp: "deposit_paid" })
+    .eq("id", invoice.id);
+  if (stampError) {
+    console.error("[deposit] couldn't stamp the invoice:", stampError.message);
   }
 
   // ---- 2. Stamp the project (before the text, so a slow SMS can't leave

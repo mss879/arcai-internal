@@ -29,7 +29,7 @@ export async function GET(
   const { data: row } = await supabase
     .from("invoices")
     .select(
-      "invoice_number, invoice_date, bill_to_name, bill_to_details, items, grand_total, due_today, amount_paid, stamp, bank_account",
+      "invoice_number, invoice_date, bill_to_name, bill_to_details, items, grand_total, due_today, amount_paid, bank_account",
     )
     .eq("share_token", token)
     .maybeSingle();
@@ -37,6 +37,14 @@ export async function GET(
   if (!row) {
     return NextResponse.json({ error: "Not found." }, { status: 404 });
   }
+
+  // Separate read — see the note on the page: `stamp` (0024) is missing on
+  // databases that never ran it, and that must not cost the client their PDF.
+  const { data: stampRow } = await supabase
+    .from("invoices")
+    .select("stamp")
+    .eq("share_token", token)
+    .maybeSingle();
 
   const invoice: InvoiceEmailData = {
     invoice_number: row.invoice_number,
@@ -53,7 +61,7 @@ export async function GET(
     grand_total: Number(row.grand_total) || 0,
     due_today: Number(row.due_today) || 0,
     amount_paid: Number(row.amount_paid) || 0,
-    stamp: row.stamp,
+    stamp: stampRow?.stamp ?? null,
     bank_account: row.bank_account,
   };
 

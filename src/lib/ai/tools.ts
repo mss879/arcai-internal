@@ -15,6 +15,7 @@ import type {
   InvoiceCardData,
   SmsCardData,
 } from "@/lib/assistant-cards";
+import { DELIVERY_STAGES } from "@/lib/constants";
 import { topLeadPosition } from "@/lib/crm";
 import { nextInvoiceNumber } from "@/lib/invoice";
 import { isSmsConfigured } from "@/lib/sms";
@@ -562,6 +563,158 @@ export const ASSISTANT_TOOLS: ToolSchema[] = [
       },
     },
   },
+
+  // ---- Delivery (AI-7, 0098) ---------------------------------------------
+  // The assistant could already LIST projects. Everything that actually
+  // happens to a project during a day — starting one, recording money, moving
+  // it on, logging a cost, adding work — had to be typed into a form. On a
+  // phone, speaking is faster than the form.
+  {
+    type: "function",
+    function: {
+      name: "create_project",
+      description:
+        "Create a new project. Use for 'start a project for X', 'set up the website build for Y'. Attach it to a client by name when one is mentioned.",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "The project's name." },
+          client: {
+            type: "string",
+            description: "Client name to attach it to. Matched loosely.",
+          },
+          total_value: {
+            type: "number",
+            description: "What the client is being charged, in LKR.",
+          },
+          service_type: {
+            type: "string",
+            description:
+              "The kind of work, e.g. business_website, ecommerce, social_media.",
+          },
+          due_date: { type: "string", description: "YYYY-MM-DD." },
+        },
+        required: ["name"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "record_project_payment",
+      description:
+        "Record money received against a project. Use for 'X paid 50,000', 'log the deposit for Y'.",
+      parameters: {
+        type: "object",
+        properties: {
+          project: { type: "string", description: "Project name. Matched loosely." },
+          amount: { type: "number", description: "Amount received." },
+          method: {
+            type: "string",
+            description: "How it was paid, e.g. bank transfer, cash.",
+          },
+        },
+        required: ["project", "amount"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "log_project_expense",
+      description:
+        "Record a cost against a project. Use for 'add 4,000 hosting to the Cafe project'.",
+      parameters: {
+        type: "object",
+        properties: {
+          project: { type: "string", description: "Project name. Matched loosely." },
+          description: { type: "string", description: "What the cost was for." },
+          amount: { type: "number", description: "How much it cost." },
+          billable: {
+            type: "boolean",
+            description:
+              "True (default) if the client should be charged for it; false if we absorb it.",
+          },
+        },
+        required: ["project", "description", "amount"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "move_project_stage",
+      description:
+        "Move a project to a delivery stage. Fires the client milestone message and the automations, exactly like the board does. Respects the deposit gate and the launch checklist — say so if it refuses.",
+      parameters: {
+        type: "object",
+        properties: {
+          project: { type: "string", description: "Project name. Matched loosely." },
+          stage: {
+            type: "string",
+            enum: ["onboarding", "assets", "build", "review", "delivered", "aftercare"],
+          },
+        },
+        required: ["project", "stage"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "add_project_task",
+      description: "Add a to-do to a project.",
+      parameters: {
+        type: "object",
+        properties: {
+          project: { type: "string", description: "Project name. Matched loosely." },
+          title: { type: "string", description: "What needs doing." },
+          due_date: { type: "string", description: "YYYY-MM-DD." },
+          assignee: { type: "string", description: "Teammate name, matched loosely." },
+        },
+        required: ["project", "title"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "projects_at_risk",
+      description:
+        "What needs attention on delivery right now — the nightly risk ranking, with the reason for each. Use for 'what's at risk this week', 'what should I worry about', 'how is delivery looking'.",
+      parameters: {
+        type: "object",
+        properties: {
+          limit: { type: "number", description: "How many to return. Default 5." },
+        },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "ask_projects",
+      description:
+        "Answer a question about the projects using their real data — money owed, spend by category, what was delivered when. Use for anything analytical the other tools don't answer directly, e.g. 'which clients still owe money on delivered work', 'what did we spend on hosting last quarter'.",
+      parameters: {
+        type: "object",
+        properties: {
+          question: {
+            type: "string",
+            description: "The user's question, in their own words.",
+          },
+        },
+        required: ["question"],
+        additionalProperties: false,
+      },
+    },
+  },
 ];
 
 // ---- Helpers -------------------------------------------------------------
@@ -652,6 +805,44 @@ function colomboDayRange(dateStr: string): { start: string; end: string } {
   const start = new Date(`${dateStr}T00:00:00+05:30`);
   const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
   return { start: start.toISOString(), end: end.toISOString() };
+}
+
+/**
+ * Find a project by a spoken name (AI-7).
+ *
+ * A contains match, so "the cafe one" finds "Cafe Aroma - Business website".
+ * Archived projects are never matched: acting on one by voice is how a
+ * mistake gets made silently.
+ */
+async function findProject(
+  supabase: DB,
+  name: unknown,
+): Promise<{ id: string; name: string; currency: string } | null> {
+  const q = String(name ?? "").trim();
+  if (!q) return null;
+  const { data } = await supabase
+    .from("projects")
+    .select("id, name, currency")
+    .is("deleted_at", null)
+    .ilike("name", `%${q}%`)
+    .order("created_at", { ascending: false })
+    .limit(1);
+  return data?.[0] ?? null;
+}
+
+/** Same idea for a client name. */
+async function findClient(
+  supabase: DB,
+  name: unknown,
+): Promise<{ id: string; name: string } | null> {
+  const q = String(name ?? "").trim();
+  if (!q) return null;
+  const { data } = await supabase
+    .from("clients")
+    .select("id, name")
+    .ilike("name", `%${q}%`)
+    .limit(1);
+  return data?.[0] ?? null;
 }
 
 /** Basic email shape check — the human still verifies it on the confirm card. */
@@ -1698,6 +1889,271 @@ export async function executeTool(
           note: "Shown to the user for confirmation. The SMS is NOT sent until the user taps Send. Do not say it has been sent.",
         },
         card: { type: "confirm_send_sms", sms },
+      };
+    }
+
+    // ---- Delivery (AI-7, 0098) -------------------------------------------
+
+    case "create_project": {
+      const projectName = String(args.name ?? "").trim();
+      if (!projectName)
+        return { content: { ok: false, error: "The project needs a name." } };
+
+      const client = await findClient(supabase, args.client);
+      const { data: created, error } = await supabase
+        .from("projects")
+        .insert({
+          name: projectName,
+          client_id: client?.id ?? null,
+          status: "planning",
+          currency: "LKR",
+          total_value:
+            typeof args.total_value === "number" ? args.total_value : null,
+          service_type: (args.service_type as string)?.trim() || null,
+          start_date: today,
+          due_date: (args.due_date as string)?.trim() || null,
+          created_by: ctx.userId,
+        })
+        .select("id, name")
+        .single();
+      if (error || !created)
+        return { content: { ok: false, error: error?.message ?? "Insert failed." } };
+
+      // Same trigger the form fires (0096) — a project created by voice must
+      // start the same kickoff flow as one created by hand.
+      const { fireProjectCreated } = await import("@/lib/project-events");
+      await fireProjectCreated(supabase, created.id, "assistant");
+
+      return {
+        content: { ok: true, project: created.name, client: client?.name ?? null },
+        event: {
+          kind: "created",
+          label: `Project: ${created.name}`,
+          href: `/projects/${created.id}`,
+        },
+      };
+    }
+
+    case "record_project_payment": {
+      const project = await findProject(supabase, args.project);
+      if (!project)
+        return { content: { ok: false, error: `No project matching "${args.project}".` } };
+      const amount = Number(args.amount);
+      if (!Number.isFinite(amount) || amount <= 0)
+        return { content: { ok: false, error: "Enter a valid amount." } };
+
+      const { data: payment, error } = await supabase
+        .from("payments")
+        .insert({
+          project_id: project.id,
+          amount,
+          currency: project.currency || "LKR",
+          status: "paid",
+          paid_at: today,
+          method: (args.method as string)?.trim() || null,
+        })
+        .select("id")
+        .single();
+      if (error || !payment)
+        return { content: { ok: false, error: error?.message ?? "Insert failed." } };
+
+      // The same payment_received event the board fires, so a deposit logged
+      // by voice still kicks off onboarding.
+      const { buildPaymentEvent } = await import("@/lib/delivery");
+      const { fireAutomationTrigger } = await import("@/lib/automation");
+      const event = await buildPaymentEvent(supabase, {
+        projectId: project.id,
+        amountText: `${project.currency || "LKR"} ${amount.toLocaleString()}`,
+        source: "project_detail",
+        triggerKey: `project_payment:${payment.id}:paid`,
+      });
+      if (event) await fireAutomationTrigger(supabase, event);
+
+      return {
+        content: { ok: true, project: project.name, amount },
+        event: {
+          kind: "created",
+          label: `Payment on ${project.name}`,
+          href: `/projects/${project.id}`,
+        },
+      };
+    }
+
+    case "log_project_expense": {
+      const project = await findProject(supabase, args.project);
+      if (!project)
+        return { content: { ok: false, error: `No project matching "${args.project}".` } };
+      const amount = Number(args.amount);
+      const description = String(args.description ?? "").trim();
+      if (!description)
+        return { content: { ok: false, error: "Say what the cost was for." } };
+      if (!Number.isFinite(amount) || amount <= 0)
+        return { content: { ok: false, error: "Enter a valid amount." } };
+
+      const { data: expense, error } = await supabase
+        .from("project_expenses")
+        .insert({
+          project_id: project.id,
+          description,
+          qty: 1,
+          unit_amount: amount,
+          currency: project.currency || "LKR",
+          billable: args.billable !== false,
+          incurred_on: today,
+          created_by: ctx.userId,
+        })
+        .select("id")
+        .single();
+      if (error || !expense)
+        return { content: { ok: false, error: error?.message ?? "Insert failed." } };
+
+      const { fireExpenseAdded } = await import("@/lib/project-events");
+      await fireExpenseAdded(supabase, project.id, {
+        id: expense.id,
+        description,
+        amount,
+        billable: args.billable !== false,
+      });
+
+      return {
+        content: {
+          ok: true,
+          project: project.name,
+          description,
+          amount,
+          billable: args.billable !== false,
+        },
+        event: {
+          kind: "created",
+          label: `Expense on ${project.name}`,
+          href: `/projects/${project.id}`,
+        },
+      };
+    }
+
+    case "move_project_stage": {
+      const project = await findProject(supabase, args.project);
+      if (!project)
+        return { content: { ok: false, error: `No project matching "${args.project}".` } };
+      const stage = String(args.stage ?? "");
+      if (!(DELIVERY_STAGES as readonly string[]).includes(stage))
+        return { content: { ok: false, error: `"${stage}" is not a delivery stage.` } };
+
+      // Through the server action, NOT setProjectDeliveryStage directly: the
+      // deposit gate and launch checklist live there, and a stage moved by
+      // voice must not bypass a rule a click obeys.
+      const { setProjectStage } = await import("@/app/(app)/projects/actions");
+      const res = await setProjectStage(
+        project.id,
+        stage as (typeof DELIVERY_STAGES)[number],
+      );
+      if (!res.ok)
+        return {
+          content: {
+            ok: false,
+            error: res.error,
+            blocked_by: res.gate?.kind ?? null,
+          },
+        };
+
+      return {
+        content: { ok: true, project: project.name, stage },
+        event: {
+          kind: "updated",
+          label: `${project.name} -> ${stage}`,
+          href: `/projects/${project.id}`,
+        },
+      };
+    }
+
+    case "add_project_task": {
+      const project = await findProject(supabase, args.project);
+      if (!project)
+        return { content: { ok: false, error: `No project matching "${args.project}".` } };
+      const title = String(args.title ?? "").trim();
+      if (!title) return { content: { ok: false, error: "Say what needs doing." } };
+
+      let assignedTo: string | null = null;
+      if (args.assignee) {
+        const { data: people } = await supabase
+          .from("profiles")
+          .select("id, full_name")
+          .ilike("full_name", `%${String(args.assignee)}%`)
+          .limit(1);
+        assignedTo = people?.[0]?.id ?? null;
+      }
+
+      const { error } = await supabase.from("todos").insert({
+        title,
+        project_id: project.id,
+        assigned_to: assignedTo,
+        due_date: (args.due_date as string)?.trim()
+          ? `${String(args.due_date).trim()}T17:00:00`
+          : null,
+        created_by: ctx.userId,
+      });
+      if (error) return { content: { ok: false, error: error.message } };
+
+      return {
+        content: { ok: true, project: project.name, task: title },
+        event: {
+          kind: "created",
+          label: `Task on ${project.name}`,
+          href: `/projects/${project.id}`,
+        },
+      };
+    }
+
+    case "projects_at_risk": {
+      const limit = Math.min(10, Math.max(1, Number(args.limit ?? 5)));
+      const { data } = await supabase
+        .from("projects")
+        .select("id, name, risk_rank, risk_note, risk_checked_at, due_date")
+        .is("deleted_at", null)
+        .not("risk_rank", "is", null)
+        .order("risk_rank", { ascending: true })
+        .limit(limit);
+
+      if (!data?.length)
+        return {
+          content: {
+            ok: true,
+            projects: [],
+            note: "Nothing is flagged. The risk radar runs once a night — if projects were only just added, it may not have looked yet.",
+          },
+          event: { kind: "read", label: "Checked delivery risk", href: "/projects" },
+        };
+
+      return {
+        content: {
+          ok: true,
+          checked: data[0].risk_checked_at,
+          projects: data.map((p) => ({
+            rank: p.risk_rank,
+            name: p.name,
+            why: p.risk_note,
+            due: p.due_date,
+          })),
+        },
+        event: {
+          kind: "read",
+          label: "Checked delivery risk",
+          href: "/projects?sort=health",
+        },
+      };
+    }
+
+    case "ask_projects": {
+      const { askProjects } = await import("@/lib/ai/project-query");
+      const res = await askProjects(supabase, String(args.question ?? ""));
+      if (!res.ok) return { content: { ok: false, error: res.error } };
+      return {
+        content: {
+          ok: true,
+          answer: res.result.answer,
+          projects: res.result.rows,
+        },
+        event: { kind: "read", label: "Asked the projects", href: "/projects" },
       };
     }
 

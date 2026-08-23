@@ -1,3 +1,4 @@
+import { allEstimates } from "@/lib/ai/project-estimate";
 import { requireProfile } from "@/lib/auth";
 import { getMembers } from "@/lib/data";
 import { createClient } from "@/lib/supabase/server";
@@ -12,8 +13,13 @@ export const metadata = { title: "Project reports" };
  * Three questions the month board can't answer: which work actually makes
  * money, who is carrying how much of it, and what lands when.
  */
-export default async function ProjectReportsPage() {
+export default async function ProjectReportsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ tab?: string }>;
+}) {
   const supabase = await createClient();
+  const { tab } = await searchParams;
 
   const [
     profile,
@@ -25,6 +31,8 @@ export default async function ProjectReportsPage() {
     teamRes,
     tasksRes,
     costRatesRes,
+    stageEventsRes,
+    estimates,
   ] = await Promise.all([
     requireProfile(),
     getMembers(),
@@ -46,6 +54,15 @@ export default async function ProjectReportsPage() {
       .select("project_id, assigned_to, status, due_date")
       .not("project_id", "is", null),
     supabase.from("profiles").select("id, hourly_cost"),
+    // VIEW-3 — every stage change ever recorded (0084). The whole of
+    // cycle-time analytics is a read over this one table.
+    supabase
+      .from("delivery_events")
+      .select("project_id, kind, meta, created_at")
+      .eq("kind", "stage_changed")
+      .order("created_at", { ascending: true }),
+    // AI-2 — medians per service type. Arithmetic, so it loads with the page.
+    allEstimates(supabase),
   ]);
 
   return (
@@ -66,6 +83,10 @@ export default async function ProjectReportsPage() {
       tasks={(tasksRes.data ?? []) as any}
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       costRates={(costRatesRes.data ?? []) as any}
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      stageEvents={(stageEventsRes.data ?? []) as any}
+      estimates={estimates}
+      initialTab={tab}
     />
   );
 }

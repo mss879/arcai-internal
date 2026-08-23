@@ -47,6 +47,9 @@ export type DeskChangeRequest = {
   quoted_amount: number | null;
   quote_note: string | null;
   client_name: string | null;
+  /** 0098 — spotted by the scope-creep reader rather than typed by a person. */
+  ai_flagged?: boolean;
+  ai_reason?: string | null;
   created_at: string;
 };
 
@@ -196,10 +199,23 @@ export function ClientDeskCard({
                 className="rounded-xl border border-slate-200 bg-slate-50/60 px-3.5 py-3"
               >
                 <p className="text-sm text-slate-800">{c.body}</p>
+                {/* AI-3 — say plainly which of these a model raised, so the
+                    team weighs it differently from one the client typed. */}
+                {c.ai_flagged && c.ai_reason && (
+                  <p className="mt-1.5 flex items-start gap-1.5 rounded-lg bg-fuchsia-50 px-2 py-1 text-[11px] leading-relaxed text-fuchsia-700">
+                    <Sparkles className="mt-0.5 h-3 w-3 shrink-0" />
+                    {c.ai_reason}
+                  </p>
+                )}
                 <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs">
                   <span className="text-slate-400">
                     {format(new Date(c.created_at), "d MMM yyyy")}
                   </span>
+                  {c.ai_flagged && (
+                    <Badge className="bg-fuchsia-50 text-fuchsia-700 ring-fuchsia-200">
+                      Spotted by AI
+                    </Badge>
+                  )}
                   {c.quoted_amount != null && (
                     <Badge className="bg-amber-50 text-amber-700 ring-amber-200">
                       {formatCurrency(Number(c.quoted_amount), currency)}

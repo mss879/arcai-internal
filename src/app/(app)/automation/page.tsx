@@ -28,6 +28,7 @@ export default async function AutomationPage() {
     smsWorkflowsRes,
     pipelinesRes,
     stagesRes,
+    templatesRes,
     members,
   ] = await Promise.all([
     supabase.from("automations").select("*").order("created_at", { ascending: false }),
@@ -42,6 +43,12 @@ export default async function AutomationPage() {
     supabase.from("sms_workflows").select("*").order("created_at", { ascending: false }),
     supabase.from("pipelines").select("*").order("position"),
     supabase.from("pipeline_stages").select("*").order("position"),
+    // 0096 — the seed_task_template step picks one of these.
+    supabase
+      .from("project_templates")
+      .select("id, name, service_type")
+      .eq("is_active", true)
+      .order("name"),
     getMembers(),
   ]);
 
@@ -55,6 +62,7 @@ export default async function AutomationPage() {
       smsWorkflows={(smsWorkflowsRes.data ?? []) as SmsWorkflow[]}
       pipelines={(pipelinesRes.data ?? []) as Pipeline[]}
       stages={(stagesRes.data ?? []) as PipelineStage[]}
+      templates={templatesRes.data ?? []}
       members={members}
       smsReady={isSmsConfigured()}
     />

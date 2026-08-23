@@ -397,6 +397,18 @@ export async function respondToApproval(
     link: `/projects/${opened.project.id}`,
   });
 
+  // 0096 — "they said yes" is the cue for invoicing, building and shipping.
+  // Only an approval, never a changes-requested: those are two different
+  // events and a recipe that treated them alike would bill on a rejection.
+  if (decision === "approved") {
+    const { fireClientApproved } = await import("@/lib/project-events");
+    await fireClientApproved(supabase, opened.project.id, {
+      id: updated.id,
+      title: updated.title,
+      signerName: name || opened.project.clientName,
+    });
+  }
+
   revalidatePath(`/public/project/${token}`);
   return { ok: true };
 }

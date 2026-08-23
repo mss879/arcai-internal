@@ -671,6 +671,14 @@ async function runStalledScan(
       `Idle ${days} days in ${project.delivery_stage}`,
       "automation",
     );
+
+    // 0096 — the alert stays as it is; this hands the same detection to the
+    // automation engine so an escalation ladder can hang off it (AUTO-6).
+    const { fireProjectStalled } = await import("@/lib/project-events");
+    await fireProjectStalled(supabase, project.id, {
+      days,
+      stage: project.delivery_stage,
+    });
     alerted++;
   }
   return alerted;

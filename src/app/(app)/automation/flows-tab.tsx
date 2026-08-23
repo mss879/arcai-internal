@@ -56,6 +56,13 @@ type DraftStep = {
 
 type DraftCondition = { field: string; op: string; value: string };
 
+/** Just enough of a plan template for the seed_task_template picker (0096). */
+export type ProjectTemplateLite = {
+  id: string;
+  name: string;
+  service_type: string | null;
+};
+
 const STEP_KINDS: AutomationStepKind[] = [
   "send_sms",
   "send_whatsapp",
@@ -75,6 +82,17 @@ const STEP_KINDS: AutomationStepKind[] = [
   // Client Delivery (0085)
   "start_wa_onboarding",
   "set_delivery_stage",
+  // Projects theme 6 (0096) — everything below works on the run's project.
+  "create_project_invoice",
+  "send_portal_link",
+  "seed_task_template",
+  "assign_member",
+  "request_asset",
+  "add_expense",
+  "set_project_status",
+  "create_payment_plan",
+  "schedule_meeting",
+  "draft_client_update",
 ];
 
 function newDraft(kind: AutomationStepKind): DraftStep {
@@ -89,7 +107,17 @@ function newDraft(kind: AutomationStepKind): DraftStep {
             ? { instruction: "", save_to: "ai_next_action" }
             : kind === "set_delivery_stage"
               ? { stage: "build" }
-              : {};
+              : kind === "set_project_status"
+                ? { status: "active" }
+                : kind === "request_asset"
+                  ? { title: "", required: true }
+                  : kind === "create_payment_plan"
+                    ? { installments: 2, every_days: 30, start_in_days: 30 }
+                    : kind === "schedule_meeting"
+                      ? { in_days: 2, hour: 10, duration_minutes: 30 }
+                      : kind === "assign_member"
+                        ? { user_id: "", role: "" }
+                        : {};
   return { key: crypto.randomUUID(), kind, config };
 }
 
@@ -103,6 +131,7 @@ export function FlowsTab({
   pipelines,
   stages,
   members,
+  templates,
   smsReady,
 }: {
   automations: Automation[];
@@ -112,6 +141,7 @@ export function FlowsTab({
   pipelines: Pipeline[];
   stages: PipelineStage[];
   members: MemberLite[];
+  templates: ProjectTemplateLite[];
   smsReady: boolean;
 }) {
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
@@ -200,6 +230,7 @@ export function FlowsTab({
           pipelines={pipelines}
           stages={stages}
           members={members}
+          templates={templates}
           smsReady={smsReady}
         />
       )}
@@ -216,6 +247,7 @@ function AutomationBuilder({
   pipelines,
   stages,
   members,
+  templates,
   smsReady,
 }: {
   automation: Automation;
@@ -224,6 +256,7 @@ function AutomationBuilder({
   pipelines: Pipeline[];
   stages: PipelineStage[];
   members: MemberLite[];
+  templates: ProjectTemplateLite[];
   smsReady: boolean;
 }) {
   const [name, setName] = React.useState(automation.name);
@@ -411,6 +444,7 @@ function AutomationBuilder({
                 pipelines={pipelines}
                 stages={stages}
                 members={members}
+                templates={templates}
                 onChange={(patch) => updateConfig(index, patch)}
                 onMove={(delta) => moveStep(index, delta)}
                 onRemove={() => removeAt(index)}
@@ -541,6 +575,64 @@ function TriggerNode({
             label={trigger === "lead_inactive" ? "days of inactivity" : "days after sending"}
             value={Number(cfg.days ?? (trigger === "lead_inactive" ? 7 : 3))}
             onChange={(days) => onConfigChange({ days })}
+          />
+        )}
+
+        {/* 0096 — project timers. days means different things per trigger,
+            so each spells out what it is counting. */}
+        {(trigger === "project_due_soon" ||
+          trigger === "project_overdue" ||
+          trigger === "balance_overdue") && (
+          <NumberConfig
+            label={
+              trigger === "project_due_soon"
+                ? "days before the due date"
+                : trigger === "project_overdue"
+                  ? "days past the due date"
+                  : "days after delivery"
+            }
+            value={Number(
+              cfg.days ??
+                (trigger === "project_due_soon" ? 3 : trigger === "project_overdue" ? 0 : 7),
+            )}
+            onChange={(days) => onConfigChange({ days })}
+          />
+        )}
+
+        {(trigger === "project_created" || trigger === "project_completed") && (
+          <Input
+            defaultValue={String(cfg.service_type ?? "")}
+            onBlur={(e) =>
+              onConfigChange({ service_type: e.target.value.trim() || undefined })
+            }
+            placeholder="Service type filter (blank = every project)"
+          />
+        )}
+
+        {trigger === "expense_added" && (
+          <>
+            <Input
+              defaultValue={String(cfg.category ?? "")}
+              onBlur={(e) =>
+                onConfigChange({ category: e.target.value.trim() || undefined })
+              }
+              placeholder="Category filter (blank = any)"
+            />
+            <NumberConfig
+              label="minimum amount"
+              value={Number(cfg.min_amount ?? 0)}
+              onChange={(min_amount) =>
+                onConfigChange({ min_amount: min_amount || undefined })
+              }
+            />
+          </>
+        )}
+
+        {trigger === "milestone_completed" && (
+          <Input
+            defaultValue={String(cfg.keyword ?? "")}
+            onBlur={(e) => onConfigChange({ keyword: e.target.value.trim() || undefined })}
+            placeholder="Title keyword (blank = every milestone)"
           />
         )}
 
@@ -791,7 +883,15 @@ function Connector({
   );
 }
 
-const TOKENS = ["{{name}}", "{{full_name}}", "{{title}}", "{{value}}", "{{company}}"];
+const TOKENS = [
+  "{{name}}",
+  "{{full_name}}",
+  "{{title}}",
+  "{{value}}",
+  "{{company}}",
+  // 0096 — set on every project trigger.
+  "{{project_name}}",
+];
 
 function StepNode({
   draft,
@@ -801,6 +901,7 @@ function StepNode({
   pipelines,
   stages,
   members,
+  templates,
   onChange,
   onMove,
   onRemove,
@@ -812,6 +913,7 @@ function StepNode({
   pipelines: Pipeline[];
   stages: PipelineStage[];
   members: MemberLite[];
+  templates: ProjectTemplateLite[];
   onChange: (patch: Record<string, unknown>) => void;
   onMove: (delta: -1 | 1) => void;
   onRemove: () => void;
@@ -1132,6 +1234,262 @@ function StepNode({
             into asset-collection mode and sends the kickoff (Delivery → Settings
             holds the message + template).
           </p>
+        )}
+
+        {/* ---- Projects theme 6 (0096) ------------------------------------ */}
+
+        {draft.kind === "create_project_invoice" && (
+          <p className="text-xs text-slate-400">
+            Bills the contract value plus every uninvoiced billable extra, minus
+            what has already come in. A fully-paid project simply produces
+            nothing. Later steps can use{" "}
+            <code className="text-slate-500">{"{{invoice_number}}"}</code>,{" "}
+            <code className="text-slate-500">{"{{invoice_total}}"}</code> and{" "}
+            <code className="text-slate-500">{"{{invoice_link}}"}</code>.
+          </p>
+        )}
+
+        {draft.kind === "send_portal_link" && (
+          <>
+            <Input
+              value={String(cfg.note ?? "")}
+              onChange={(e) => onChange({ note: e.target.value })}
+              placeholder="Extra line to add (optional)"
+              className="max-w-lg"
+            />
+            <p className="text-xs text-slate-400">
+              One text with the link and the passcode together. Refuses to send if
+              the portal has been revoked.
+            </p>
+          </>
+        )}
+
+        {draft.kind === "seed_task_template" && (
+          <>
+            <Select
+              value={String(cfg.template_id ?? "")}
+              onChange={(e) => onChange({ template_id: e.target.value })}
+              className="max-w-sm"
+            >
+              <option value="">Match the project&apos;s service type</option>
+              {templates.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                  {t.service_type ? ` (${t.service_type})` : ""}
+                </option>
+              ))}
+            </Select>
+            <p className="text-xs text-slate-400">
+              Seeds tasks, milestones, launch checks and asset requests. Anything
+              already on the project by the same name is left alone, so running it
+              twice is safe.
+            </p>
+          </>
+        )}
+
+        {draft.kind === "assign_member" && (
+          <>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <Select
+                value={String(cfg.user_id ?? "")}
+                onChange={(e) => onChange({ user_id: e.target.value })}
+              >
+                <option value="">Pick teammate…</option>
+                {members.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.full_name || m.username}
+                  </option>
+                ))}
+              </Select>
+              <Input
+                value={String(cfg.role ?? "")}
+                onChange={(e) => onChange({ role: e.target.value })}
+                placeholder="Role, e.g. designer"
+              />
+            </div>
+            <label className="inline-flex items-center gap-2 text-sm text-slate-600">
+              <input
+                type="checkbox"
+                checked={!!cfg.is_owner}
+                onChange={(e) => onChange({ is_owner: e.target.checked })}
+                className="h-4 w-4 rounded border-slate-300 text-primary-600"
+              />
+              Make them the project owner
+            </label>
+            <p className="text-xs text-slate-400">
+              Template tasks name a <em>role</em>; matching the role here means a
+              later Apply-template step lands its tasks on this person.
+            </p>
+          </>
+        )}
+
+        {draft.kind === "request_asset" && (
+          <>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <Input
+                value={String(cfg.title ?? "")}
+                onChange={(e) => onChange({ title: e.target.value })}
+                placeholder="What to ask for, e.g. Logo files"
+              />
+              <Select
+                value={String(cfg.category ?? "")}
+                onChange={(e) => onChange({ category: e.target.value })}
+              >
+                <option value="">No category</option>
+                <option value="brand">Brand</option>
+                <option value="content">Content</option>
+                <option value="photos">Photos</option>
+                <option value="access">Access</option>
+              </Select>
+            </div>
+            <Input
+              value={String(cfg.description ?? "")}
+              onChange={(e) => onChange({ description: e.target.value })}
+              placeholder="A line of guidance for the client (optional)"
+            />
+            <label className="inline-flex items-center gap-2 text-sm text-slate-600">
+              <input
+                type="checkbox"
+                checked={cfg.required !== false}
+                onChange={(e) => onChange({ required: e.target.checked })}
+                className="h-4 w-4 rounded border-slate-300 text-primary-600"
+              />
+              Required — the build can&apos;t start without it
+            </label>
+          </>
+        )}
+
+        {draft.kind === "add_expense" && (
+          <>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <Input
+                value={String(cfg.description ?? "")}
+                onChange={(e) => onChange({ description: e.target.value })}
+                placeholder="What the cost is for"
+              />
+              <Input
+                type="number"
+                value={String(cfg.amount ?? "")}
+                onChange={(e) => onChange({ amount: Number(e.target.value) })}
+                placeholder="Amount"
+              />
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <Input
+                value={String(cfg.category ?? "")}
+                onChange={(e) => onChange({ category: e.target.value })}
+                placeholder="Category (optional)"
+              />
+              <Input
+                value={String(cfg.vendor ?? "")}
+                onChange={(e) => onChange({ vendor: e.target.value })}
+                placeholder="Vendor (optional)"
+              />
+            </div>
+            <label className="inline-flex items-center gap-2 text-sm text-slate-600">
+              <input
+                type="checkbox"
+                checked={cfg.billable !== false}
+                onChange={(e) => onChange({ billable: e.target.checked })}
+                className="h-4 w-4 rounded border-slate-300 text-primary-600"
+              />
+              Billable — put it on the next invoice
+            </label>
+          </>
+        )}
+
+        {draft.kind === "set_project_status" && (
+          <Select
+            value={String(cfg.status ?? "")}
+            onChange={(e) => onChange({ status: e.target.value })}
+            className="max-w-sm"
+          >
+            <option value="">Pick status…</option>
+            <option value="planning">Planning</option>
+            <option value="active">Active</option>
+            <option value="on_hold">On hold</option>
+            <option value="completed">Completed</option>
+            <option value="cancelled">Cancelled</option>
+          </Select>
+        )}
+
+        {draft.kind === "create_payment_plan" && (
+          <>
+            <div className="grid gap-2 sm:grid-cols-3">
+              <NumberConfig
+                label="instalments"
+                value={Number(cfg.installments ?? 2)}
+                onChange={(installments) => onChange({ installments })}
+              />
+              <NumberConfig
+                label="days apart"
+                value={Number(cfg.every_days ?? 30)}
+                onChange={(every_days) => onChange({ every_days })}
+              />
+              <NumberConfig
+                label="days until the first"
+                value={Number(cfg.start_in_days ?? 30)}
+                onChange={(start_in_days) => onChange({ start_in_days })}
+              />
+            </div>
+            <p className="text-xs text-slate-400">
+              Schedules whatever is still outstanding, not the contract value. A
+              project that already has a plan is left alone.
+            </p>
+          </>
+        )}
+
+        {draft.kind === "schedule_meeting" && (
+          <>
+            <Input
+              value={String(cfg.title ?? "")}
+              onChange={(e) => onChange({ title: e.target.value })}
+              placeholder="Meeting title, e.g. Kickoff call with {{name}}"
+            />
+            <div className="grid gap-2 sm:grid-cols-3">
+              <NumberConfig
+                label="days from now"
+                value={Number(cfg.in_days ?? 2)}
+                onChange={(in_days) => onChange({ in_days })}
+              />
+              <NumberConfig
+                label="hour (24h)"
+                value={Number(cfg.hour ?? 10)}
+                onChange={(hour) => onChange({ hour })}
+              />
+              <NumberConfig
+                label="minutes long"
+                value={Number(cfg.duration_minutes ?? 30)}
+                onChange={(duration_minutes) => onChange({ duration_minutes })}
+              />
+            </div>
+            <Select
+              value={String(cfg.location_type ?? "online")}
+              onChange={(e) => onChange({ location_type: e.target.value })}
+              className="max-w-sm"
+            >
+              <option value="online">Online</option>
+              <option value="in_person">In person</option>
+            </Select>
+          </>
+        )}
+
+        {draft.kind === "draft_client_update" && (
+          <>
+            <Textarea
+              value={String(cfg.instruction ?? "")}
+              onChange={(e) => onChange({ instruction: e.target.value })}
+              rows={2}
+              placeholder="Anything extra the update should cover (optional)"
+            />
+            <p className="text-xs text-slate-400">
+              Written from where the project actually is — stage, milestones,
+              outstanding assets, recent history. Filed as an internal note for
+              you to send or edit; it never messages the client by itself. Later
+              steps can use{" "}
+              <code className="text-slate-500">{"{{client_update}}"}</code>.
+            </p>
+          </>
         )}
       </div>
     </div>

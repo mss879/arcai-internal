@@ -198,7 +198,18 @@ export type AutomationTrigger =
   | "project_stage_changed"
   | "project_delivered"
   | "asset_submitted"
-  | "assets_complete";
+  | "assets_complete"
+  // 0096 — Projects theme 6 (AUTO-1)
+  | "project_created"
+  | "project_due_soon"
+  | "project_overdue"
+  | "balance_overdue"
+  | "expense_added"
+  | "expenses_over_budget"
+  | "milestone_completed"
+  | "client_approved"
+  | "project_completed"
+  | "project_stalled";
 export type AutomationStepKind =
   | "send_sms"
   | "send_email"
@@ -219,7 +230,18 @@ export type AutomationStepKind =
   | "create_project"
   // 0085 — Client Delivery
   | "start_wa_onboarding"
-  | "set_delivery_stage";
+  | "set_delivery_stage"
+  // 0096 — Projects theme 6 (AUTO-2)
+  | "create_project_invoice"
+  | "send_portal_link"
+  | "seed_task_template"
+  | "assign_member"
+  | "request_asset"
+  | "add_expense"
+  | "set_project_status"
+  | "create_payment_plan"
+  | "schedule_meeting"
+  | "draft_client_update";
 /** Client Delivery pipeline (0084). NULL on projects = not started. */
 export type DeliveryStage =
   | "onboarding"
@@ -229,6 +251,21 @@ export type DeliveryStage =
   | "delivered"
   | "aftercare";
 export type AssetCategory = "brand" | "content" | "photos" | "access";
+// 0098 — Projects theme 5 (AI)
+export type ProjectLessonCategory =
+  | "pricing"
+  | "scope"
+  | "timeline"
+  | "delivery"
+  | "client";
+export type ProjectLessonStatus = "new" | "kept" | "dismissed";
+export type ProjectAnomalyKind =
+  | "duplicate_expense"
+  | "duplicate_payment"
+  | "duplicate_project"
+  | "payment_over_value"
+  | "expense_no_receipt";
+export type ProjectAnomalyStatus = "open" | "dismissed" | "fixed";
 export type AssetRequestStatus = "pending" | "submitted" | "na";
 export type AssetRequestSource = "portal" | "whatsapp" | "team";
 // 0094 grew this list with the portal/review/approval/change events.
@@ -424,6 +461,9 @@ export type Database = {
           city: string | null;
           status: ClientStatus;
           notes: string | null;
+          // 0099 — BIG-1: whether this client has ever used their portal.
+          portal_last_login_at: Timestamp | null;
+          portal_login_count: number;
           created_by: UUID | null;
           created_at: Timestamp;
         };
@@ -436,6 +476,9 @@ export type Database = {
           city?: string | null;
           status?: ClientStatus;
           notes?: string | null;
+          // 0099
+          portal_last_login_at?: Timestamp | null;
+          portal_login_count?: number;
           created_by?: UUID | null;
           created_at?: Timestamp;
         };
@@ -590,6 +633,17 @@ export type Database = {
           template_id: UUID | null;
           aftercare_enabled: boolean;
           aftercare_last_run_on: string | null;
+          // 0096 — stand every automation down for this one project.
+          automation_paused: boolean;
+          // 0098 — the nightly risk radar's answer, and the scope reader's mark.
+          risk_rank: number | null;
+          risk_note: string | null;
+          risk_checked_at: Timestamp | null;
+          scope_checked_at: Timestamp | null;
+          // 0099 — BIG-2: where this project came from.
+          lead_id: UUID | null;
+          quote_id: UUID | null;
+          proposal_id: UUID | null;
         };
         Insert: {
           id?: UUID;
@@ -660,6 +714,17 @@ export type Database = {
           template_id?: UUID | null;
           aftercare_enabled?: boolean;
           aftercare_last_run_on?: string | null;
+          // 0096
+          automation_paused?: boolean;
+          // 0098
+          risk_rank?: number | null;
+          risk_note?: string | null;
+          risk_checked_at?: Timestamp | null;
+          scope_checked_at?: Timestamp | null;
+          // 0099
+          lead_id?: UUID | null;
+          quote_id?: UUID | null;
+          proposal_id?: UUID | null;
         };
         Update: Partial<Database["public"]["Tables"]["projects"]["Insert"]>;
         Relationships: [];
@@ -722,6 +787,123 @@ export type Database = {
       };
       // 0092 — the reusable plan behind a service type: the tasks, asset
       // requests, milestones and launch checks every job of that kind needs.
+      // 0097 — VIEW-2: a named set of board filters.
+      project_views: {
+        Row: {
+          id: UUID;
+          name: string;
+          /** The board's own filter state, verbatim. */
+          filters: Record<string, unknown>;
+          owner_id: UUID | null;
+          shared: boolean;
+          position: number;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          name: string;
+          filters?: Record<string, unknown>;
+          owner_id?: UUID | null;
+          shared?: boolean;
+          position?: number;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["project_views"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0098 — AI-6: what a finished project taught us. Approve-first.
+      project_lessons: {
+        Row: {
+          id: UUID;
+          project_id: UUID | null;
+          project_name: string;
+          title: string;
+          body: string;
+          category: ProjectLessonCategory;
+          evidence: Record<string, unknown>;
+          status: ProjectLessonStatus;
+          decided_by: UUID | null;
+          decided_at: Timestamp | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          project_id?: UUID | null;
+          project_name?: string;
+          title: string;
+          body: string;
+          category?: ProjectLessonCategory;
+          evidence?: Record<string, unknown>;
+          status?: ProjectLessonStatus;
+          decided_by?: UUID | null;
+          decided_at?: Timestamp | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["project_lessons"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0098 — AI-9: rule-based duplicate and anomaly guards.
+      project_anomalies: {
+        Row: {
+          id: UUID;
+          project_id: UUID | null;
+          kind: ProjectAnomalyKind;
+          detail: string;
+          evidence: Record<string, unknown>;
+          /** Identity of the PAIR — unique, so a dismissal sticks. */
+          fingerprint: string;
+          status: ProjectAnomalyStatus;
+          resolved_by: UUID | null;
+          resolved_at: Timestamp | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          project_id?: UUID | null;
+          kind: ProjectAnomalyKind;
+          detail: string;
+          evidence?: Record<string, unknown>;
+          fingerprint: string;
+          status?: ProjectAnomalyStatus;
+          resolved_by?: UUID | null;
+          resolved_at?: Timestamp | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["project_anomalies"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0099 — BIG-1: one-time SMS codes for the client portal login.
+      // Only ever touched by the admin client from a server action.
+      client_login_codes: {
+        Row: {
+          id: UUID;
+          /** Normalised E.164. */
+          phone: string;
+          /** HMAC of the code — never the code itself. */
+          code_hash: string;
+          expires_at: Timestamp;
+          attempts: number;
+          consumed_at: Timestamp | null;
+          requested_at: Timestamp;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          phone: string;
+          code_hash: string;
+          expires_at: Timestamp;
+          attempts?: number;
+          consumed_at?: Timestamp | null;
+          requested_at?: Timestamp;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["client_login_codes"]["Insert"]>;
+        Relationships: [];
+      };
       project_templates: {
         Row: {
           id: UUID;
@@ -975,6 +1157,9 @@ export type Database = {
           todo_id: UUID | null;
           source: ChangeRequestSource;
           client_name: string | null;
+          // 0098 — spotted by the scope-creep reader rather than a person.
+          ai_flagged: boolean;
+          ai_reason: string | null;
           created_at: Timestamp;
           updated_at: Timestamp;
         };
@@ -989,6 +1174,9 @@ export type Database = {
           todo_id?: UUID | null;
           source?: ChangeRequestSource;
           client_name?: string | null;
+          // 0098
+          ai_flagged?: boolean;
+          ai_reason?: string | null;
           created_at?: Timestamp;
           updated_at?: Timestamp;
         };
@@ -1259,6 +1447,11 @@ export type Database = {
           selection: Record<string, unknown>;
           content: Record<string, unknown>;
           grand_total: number;
+          // 0099 — BIG-2: the chain this document belongs to.
+          lead_id: UUID | null;
+          client_id: UUID | null;
+          quote_id: UUID | null;
+          project_id: UUID | null;
           created_by: UUID | null;
           created_at: Timestamp;
         };
@@ -1270,6 +1463,11 @@ export type Database = {
           selection?: Record<string, unknown>;
           content?: Record<string, unknown>;
           grand_total?: number;
+          // 0099
+          lead_id?: UUID | null;
+          client_id?: UUID | null;
+          quote_id?: UUID | null;
+          project_id?: UUID | null;
           created_by?: UUID | null;
           created_at?: Timestamp;
         };

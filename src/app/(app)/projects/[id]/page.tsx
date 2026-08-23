@@ -1,10 +1,16 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { format, startOfToday } from "date-fns";
+import { format, parseISO, startOfToday } from "date-fns";
 import { ArrowLeft, ArchiveRestore, CalendarRange } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { ActivitySection } from "@/components/projects/activity-section";
+import {
+  AutomationSection,
+  type ProjectRunRow,
+} from "@/components/projects/automation-section";
+import { AiToolsCard } from "@/components/projects/ai-tools-card";
+import { ChainCard, type ChainLink } from "@/components/projects/chain-card";
 import {
   ClientMessageCard,
   type SentClientMessage,
@@ -47,6 +53,7 @@ import {
   STORAGE_BUCKETS,
   SERVICE_TYPE_LABELS,
 } from "@/lib/constants";
+import { isOpenAIConfigured } from "@/lib/ai/openai";
 import { requireProfile } from "@/lib/auth";
 import { getMembers } from "@/lib/data";
 import {
@@ -96,6 +103,7 @@ export default async function ProjectDetailPage({
     depositInvoiceRes,
     clientSmsRes,
     planRes,
+    automationRunsRes,
   ] = await Promise.all([
     requireProfile(),
     (supabase as any)
@@ -185,7 +193,7 @@ export default async function ProjectDetailPage({
     supabase
       .from("project_change_requests")
       .select(
-        "id, body, status, quoted_amount, quote_note, client_name, created_at",
+        "id, body, status, quoted_amount, quote_note, client_name, ai_flagged, ai_reason, created_at",
       )
       .eq("project_id", id)
       .order("created_at", { ascending: false }),
@@ -234,10 +242,121 @@ export default async function ProjectDetailPage({
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle(),
+    // 0096 — what the automation engine has done to this project (AUTO-7).
+    supabase
+      .from("automation_runs")
+      .select(
+        "id, automation_id, status, step_index, next_run_at, created_at, completed_at, error, log, automation:automations(name)",
+      )
+      .eq("project_id", id)
+      .order("created_at", { ascending: false })
+      .limit(25),
   ]);
 
   const project = projectRes.data;
   if (!project) notFound();
+
+  const aiReady = isOpenAIConfigured();
+
+  // ---------------------------------------------------------------------
+  // BIG-2 (0099) — walk the chain this project sits in.
+  //
+  // Four of the five joins already existed; 0099 added projects → lead/quote/
+  // proposal and proposals → the rest. Each hop is its own small query rather
+  // than one deep join, because most projects link to none of them and a
+  // five-table join that usually returns nulls is a slow way to learn that.
+  // ---------------------------------------------------------------------
+  const [chainLeadRes, chainQuoteRes, chainProposalRes, chainInvoicesRes] =
+    await Promise.all([
+      project.lead_id
+        ? supabase
+            .from("leads")
+            .select("id, title, company, value, created_at")
+            .eq("id", project.lead_id)
+            .maybeSingle()
+        : Promise.resolve({ data: null }),
+      project.quote_id
+        ? supabase
+            .from("quotes")
+            .select("id, quote_number, title, grand_total, status, share_token, accepted_at")
+            .eq("id", project.quote_id)
+            .maybeSingle()
+        : Promise.resolve({ data: null }),
+      project.proposal_id
+        ? supabase
+            .from("proposals")
+            .select("id, project_name, grand_total, proposal_date")
+            .eq("id", project.proposal_id)
+            .maybeSingle()
+        : Promise.resolve({ data: null }),
+      supabase
+        .from("invoices")
+        .select("id, invoice_number, grand_total, invoice_date, share_token")
+        .eq("project_id", id)
+        .order("invoice_date", { ascending: true }),
+    ]);
+
+  const chainLead = chainLeadRes.data;
+  const chainQuote = chainQuoteRes.data;
+  const chainProposal = chainProposalRes.data;
+  const chainInvoices = chainInvoicesRes.data ?? [];
+
+  const chainCandidates: (ChainLink | null | false)[] = [
+    chainLead && {
+      kind: "lead" as const,
+      label: chainLead.title,
+      sublabel:
+        [chainLead.company, chainDate(chainLead.created_at)]
+          .filter(Boolean)
+          .join(" · ") || null,
+      href: `/crm/lead/${chainLead.id}`,
+      amount: chainLead.value === null ? null : Number(chainLead.value),
+    },
+    chainQuote && {
+      kind: "quote" as const,
+      label: chainQuote.title || chainQuote.quote_number,
+      sublabel:
+        chainQuote.status === "accepted" && chainQuote.accepted_at
+          ? `Accepted ${chainDate(chainQuote.accepted_at)}`
+          : chainQuote.status,
+      href: chainQuote.share_token ? `/q/${chainQuote.share_token}` : "/quotes",
+      amount: Number(chainQuote.grand_total) || 0,
+    },
+    chainProposal && {
+      kind: "proposal" as const,
+      label: chainProposal.project_name || "Proposal",
+      sublabel: chainDate(chainProposal.proposal_date),
+      href: "/proposals",
+      amount: Number(chainProposal.grand_total) || 0,
+    },
+    {
+      kind: "project" as const,
+      label: project.name,
+      sublabel: "This project",
+      href: null,
+      amount: Number(project.total_value) || 0,
+    },
+    chainInvoices.length > 0 && {
+      kind: "invoice" as const,
+      label:
+        chainInvoices.length === 1
+          ? `Invoice ${chainInvoices[0].invoice_number}`
+          : "Invoices",
+      sublabel:
+        chainInvoices.length === 1
+          ? chainDate(chainInvoices[0].invoice_date)
+          : `${chainInvoices[0].invoice_number} … ${chainInvoices[chainInvoices.length - 1].invoice_number}`,
+      href:
+        chainInvoices.length === 1 && chainInvoices[0].share_token
+          ? `/public/invoice/${chainInvoices[0].share_token}`
+          : "/invoices",
+      amount: chainInvoices.reduce((sum, i) => sum + (Number(i.grand_total) || 0), 0),
+      count: chainInvoices.length,
+    },
+  ];
+  const chainLinks: ChainLink[] = chainCandidates.filter(
+    (l): l is ChainLink => Boolean(l),
+  );
 
   // Handle dynamic sharing token generation for legacy data
   let shareToken = project.share_token;
@@ -248,6 +367,63 @@ export default async function ProjectDetailPage({
       .update({ share_token: shareToken })
       .eq("id", id);
   }
+
+  // ---------------------------------------------------------------------
+  // AUTO-7 — this project's automation runs, with "step 3 of 6" made real.
+  //
+  // The run row knows how far it got; only automation_steps knows how far
+  // there is to go, so the totals are counted once for the handful of
+  // automations that actually touched this project.
+  // ---------------------------------------------------------------------
+  type RawRun = {
+    id: string;
+    automation_id: string;
+    status: string;
+    step_index: number;
+    next_run_at: string;
+    created_at: string;
+    completed_at: string | null;
+    error: string | null;
+    log: unknown;
+    automation: { name: string } | { name: string }[] | null;
+  };
+  const rawRuns = (automationRunsRes.data ?? []) as unknown as RawRun[];
+
+  const stepCounts = new Map<string, number>();
+  if (rawRuns.length) {
+    const { data: allSteps } = await supabase
+      .from("automation_steps")
+      .select("automation_id")
+      .in("automation_id", Array.from(new Set(rawRuns.map((r) => r.automation_id))));
+    for (const step of allSteps ?? []) {
+      stepCounts.set(
+        step.automation_id,
+        (stepCounts.get(step.automation_id) ?? 0) + 1,
+      );
+    }
+  }
+
+  const automationRuns: ProjectRunRow[] = rawRuns.map((r) => {
+    const automation = Array.isArray(r.automation) ? r.automation[0] : r.automation;
+    const log = Array.isArray(r.log)
+      ? (r.log as { step?: string; at?: string; ok?: boolean; detail?: string }[])
+      : [];
+    return {
+      id: r.id,
+      automation_name: automation?.name ?? "Automation",
+      status: r.status as ProjectRunRow["status"],
+      step_index: r.step_index,
+      // Falls back to what the log proves ran, so a run whose automation has
+      // since been deleted still reads sensibly rather than "step 3 of 0".
+      step_count:
+        stepCounts.get(r.automation_id) ?? Math.max(log.length, r.step_index),
+      next_run_at: r.next_run_at,
+      created_at: r.created_at,
+      completed_at: r.completed_at,
+      error: r.error,
+      log,
+    };
+  });
 
   const payments = await Promise.all(
     (paymentsRes.data ?? []).map(async (p) => {
@@ -573,6 +749,13 @@ export default async function ProjectDetailPage({
         overview={
           <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
             <div className="space-y-6 xl:col-span-2">
+              {/* BIG-2 — where this job came from, before what it is worth. */}
+              <ChainCard
+                links={chainLinks}
+                currency={project.currency || "LKR"}
+                quoted={chainQuote ? Number(chainQuote.grand_total) || 0 : null}
+                delivered={Number(project.total_value) || 0}
+              />
               <LedgerSection
                 projectId={id}
                 rows={ledger}
@@ -581,6 +764,18 @@ export default async function ProjectDetailPage({
                 totalValue={totalValue}
               />
               <TasksSection projectId={id} tasks={tasks} members={members} />
+              {/* Theme 5 — the tools that act on THIS project. Full width:
+                  the screenshot draft is edited before it is filed. */}
+              <AiToolsCard
+                projectId={id}
+                aiReady={aiReady}
+                canPostMortem={
+                  project.status === "completed" ||
+                  project.delivery_stage === "delivered" ||
+                  project.delivery_stage === "aftercare"
+                }
+                hasClient={!!project.client_id}
+              />
             </div>
             {/* Only short, glanceable cards sit in the narrow column — the
              * client-facing surfaces need real width and live on their own
@@ -750,7 +945,18 @@ export default async function ProjectDetailPage({
         }
         files={<FilesSection files={files} />}
         activity={
-          <ActivitySection events={(eventsRes.data ?? []) as DeliveryEvent[]} />
+          <div className="space-y-6">
+            {/* Both of these answer "what happened to this project" — the
+                machine's account above the people's. Provenance and the AI
+                tools used to live here too; they are context and actions, not
+                history, and moved to Overview. */}
+            <AutomationSection
+              projectId={id}
+              paused={project.automation_paused ?? false}
+              runs={automationRuns}
+            />
+            <ActivitySection events={(eventsRes.data ?? []) as DeliveryEvent[]} />
+          </div>
         }
       />
     </div>
@@ -891,4 +1097,21 @@ function Stat({
       {hint && <p className="mt-0.5 text-[11px] text-slate-400">{hint}</p>}
     </div>
   );
+}
+
+/**
+ * Date formatting for the chain card.
+ *
+ * Deliberately defined HERE and not exported from chain-card.tsx: that file is
+ * "use client", and every export of a client module becomes a client reference
+ * when a Server Component imports it — calling one on the server throws at
+ * runtime, which a type check will not catch.
+ */
+function chainDate(value: string | null): string | null {
+  if (!value) return null;
+  try {
+    return format(parseISO(value), "d MMM yyyy");
+  } catch {
+    return null;
+  }
 }

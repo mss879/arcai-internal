@@ -3,7 +3,7 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Wallet, Plus, FileText, Receipt, Upload, X } from "lucide-react";
+import { Wallet, Plus, FileText, Receipt, Sparkles, Upload, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select, Textarea } from "@/components/ui/input";
@@ -13,7 +13,10 @@ import type { Client, Project, ProjectStatus } from "@/lib/types";
 import { uploadFile } from "@/lib/upload";
 import { formatCurrency } from "@/lib/utils";
 
+import type { ProjectBrief } from "@/lib/ai/project-brief";
+
 import { saveProject, type ProjectInput } from "@/app/(app)/projects/actions";
+import { draftBrief } from "@/app/(app)/projects/ai-actions";
 import { ClientFormModal } from "@/app/(app)/clients/clients-view";
 
 export function ProjectFormModal({
@@ -31,6 +34,53 @@ export function ProjectFormModal({
   const [pending, startTransition] = React.useTransition();
   const [form, setForm] = React.useState<ProjectInput>({ name: "" });
   const [isAddingClient, setIsAddingClient] = React.useState(false);
+
+  // AI-1 (0098) — write the brief from the sale rather than from memory.
+  const [drafting, setDrafting] = React.useState(false);
+  const [brief, setBrief] = React.useState<ProjectBrief | null>(null);
+
+  async function handleDraftBrief() {
+    if (!form.client_id) {
+      toast.error("Pick the client first — that's what the brief is read from.");
+      return;
+    }
+    setDrafting(true);
+    const res = await draftBrief({ clientId: form.client_id });
+    setDrafting(false);
+    if (!res.ok) {
+      toast.error(res.error);
+      return;
+    }
+    // Pre-fills, never overwrites something already typed: a half-filled form
+    // is somebody's work in progress.
+    setBrief(res.brief);
+    setForm((prev) => ({
+      ...prev,
+      name: prev.name?.trim() ? prev.name : res.brief.name,
+      description: prev.description?.trim()
+        ? prev.description
+        : [
+            res.brief.summary,
+            res.brief.deliverables.length
+              ? `\n\nIncluded:\n${res.brief.deliverables.map((d) => `• ${d}`).join("\n")}`
+              : "",
+            res.brief.exclusions.length
+              ? `\n\nNot included:\n${res.brief.exclusions.map((d) => `• ${d}`).join("\n")}`
+              : "",
+          ]
+            .filter(Boolean)
+            .join(""),
+      service_type: prev.service_type ?? res.brief.service_type,
+      due_date:
+        prev.due_date ??
+        (res.brief.estimated_days
+          ? new Date(Date.now() + res.brief.estimated_days * 86400000)
+              .toISOString()
+              .slice(0, 10)
+          : prev.due_date),
+    }));
+    toast.success("Brief drafted — read it before you save.");
+  }
   /** Which document slot is mid-upload — blocks Save so nothing saves half-done. */
   const [uploading, setUploading] = React.useState<"proposal" | "invoice" | null>(
     null,
@@ -132,6 +182,61 @@ export function ProjectFormModal({
             rows={2}
           />
         </Field>
+
+        {/* AI-1 — the quote, the proposal and the WhatsApp thread already say
+            what was agreed; this reads them instead of you retyping it. */}
+        {!project && (
+          <div className="rounded-xl border border-dashed border-fuchsia-200 bg-fuchsia-50/40 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs text-slate-600">
+                <span className="font-semibold text-slate-800">
+                  Draft this from the sale.
+                </span>{" "}
+                Reads the client&apos;s quote, proposal and WhatsApp thread.
+              </p>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={handleDraftBrief}
+                loading={drafting}
+                disabled={!form.client_id}
+              >
+                <Sparkles className="h-4 w-4" /> Draft brief
+              </Button>
+            </div>
+
+            {brief && (
+              <div className="mt-3 space-y-2 text-xs">
+                {brief.estimated_days && (
+                  <p className="text-slate-600">
+                    <span className="font-semibold">Estimated:</span>{" "}
+                    {brief.estimated_days} days, from what your past projects of
+                    this type actually took.
+                  </p>
+                )}
+                {brief.open_questions.length > 0 && (
+                  <div className="rounded-lg bg-amber-50 px-2.5 py-2 text-amber-800">
+                    <p className="font-semibold">The sale didn&apos;t settle:</p>
+                    <ul className="mt-1 list-disc space-y-0.5 pl-4">
+                      {brief.open_questions.map((q, i) => (
+                        <li key={i}>{q}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {(brief.tasks.length > 0 || brief.assets.length > 0) && (
+                  <p className="text-slate-500">
+                    It also suggested {brief.tasks.length} task
+                    {brief.tasks.length === 1 ? "" : "s"} and {brief.assets.length}{" "}
+                    asset{brief.assets.length === 1 ? "" : "s"} to collect — seed
+                    them from a plan template on the project once it exists.
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-4">
           <Field label="Client" className="sm:col-span-2">

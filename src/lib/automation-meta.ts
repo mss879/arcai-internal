@@ -98,6 +98,63 @@ export const TRIGGER_META: Record<
     description:
       "The LAST required checklist item arrives — everything needed to start the build is in. Fires once per project.",
   },
+
+  // 0096 — Projects theme 6 (AUTO-1). Everything below concerns a project,
+  // so the steps that need one (invoice, portal link, template, member,
+  // asset, expense, status, plan, meeting, update) all work off these.
+  project_created: {
+    label: "Project created",
+    description:
+      "A project record is born — added by hand, generated as a retainer month, or created by the assistant. Deliberately NOT fired by the \u201cCreate project\u201d automation step, so a kickoff flow can\u2019t loop into itself.",
+  },
+  project_due_soon: {
+    label: "Project due in X days",
+    description:
+      "An open project\u2019s due date is within a number of days. Fires once per deadline — move the date and it re-arms.",
+    timeBased: true,
+  },
+  project_overdue: {
+    label: "Project overdue",
+    description:
+      "An open project is past its due date by X days. Fires once per deadline, so pushing the date out re-arms it.",
+    timeBased: true,
+  },
+  balance_overdue: {
+    label: "Balance overdue",
+    description:
+      "A delivered project still has money outstanding X days after delivery. The escalation the built-in balance chaser hands over to.",
+    timeBased: true,
+  },
+  expense_added: {
+    label: "Expense added",
+    description:
+      "A cost is recorded against a project. Add a category in the trigger config to only fire on that one.",
+  },
+  expenses_over_budget: {
+    label: "Expenses over budget",
+    description:
+      "A project\u2019s recorded costs pass its expense cap (or its budget). Fires once per project \u2014 the same guard the built-in budget alert uses.",
+  },
+  milestone_completed: {
+    label: "Milestone completed",
+    description:
+      "A project milestone is ticked off. Add a title keyword in the trigger config to only fire on the ones that matter.",
+  },
+  client_approved: {
+    label: "Client approved",
+    description:
+      "The client signed off on an approval from the portal. The hook for \u201cthey said yes \u2014 now invoice/build/ship it\u201d.",
+  },
+  project_completed: {
+    label: "Project completed",
+    description:
+      "A project\u2019s status becomes Completed \u2014 the job is closed, whatever its delivery stage says.",
+  },
+  project_stalled: {
+    label: "Project stalled",
+    description:
+      "A project has sat untouched past the Delivery stalled threshold. Fires alongside the built-in alert, so an escalation ladder can hang off it.",
+  },
 };
 
 export const STEP_META: Record<
@@ -202,6 +259,69 @@ export const STEP_META: Record<
     label: "Wait",
     description: "Pause before the next step.",
     tone: "bg-amber-500",
+  },
+
+  // 0096 — Projects theme 6 (AUTO-2). Every one of these needs a project on
+  // the run: fire from a project trigger, or put a Create project step first.
+  create_project_invoice: {
+    label: "Raise project invoice",
+    description:
+      "Bill the project for real: contract value plus every uninvoiced billable extra, minus what has already been received. Lands in /invoices like one you typed.",
+    tone: "bg-lime-700",
+  },
+  send_portal_link: {
+    label: "Send portal link",
+    description:
+      "Text the client their portal link and passcode in one message \u2014 the same send as the button on the project.",
+    tone: "bg-sky-600",
+  },
+  seed_task_template: {
+    label: "Apply plan template",
+    description:
+      "Seed the project\u2019s tasks, milestones, launch checks and asset checklist from a plan template. Skips anything already there.",
+    tone: "bg-violet-600",
+  },
+  assign_member: {
+    label: "Assign teammate to project",
+    description:
+      "Put someone on the job (optionally as owner) and tell them. Staffing, not commission.",
+    tone: "bg-indigo-600",
+  },
+  request_asset: {
+    label: "Request an asset",
+    description:
+      "Add a checklist item for the client to supply \u2014 the WhatsApp agent and the portal both collect against it.",
+    tone: "bg-amber-600",
+  },
+  add_expense: {
+    label: "Add expense",
+    description:
+      "Record a cost against the project \u2014 a recurring licence, a stock-photo budget, a retainer\u2019s fixed hosting.",
+    tone: "bg-rose-600",
+  },
+  set_project_status: {
+    label: "Set project status",
+    description:
+      "Move the project between Planning, Active, On hold, Completed and Cancelled.",
+    tone: "bg-teal-600",
+  },
+  create_payment_plan: {
+    label: "Create payment plan",
+    description:
+      "Schedule the balance as instalments against the project \u2014 the installment-due reminders then run themselves.",
+    tone: "bg-emerald-700",
+  },
+  schedule_meeting: {
+    label: "Schedule a meeting",
+    description:
+      "Book a call with the client on the calendar, with its SMS invite and reminder.",
+    tone: "bg-blue-600",
+  },
+  draft_client_update: {
+    label: "Draft client update",
+    description:
+      "Have the AI write a short, plain progress update from where the project actually is, and file it as a team note to send or edit. Never messages the client on its own.",
+    tone: "bg-fuchsia-600",
   },
 };
 

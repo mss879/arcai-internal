@@ -96,6 +96,15 @@ async function runBudgetAlerts(db: DB, result: ProjectAutomationResult) {
       .from("projects")
       .update({ budget_alerted_at: new Date().toISOString() })
       .eq("id", project.id);
+
+    // 0096 — same crossing, same once-per-project guard, now available to
+    // the automation engine as a trigger.
+    const { fireExpensesOverBudget } = await import("@/lib/project-events");
+    await fireExpensesOverBudget(db, project.id, {
+      spent: spend,
+      cap,
+      currency: project.currency,
+    });
     result.budget_alerts++;
   }
 }
@@ -168,6 +177,11 @@ async function runRetainers(db: DB, result: ProjectAutomationResult) {
       .from("projects")
       .update({ retainer_last_run_on: today.toISOString().slice(0, 10) })
       .eq("id", parent.id);
+
+    // 0096 — a retainer month is a real new project, so the kickoff flows
+    // (seed the plan, staff it, send the portal) run for it too.
+    const { fireProjectCreated } = await import("@/lib/project-events");
+    await fireProjectCreated(db, child.id, "retainer");
 
     await notifyTeam(db, {
       title: "Retainer month created",

@@ -28,6 +28,7 @@ import { FlowsTab } from "./flows-tab";
 import { RunsTab } from "./runs-tab";
 import { ConnectTab } from "./connect-tab";
 import { RecipesTab } from "./recipes-tab";
+import type { ProjectTemplateLite } from "./flows-tab";
 
 type Tab = "flows" | "runs" | "connect" | "recipes";
 
@@ -43,6 +44,7 @@ export function AutomationView({
   smsWorkflows,
   pipelines,
   stages,
+  templates,
   members,
   smsReady,
 }: {
@@ -54,6 +56,7 @@ export function AutomationView({
   smsWorkflows: SmsWorkflow[];
   pipelines: Pipeline[];
   stages: PipelineStage[];
+  templates: ProjectTemplateLite[];
   members: MemberLite[];
   smsReady: boolean;
 }) {
@@ -127,6 +130,7 @@ export function AutomationView({
           smsWorkflows={smsWorkflows}
           pipelines={pipelines}
           stages={stages}
+          templates={templates}
           members={members}
           smsReady={smsReady}
         />

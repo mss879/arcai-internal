@@ -45,6 +45,7 @@ export default async function ProjectsPage({
     assetsRes,
     milestonesRes,
     commissionsRes,
+    savedViewsRes,
   ] = await Promise.all([
     requireProfile(),
     projectQuery.order("created_at", { ascending: false }),
@@ -68,7 +69,20 @@ export default async function ProjectsPage({
     supabase
       .from("commissions")
       .select("project_id, amount, percentage, basis"),
+    // VIEW-2 (0097) — saved filter sets. Scoping happens below rather than in
+    // the query: RLS is workspace-wide here, so the private/shared split is
+    // applied against the profile we just resolved.
+    supabase
+      .from("project_views")
+      .select("id, name, filters, owner_id, shared")
+      .order("position", { ascending: true })
+      .order("created_at", { ascending: true }),
   ]);
+
+  // A private view is only listed for the person who made it.
+  const savedViews = (savedViewsRes.data ?? []).filter(
+    (v) => v.shared || !v.owner_id || v.owner_id === profile.id,
+  );
 
   return (
     <ProjectsView
@@ -87,6 +101,8 @@ export default async function ProjectsPage({
       milestones={(milestonesRes.data ?? []) as any}
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       commissions={(commissionsRes.data ?? []) as any}
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      savedViews={savedViews as any}
       isAdmin={profile.role === "admin"}
       showArchived={showArchived}
     />

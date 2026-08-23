@@ -12,7 +12,9 @@ theme 5."*
 
 `arc-ai-management` is ARC AI's internal workspace (Next.js 16 + React 19 + Tailwind v4,
 Supabase, Netlify). A 72-idea roadmap for the **Projects** module was written and grouped into
-eight themes. **Themes 1–4 are built and live. Themes 5–8 are not started.**
+eight themes. **Themes 1–7 are built, and four of theme 8's five items with them. Only `BIG-4` (sell the
+delivery portal as multi-tenant SaaS) is left, deliberately — it is a business decision, not an
+engineering one.**
 
 The full roadmap, with every item and its rationale, is a private artifact:
 <https://claude.ai/code/artifact/17e528c4-ddfe-4d11-b71f-03e7ee53ab68>
@@ -68,6 +70,26 @@ src/app/public/invoice/[token]/     one invoice, public, nothing else
 src/app/public/review/[token]/      the review form
 
 src/lib/projects.ts                 THE money + health maths (client-safe)
+src/lib/project-events.ts           the six project automation triggers, fired from one place
+src/lib/project-templates.ts        plan-template seeding, shared by the button and the step
+src/lib/project-history.ts          THE historical maths — medians, outcomes (feeds AI-1/2/6)
+src/lib/project-anomalies.ts        rule-based duplicate/anomaly guards (AI-9)
+src/lib/project-export.ts           CSV + the export row shape (VIEW-5)
+src/lib/ai/project-brief.ts         AI-1   src/lib/ai/project-estimate.ts   AI-2
+src/lib/ai/scope-creep.ts           AI-3   src/lib/ai/risk-radar.ts         AI-4
+src/lib/ai/progress-note.ts         AI-5   src/lib/ai/project-postmortem.ts AI-6
+src/lib/ai/project-query.ts         AI-8
+
+src/app/(app)/projects/insights/    the AI layer's home (Ask · Risk · Estimates · Lessons · Guards)
+src/app/(app)/projects/ai-actions.ts        theme 5 server actions
+src/app/(app)/projects/view-actions.ts      saved board views (VIEW-2)
+src/components/projects/board-views.tsx     kanban / table / calendar (VIEW-1)
+src/components/projects/chain-card.tsx      lead→quote→proposal→project→invoice (BIG-2)
+
+src/lib/client-auth.ts              client portal login: SMS code, hashed, rate-limited (BIG-1)
+src/app/portal/                     the client's own account area (BIG-1)
+src/app/api/public/v1/projects/     the projects API (BIG-3)
+src/app/(app)/projects/go/          phone-first delivery (BIG-5)
 src/lib/project-automation.ts       tick jobs: budget alerts, retainers, chases, aftercare
 src/lib/project-sms.ts              the one way a client gets texted
 src/lib/portal-access.ts            passcode gate, HMAC cookie, lockout
@@ -109,10 +131,16 @@ These were each learned the hard way. Breaking one is a real bug, not a style ch
    Use Tailwind v4 `@container` + `@md:`. A `sm:grid-cols-3` inside a ~340px rail is what once
    clipped a date field to "23/08/2".
 
-8. **Don't call `Date.now()` / `new Date()` during render** — `react-hooks/purity` forbids it. Use
+8. **A `"use client"` module's exports become CLIENT REFERENCES when a Server Component
+   imports them.** A plain helper exported from a client component and called on the server
+   throws at runtime — and `tsc` and `next build` both pass. Type-only imports
+   (`import { X, type Y }`) are erased and always safe; anything else callable must live in a
+   server-safe module.
+
+9. **Don't call `Date.now()` / `new Date()` during render** — `react-hooks/purity` forbids it. Use
    `date-fns` (`startOfToday()`, `isBefore`, `differenceInCalendarDays`).
 
-9. **Margin is admin-only**, matching commissions. `profiles.hourly_cost` is never shown to the
+10. **Margin is admin-only**, matching commissions. `profiles.hourly_cost` is never shown to the
    member it belongs to. And margin is **hidden entirely until costs exist** — with none recorded
    it always reads 100%, which is an empty cost sheet dressed as a result
    (`marginIsMeaningful()`).
@@ -133,8 +161,13 @@ These were each learned the hard way. Breaking one is a real bug, not a style ch
 
 ## 5. What's already built (don't rebuild it)
 
-**Migrations `0090`–`0095`.** All applied to production **except `0095`**, which re-adds
-`invoices.stamp` — apply it, or the DEPOSIT PAID stamp won't print.
+**Migrations `0090`–`0099`.** All applied to production **except `0095`–`0099`**.
+`0095` re-adds `invoices.stamp` — apply it, or the DEPOSIT PAID stamp won't print. `0096`
+(theme 6), `0097` (theme 7) and `0098` (theme 5) **must all be applied before the next
+push**: the tick filters on `projects.automation_paused` every run, the board reads
+`project_views`, and the AI layer reads `project_lessons`, `project_anomalies` and four new
+`projects` columns, and `0099` adds the chain foreign keys plus the client-login table. All five
+are additive and safe to run against the currently-live build.
 
 | | |
 |---|---|
@@ -144,6 +177,10 @@ These were each learned the hard way. Breaking one is a real bug, not a style ch
 | `0093` | deposit confirmation + `invoices.share_token` + client SMS |
 | `0094` | CX: portal passcode/expiry/revoke/language, reviews, approvals, change requests, comments, pulses |
 | `0095` | re-applies `invoices.stamp` (0024, never run) |
+| `0096` | AUTO: 10 triggers + 10 steps on the CHECK constraints, `projects.automation_paused`, two scan indexes |
+| `0097` | VIEW: `project_views` (saved board filters) |
+| `0098` | AI: `project_lessons`, `project_anomalies`, `projects.risk_*` + `scope_checked_at`, `project_change_requests.ai_flagged` |
+| `0099` | BIG: `projects.lead_id/quote_id/proposal_id`, `proposals.lead_id/client_id/quote_id/project_id`, `client_login_codes`, `clients.portal_last_login_at` |
 
 **Themes 1–4, all 45 items.** In short:
 
@@ -161,110 +198,154 @@ These were each learned the hard way. Breaking one is a real bug, not a style ch
 Plus **deposit confirmation**: one button raises a DEPOSIT PAID invoice and texts the client a
 link to it on its own public page.
 
+**Theme 6 (AUTO), all 7 items.** The automation engine now understands the whole project
+lifecycle:
+
+- **AUTO-1** — ten triggers: `project_created` · `project_due_soon` · `project_overdue` ·
+  `balance_overdue` · `expense_added` · `expenses_over_budget` · `milestone_completed` ·
+  `client_approved` · `project_completed` · `project_stalled`. The four timers scan in
+  `scanTimeBasedTriggers`; the six events fire through **`src/lib/project-events.ts`**, the one
+  place a project is resolved into a trigger (client, portal link, pause check).
+- **AUTO-2** — ten steps: raise project invoice · send portal link · apply plan template · assign
+  teammate · request an asset · add expense · set project status · create payment plan · schedule
+  meeting · draft client update (AI, files an internal note and never messages the client).
+- **AUTO-3…6** — four recipes: `project-deposit-kickoff`, `project-assets-to-build`,
+  `project-delivered-to-retained`, `project-stalled-escalation`. All opt-in, all in the Delivery
+  hub's Automations tab.
+- **AUTO-7** — an **Automations** card on the project's History tab: what's queued, what's
+  running, what fired (expandable step log), and a per-project pause switch.
+
+Two things worth knowing before building on it:
+
+1. **`renderTokens` leaves an unknown `{{token}}` standing in the text.** A step whose output is
+   optional must therefore write its tokens on BOTH paths — see `create_project_invoice`, which
+   sets a whole-clause `{{invoice_line}}` (blank when there was nothing to bill) rather than a
+   bare `{{invoice_number}}` that would go out to the client verbatim. `{{money_line}}` on
+   `project_stalled` does the same.
+2. **`project_created` is deliberately NOT fired by the `create_project` step** — only by
+   `saveProject`, the assistant and the retainer generator. A flow that both listens for it and
+   creates a project would otherwise hatch a new one every tick, forever.
+
+Template seeding moved to **`src/lib/project-templates.ts`** so the Apply-template button and the
+`seed_task_template` step produce an identical project; `applyTemplate` in `plan-actions.ts` is
+now a thin auth + revalidate wrapper.
+
+**Theme 7 (VIEW), all 6 items.**
+
+- **VIEW-1** — four board layouts (month · kanban by stage · table · calendar by due date),
+  remembered per user in `localStorage`. The **timeline links to `/projects/reports?tab=timeline`**
+  rather than being drawn twice — PLAN-6 already draws it.
+- **VIEW-2** — saved filter sets (`project_views`), shared by default, private optional. The
+  active view is **derived** from the live filters, not tracked in state, so nudging a dropdown
+  deselects the pill on its own.
+- **VIEW-3** — a Cycle-time tab on Reports over `delivery_events`: days per stage (median AND
+  mean, because one holiday skews the mean), on-time rate, and a six-month trend.
+- **VIEW-4** — a close strip on **every** month group: booked, delivered, collected, owed,
+  carried forward, margin.
+- **VIEW-5** — CSV (client-side, formula-injection guarded, BOM for Excel) and a branded
+  landscape PDF via `/api/projects/pdf`. Margin is re-checked server-side, never trusted from
+  the body.
+- **VIEW-6** — the dashboard's active-project count is gone; a Delivery row replaces it with at
+  risk · awaiting client · delivering this week · cash outstanding.
+
+**Theme 5 (AI), all 9 items.** New home: **`/projects/insights`** (Ask · At risk · Estimates ·
+Lessons · Guards), plus an **AI tools** card on each project's History tab.
+
+- **AI-1** — Draft brief from the sale: reads the quote, the proposal and the WhatsApp thread,
+  pre-fills the new-project form (never overwrites something already typed) and lists what the
+  sale left unsettled.
+- **AI-2** — `src/lib/project-history.ts` computes real medians per service type; the model only
+  turns them into a sentence, so an estimate can be wrong about advice but never about arithmetic.
+- **AI-3** — the scope-creep reader files out-of-scope asks as ordinary change requests with
+  `ai_flagged = true`, so CX-3's pricing flow bills them unchanged.
+- **AI-4** — the nightly risk radar. **The ranking is arithmetic and works with no API key**;
+  the model only writes the one-sentence reason. Rewritten wholesale each pass, so a recovered
+  project stops being listed.
+- **AI-5** — screenshot → a client update and an internal note, both editable, filed as project
+  comments. Never sends.
+- **AI-6** — post-mortems into `project_lessons`, approve-first. **Only `status = 'kept'` is ever
+  quoted back into an estimate.**
+- **AI-7** — seven new assistant tools: create project · record payment · log expense · move
+  stage · add task · projects at risk · ask projects. `move_project_stage` goes through the
+  server action, so voice cannot bypass the deposit gate a click obeys.
+- **AI-8** — Ask your projects. **The model never writes SQL**: every project is flattened
+  through the same money helpers and handed over as facts, and any id it invents is dropped
+  before rendering.
+- **AI-9** — rule-based guards (duplicate expense, double-counted payment, overpayment,
+  duplicate project). Fingerprinted and unique, so a dismissal sticks.
+
+Two things worth knowing before extending the AI layer:
+
+1. **Everything drafts; nothing sends, bills or closes.** That is the receipt.ts contract from
+   MON-8 and the whole theme keeps it.
+2. **The tick's AI passes self-gate** (risk radar ~once a day, scope reader ≤2 projects/tick and
+   once a day each). A tick runs every minute — anything that calls a model must gate itself or
+   it becomes an API bill.
+
+**Theme 8 (BIG), four of five.** `BIG-4` is untouched on purpose — see §6.
+
+- **BIG-2 — the chain is real.** `projects.lead_id / quote_id / proposal_id` and
+  `proposals.lead_id / client_id / quote_id / project_id`. A **Chain card** on the project's
+  History tab walks lead → quote → proposal → project → invoices and shows quoted-vs-now-worth.
+  The `create_project` automation step and the projects API both record the links, because an
+  automated project is exactly the one nobody will ever link by hand. **The migration backfills
+  only proposals→clients, and only on an exact single-match name** — a fuzzy match would file one
+  client's proposal against another's, which is worse than no link.
+- **BIG-1 — client accounts.** `/portal/login` takes a phone number and texts a 6-digit code;
+  `/portal` then shows that client every project, invoice and quote they own. Codes are stored
+  **hashed** with the service-role key, expire in 10 minutes, are consumed on use, count wrong
+  guesses, and are rate-limited per number. **An unknown number gets the identical "we sent a
+  code" screen and no SMS** — otherwise the form enumerates the client list. The share token
+  stays as the convenience it always was. `/portal` is in `PUBLIC_PREFIXES` because clients are
+  not Supabase users; they hold their own signed cookie (`src/lib/client-auth.ts`).
+- **BIG-3 — the projects API.** `GET/POST /api/public/v1/projects`, same key infrastructure as
+  leads. Deliberately never exposes cost data or `share_token`, and serialises through an
+  allow-list so a column added later cannot leak by accident.
+- **BIG-5 — phone-first delivery.** `/projects/go`: open projects worst-first, four thumb-sized
+  verbs each (advance the stage, log time, photograph, nudge the client). Every one goes through
+  the same server action the desktop uses, so the deposit gate still applies. Linked from the
+  board on small screens only.
+
+One trap worth writing down, because a type check will not catch it:
+
+- **A `"use client"` module's exports become client references when a Server Component imports
+  them.** A plain helper exported from a client component and called on the server throws at
+  runtime. `chainDate()` was written that way and had to be moved into the page. Type-only
+  imports (`import { X, type Y }`) are erased and are always safe.
+
 **Known open item:** the Sinhala and Tamil portal copy in `src/lib/portal-copy.ts` is
 machine-translated. It renders correctly but wants a native speaker's read.
 
 ---
 
-## 6. What's left — themes 5 to 8 (27 items)
+## 6. What's left — `BIG-4`, and only `BIG-4`
 
-Each has a stable ID. The user refers to them by ID ("build AUTO-3").
+### `BIG-4` — sell the delivery portal
 
-### Theme 5 — AI (`AI-1` … `AI-9`)
+The client portal plus the WhatsApp asset collector is a product other agencies would pay for.
+Turning it into one means multi-workspace, per-tenant branding and per-tenant billing.
 
-The sales side is heavily AI-driven (research, drafting, coaching, lessons). Delivery has one AI
-feature. These close that gap. Helpers already exist: `src/lib/ai/openai.ts`
-(`openaiChat`, `openaiChatJSON`, `openaiVisionJSON`), and `src/lib/ai/receipt.ts` is a worked
-example of the drafts-never-saves pattern.
+**This is not a feature and should not be picked up as one.** Every table in this schema is
+single-tenant: there is no `workspace_id` anywhere, `delivery_settings` is a literal singleton
+(`id = 1`), `INVOICE_BANK` and `PROPOSAL_COMPANY` are hard-coded ARC AI constants, and the
+WhatsApp integration is one Meta app with one phone number. Retrofitting tenancy touches
+essentially every query in the codebase and every automation that runs on a timer.
 
-- **AI-1 Project brief from the sale** — feed the accepted quote, the proposal and the WhatsApp
-  thread in; get scope, deliverables, a task list, an asset checklist and a realistic timeline
-  out. One click at project creation, editable before it's saved.
-- **AI-2 Estimate from your own history** — "Business websites like this one took 24 days and cost
-  LKR 41,000 in extras; you quoted 150,000 and kept 62%." Pricing grounded in actuals, improving
-  every project.
-- **AI-3 Scope-creep detector** — watch the client's messages against the agreed scope; when a
-  request falls outside it, flag it and draft the "happy to do that — it's an extra LKR X" reply.
-- **AI-4 Nightly risk radar** — a pass over every open project producing a ranked "these three
-  need you today, and here's why". Feeds the existing weekly digest and morning WhatsApp digest.
-- **AI-5 Screenshot to progress note** — drop a screenshot; get a client-friendly update and an
-  internal note, both filed to the project.
-- **AI-6 Post-mortem when a project closes** — where the time went, where the margin leaked, which
-  stage dragged, what to quote differently. Stored as lessons, like the WA agent already does.
-- **AI-7 Voice control for delivery** — the assistant can already list projects. Add: create a
-  project, log an expense, record a payment, move a stage, add a task, "what's at risk this week".
-- **AI-8 Ask your projects anything** — natural language over the project tables, answered with a
-  table you can act on.
-- **AI-9 Duplicate and anomaly guards** — the same expense twice, a payment on the wrong project,
-  an automation creating a second project for one deposit. (`buildLedger()` already flags
-  cross-table duplicates — extend that idea.)
-
-### Theme 6 — AUTO (`AUTO-1` … `AUTO-7`)
-
-The engine already understands projects: 0085 added four triggers and three steps. Extending it is
-a CHECK-constraint update plus a `case` in the executor (`src/lib/automation.ts`), and metadata in
-`src/lib/automation-meta.ts`. Recipes live in `src/lib/automation-recipes.ts`.
-
-- **AUTO-1 Nine new triggers** — project created · due in X days · overdue · balance overdue ·
-  expense added · expenses over budget · milestone completed · client approved · project
-  completed. (Stalled is detected today but only alerts — make it a trigger.)
-- **AUTO-2 Ten new steps** — create invoice (for real, not a session handoff) · send portal link ·
-  seed task template · assign member · request an asset · add expense · set project status ·
-  create payment plan · schedule a meeting · draft the client update.
-- **AUTO-3 Recipe — deposit to kickoff** — project created, checklist seeded, tasks seeded, team
-  assigned, WhatsApp onboarding started, portal link sent, kickoff call booked. Most pieces exist;
-  bundle them.
-- **AUTO-4 Recipe — assets complete to build** — stage moves, team notified, countdown starts,
-  client told work has begun.
-- **AUTO-5 Recipe — delivered to paid, reviewed, retained** — balance invoice, handover pack,
-  review at day 3, aftercare offer at day 30, upsell at day 90.
-- **AUTO-6 Recipe — stalled escalation** — day 5 nudge the client, day 8 notify the owner, day 12
-  alert with the money at stake.
-- **AUTO-7 Per-project automation view** — what's running, what fired, what's queued, and a pause
-  switch. `automation_runs.project_id` already exists; it just isn't surfaced.
-
-### Theme 7 — VIEW (`VIEW-1` … `VIEW-6`)
-
-- **VIEW-1 Switchable views** — month board (today) · kanban by delivery stage · sortable table ·
-  calendar by due date · timeline. Remembered per user.
-- **VIEW-2 Saved filters** — "My active builds", "Unpaid deliveries", "Everything at risk", pinned
-  to the board. The CRM's segments idea applied to projects.
-- **VIEW-3 Cycle-time analytics** — average days per stage, on-time rate, trend. `delivery_events`
-  has recorded every stage change since 0084, so the history already exists.
-- **VIEW-4 Monthly close card** — booked, delivered, collected, still owed, carried forward,
-  margin.
-- **VIEW-5 Export** — CSV and a branded PDF report. (PDF stack: `src/lib/invoice-pdf.tsx` and
-  friends.)
-- **VIEW-6 Dashboard tiles that earn their place** — replace the active-project count with: at
-  risk, awaiting client, delivering this week, cash outstanding.
-
-### Theme 8 — BIG (`BIG-1` … `BIG-5`)
-
-Longer and riskier; each changes what the product *is*. Confirm scope before starting one.
-
-- **BIG-1 Client accounts instead of share links** — magic-link login; one client sees all their
-  projects, invoices, quotes and files. The share token becomes a convenience, not the security
-  model.
-- **BIG-2 Link the whole chain in the database** — lead → quote → proposal → project → invoice →
-  payment. The proposal and invoice on a project are currently uploaded *files*, so nothing is
-  traceable end to end. Real foreign keys make the reporting above possible. **Probably the
-  highest-value item left.**
-- **BIG-3 Projects API** — the API key infrastructure exists and already serves leads.
-- **BIG-4 Sell the delivery portal** — multi-workspace, per-tenant branding and billing. A fork in
-  the road, not a feature.
-- **BIG-5 Phone-first delivery** — the app is already installable; a phone-shaped project view for
-  approve / log / photograph / nudge.
+If the business decision is ever made, the honest first step is a spike answering three
+questions — how a tenant's WhatsApp number is provisioned, what happens to the existing single
+workspace's data, and who pays for the OpenAI usage — not a migration.
 
 ---
 
-## 7. Suggested order
+## 7. Where to go next
 
-1. **`AUTO-1` + `AUTO-2`**, then the recipes. Cheapest work with the widest reach — everything
-   else becomes automatable, and most of the actions already exist as functions.
-2. **`VIEW-3` + `VIEW-6`**. Pure reads over data already recorded; no schema.
-3. **`AI-4`, then `AI-1` and `AI-3`.** Risk radar is the one that changes behaviour daily;
-   scope-creep detection is the one that earns money.
-4. **`BIG-2`** before any more reporting — without the foreign keys, later analytics will be built
-   on file uploads.
+The roadmap is done bar `BIG-4`. What is worth doing now is not more features:
 
-Leave `BIG-4` alone unless the business decision has actually been made.
+1. **Apply `0095`–`0099` and push.** Themes 5–8 are inert until the migrations land.
+2. **Watch the tick.** Three new passes run on it (anomaly guards every minute, risk radar and
+   scope reader once a day). Check `/api/automation/tick`'s JSON for `anomalies`, `riskRadar` and
+   `scopeCreep` counts, and check the OpenAI spend after the first full day.
+3. **Sit with the AI output before trusting it.** The lessons queue and the scope-creep flags are
+   approve-first precisely so they can be judged for a few weeks before anyone leans on them.
+4. **The Sinhala and Tamil portal copy in `src/lib/portal-copy.ts` is still machine-translated**
+   and still wants a native speaker's read. It has outlasted four themes.

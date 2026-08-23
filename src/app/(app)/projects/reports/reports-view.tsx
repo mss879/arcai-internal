@@ -4,17 +4,21 @@ import * as React from "react";
 import Link from "next/link";
 import { format, startOfToday } from "date-fns";
 import {
-  ArrowLeft,
   CalendarRange,
   Coins,
   Users,
+  Timer,
 } from "lucide-react";
 
 import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
+import { ProjectsSectionNav } from "@/components/projects/section-nav";
+import type { ServiceBenchmark } from "@/lib/project-history";
 import {
+  DELIVERY_STAGES,
+  DELIVERY_STAGE_META,
   PROJECT_EXPENSE_CATEGORY_LABELS,
   SERVICE_TYPE_LABELS,
 } from "@/lib/constants";
@@ -68,7 +72,15 @@ type TaskRow = {
 };
 type CostRate = { id: string; hourly_cost: number | null };
 
-type Tab = "profit" | "workload" | "timeline";
+type Tab = "profit" | "estimates" | "workload" | "timeline" | "cycle";
+
+/** VIEW-3 — one recorded stage move. `meta` carries old_stage / new_stage. */
+export type StageEventRow = {
+  project_id: string;
+  kind: string;
+  meta: { old_stage?: string | null; new_stage?: string | null } | null;
+  created_at: string;
+};
 
 export function ReportsView({
   isAdmin,
@@ -80,6 +92,9 @@ export function ReportsView({
   team,
   tasks,
   costRates,
+  stageEvents,
+  estimates,
+  initialTab,
 }: {
   isAdmin: boolean;
   members: MemberLite[];
@@ -90,23 +105,31 @@ export function ReportsView({
   team: TeamRow[];
   tasks: TaskRow[];
   costRates: CostRate[];
+  stageEvents: StageEventRow[];
+  /** AI-2 — medians per service type, computed in project-history.ts. */
+  estimates: ServiceBenchmark[];
+  /** Deep link from the board's view switcher, e.g. ?tab=timeline. */
+  initialTab?: string;
 }) {
-  // Members can't see margin, so don't land them on a tab they can't read.
-  const [tab, setTab] = React.useState<Tab>(isAdmin ? "profit" : "workload");
+  const TABS: Tab[] = ["profit", "estimates", "workload", "timeline", "cycle"];
+  // Members can't see margin, so don't land them on a tab they can't read —
+  // including via the URL.
+  const requested = TABS.includes(initialTab as Tab) ? (initialTab as Tab) : null;
+  const fallback: Tab = isAdmin ? "profit" : "workload";
+  const [tab, setTab] = React.useState<Tab>(
+    (requested === "profit" || requested === "estimates") && !isAdmin
+      ? fallback
+      : (requested ?? fallback),
+  );
 
   return (
     <div className="space-y-6">
-      <Link
-        href="/projects"
-        className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-500 hover:text-slate-800"
-      >
-        <ArrowLeft className="h-4 w-4" /> Projects
-      </Link>
-
       <PageHeader
         title="Project reports"
-        description="What the work adds up to — money, people and dates."
+        description="What the work adds up to — money, people, time, and what to quote next time. What needs you today lives under Insights."
       />
+
+      <ProjectsSectionNav />
 
       <div className="inline-flex rounded-xl border border-slate-200 bg-white p-1 shadow-sm">
         {isAdmin && (
@@ -116,6 +139,15 @@ export function ReportsView({
             icon={<Coins className="h-4 w-4" />}
           >
             Profitability
+          </TabButton>
+        )}
+        {isAdmin && (
+          <TabButton
+            active={tab === "estimates"}
+            onClick={() => setTab("estimates")}
+            icon={<Coins className="h-4 w-4" />}
+          >
+            Estimates
           </TabButton>
         )}
         <TabButton
@@ -132,6 +164,13 @@ export function ReportsView({
         >
           Timeline
         </TabButton>
+        <TabButton
+          active={tab === "cycle"}
+          onClick={() => setTab("cycle")}
+          icon={<Timer className="h-4 w-4" />}
+        >
+          Cycle time
+        </TabButton>
       </div>
 
       {tab === "profit" && isAdmin && (
@@ -143,6 +182,7 @@ export function ReportsView({
           costRates={costRates}
         />
       )}
+      {tab === "estimates" && isAdmin && <EstimatesTab benchmarks={estimates} />}
       {tab === "workload" && (
         <WorkloadTab
           members={members}
@@ -153,6 +193,9 @@ export function ReportsView({
         />
       )}
       {tab === "timeline" && <TimelineTab projects={projects} />}
+      {tab === "cycle" && (
+        <CycleTab projects={projects} stageEvents={stageEvents} />
+      )}
     </div>
   );
 }
@@ -508,6 +551,335 @@ function WorkloadTab({
         ))}
       </ul>
     </Card>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Estimates from our own history (AI-2)                               */
+/* ------------------------------------------------------------------ */
+
+function EstimatesTab({ benchmarks }: { benchmarks: ServiceBenchmark[] }) {
+  if (benchmarks.length === 0) {
+    return (
+      <EmptyState
+        icon={<Coins className="h-6 w-6" />}
+        title="Not enough history yet"
+        description="Two finished projects of the same service type are needed before a median means anything. Deliver a few and this fills itself in."
+      />
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <p className="px-1 text-xs text-slate-400">
+        Medians, not averages — one job that ran over a holiday shouldn&apos;t
+        become how long the work takes. A sample under three is thin; treat it as
+        a hint, not a price.
+      </p>
+      <div className="grid gap-4 sm:grid-cols-2">
+        {benchmarks.map((b) => (
+          <div
+            key={b.serviceType}
+            className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[var(--shadow-card)]"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-sm font-semibold text-slate-900">
+                {SERVICE_TYPE_LABELS[
+                  b.serviceType as keyof typeof SERVICE_TYPE_LABELS
+                ] ?? b.serviceType}
+              </h3>
+              <Badge
+                className={
+                  b.count < 3
+                    ? "bg-amber-50 text-amber-700 ring-amber-200"
+                    : "bg-slate-100 text-slate-600"
+                }
+              >
+                {b.count} project{b.count === 1 ? "" : "s"}
+              </Badge>
+            </div>
+            <dl className="mt-3 grid grid-cols-2 gap-3">
+              <EstimateFigure label="Typical time" value={b.medianDays === null ? "—" : `${b.medianDays} days`} />
+              <EstimateFigure label="Typical quote" value={formatCurrency(b.medianQuoted, b.currency)} />
+              <EstimateFigure label="Extras raised" value={formatCurrency(b.medianExtras, b.currency)} />
+              <EstimateFigure
+                label="Margin kept"
+                value={b.medianMarginPercent === null ? "—" : `${b.medianMarginPercent}%`}
+              />
+            </dl>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function EstimateFigure({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+        {label}
+      </dt>
+      <dd className="mt-0.5 text-base font-bold tabular-nums text-slate-800">
+        {value}
+      </dd>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Cycle time (VIEW-3)                                                 */
+/*                                                                     */
+/* Every stage move has been recorded in delivery_events since 0084,   */
+/* so "how long does a build actually take" is a read, not a new       */
+/* feature. A stage's duration is the gap between the move INTO it and */
+/* the next move out — which means the stage a project is sitting in   */
+/* right now is deliberately excluded: it hasn't finished, and         */
+/* counting it would drag every average down as work in progress ages. */
+/* ------------------------------------------------------------------ */
+
+function CycleTab({
+  projects,
+  stageEvents,
+}: {
+  projects: ProjectRow[];
+  stageEvents: StageEventRow[];
+}) {
+  const analysis = React.useMemo(() => {
+    const known = new Set(projects.map((p) => p.id));
+
+    // Group the moves per project, in the order they happened.
+    const byProject = new Map<string, StageEventRow[]>();
+    for (const e of stageEvents) {
+      if (!known.has(e.project_id)) continue; // archived / deleted
+      const list = byProject.get(e.project_id);
+      if (list) list.push(e);
+      else byProject.set(e.project_id, [e]);
+    }
+
+    const durations = new Map<string, number[]>();
+    /** Booked → delivered, for the projects that got all the way there. */
+    const endToEnd: { id: string; days: number; deliveredAt: string }[] = [];
+
+    for (const [projectId, events] of byProject) {
+      let firstAt: string | null = null;
+      for (let i = 0; i < events.length; i++) {
+        const entered = events[i].meta?.new_stage;
+        if (!entered) continue;
+        if (!firstAt) firstAt = events[i].created_at;
+
+        const next = events[i + 1];
+        if (!next) break; // still in this stage — not a completed spell
+        const days =
+          (Date.parse(next.created_at) - Date.parse(events[i].created_at)) /
+          (24 * 3600_000);
+        if (days < 0) continue;
+        const list = durations.get(entered);
+        if (list) list.push(days);
+        else durations.set(entered, [days]);
+
+        if (entered !== "delivered" && next.meta?.new_stage === "delivered") {
+          endToEnd.push({
+            id: projectId,
+            days:
+              (Date.parse(next.created_at) - Date.parse(firstAt)) /
+              (24 * 3600_000),
+            deliveredAt: next.created_at,
+          });
+        }
+      }
+    }
+
+    const stageRows = DELIVERY_STAGES.map((stage) => {
+      const list = durations.get(stage) ?? [];
+      const total = list.reduce((sum, d) => sum + d, 0);
+      const sorted = [...list].sort((a, b) => a - b);
+      return {
+        stage,
+        label: DELIVERY_STAGE_META[stage].label,
+        count: list.length,
+        average: list.length ? total / list.length : null,
+        // The median matters more than the mean here: one project that sat in
+        // review over a holiday shouldn't become "how long review takes".
+        median: sorted.length ? sorted[Math.floor(sorted.length / 2)] : null,
+        longest: sorted.length ? sorted[sorted.length - 1] : null,
+      };
+    });
+
+    // On time = delivered on or before its due date. Only projects that have
+    // both a due date and a delivery can answer the question at all.
+    const dated = projects.filter(
+      (p) =>
+        p.due_date &&
+        (p.delivery_stage === "delivered" || p.delivery_stage === "aftercare"),
+    );
+    const deliveredAtById = new Map(endToEnd.map((e) => [e.id, e.deliveredAt]));
+    let onTime = 0;
+    let measurable = 0;
+    for (const p of dated) {
+      const at = deliveredAtById.get(p.id);
+      if (!at) continue;
+      measurable++;
+      if (at.slice(0, 10) <= (p.due_date as string)) onTime++;
+    }
+
+    // Trend: average end-to-end days by the month the project was delivered.
+    const byMonth = new Map<string, number[]>();
+    for (const e of endToEnd) {
+      const key = e.deliveredAt.slice(0, 7);
+      const list = byMonth.get(key);
+      if (list) list.push(e.days);
+      else byMonth.set(key, [e.days]);
+    }
+    const trend = [...byMonth.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .slice(-6)
+      .map(([key, list]) => ({
+        key,
+        label: format(new Date(`${key}-01T00:00:00`), "MMM yy"),
+        count: list.length,
+        average: list.reduce((sum, d) => sum + d, 0) / list.length,
+      }));
+
+    const allEndToEnd = endToEnd.map((e) => e.days);
+
+    return {
+      stageRows,
+      trend,
+      onTimePercent: measurable ? Math.round((onTime / measurable) * 100) : null,
+      measurable,
+      deliveries: endToEnd.length,
+      averageEndToEnd: allEndToEnd.length
+        ? allEndToEnd.reduce((sum, d) => sum + d, 0) / allEndToEnd.length
+        : null,
+    };
+  }, [projects, stageEvents]);
+
+  if (analysis.deliveries === 0 && analysis.stageRows.every((r) => r.count === 0)) {
+    return (
+      <EmptyState
+        icon={<Timer className="h-6 w-6" />}
+        title="No stage history yet"
+        description="Cycle time is measured from stage moves. Move a project through the delivery stages and the averages build themselves."
+      />
+    );
+  }
+
+  const slowest = Math.max(
+    1,
+    ...analysis.stageRows.map((r) => r.average ?? 0),
+  );
+
+  return (
+    <div className="space-y-6">
+      <div className="grid gap-4 sm:grid-cols-3">
+        <Tile
+          label="Average build"
+          value={
+            analysis.averageEndToEnd === null
+              ? "—"
+              : `${Math.round(analysis.averageEndToEnd)} days`
+          }
+          hint={
+            analysis.deliveries
+              ? `Across ${analysis.deliveries} delivered project${analysis.deliveries === 1 ? "" : "s"}`
+              : "Nothing delivered yet"
+          }
+        />
+        <Tile
+          label="Delivered on time"
+          value={
+            analysis.onTimePercent === null ? "—" : `${analysis.onTimePercent}%`
+          }
+          hint={
+            analysis.measurable
+              ? `${analysis.measurable} project${analysis.measurable === 1 ? "" : "s"} had a due date`
+              : "No delivered project had a due date"
+          }
+          tone={
+            analysis.onTimePercent === null
+              ? undefined
+              : analysis.onTimePercent >= 80
+                ? "emerald"
+                : "rose"
+          }
+        />
+        <Tile
+          label="Stage moves recorded"
+          value={String(stageEvents.length)}
+          hint="Since the delivery pipeline was switched on"
+        />
+      </div>
+
+      <Card
+        title="How long each stage takes"
+        subtitle="Completed spells only — the stage a project is sitting in right now isn't counted, because it hasn't finished."
+      >
+        <ul className="divide-y divide-slate-100">
+          {analysis.stageRows.map((r) => (
+            <li key={r.stage} className="px-5 py-3.5">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-sm font-medium text-slate-700">
+                  {r.label}
+                </span>
+                <span className="text-xs tabular-nums text-slate-400">
+                  {r.count === 0
+                    ? "no data"
+                    : `${r.count} spell${r.count === 1 ? "" : "s"}`}
+                </span>
+              </div>
+              {r.average !== null && (
+                <>
+                  <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100">
+                    <div
+                      className="h-full rounded-full bg-primary-500"
+                      style={{ width: `${Math.round((r.average / slowest) * 100)}%` }}
+                    />
+                  </div>
+                  <p className="mt-1.5 text-xs text-slate-500 tabular-nums">
+                    <span className="font-semibold text-slate-700">
+                      {r.average.toFixed(1)} days
+                    </span>{" "}
+                    average · {r.median?.toFixed(1)} median · longest{" "}
+                    {r.longest?.toFixed(1)}
+                  </p>
+                </>
+              )}
+            </li>
+          ))}
+        </ul>
+      </Card>
+
+      {analysis.trend.length > 0 && (
+        <Card
+          title="Are we getting faster?"
+          subtitle="Average days from first stage move to delivered, by the month of delivery."
+        >
+          <ul className="divide-y divide-slate-100">
+            {analysis.trend.map((t) => {
+              const max = Math.max(...analysis.trend.map((x) => x.average), 1);
+              return (
+                <li key={t.key} className="flex items-center gap-3 px-5 py-3">
+                  <span className="w-16 shrink-0 text-xs font-medium text-slate-500">
+                    {t.label}
+                  </span>
+                  <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-100">
+                    <div
+                      className="h-full rounded-full bg-emerald-500"
+                      style={{ width: `${Math.round((t.average / max) * 100)}%` }}
+                    />
+                  </div>
+                  <span className="w-28 shrink-0 text-right text-xs tabular-nums text-slate-500">
+                    {t.average.toFixed(1)}d · {t.count} job
+                    {t.count === 1 ? "" : "s"}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </Card>
+      )}
+    </div>
   );
 }
 

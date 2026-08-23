@@ -7,6 +7,9 @@ import {
 } from "@/lib/automation";
 import { processDeliveryAutomations } from "@/lib/delivery";
 import { processProjectAutomations } from "@/lib/project-automation";
+import { processProjectAnomalies } from "@/lib/project-anomalies";
+import { processRiskRadar } from "@/lib/ai/risk-radar";
+import { processScopeScans } from "@/lib/ai/scope-creep";
 import { processFinanceReminders } from "@/lib/finance";
 import { processDueSmsRuns } from "@/lib/sms-automation";
 import { processTodoReminders } from "@/lib/todo-reminders";
@@ -42,6 +45,9 @@ import { isSmsConfigured } from "@/lib/sms";
  *     research first, ≤cap template sends per day, spread apart, one
  *     follow-up nudge for delivered-but-silent leads)
  *   - sends the once-a-day morning outreach digest to the team
+ *   - runs the project duplicate/anomaly guards (rule-based, every tick),
+ *     the nightly project risk radar and the scope-creep reader (both
+ *     self-gated to once a day)
  *
  * Point a scheduler at it every minute:  GET /api/automation/tick
  * If SMS_CRON_SECRET is set, pass it as `Authorization: Bearer <secret>`
@@ -75,6 +81,12 @@ export async function GET(request: Request) {
     // chase ladder and aftercare task batches. All DB work, all guarded by a
     // stamp so nothing fires twice.
     const projects = await processProjectAutomations(supabase);
+    // Projects theme 5 (0098). Cheap arithmetic first, then the two AI passes
+    // — both self-gated to roughly once a day so a tick every minute doesn't
+    // become an API bill.
+    const anomalies = await processProjectAnomalies(supabase);
+    const riskRadar = await processRiskRadar(supabase);
+    const scopeCreep = await processScopeScans(supabase);
     const research = await processPendingResearch(supabase);
     const schedules = await processDueProspectSchedules(supabase);
     const prospecting = await processPendingProspectScans(supabase);
@@ -117,6 +129,9 @@ export async function GET(request: Request) {
       meetings,
       delivery,
       projects,
+      anomalies,
+      riskRadar,
+      scopeCreep,
       research,
       schedules,
       prospecting,

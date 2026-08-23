@@ -355,3 +355,22 @@ export const PROJECT_SORTS = [
 ] as const;
 
 export type ProjectSort = (typeof PROJECT_SORTS)[number]["value"];
+
+/**
+ * VIEW-1 (0097) — the five questions the board gets asked.
+ *
+ * The month grouping is the record of what was booked and when; it is a poor
+ * way to ask "what is due next week" or "what is stuck in review". Same data,
+ * five layouts, remembered per user.
+ *
+ * The timeline lives on /projects/reports (PLAN-6) rather than being drawn a
+ * second time here — the switcher links to it.
+ */
+export const PROJECT_VIEW_MODES = [
+  { value: "board", label: "Month board", hint: "Grouped by the month a project was booked" },
+  { value: "kanban", label: "Kanban", hint: "Columns by delivery stage" },
+  { value: "table", label: "Table", hint: "Every project, one row each" },
+  { value: "calendar", label: "Calendar", hint: "Placed on the month they are due" },
+] as const;
+
+export type ProjectViewMode = (typeof PROJECT_VIEW_MODES)[number]["value"];

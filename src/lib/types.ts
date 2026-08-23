@@ -20,6 +20,12 @@ export type ProjectDocumentRequest =
   Tables["project_document_requests"]["Row"];
 export type ProjectExpense = Tables["project_expenses"]["Row"];
 export type ProjectTemplate = Tables["project_templates"]["Row"];
+/** 0097 — a saved set of board filters (VIEW-2). */
+export type ProjectSavedView = Tables["project_views"]["Row"];
+/** 0098 — what a finished project taught us (AI-6). */
+export type ProjectLesson = Tables["project_lessons"]["Row"];
+/** 0098 — a rule-based duplicate/anomaly flag (AI-9). */
+export type ProjectAnomaly = Tables["project_anomalies"]["Row"];
 export type ProjectTemplateItem = Tables["project_template_items"]["Row"];
 export type ProjectMilestone = Tables["project_milestones"]["Row"];
 export type ProjectMember = Tables["project_members"]["Row"];
@@ -166,6 +172,11 @@ export type {
   WaCampaignStatus,
   DeliveryStage,
   AssetCategory,
+  // 0098 — Projects theme 5 (AI)
+  ProjectLessonCategory,
+  ProjectLessonStatus,
+  ProjectAnomalyKind,
+  ProjectAnomalyStatus,
   AssetRequestStatus,
   AssetRequestSource,
   DeliveryEventKind,

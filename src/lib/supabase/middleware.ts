@@ -39,6 +39,12 @@ const PUBLIC_PREFIXES = [
   // hand-picked set of client-safe fields, and every server action re-resolves
   // the token to a project before it writes anything.
   "/public",
+  // The client account portal (BIG-1, 0099). Clients are never Supabase users
+  // — they hold their OWN signed cookie, checked by currentClientId(). Every
+  // page under here redirects to /portal/login itself when that cookie is
+  // missing, so leaving it out of this list would send clients to the TEAM's
+  // login screen instead.
+  "/portal",
   // Netlify functions (the scheduled automation tick) are invoked server-to-
   // server with no auth cookie. The catch-all proxy matcher runs on these paths
   // too, so without this they'd be redirected to /login. Harmless to keep even

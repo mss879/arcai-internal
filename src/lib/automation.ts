@@ -3,8 +3,10 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type {
+  AssetCategory,
   AutomationTrigger,
   Database,
+  ProjectStatus,
 } from "@/lib/database.types";
 import { appLink } from "@/lib/app-url";
 import { DELIVERY_STAGES } from "@/lib/constants";
@@ -84,6 +86,12 @@ export async function fireAutomationTrigger(
       .eq("is_active", true);
     if (!automations?.length) return;
 
+    // AUTO-7 (0096) — one project can be stood down without pausing the
+    // automation for every other job it runs on. Checked here rather than in
+    // each caller so it holds for delivery stage moves and payments too.
+    if (event.project && (await isProjectAutomationPaused(supabase, event.project.id)))
+      return;
+
     for (const automation of automations) {
       if (!matchesTriggerConfig(automation, event)) continue;
       if (event.lead && !passesConditions(automation, event.lead)) continue;
@@ -92,6 +100,19 @@ export async function fireAutomationTrigger(
   } catch (e) {
     console.error("[automation] fireAutomationTrigger failed:", e);
   }
+}
+
+/** AUTO-7 — is every automation stood down for this project? */
+async function isProjectAutomationPaused(
+  supabase: DB,
+  projectId: string,
+): Promise<boolean> {
+  const { data } = await supabase
+    .from("projects")
+    .select("automation_paused")
+    .eq("id", projectId)
+    .maybeSingle();
+  return Boolean(data?.automation_paused);
 }
 
 function matchesTriggerConfig(automation: Automation, event: TriggerEvent): boolean {
@@ -129,6 +150,29 @@ function matchesTriggerConfig(automation: Automation, event: TriggerEvent): bool
     case "project_stage_changed":
       // No stage filter = any delivery-stage move.
       return !cfg.stage || event.payload?.new_stage === cfg.stage;
+
+    // 0096 — project triggers. Every filter is optional: blank fires on all.
+    case "project_created":
+    case "project_completed": {
+      const service = String(cfg.service_type ?? "").trim().toLowerCase();
+      if (!service) return true;
+      return String(event.payload?.service_type ?? "").toLowerCase() === service;
+    }
+    case "expense_added": {
+      const category = String(cfg.category ?? "").trim().toLowerCase();
+      if (category && String(event.payload?.category ?? "").toLowerCase() !== category)
+        return false;
+      const min = Number(cfg.min_amount ?? 0);
+      if (min > 0 && Number(event.payload?.amount ?? 0) < min) return false;
+      return true;
+    }
+    case "milestone_completed": {
+      const keyword = String(cfg.keyword ?? "").trim().toLowerCase();
+      if (!keyword) return true;
+      return String(event.payload?.milestone ?? "")
+        .toLowerCase()
+        .includes(keyword);
+    }
     default:
       return true;
   }
@@ -306,6 +350,23 @@ export async function processDueAutomationRuns(
   const activeIds = new Set(
     (automations ?? []).filter((a) => a.is_active).map((a) => a.id),
   );
+
+  // AUTO-7 (0096) — a paused project's in-flight runs stand still too, or a
+  // pause would only stop new enrolments while yesterday's chase ladder kept
+  // firing. They resume from the same step the moment it is un-paused.
+  const projectIds = Array.from(
+    new Set(dueRuns.map((r) => r.project_id).filter((id): id is string => !!id)),
+  );
+  const pausedProjects = new Set<string>();
+  if (projectIds.length) {
+    const { data: paused } = await supabase
+      .from("projects")
+      .select("id")
+      .in("id", projectIds)
+      .eq("automation_paused", true);
+    for (const row of paused ?? []) pausedProjects.add(row.id);
+  }
+
   const triggerById = new Map(
     (automations ?? []).map((a) => [a.id, a.trigger]),
   );
@@ -318,6 +379,7 @@ export async function processDueAutomationRuns(
 
   for (const run of dueRuns) {
     if (!activeIds.has(run.automation_id)) continue; // paused automation
+    if (run.project_id && pausedProjects.has(run.project_id)) continue; // paused project
     result.processed++;
     const ok = await advanceRun(
       supabase,
@@ -348,6 +410,10 @@ export async function scanTimeBasedTriggers(supabase: DB): Promise<number> {
       "invoice_unpaid",
       "installment_due",
       "cheque_due",
+      // 0096 — project timers
+      "project_due_soon",
+      "project_overdue",
+      "balance_overdue",
     ]);
   if (!automations?.length) return 0;
 
@@ -488,6 +554,129 @@ export async function scanTimeBasedTriggers(supabase: DB): Promise<number> {
           }
           break;
         }
+        // -------------------------------------------------------------
+        // 0096 — project timers (AUTO-1)
+        //
+        // All three resolve the project through projectEventBase(), so a
+        // paused project (AUTO-7) is skipped and every run carries the same
+        // client + portal_link tokens the event triggers do.
+        // -------------------------------------------------------------
+        case "project_due_soon":
+        case "project_overdue": {
+          const overdue = automation.trigger === "project_overdue";
+          const days = Math.max(0, Number(cfg.days ?? (overdue ? 0 : 3)));
+          const boundary = new Date(
+            now + (overdue ? -days : days) * 24 * 3600_000,
+          )
+            .toISOString()
+            .slice(0, 10);
+
+          let q = supabase
+            .from("projects")
+            .select("id, due_date")
+            .is("deleted_at", null)
+            .eq("automation_paused", false)
+            .in("status", ["planning", "active", "on_hold"])
+            .not("due_date", "is", null);
+          // due_soon: from today up to the horizon.
+          // overdue: at or before the boundary AND strictly before today —
+          // the second guard matters at days = 0, where the boundary IS
+          // today and a project due this afternoon is not yet late.
+          q = overdue
+            ? q.lte("due_date", boundary).lt("due_date", today)
+            : q.gte("due_date", today).lte("due_date", boundary);
+
+          const { data: projects } = await q.limit(100);
+          if (!projects?.length) break;
+
+          const { projectEventBase } = await import("@/lib/project-events");
+          for (const row of projects) {
+            const base = await projectEventBase(supabase, row.id);
+            if (!base) continue;
+            // Whole calendar days, both sides read as UTC midnight. Comparing
+            // the due date against `now` instead would report a project due
+            // yesterday as two days overdue by mid-afternoon.
+            const diff = Math.round(
+              (Date.parse(`${row.due_date}T00:00:00Z`) -
+                Date.parse(`${today}T00:00:00Z`)) /
+                (24 * 3600_000),
+            );
+            await enrollRun(supabase, automation, {
+              trigger: automation.trigger,
+              project: base.project,
+              client: base.client,
+              payload: {
+                ...base.payload,
+                days_left: Math.max(0, diff),
+                days_overdue: Math.max(0, -diff),
+              },
+              // Keyed on the deadline: moving the date re-arms the trigger,
+              // and leaving it alone never fires twice.
+              triggerKey: `${row.id}:${automation.trigger}:${row.due_date}`,
+            });
+            enrolled++;
+          }
+          break;
+        }
+        case "balance_overdue": {
+          const days = Math.max(0, Number(cfg.days ?? 7));
+          const cutoff = new Date(now - days * 24 * 3600_000).toISOString();
+          const { data: projects } = await supabase
+            .from("projects")
+            .select("id, currency, total_value, deposit_paid")
+            .is("deleted_at", null)
+            .eq("automation_paused", false)
+            .eq("delivery_stage", "delivered")
+            .gt("total_value", 0)
+            .lt("delivery_stage_changed_at", cutoff)
+            .limit(100);
+          if (!projects?.length) break;
+
+          // One round-trip for the money, not one per project. Both ledgers,
+          // because settledAmount() reconciles across them.
+          const ids = projects.map((p) => p.id);
+          const [{ data: own }, { data: linked }] = await Promise.all([
+            supabase
+              .from("payments")
+              .select("project_id, amount, status")
+              .in("project_id", ids),
+            supabase
+              .from("company_payments")
+              .select("project_id, price_lkr, is_paid")
+              .in("project_id", ids),
+          ]);
+
+          const { balanceDue } = await import("@/lib/projects");
+          const { projectEventBase } = await import("@/lib/project-events");
+          for (const row of projects) {
+            const balance = balanceDue({
+              total_value: row.total_value,
+              deposit_paid: row.deposit_paid,
+              payments: (own ?? []).filter((p) => p.project_id === row.id),
+              company_payments: (linked ?? []).filter(
+                (p) => p.project_id === row.id,
+              ),
+            });
+            if (balance <= 0) continue;
+            const base = await projectEventBase(supabase, row.id);
+            if (!base) continue;
+            await enrollRun(supabase, automation, {
+              trigger: "balance_overdue",
+              project: base.project,
+              client: base.client,
+              payload: {
+                ...base.payload,
+                balance,
+                amount: `${row.currency} ${balance.toLocaleString()}`,
+                days_since_delivery: days,
+              },
+              // Re-fires when the ladder is widened, not every tick.
+              triggerKey: `${row.id}:balance_overdue:${days}`,
+            });
+            enrolled++;
+          }
+          break;
+        }
         case "cheque_due": {
           const daysBefore = Math.max(0, Number(cfg.days_before ?? 1));
           const target = new Date(now + daysBefore * 24 * 3600_000)
@@ -572,6 +761,13 @@ function isNudgeTrigger(
       // ask, testimonial, aftercare); by send time the client did nothing
       // recent, so they must respect quiet hours like any other nudge.
       "project_delivered",
+      // 0096 — every project timer is unprompted by definition: nobody did
+      // anything, a date passed. Chasing a deadline at 2am is still a chase.
+      "project_due_soon",
+      "project_overdue",
+      "balance_overdue",
+      "project_stalled",
+      "expenses_over_budget",
     ].includes(trigger)
   ) {
     return true;
@@ -1206,6 +1402,11 @@ async function executeStep(
           name,
           description: `Created automatically when the deposit landed${run.subject_name ? ` — client: ${run.subject_name}` : ""}.`,
           client_id: run.client_id,
+          // BIG-2 (0099) — the run already knows where it came from, so record
+          // it. A project created by automation is exactly the case where
+          // nobody will ever go back and link it by hand.
+          lead_id: run.lead_id,
+          quote_id: ctx.quote_id ? String(ctx.quote_id) : null,
           status: "planning",
           budget,
           total_value: Number(String(ctx.total ?? "")) || null,
@@ -1299,7 +1500,562 @@ async function executeStep(
       return { ok: res.ok, detail: res.detail };
     }
 
+    // -----------------------------------------------------------------
+    // 0096 — Projects theme 6 (AUTO-2).
+    //
+    // All ten work on the run's project. A run with no project is a
+    // configuration mistake, not a failure: they say so and let the rest of
+    // the flow (the create_task / notify fallbacks) still run, exactly like
+    // start_wa_onboarding does.
+    // -----------------------------------------------------------------
+
+    case "create_project_invoice": {
+      const projectId = runProjectId(run);
+      if (!projectId) return { ok: true, detail: NO_PROJECT };
+      const { generateProjectInvoice } = await import("@/lib/project-automation");
+      const res = await generateProjectInvoice(supabase, projectId);
+
+      // Nothing outstanding is a perfectly good outcome for a recipe that
+      // bills on delivery — the client already paid in full. The tokens are
+      // written EITHER WAY, blank when there is no invoice: renderTokens
+      // leaves an unknown {{token}} standing in the text, so a message that
+      // mentions the invoice would otherwise go out to the client reading
+      // "Your invoice {{invoice_number}} is here: {{invoice_link}}".
+      if (!res.ok) {
+        await patchRunContext(supabase, run, {
+          invoice_id: "",
+          invoice_number: "",
+          invoice_total: "",
+          invoice_link: "",
+          invoice_line: "",
+        });
+        return { ok: true, detail: `No invoice raised — ${res.detail}` };
+      }
+
+      const { data: invoice } = await supabase
+        .from("invoices")
+        .select("share_token")
+        .eq("id", res.invoiceId)
+        .maybeSingle();
+      const link = invoice?.share_token
+        ? appLink(`/public/invoice/${invoice.share_token}`)
+        : null;
+      await patchRunContext(supabase, run, {
+        invoice_id: res.invoiceId,
+        invoice_number: res.invoiceNumber,
+        invoice_total: res.total,
+        invoice_link: link ?? "",
+        // A whole clause rather than a bare value, so one message template
+        // reads correctly whether or not there was anything left to bill.
+        invoice_line: link
+          ? `Your invoice ${res.invoiceNumber} is here: ${link} `
+          : `Your invoice ${res.invoiceNumber} is on its way. `,
+      });
+      return {
+        ok: true,
+        detail: `Invoice ${res.invoiceNumber} — ${res.total.toLocaleString()} due`,
+      };
+    }
+
+    case "send_portal_link": {
+      const projectId = runProjectId(run);
+      if (!projectId) return { ok: true, detail: NO_PROJECT };
+      const { data: project } = await supabase
+        .from("projects")
+        .select("share_token, portal_passcode, portal_revoked_at")
+        .eq("id", projectId)
+        .maybeSingle();
+      if (!project?.share_token)
+        return { ok: false, detail: "This project has no portal link yet." };
+      if (project.portal_revoked_at)
+        return { ok: false, detail: "The portal link is revoked." };
+
+      const link = appLink(`/public/project/${project.share_token}`);
+      if (!link)
+        return { ok: false, detail: "NEXT_PUBLIC_APP_URL isn't set — no link to send." };
+
+      const { projectClientContact, sendClientSms, firstName } = await import(
+        "@/lib/project-sms"
+      );
+      const contact = await projectClientContact(supabase, projectId);
+      if ("error" in contact) return { ok: false, detail: contact.error };
+
+      const { portalMessage } = await import("@/lib/portal-copy");
+      const note = renderTokens(String(cfg.note ?? ""), run, lead).trim();
+      const message = portalMessage({
+        name: firstName(contact.clientName),
+        projectName: contact.projectName,
+        link,
+        passcode: project.portal_passcode,
+        note: note || undefined,
+      });
+
+      const sent = await sendClientSms(supabase, {
+        contact,
+        message,
+        kind: "custom",
+        actorId: null,
+        eventDetail: "Portal link texted by an automation",
+      });
+      if (!sent.ok) return { ok: false, detail: sent.error };
+
+      await supabase
+        .from("projects")
+        .update({ portal_last_sent_at: new Date().toISOString() })
+        .eq("id", projectId);
+      return { ok: true, detail: `Portal link to ${sent.to}` };
+    }
+
+    case "seed_task_template": {
+      const projectId = runProjectId(run);
+      if (!projectId) return { ok: true, detail: NO_PROJECT };
+
+      // A named template wins; otherwise fall back to the one matching the
+      // project's service type, so one recipe covers every service.
+      let templateId = String(cfg.template_id ?? "").trim();
+      if (!templateId) {
+        const { data: project } = await supabase
+          .from("projects")
+          .select("service_type")
+          .eq("id", projectId)
+          .maybeSingle();
+        const service = (project?.service_type ?? "").trim();
+        if (!service)
+          return { ok: true, detail: "Skipped — no template picked and no service type to match." };
+        const { data: match } = await supabase
+          .from("project_templates")
+          .select("id")
+          .ilike("service_type", service)
+          .limit(1)
+          .maybeSingle();
+        if (!match)
+          return { ok: true, detail: `Skipped — no template for "${service}".` };
+        templateId = match.id;
+      }
+
+      const { applyProjectTemplate } = await import("@/lib/project-templates");
+      const res = await applyProjectTemplate(supabase, projectId, templateId);
+      if (!res.ok) return { ok: false, detail: res.error };
+      return {
+        ok: true,
+        detail: `Seeded ${res.tasks} task(s), ${res.milestones} milestone(s), ${res.checks} check(s), ${res.assets} asset(s)`,
+      };
+    }
+
+    case "assign_member": {
+      const projectId = runProjectId(run);
+      if (!projectId) return { ok: true, detail: NO_PROJECT };
+      const userId = String(cfg.user_id ?? "").trim();
+      // Soft: this step ships inside recipes that can't know your team, so an
+      // unconfigured one has to say so without killing the rest of the flow.
+      if (!userId)
+        return {
+          ok: true,
+          detail: "Skipped — no teammate picked yet. Open this step and choose one.",
+        };
+      const role = String(cfg.role ?? "").trim() || null;
+      const isOwner = Boolean(cfg.is_owner);
+
+      // One row per person per project — the same guard the Team card uses.
+      const { data: existing } = await supabase
+        .from("project_members")
+        .select("id")
+        .eq("project_id", projectId)
+        .eq("user_id", userId)
+        .maybeSingle();
+      if (existing) {
+        await supabase
+          .from("project_members")
+          .update({ role, is_owner: isOwner })
+          .eq("id", existing.id);
+      } else {
+        const { error } = await supabase
+          .from("project_members")
+          .insert({ project_id: projectId, user_id: userId, role, is_owner: isOwner });
+        if (error) return { ok: false, detail: error.message };
+      }
+      // Only one owner at a time.
+      if (isOwner) {
+        await supabase
+          .from("project_members")
+          .update({ is_owner: false })
+          .eq("project_id", projectId)
+          .neq("user_id", userId);
+      }
+
+      const projectName = String(
+        (run.context as Record<string, unknown>)?.project_name ?? "a project",
+      );
+      const title = isOwner ? "You now own a project" : "You're on a project";
+      await supabase.from("notifications").insert({
+        user_id: userId,
+        type: "assignment",
+        title,
+        body: projectName,
+        link: `/projects/${projectId}`,
+      });
+      await sendPushToUser({
+        userId,
+        title,
+        body: projectName,
+        link: `/projects/${projectId}`,
+      });
+      return { ok: true, detail: `Assigned${role ? ` as ${role}` : ""}` };
+    }
+
+    case "request_asset": {
+      const projectId = runProjectId(run);
+      if (!projectId) return { ok: true, detail: NO_PROJECT };
+      const title = renderTokens(String(cfg.title ?? ""), run, lead).trim();
+      if (!title) return { ok: false, detail: "The asset request needs a title." };
+
+      // Asking twice for the same thing is how a checklist loses its meaning.
+      const { data: already } = await supabase
+        .from("project_document_requests")
+        .select("id")
+        .eq("project_id", projectId)
+        .ilike("title", title)
+        .limit(1)
+        .maybeSingle();
+      if (already) return { ok: true, detail: `"${title}" is already on the checklist.` };
+
+      const category = String(cfg.category ?? "").trim().toLowerCase();
+      const { error } = await supabase.from("project_document_requests").insert({
+        project_id: projectId,
+        title,
+        description:
+          renderTokens(String(cfg.description ?? ""), run, lead).trim() || null,
+        category: (ASSET_CATEGORIES as string[]).includes(category)
+          ? (category as AssetCategory)
+          : null,
+        required: cfg.required !== false,
+        source: "team",
+      });
+      if (error) return { ok: false, detail: error.message };
+      return { ok: true, detail: `Asked for "${title}"` };
+    }
+
+    case "add_expense": {
+      const projectId = runProjectId(run);
+      if (!projectId) return { ok: true, detail: NO_PROJECT };
+      const description = renderTokens(
+        String(cfg.description ?? ""),
+        run,
+        lead,
+      ).trim();
+      const unitAmount = Number(cfg.amount ?? 0);
+      if (!description) return { ok: false, detail: "The expense needs a description." };
+      if (!Number.isFinite(unitAmount) || unitAmount <= 0)
+        return { ok: false, detail: "The expense needs a positive amount." };
+
+      const { data: project } = await supabase
+        .from("projects")
+        .select("currency")
+        .eq("id", projectId)
+        .maybeSingle();
+      const { error } = await supabase.from("project_expenses").insert({
+        project_id: projectId,
+        description,
+        detail: renderTokens(String(cfg.detail ?? ""), run, lead).trim() || null,
+        category: String(cfg.category ?? "").trim() || null,
+        vendor: String(cfg.vendor ?? "").trim() || null,
+        qty: 1,
+        unit_amount: unitAmount,
+        currency: project?.currency || "LKR",
+        billable: cfg.billable !== false,
+        created_by: null,
+      });
+      if (error) return { ok: false, detail: error.message };
+      return { ok: true, detail: `${description} — ${unitAmount.toLocaleString()}` };
+    }
+
+    case "set_project_status": {
+      const projectId = runProjectId(run);
+      if (!projectId) return { ok: true, detail: NO_PROJECT };
+      const status = String(cfg.status ?? "");
+      if (!(PROJECT_STATUSES as string[]).includes(status))
+        return { ok: false, detail: `"${status}" is not a project status.` };
+
+      const { data: before } = await supabase
+        .from("projects")
+        .select("status")
+        .eq("id", projectId)
+        .maybeSingle();
+      if (before?.status === status)
+        return { ok: true, detail: `Already ${status}.` };
+
+      const { error } = await supabase
+        .from("projects")
+        .update({ status: status as ProjectStatus })
+        .eq("id", projectId);
+      if (error) return { ok: false, detail: error.message };
+
+      // Closing a project this way must fire project_completed, or a status
+      // set by a recipe would be invisible to the recipes listening for it.
+      if (status === "completed") {
+        const { fireProjectCompleted } = await import("@/lib/project-events");
+        await fireProjectCompleted(supabase, projectId);
+      }
+      return { ok: true, detail: `Status → ${status}` };
+    }
+
+    case "create_payment_plan": {
+      const projectId = runProjectId(run);
+      if (!projectId) return { ok: true, detail: NO_PROJECT };
+      const { data: project } = await supabase
+        .from("projects")
+        .select("id, name, currency, client_id, total_value, deposit_paid")
+        .eq("id", projectId)
+        .maybeSingle();
+      if (!project) return { ok: false, detail: "Project not found." };
+
+      // One plan per project: a second schedule for the same money is how a
+      // client ends up chased twice for one instalment.
+      const { data: existingPlan } = await supabase
+        .from("payment_plans")
+        .select("id")
+        .eq("project_id", projectId)
+        .neq("status", "cancelled")
+        .limit(1)
+        .maybeSingle();
+      if (existingPlan)
+        return { ok: true, detail: "This project already has a payment plan." };
+
+      const [{ data: own }, { data: linked }] = await Promise.all([
+        supabase.from("payments").select("amount, status").eq("project_id", projectId),
+        supabase
+          .from("company_payments")
+          .select("price_lkr, is_paid")
+          .eq("project_id", projectId),
+      ]);
+      const { balanceDue } = await import("@/lib/projects");
+      const outstanding = balanceDue({
+        total_value: project.total_value,
+        deposit_paid: project.deposit_paid,
+        payments: own ?? [],
+        company_payments: linked ?? [],
+      });
+      if (outstanding <= 0)
+        return { ok: true, detail: "Nothing left to schedule — fully paid." };
+
+      const count = Math.min(12, Math.max(1, Number(cfg.installments ?? 2)));
+      const everyDays = Math.max(1, Number(cfg.every_days ?? 30));
+      const startInDays = Math.max(0, Number(cfg.start_in_days ?? everyDays));
+
+      const { data: plan, error } = await supabase
+        .from("payment_plans")
+        .insert({
+          title: `${project.name} — balance`,
+          client_id: project.client_id,
+          project_id: projectId,
+          contact_name: run.subject_name || "",
+          phone: run.subject_phone,
+          total: outstanding,
+          currency: project.currency,
+          status: "active",
+          remind_days_before: Number(cfg.remind_days_before ?? 2),
+          created_by: null,
+        })
+        .select("id")
+        .single();
+      if (error || !plan)
+        return { ok: false, detail: error?.message ?? "Payment plan insert failed." };
+
+      // Rounded to whole rupees, with the rounding dust on the last one so
+      // the instalments always add back up to the balance exactly.
+      const each = Math.floor(outstanding / count);
+      const rows = Array.from({ length: count }, (_, i) => {
+        const due = new Date(Date.now() + (startInDays + i * everyDays) * 24 * 3600_000);
+        return {
+          plan_id: plan.id,
+          seq: i + 1,
+          amount: i === count - 1 ? outstanding - each * (count - 1) : each,
+          due_date: due.toISOString().slice(0, 10),
+        };
+      });
+      const { error: instError } = await supabase
+        .from("payment_installments")
+        .insert(rows);
+      if (instError) return { ok: false, detail: instError.message };
+
+      await patchRunContext(supabase, run, { plan_id: plan.id, plan_total: outstanding });
+      return {
+        ok: true,
+        detail: `${count} instalment(s) of ~${each.toLocaleString()} ${project.currency}`,
+      };
+    }
+
+    case "schedule_meeting": {
+      const projectId = runProjectId(run);
+      const title =
+        renderTokens(String(cfg.title ?? ""), run, lead).trim() ||
+        `Call — ${String((run.context as Record<string, unknown>)?.project_name ?? run.subject_name ?? "client")}`;
+      const inDays = Math.max(0, Number(cfg.in_days ?? 1));
+      const hour = Math.min(23, Math.max(0, Number(cfg.hour ?? 10)));
+
+      const when = new Date(Date.now() + inDays * 24 * 3600_000);
+      when.setHours(hour, 0, 0, 0);
+
+      const { data: project } = projectId
+        ? await supabase
+            .from("projects")
+            .select("client_id")
+            .eq("id", projectId)
+            .maybeSingle()
+        : { data: null };
+
+      const { data: meeting, error } = await supabase
+        .from("meetings")
+        .insert({
+          title,
+          description:
+            renderTokens(String(cfg.description ?? ""), run, lead).trim() || null,
+          meeting_at: when.toISOString(),
+          duration_minutes: Math.max(5, Number(cfg.duration_minutes ?? 30)),
+          location_type: cfg.location_type === "in_person" ? "in_person" : "online",
+          location: String(cfg.location ?? "").trim() || null,
+          meeting_url: String(cfg.meeting_url ?? "").trim() || null,
+          reminder_hours: Math.min(5, Math.max(1, Number(cfg.reminder_hours ?? 2))),
+          client_id: project?.client_id ?? run.client_id,
+          created_by: null,
+        })
+        .select("id")
+        .single();
+      if (error || !meeting)
+        return { ok: false, detail: error?.message ?? "Meeting insert failed." };
+
+      await patchRunContext(supabase, run, {
+        meeting_id: meeting.id,
+        meeting_at: when.toISOString(),
+      });
+      return { ok: true, detail: `${title} — ${when.toLocaleString()}` };
+    }
+
+    case "draft_client_update": {
+      const projectId = runProjectId(run);
+      if (!projectId) return { ok: true, detail: NO_PROJECT };
+      const { isOpenAIConfigured, openaiChat } = await import("@/lib/ai/openai");
+      if (!isOpenAIConfigured())
+        return { ok: false, detail: "OPENAI_API_KEY is not configured." };
+
+      // Everything the update should be grounded in: where the project is,
+      // what has actually been finished, and what is still outstanding.
+      const [projectRes, milestonesRes, assetsRes, eventsRes] = await Promise.all([
+        supabase
+          .from("projects")
+          .select("name, status, delivery_stage, due_date, description")
+          .eq("id", projectId)
+          .maybeSingle(),
+        supabase
+          .from("project_milestones")
+          .select("title, status, due_date")
+          .eq("project_id", projectId)
+          .eq("kind", "milestone")
+          .order("position", { ascending: true })
+          .limit(20),
+        supabase
+          .from("project_document_requests")
+          .select("title, status, required")
+          .eq("project_id", projectId)
+          .limit(20),
+        supabase
+          .from("delivery_events")
+          .select("kind, detail, created_at")
+          .eq("project_id", projectId)
+          .order("created_at", { ascending: false })
+          .limit(10),
+      ]);
+      const project = projectRes.data;
+      if (!project) return { ok: false, detail: "Project not found." };
+
+      const done = (milestonesRes.data ?? []).filter((m) => m.status === "done");
+      const open = (milestonesRes.data ?? []).filter((m) => m.status !== "done");
+      const waiting = (assetsRes.data ?? []).filter(
+        (a) => a.status === "pending" && a.required,
+      );
+
+      const reply = await openaiChat([
+        {
+          role: "system",
+          content:
+            "You write short client progress updates for ARC AI, a Sri Lankan digital agency. Plain text, no markdown, no headings, no emoji. 3-5 sentences, warm and specific. Say what is done, what is next, and what (if anything) you need from them. Never invent work that isn't in the facts. Never mention money, margin or internal costs.",
+        },
+        {
+          role: "user",
+          content: [
+            `Project: ${project.name}`,
+            project.description ? `Brief: ${project.description}` : "",
+            `Delivery stage: ${project.delivery_stage ?? "not started"}`,
+            project.due_date ? `Due: ${project.due_date}` : "",
+            `Completed: ${done.map((m) => m.title).join(", ") || "(nothing yet)"}`,
+            `Still to do: ${open.map((m) => m.title).join(", ") || "(nothing listed)"}`,
+            `Waiting on the client for: ${waiting.map((a) => a.title).join(", ") || "(nothing)"}`,
+            `Recent activity:\n${(eventsRes.data ?? []).map((e) => `- ${e.created_at.slice(0, 10)} ${e.kind}: ${e.detail ?? ""}`).join("\n") || "(none)"}`,
+            cfg.instruction
+              ? `\nExtra instruction: ${renderTokens(String(cfg.instruction), run, lead)}`
+              : "",
+          ]
+            .filter(Boolean)
+            .join("\n"),
+        },
+      ]);
+      const text = (reply.content ?? "").trim();
+      if (!text) return { ok: false, detail: "AI returned nothing." };
+
+      // Filed as an internal note, never sent. A message to a client is a
+      // decision a person makes; this step only removes the blank page.
+      const { error } = await supabase.from("project_comments").insert({
+        project_id: projectId,
+        author_type: "team",
+        author_id: null,
+        author_name: "AI draft",
+        body: text,
+      });
+      if (error) return { ok: false, detail: error.message };
+
+      await patchRunContext(supabase, run, { client_update: text });
+      return { ok: true, detail: `Drafted ${text.length} chars — filed as a team note` };
+    }
+
     default:
       return { ok: false, detail: `Unknown step kind "${step.kind}".` };
   }
+}
+
+// ---------------------------------------------------------------------------
+// 0096 step helpers
+// ---------------------------------------------------------------------------
+
+const NO_PROJECT =
+  "Skipped — this run has no project. Fire it from a project trigger, or put a Create project step before it.";
+
+const PROJECT_STATUSES: ProjectStatus[] = [
+  "planning",
+  "active",
+  "on_hold",
+  "completed",
+  "cancelled",
+];
+
+const ASSET_CATEGORIES: AssetCategory[] = ["brand", "content", "photos", "access"];
+
+/** The project this run is about, from the run row or its context. */
+function runProjectId(run: Run): string {
+  const ctx = (run.context ?? {}) as Record<string, unknown>;
+  return run.project_id || String(ctx.project_id ?? "");
+}
+
+/**
+ * Merge values into the run's context so LATER steps can use them as
+ * {{tokens}} — an invoice number in the SMS that follows the invoice, a
+ * meeting time in the confirmation.
+ */
+async function patchRunContext(
+  supabase: DB,
+  run: Run,
+  patch: Record<string, unknown>,
+): Promise<void> {
+  const next = { ...((run.context ?? {}) as Record<string, unknown>), ...patch };
+  await supabase.from("automation_runs").update({ context: next }).eq("id", run.id);
+  run.context = next;
 }

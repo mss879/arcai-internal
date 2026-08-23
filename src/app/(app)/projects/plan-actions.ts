@@ -17,24 +17,10 @@ import {
 import { createClient } from "@/lib/supabase/server";
 import type {
   ActionResult,
-  AssetCategory,
   MilestoneKind,
   MilestoneStatus,
   TodoPriority,
 } from "@/lib/types";
-
-/** Template categories are free text; the asset checklist's are not. */
-const ASSET_CATEGORIES = new Set<AssetCategory>([
-  "brand",
-  "content",
-  "photos",
-  "access",
-]);
-
-function asAssetCategory(value: string | null): AssetCategory | null {
-  const v = (value ?? "").toLowerCase() as AssetCategory;
-  return ASSET_CATEGORIES.has(v) ? v : null;
-}
 
 async function authed() {
   const supabase = await createClient();
@@ -215,9 +201,20 @@ export async function setMilestoneStatus(
   if (status === "done") {
     const { data: milestone } = await supabase
       .from("project_milestones")
-      .select("notify_sms, notified_at")
+      .select("notify_sms, notified_at, title, kind")
       .eq("id", id)
       .maybeSingle();
+
+    // 0096 — a milestone landing is a trigger of its own. Keyed on the
+    // milestone id, so un-ticking and re-ticking can't re-run the flow.
+    if (milestone) {
+      const { fireMilestoneCompleted } = await import("@/lib/project-events");
+      await fireMilestoneCompleted(supabase, projectId, {
+        id,
+        title: milestone.title,
+        kind: milestone.kind,
+      });
+    }
     if (milestone?.notify_sms && !milestone.notified_at) {
       const { textMilestone } = await import("./client-sms-actions");
       const res = await textMilestone(id);
@@ -555,133 +552,11 @@ export async function applyTemplate(
   const { supabase, user } = await authed();
   if (!user) return { ok: false, error: "Not authenticated." };
 
-  const [projectRes, itemsRes, membersRes] = await Promise.all([
-    supabase
-      .from("projects")
-      .select("id, start_date, currency")
-      .eq("id", projectId)
-      .maybeSingle(),
-    supabase
-      .from("project_template_items")
-      .select("*")
-      .eq("template_id", templateId)
-      .order("kind", { ascending: true })
-      .order("position", { ascending: true }),
-    supabase
-      .from("project_members")
-      .select("user_id, role")
-      .eq("project_id", projectId),
-  ]);
-
-  const project = projectRes.data;
-  if (!project) return { ok: false, error: "Project not found." };
-  const items = itemsRes.data ?? [];
-  if (items.length === 0)
-    return { ok: false, error: "That template has no items in it yet." };
-
-  const start = project.start_date
-    ? new Date(`${project.start_date}T00:00:00`)
-    : new Date();
-  const dateFor = (offset: number | null): string | null => {
-    if (offset === null || offset === undefined) return null;
-    const d = new Date(start);
-    d.setDate(d.getDate() + offset);
-    return d.toISOString().slice(0, 10);
-  };
-
-  // Template items name a ROLE; the project names PEOPLE. Match them up so a
-  // seeded task lands on whoever holds that role on this project.
-  const byRole = new Map<string, string>();
-  for (const m of membersRes.data ?? []) {
-    if (m.role) byRole.set(m.role.toLowerCase(), m.user_id);
-  }
-
-  const [todosRes, requestsRes, milestonesRes] = await Promise.all([
-    supabase.from("todos").select("title").eq("project_id", projectId),
-    supabase
-      .from("project_document_requests")
-      .select("title")
-      .eq("project_id", projectId),
-    supabase
-      .from("project_milestones")
-      .select("title, kind")
-      .eq("project_id", projectId),
-  ]);
-  const haveTodos = new Set(
-    (todosRes.data ?? []).map((t) => t.title.toLowerCase()),
-  );
-  const haveAssets = new Set(
-    (requestsRes.data ?? []).map((r) => r.title.toLowerCase()),
-  );
-  const haveMilestones = new Set(
-    (milestonesRes.data ?? []).map((m) => `${m.kind}:${m.title.toLowerCase()}`),
-  );
-
-  const todoRows = [];
-  const assetRows = [];
-  const milestoneRows = [];
-
-  for (const item of items) {
-    if (item.kind === "task") {
-      if (haveTodos.has(item.title.toLowerCase())) continue;
-      const due = dateFor(item.offset_days);
-      todoRows.push({
-        title: item.title,
-        description: item.detail,
-        priority: item.priority,
-        project_id: projectId,
-        assigned_to: item.role ? byRole.get(item.role.toLowerCase()) ?? null : null,
-        due_date: due ? `${due}T17:00:00` : null,
-        position: item.position,
-      });
-    } else if (item.kind === "asset") {
-      if (haveAssets.has(item.title.toLowerCase())) continue;
-      assetRows.push({
-        project_id: projectId,
-        title: item.title,
-        description: item.detail,
-        category: asAssetCategory(item.category),
-        required: item.required,
-        position: item.position,
-        source: "team" as const,
-      });
-    } else {
-      const key = `${item.kind}:${item.title.toLowerCase()}`;
-      if (haveMilestones.has(key)) continue;
-      milestoneRows.push({
-        project_id: projectId,
-        title: item.title,
-        detail: item.detail,
-        kind: item.kind as "milestone" | "launch_check",
-        due_date: dateFor(item.offset_days),
-        position: item.position,
-        client_visible: item.kind === "milestone",
-        owner_id: item.role ? byRole.get(item.role.toLowerCase()) ?? null : null,
-      });
-    }
-  }
-
-  if (todoRows.length) {
-    const { error } = await supabase.from("todos").insert(todoRows);
-    if (error) return { ok: false, error: error.message };
-  }
-  if (assetRows.length) {
-    const { error } = await supabase
-      .from("project_document_requests")
-      .insert(assetRows);
-    if (error) return { ok: false, error: error.message };
-  }
-  if (milestoneRows.length) {
-    const { error } = await supabase
-      .from("project_milestones")
-      .insert(milestoneRows);
-    if (error) return { ok: false, error: error.message };
-  }
-
-  await supabase
-    .from("projects")
-    .update({ template_id: templateId })
-    .eq("id", projectId);
+  // The seeding itself lives in @/lib/project-templates so the automation
+  // engine's seed_task_template step (0096) produces an identical project.
+  const { applyProjectTemplate } = await import("@/lib/project-templates");
+  const res = await applyProjectTemplate(supabase, projectId, templateId);
+  if (!res.ok) return { ok: false, error: res.error };
 
   touch(projectId);
   revalidatePath("/todos");
@@ -689,10 +564,10 @@ export async function applyTemplate(
 
   return {
     ok: true,
-    tasks: todoRows.length,
-    assets: assetRows.length,
-    milestones: milestoneRows.filter((m) => m.kind === "milestone").length,
-    checks: milestoneRows.filter((m) => m.kind === "launch_check").length,
+    tasks: res.tasks,
+    assets: res.assets,
+    milestones: res.milestones,
+    checks: res.checks,
   };
 }
 

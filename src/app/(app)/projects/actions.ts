@@ -43,6 +43,10 @@ export type ProjectInput = {
   invoice_url?: string | null;
   invoice_name?: string | null;
   invoice_path?: string | null;
+  /** 0099 — BIG-2: where this project came from. */
+  lead_id?: string | null;
+  quote_id?: string | null;
+  proposal_id?: string | null;
 };
 
 export async function saveProject(input: ProjectInput): Promise<ActionResult> {
@@ -62,6 +66,11 @@ export async function saveProject(input: ProjectInput): Promise<ActionResult> {
     total_value: input.total_value ?? 0.00,
     deposit_paid: input.deposit_paid ?? 0.00,
     service_type: input.service_type || null,
+    // BIG-2 — only written when passed, so an edit that doesn't touch the
+    // chain can never unlink a project from the deal that produced it.
+    ...(input.lead_id !== undefined ? { lead_id: input.lead_id } : {}),
+    ...(input.quote_id !== undefined ? { quote_id: input.quote_id } : {}),
+    ...(input.proposal_id !== undefined ? { proposal_id: input.proposal_id } : {}),
     // Documents are only written when the form actually passed them, so an
     // edit that doesn't touch the uploads can never blank an existing file.
     ...(input.proposal_url !== undefined
@@ -80,11 +89,32 @@ export async function saveProject(input: ProjectInput): Promise<ActionResult> {
       : {}),
   };
 
-  const { error } = input.id
-    ? await supabase.from("projects").update(payload).eq("id", input.id)
-    : await supabase.from("projects").insert(payload);
+  // 0096 — only a REAL transition into completed fires project_completed, so
+  // re-saving a finished project doesn't re-run its close-out flow.
+  const { data: before } = input.id
+    ? await supabase.from("projects").select("status").eq("id", input.id).maybeSingle()
+    : { data: null };
 
-  if (error) return { ok: false, error: error.message };
+  const saved = input.id
+    ? await supabase
+        .from("projects")
+        .update(payload)
+        .eq("id", input.id)
+        .select("id")
+        .single()
+    : await supabase.from("projects").insert(payload).select("id").single();
+
+  if (saved.error) return { ok: false, error: saved.error.message };
+
+  if (saved.data) {
+    const { fireProjectCompleted, fireProjectCreated } = await import(
+      "@/lib/project-events"
+    );
+    if (!input.id) await fireProjectCreated(supabase, saved.data.id, "team");
+    if (payload.status === "completed" && before?.status !== "completed")
+      await fireProjectCompleted(supabase, saved.data.id);
+  }
+
   revalidatePath("/projects");
   return { ok: true };
 }
@@ -341,11 +371,30 @@ export async function saveProjectExpense(
       : {}),
   };
 
-  const { error } = input.id
-    ? await supabase.from("project_expenses").update(payload).eq("id", input.id)
-    : await supabase.from("project_expenses").insert(payload);
+  const saved = input.id
+    ? await supabase
+        .from("project_expenses")
+        .update(payload)
+        .eq("id", input.id)
+        .select("id")
+        .single()
+    : await supabase.from("project_expenses").insert(payload).select("id").single();
 
-  if (error) return { ok: false, error: error.message };
+  if (saved.error) return { ok: false, error: saved.error.message };
+
+  // 0096 — a NEW cost is the event; editing one already recorded isn't.
+  if (!input.id && saved.data) {
+    const { fireExpenseAdded } = await import("@/lib/project-events");
+    await fireExpenseAdded(supabase, input.project_id, {
+      id: saved.data.id,
+      description: payload.description,
+      amount: qty * input.unit_amount,
+      category: payload.category,
+      vendor: payload.vendor,
+      billable: payload.billable,
+    });
+  }
+
   revalidatePath(`/projects/${input.project_id}`);
   revalidatePath("/projects");
   return { ok: true };
@@ -603,6 +652,45 @@ export async function setProjectBlocked(
 
   revalidatePath(`/projects/${projectId}`);
   revalidatePath("/projects");
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Per-project automation pause (AUTO-7, 0096)
+// ---------------------------------------------------------------------------
+
+/**
+ * Stand every automation down for ONE project.
+ *
+ * The alternative when a job goes sideways is pausing the automation itself,
+ * which stops it for every other client too. This is the smaller hammer: new
+ * triggers stop enrolling this project and its in-flight runs stand still at
+ * the step they reached, resuming from there when it is switched back on.
+ */
+export async function setProjectAutomationPaused(
+  projectId: string,
+  paused: boolean,
+): Promise<ActionResult> {
+  const { supabase, user } = await authed();
+  if (!user) return { ok: false, error: "Not authenticated." };
+
+  const { error } = await supabase
+    .from("projects")
+    .update({ automation_paused: paused })
+    .eq("id", projectId);
+  if (error) return { ok: false, error: error.message };
+
+  const { logDeliveryEvent } = await import("@/lib/delivery");
+  await logDeliveryEvent(
+    supabase,
+    projectId,
+    "stage_changed",
+    paused ? "Automations paused for this project" : "Automations resumed",
+    "team",
+    { automation_paused: paused },
+  );
+
+  revalidatePath(`/projects/${projectId}`);
   return { ok: true };
 }
 

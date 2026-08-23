@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { CSSProperties } from "react";
 import {
+  addDays,
   format,
   isPast,
   isToday,
@@ -17,12 +18,14 @@ import {
   DollarSign,
   FileSignature,
   FileText,
-  FolderKanban,
   KanbanSquare,
   ListChecks,
+  OctagonPause,
+  PackageCheck,
   TrendingUp,
   UserPlus,
   Users,
+  Wallet,
 } from "lucide-react";
 
 import { Calendar } from "@/components/dashboard/calendar";
@@ -31,6 +34,7 @@ import { QuickAddTask } from "@/components/dashboard/quick-add-task";
 import { PRIORITY_META } from "@/lib/constants";
 import { requireProfile } from "@/lib/auth";
 import { getMembers } from "@/lib/data";
+import { balanceDue, projectHealth } from "@/lib/projects";
 import { createClient } from "@/lib/supabase/server";
 import { cn, formatCurrency, formatTime12 } from "@/lib/utils";
 import type { Meeting, MeetingWithAttendees, NotificationLite, Todo } from "@/lib/types";
@@ -67,7 +71,7 @@ export default async function DashboardPage() {
   const [
     todosRes,
     members,
-    projectsCount,
+    projectsRes,
     clientsCount,
     bookingsRes,
     meetingsRes,
@@ -78,10 +82,14 @@ export default async function DashboardPage() {
   ] = await Promise.all([
     supabase.from("todos").select("*").order("due_date", { ascending: true }),
     getMembers(),
+    // VIEW-6 — an active-project COUNT told you nothing you could act on.
+    // These are the rows behind the four tiles that replaced it: health needs
+    // the money and the dates, "awaiting client" needs the blocked flag.
     supabase
       .from("projects")
-      .select("*", { count: "exact", head: true })
-      .eq("status", "active")
+      .select(
+        "id, status, delivery_stage, delivery_stage_changed_at, updated_at, due_date, blocked_since, blocked_reason, total_value, deposit_paid, currency, payments(amount, status), company_payments(price_lkr, is_paid)",
+      )
       // 0090 — archived projects are out of every count and board.
       .is("deleted_at", null),
     supabase.from("clients").select("*", { count: "exact", head: true }),
@@ -275,6 +283,91 @@ export default async function DashboardPage() {
     });
   }
 
+  /**
+   * VIEW-6 — four project tiles that ask for a decision, in place of a count
+   * that never did. Health uses the same projectHealth() the board's dots do,
+   * so a project that reads "at risk" here reads "at risk" there.
+   *
+   * Deliberately fed only the signals the dashboard can afford to fetch: the
+   * asset, task and milestone counts the board also feeds it would be three
+   * more full-table reads on the busiest page in the app, and their absence
+   * makes the score conservative — it can under-report risk, never invent it.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const dashProjects = (projectsRes.data ?? []) as any[];
+  const weekAhead = format(addDays(new Date(), 7), "yyyy-MM-dd");
+
+  let atRisk = 0;
+  let awaitingClient = 0;
+  let deliveringThisWeek = 0;
+  let cashOutstanding = 0;
+
+  for (const p of dashProjects) {
+    const open = ["planning", "active", "on_hold"].includes(p.status);
+
+    const balance = balanceDue({
+      total_value: p.total_value,
+      deposit_paid: p.deposit_paid,
+      payments: p.payments ?? [],
+      company_payments: p.company_payments ?? [],
+    });
+    cashOutstanding += balance;
+
+    if (!open) continue;
+
+    if (p.blocked_reason) awaitingClient++;
+    if (p.due_date && p.due_date >= today && p.due_date <= weekAhead)
+      deliveringThisWeek++;
+
+    const health = projectHealth({
+      status: p.status,
+      deliveryStage: p.delivery_stage,
+      stageChangedAt: p.delivery_stage_changed_at,
+      updatedAt: p.updated_at,
+      dueDate: p.due_date,
+      blockedSince: p.blocked_since,
+      assetsOutstanding: 0,
+      overdueTasks: 0,
+      overdueMilestones: 0,
+      balance,
+      daysSinceDelivered: null,
+      budget: null,
+      spend: 0,
+    });
+    if (health.tone === "risk") atRisk++;
+  }
+
+  const deliveryStats = [
+    {
+      label: "At risk",
+      value: String(atRisk),
+      icon: AlertTriangle,
+      href: "/projects?sort=health",
+      tint: "bg-rose-500/10 text-rose-600 border border-rose-500/10",
+    },
+    {
+      label: "Awaiting client",
+      value: String(awaitingClient),
+      icon: OctagonPause,
+      href: "/projects",
+      tint: "bg-amber-500/10 text-amber-600 border border-amber-500/10",
+    },
+    {
+      label: "Delivering this week",
+      value: String(deliveringThisWeek),
+      icon: PackageCheck,
+      href: "/projects",
+      tint: "bg-sky-500/10 text-sky-600 border border-sky-500/10",
+    },
+    {
+      label: "Cash outstanding",
+      value: formatCurrency(cashOutstanding),
+      icon: Wallet,
+      href: "/projects",
+      tint: "bg-violet-500/10 text-violet-600 border border-violet-500/10",
+    },
+  ];
+
   const stats = [
     {
       label: "Open tasks",
@@ -282,13 +375,6 @@ export default async function DashboardPage() {
       icon: ListChecks,
       href: "/todos",
       tint: "bg-primary-500/10 text-primary-600 border border-primary-500/10",
-    },
-    {
-      label: "Active projects",
-      value: String(projectsCount.count ?? 0),
-      icon: FolderKanban,
-      href: "/projects",
-      tint: "bg-amber-500/10 text-amber-600 border border-amber-500/10",
     },
     {
       label: "Clients",
@@ -400,7 +486,7 @@ export default async function DashboardPage() {
 
       {/* Stats */}
       <div
-        className="animate-rise-in grid grid-cols-2 gap-4 lg:grid-cols-4"
+        className="animate-rise-in grid grid-cols-2 gap-4 lg:grid-cols-3"
         style={rise(180)}
       >
         {stats.map((s, idx) => (
@@ -425,6 +511,40 @@ export default async function DashboardPage() {
                 {s.value}
               </p>
               <p className="mt-1 text-xs font-semibold uppercase tracking-wider text-slate-500">{s.label}</p>
+            </Link>
+          </div>
+        ))}
+      </div>
+
+      {/* Delivery (VIEW-6) — the project numbers worth acting on. */}
+      <div
+        className="animate-rise-in grid grid-cols-2 gap-4 lg:grid-cols-4"
+        style={rise(225)}
+      >
+        {deliveryStats.map((s, idx) => (
+          <div
+            key={s.label}
+            style={{ animationDelay: `${idx * 300}ms` }}
+            className="animate-continuous-float"
+          >
+            <Link
+              href={s.href}
+              className="block group rounded-2xl border border-white/30 bg-gradient-to-br from-white/60 to-white/25 p-5 shadow-sm backdrop-blur-xl transition-all duration-300 ease-out hover:-translate-y-1.5 hover:scale-[1.02] hover:from-white/75 hover:to-white/40 hover:border-primary-400 hover:shadow-md active:scale-[0.98]"
+            >
+              <span
+                className={cn(
+                  "grid h-11 w-11 place-items-center rounded-xl transition-transform duration-500 ease-out group-hover:scale-115 group-hover:rotate-6",
+                  s.tint,
+                )}
+              >
+                <s.icon className="h-5 w-5" />
+              </span>
+              <p className="mt-3 text-2xl font-extrabold tabular-nums tracking-tight text-slate-800">
+                {s.value}
+              </p>
+              <p className="mt-1 text-xs font-semibold uppercase tracking-wider text-slate-500">
+                {s.label}
+              </p>
             </Link>
           </div>
         ))}

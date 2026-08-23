@@ -751,6 +751,213 @@ export const AUTOMATION_RECIPES: AutomationRecipe[] = [
       },
     ],
   },
+
+  // -------------------------------------------------------------------------
+  // Projects theme 6 (0096) — the four recipes AUTO-3 … AUTO-6 name. Each one
+  // bundles the pieces that already existed into the sequence you'd otherwise
+  // run by hand, and each is opt-in like everything else here.
+  // -------------------------------------------------------------------------
+  {
+    id: "project-deposit-kickoff",
+    name: "Deposit → full kickoff 🚀",
+    description:
+      "The first payment on a project starts the whole job: the plan template is seeded (tasks, milestones, launch checks and the asset checklist), the team is staffed, the WhatsApp agent begins collecting assets, the client gets their portal link, and a kickoff call goes on the calendar. Open the Assign teammate step after installing and pick who runs it — until you do, that one step politely skips. Supersedes \"Payment received → full client onboarding\": install one or the other, not both.",
+    emoji: "🚀",
+    category: "delivery",
+    trigger: "payment_received",
+    trigger_config: { first_payment: true },
+    conditions: [],
+    steps: [
+      { kind: "set_project_status", config: { status: "active" } },
+      { kind: "seed_task_template", config: {} },
+      { kind: "assign_member", config: { user_id: "", role: "lead", is_owner: true } },
+      { kind: "start_wa_onboarding", config: {} },
+      { kind: "send_portal_link", config: { note: "Everything for the project lives here." } },
+      {
+        kind: "schedule_meeting",
+        config: {
+          title: "Kickoff call — {{project_name}}",
+          description: "Walk the client through the plan and confirm what we still need.",
+          in_days: 2,
+          hour: 10,
+          duration_minutes: 30,
+          location_type: "online",
+          reminder_hours: 2,
+        },
+      },
+      {
+        kind: "notify",
+        config: {
+          user_id: "all",
+          title: "Project kicked off 🚀",
+          body: "{{full_name}} paid {{amount}} — {{project_name}} is staffed, seeded and collecting assets.",
+        },
+      },
+    ],
+  },
+  {
+    id: "project-assets-to-build",
+    name: "Assets in → build starts 🔨",
+    description:
+      "The last required asset lands and the build actually begins: the project moves to In build and goes Active, the build plan is seeded from its template, the client is told work has started, and the team gets the task with a deadline. The richer sibling of \"All assets in → build kickoff\" — install one or the other, not both.",
+    emoji: "🔨",
+    category: "delivery",
+    trigger: "assets_complete",
+    trigger_config: {},
+    conditions: [],
+    steps: [
+      { kind: "set_delivery_stage", config: { stage: "build" } },
+      { kind: "set_project_status", config: { status: "active" } },
+      { kind: "seed_task_template", config: {} },
+      {
+        kind: "send_sms",
+        config: {
+          message:
+            "Hi {{name}}, we have everything we need for {{project_name}} — the build starts today. We'll show you the first version shortly. Follow along here: {{portal_link}} — ARC AI",
+        },
+      },
+      {
+        kind: "create_task",
+        config: {
+          title: "Build {{project_name}} — assets are all in",
+          notes:
+            "Every required asset is collected and the client has been told work started. Set the internal deadline and split the work.",
+          due_in_days: 1,
+        },
+      },
+      {
+        kind: "notify",
+        config: {
+          user_id: "all",
+          title: "Build started 🔨",
+          body: "{{project_name}} has all its assets — moved to In build.",
+        },
+      },
+    ],
+  },
+  {
+    id: "project-delivered-to-retained",
+    name: "Delivered → paid, reviewed, retained 🏁",
+    description:
+      "The whole tail of a project, hands-free. On delivery: the balance invoice is raised for real and texted to the client, and the handover pack lands on the team's list. Day 3: the review ask. Day 30: the aftercare offer. Day 90: the upsell. Sent by SMS rather than WhatsApp on purpose — no 24h window, so none of it needs a Meta-approved template. A fully-paid project simply skips the invoice and the message reads correctly without it.",
+    emoji: "🏁",
+    category: "delivery",
+    trigger: "project_delivered",
+    trigger_config: {},
+    conditions: [],
+    steps: [
+      { kind: "create_project_invoice", config: {} },
+      {
+        kind: "send_sms",
+        config: {
+          message:
+            "Hi {{name}}, {{project_name}} is delivered 🎉 {{invoice_line}}Any questions, just reply — and thank you for trusting us with it. — ARC AI",
+        },
+      },
+      {
+        kind: "create_task",
+        config: {
+          title: "Send the handover pack — {{project_name}}",
+          notes:
+            "Logins, files, a short how-to and who to call. The difference between a delivery and a handover.",
+          due_in_days: 1,
+        },
+      },
+      // Day 3 — ask while they're still delighted.
+      { kind: "wait", config: { minutes: 4320 } },
+      {
+        kind: "send_sms",
+        config: {
+          message:
+            "Hi {{name}}, how are you finding {{project_name}}? If you're happy with it, a short review would mean a lot to us — reply here and we'll send the link. — ARC AI",
+        },
+      },
+      // Day 30 — aftercare, before anything has had time to break.
+      { kind: "wait", config: { minutes: 38880 } },
+      {
+        kind: "send_sms",
+        config: {
+          message:
+            "Hi {{name}}, it's been a month since {{project_name}} went live. We do monthly care — updates, backups, small changes and someone to call. Want the details? — ARC AI",
+        },
+      },
+      // Day 90 — the next piece of work.
+      { kind: "wait", config: { minutes: 86400 } },
+      {
+        kind: "create_task",
+        config: {
+          title: "90-day check-in — {{full_name}}",
+          notes:
+            "Three months since {{project_name}} was delivered. Call them: how is it performing, and what's the next thing they need?",
+          due_in_days: 2,
+        },
+      },
+      {
+        kind: "send_sms",
+        config: {
+          message:
+            "Hi {{name}}, three months on from {{project_name}} — how's it going? We've been thinking about what would move the needle next for you. Free for a quick call this week? — ARC AI",
+        },
+      },
+    ],
+  },
+  {
+    id: "project-stalled-escalation",
+    name: "Stalled project escalation ⏳",
+    description:
+      "A project that stops moving gets chased instead of forgotten. The moment it trips the stalled threshold the client is nudged and the team gets a task. Three days later the whole team is notified. Four days after that the alert comes back naming the money still on the table.",
+    emoji: "⏳",
+    category: "delivery",
+    trigger: "project_stalled",
+    trigger_config: {},
+    conditions: [],
+    steps: [
+      {
+        kind: "send_sms",
+        config: {
+          message:
+            "Hi {{name}}, checking in on {{project_name}} — we're ready to keep going and just need a little from you. Anything we can help unblock? — ARC AI",
+        },
+      },
+      {
+        kind: "create_task",
+        config: {
+          title: "Unstick {{project_name}} — idle {{idle_days}} days",
+          notes: "The client has been nudged. Find the real blocker and clear it.",
+          due_in_days: 1,
+        },
+      },
+      // +3 days — still nothing.
+      { kind: "wait", config: { minutes: 4320 } },
+      {
+        kind: "notify",
+        config: {
+          user_id: "all",
+          title: "Still stalled: {{project_name}}",
+          body: "No movement since the first nudge. Somebody needs to own this one today.",
+        },
+      },
+      // +4 more — name the money.
+      { kind: "wait", config: { minutes: 5760 } },
+      {
+        kind: "notify",
+        config: {
+          user_id: "all",
+          title: "Stalled a week: {{project_name}}",
+          body: "{{money_line}}Call the client — decide today whether to rescue it, re-scope it or close it.",
+        },
+      },
+      {
+        kind: "create_task",
+        config: {
+          title: "Escalate {{project_name}} — stalled over a week",
+          notes:
+            "{{money_line}}Idle since the first nudge and the team alert. Rescue it, re-scope it, or close it — but decide.",
+          due_in_days: 0,
+        },
+      },
+    ],
+  },
 ];
 
 export function getRecipe(id: string): AutomationRecipe | undefined {

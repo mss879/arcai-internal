@@ -1,11 +1,9 @@
 "use client";
 
 import * as React from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
-  ArrowLeft,
   Flag,
   Layers,
   ListTodo,
@@ -23,6 +21,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Field, Input, Select, Textarea } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { PageHeader } from "@/components/ui/page-header";
+import { ProjectsSectionNav } from "@/components/projects/section-nav";
 import {
   PROJECT_ROLES,
   SERVICE_TYPE_LABELS,
@@ -104,13 +103,6 @@ export function TemplatesView({
 
   return (
     <div className="space-y-6">
-      <Link
-        href="/projects"
-        className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-500 hover:text-slate-800"
-      >
-        <ArrowLeft className="h-4 w-4" /> Projects
-      </Link>
-
       <PageHeader
         title="Project templates"
         description="The plan behind a service type — seeded onto a project in one click."
@@ -120,6 +112,8 @@ export function TemplatesView({
           </Button>
         }
       />
+
+      <ProjectsSectionNav />
 
       {templates.length === 0 ? (
         <EmptyState

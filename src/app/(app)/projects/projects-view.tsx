@@ -8,20 +8,21 @@ import { format, isBefore, startOfToday } from "date-fns";
 import {
   Archive,
   ArchiveRestore,
-  BarChart3,
   CalendarClock,
   ChevronDown,
+  Download,
   EyeOff,
+  FileSpreadsheet,
   FileText,
   FolderKanban,
   History,
-  Layers,
   MoreVertical,
   OctagonPause,
   Pencil,
   Plus,
   Receipt,
   Search,
+  Smartphone,
   Trash2,
   Wallet,
   X,
@@ -40,9 +41,31 @@ import {
   DELIVERY_STAGE_META,
   PROJECT_SORTS,
   PROJECT_STATUS_META,
+  PROJECT_VIEW_MODES,
   SERVICE_TYPE_LABELS,
   type ProjectSort,
+  type ProjectViewMode,
 } from "@/lib/constants";
+import {
+  CalendarView,
+  KanbanView,
+  TableView,
+  type BoardProject,
+} from "@/components/projects/board-views";
+import {
+  MonthCloseCard,
+  type MonthCloseFigures,
+} from "@/components/projects/month-close-card";
+import {
+  downloadFile,
+  projectsToCsv,
+  type ExportRow,
+} from "@/lib/project-export";
+import {
+  SavedViewsBar,
+  type SavedViewRow,
+} from "@/components/projects/saved-views-bar";
+import { ProjectsSectionNav } from "@/components/projects/section-nav";
 import {
   commissionEarned,
   daysSince,
@@ -65,6 +88,9 @@ import { useRealtimeSyncTables } from "@/hooks/use-realtime-sync";
 
 /** Work that hasn't finished — the projects that carry into this month. */
 const OPEN_STATUSES = new Set(["planning", "active", "on_hold"]);
+
+/** Where the per-user board preferences live (VIEW-1). */
+const PREFS_KEY = "arc:projects:prefs";
 
 export type ProjectCard = Project & {
   client?: Pick<Client, "id" | "name" | "company"> | null;
@@ -140,6 +166,7 @@ export function ProjectsView({
   assets,
   milestones,
   commissions,
+  savedViews,
   isAdmin,
   showArchived,
 }: {
@@ -151,6 +178,7 @@ export function ProjectsView({
   assets: AssetRow[];
   milestones: MilestoneRow[];
   commissions: CommissionRow[];
+  savedViews: SavedViewRow[];
   isAdmin: boolean;
   showArchived: boolean;
 }) {
@@ -171,6 +199,38 @@ export function ProjectsView({
   const [owing, setOwing] = React.useState(false);
   const [sort, setSort] = React.useState<ProjectSort>("recent");
 
+  // ---- View mode (VIEW-1) -------------------------------------------------
+  // Remembered per user in localStorage rather than a column: it is a device
+  // preference, not workspace data, and it must not cost a round-trip on
+  // every board load. Same pattern the todos board already uses.
+  const [mode, setMode] = React.useState<ProjectViewMode>("board");
+  const prefsLoaded = React.useRef(false);
+
+  React.useEffect(() => {
+    try {
+      const raw = localStorage.getItem(PREFS_KEY);
+      if (raw) {
+        const p = JSON.parse(raw) as { mode?: string; sort?: string };
+        if (PROJECT_VIEW_MODES.some((m) => m.value === p.mode))
+          setMode(p.mode as ProjectViewMode);
+        if (PROJECT_SORTS.some((sOpt) => sOpt.value === p.sort))
+          setSort(p.sort as ProjectSort);
+      }
+    } catch {
+      // storage may be unavailable
+    }
+    prefsLoaded.current = true;
+  }, []);
+
+  React.useEffect(() => {
+    if (!prefsLoaded.current) return;
+    try {
+      localStorage.setItem(PREFS_KEY, JSON.stringify({ mode, sort }));
+    } catch {
+      // storage may be unavailable
+    }
+  }, [mode, sort]);
+
   const filtersOn =
     query.trim() !== "" ||
     status !== "" ||
@@ -187,6 +247,67 @@ export function ProjectsView({
     setService("");
     setOwing(false);
   }
+
+  /**
+   * Applying a view sets every field, including the ones it left empty — a
+   * saved view is a complete description of the board, not a patch over
+   * whatever happened to be set already.
+   */
+  function applyView(view: SavedViewRow) {
+    const f = view.filters ?? {};
+    setQuery(f.query ?? "");
+    setStatus((f.status as ProjectStatus) ?? "");
+    setStage((f.stage as DeliveryStage) ?? "");
+    setClientId(f.client_id ?? "");
+    setService(f.service ?? "");
+    setOwing(!!f.owing);
+    if (PROJECT_SORTS.some((s2) => s2.value === f.sort))
+      setSort(f.sort as ProjectSort);
+    if (PROJECT_VIEW_MODES.some((m) => m.value === f.mode))
+      setMode(f.mode as ProjectViewMode);
+  }
+
+  /** The board's filter state, in the shape a saved view stores. */
+  const currentFilters = React.useMemo(
+    () => ({
+      query: query.trim() || undefined,
+      status: status || undefined,
+      stage: stage || undefined,
+      client_id: clientId || undefined,
+      service: service || undefined,
+      owing: owing || undefined,
+      sort: sort !== "recent" ? sort : undefined,
+      mode: mode !== "board" ? mode : undefined,
+    }),
+    [query, status, stage, clientId, service, owing, sort, mode],
+  );
+
+  /**
+   * Which saved view the board is showing — DERIVED, not tracked. Storing it
+   * would mean remembering to clear it every time any one of eight filters
+   * changed; comparing instead means nudging a dropdown deselects the pill on
+   * its own, and re-creating the same filters by hand re-selects it.
+   */
+  const activeViewId = React.useMemo(() => {
+    const keys = [
+      "query",
+      "status",
+      "stage",
+      "client_id",
+      "service",
+      "owing",
+      "sort",
+      "mode",
+    ] as const;
+    const match = savedViews.find((v) =>
+      keys.every(
+        (k) =>
+          (v.filters?.[k] ?? undefined) ===
+          (currentFilters[k] ?? undefined),
+      ),
+    );
+    return match?.id ?? null;
+  }, [savedViews, currentFilters]);
 
   // ---- Per-project derived numbers ---------------------------------------
   const byProject = React.useCallback(
@@ -388,6 +509,43 @@ export function ProjectsView({
     return { total, count };
   }, [projects, derive]);
 
+  /**
+   * The filtered board, flattened for the kanban / table / calendar layouts
+   * (VIEW-1). Built from the same `derive()` the cards use, so no layout can
+   * ever show a different number for the same project.
+   */
+  const boardProjects = React.useMemo<BoardProject[]>(() => {
+    const today = startOfToday();
+    return visible.map((p) => {
+      const d = derive(p);
+      return {
+        id: p.id,
+        name: p.name,
+        clientName: p.client?.name ?? null,
+        status: p.status,
+        stage: p.delivery_stage,
+        serviceType: p.service_type,
+        currency: p.currency || "LKR",
+        totalValue: Number(p.total_value) || 0,
+        received: d.received,
+        balance: d.balance,
+        marginPercent: d.marginPercent,
+        health: d.health,
+        dueDate: p.due_date,
+        daysInStage: d.daysInStage,
+        team: d.team
+          .map((t) => t.profile)
+          .filter((x): x is NonNullable<typeof x> => !!x),
+        blocked: !!p.blocked_reason,
+        overdue: Boolean(
+          OPEN_STATUSES.has(p.status) &&
+            p.due_date &&
+            isBefore(new Date(p.due_date), today),
+        ),
+      };
+    });
+  }, [visible, derive]);
+
   const formatSums = (sums: Record<string, number>) => {
     const entries = Object.entries(sums);
     if (entries.length === 0) return formatCurrency(0, "LKR");
@@ -395,6 +553,94 @@ export function ProjectsView({
   };
 
   const currentMonthLabel = format(new Date(), "MMMM yyyy");
+
+  // ---- Export (VIEW-5) ----------------------------------------------------
+  const [exporting, setExporting] = React.useState(false);
+
+  /** A sentence describing what is on screen, printed on the PDF. */
+  const filterSummary = React.useMemo(() => {
+    const parts: string[] = [];
+    if (query.trim()) parts.push(`matching "${query.trim()}"`);
+    if (status) parts.push(PROJECT_STATUS_META[status].label);
+    if (stage) parts.push(DELIVERY_STAGE_META[stage].label);
+    if (clientId)
+      parts.push(clients.find((c) => c.id === clientId)?.name ?? "one client");
+    if (service)
+      parts.push(
+        SERVICE_TYPE_LABELS[service as keyof typeof SERVICE_TYPE_LABELS] ?? service,
+      );
+    if (owing) parts.push("with a balance due");
+    return parts.length ? parts.join(" · ") : "All projects";
+  }, [query, status, stage, clientId, service, owing, clients]);
+
+  const exportRows = React.useCallback(
+    (): ExportRow[] =>
+      boardProjects.map((p) => ({
+        name: p.name,
+        client: p.clientName ?? "",
+        status: PROJECT_STATUS_META[p.status].label,
+        stage: p.stage ? DELIVERY_STAGE_META[p.stage].label : "",
+        serviceType: p.serviceType
+          ? (SERVICE_TYPE_LABELS[
+              p.serviceType as keyof typeof SERVICE_TYPE_LABELS
+            ] ?? p.serviceType)
+          : "",
+        currency: p.currency,
+        totalValue: p.totalValue,
+        received: p.received,
+        balance: p.balance,
+        // Members never see margin, so it never leaves in their export either.
+        marginPercent: isAdmin ? p.marginPercent : null,
+        dueDate: p.dueDate,
+        team: p.team.map((m) => m.full_name).join(", "),
+      })),
+    [boardProjects, isAdmin],
+  );
+
+  function handleExportCsv() {
+    const rows = exportRows();
+    if (rows.length === 0) {
+      toast.error("Nothing to export — no projects match the filters.");
+      return;
+    }
+    downloadFile(
+      `arc-ai-projects-${format(new Date(), "yyyy-MM-dd")}.csv`,
+      projectsToCsv(rows, { includeMargin: isAdmin }),
+      "text/csv;charset=utf-8",
+    );
+    toast.success(`Exported ${rows.length} project${rows.length === 1 ? "" : "s"}.`);
+  }
+
+  async function handleExportPdf() {
+    const rows = exportRows();
+    if (rows.length === 0) {
+      toast.error("Nothing to export — no projects match the filters.");
+      return;
+    }
+    setExporting(true);
+    try {
+      const res = await fetch("/api/projects/pdf", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rows, filterSummary }),
+      });
+      if (!res.ok) throw new Error(`Report failed (${res.status})`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `ARC-AI-Projects-${format(new Date(), "yyyy-MM-dd")}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+      toast.success("Report downloaded.");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not build the report.");
+    } finally {
+      setExporting(false);
+    }
+  }
 
   // ---- Month grouping (0087) ---------------------------------------------
   const placed = React.useMemo<PlacedProject[]>(
@@ -436,6 +682,68 @@ export function ProjectsView({
         carriedCount: items.filter((i) => i.echo).length,
       }));
   }, [placed, currentMonthKey]);
+
+  /**
+   * VIEW-4 — the six numbers that close a month, per month group.
+   *
+   * Deliberately computed over the month a project was BOOKED (its own group,
+   * echoes excluded), because "how did March go" is a question about the work
+   * March brought in, not about what happens to be on screen under March.
+   */
+  const closeByMonth = React.useMemo(() => {
+    const map = new Map<string, MonthCloseFigures>();
+    for (const item of placed) {
+      const p = item.project;
+      const d = item.derived;
+      const value = Number(p.total_value) || 0;
+      const delivered =
+        p.delivery_stage === "delivered" || p.delivery_stage === "aftercare";
+
+      const prev =
+        map.get(item.originKey) ??
+        ({
+          bookedCount: 0,
+          bookedValue: 0,
+          deliveredCount: 0,
+          deliveredValue: 0,
+          collected: 0,
+          owed: 0,
+          carriedCount: 0,
+          marginPercent: null,
+          profit: 0,
+          currency: p.currency || "LKR",
+        } satisfies MonthCloseFigures);
+
+      map.set(item.originKey, {
+        ...prev,
+        bookedCount: prev.bookedCount + 1,
+        bookedValue: prev.bookedValue + value,
+        deliveredCount: prev.deliveredCount + (delivered ? 1 : 0),
+        deliveredValue: prev.deliveredValue + (delivered ? value : 0),
+        collected: prev.collected + d.received,
+        owed: prev.owed + d.balance,
+        carriedCount: prev.carriedCount + (item.carried ? 1 : 0),
+        profit: prev.profit + d.profit,
+      });
+    }
+
+    // Margin is a ratio, so it is worked out once per month at the end rather
+    // than accumulated — and stays null when nothing has been spent, for the
+    // same reason a single project's does (marginIsMeaningful).
+    for (const [key, fig] of map) {
+      const anyMargin = placed.some(
+        (i) => i.originKey === key && i.derived.marginPercent !== null,
+      );
+      map.set(key, {
+        ...fig,
+        marginPercent:
+          anyMargin && fig.bookedValue > 0
+            ? Math.round((fig.profit / fig.bookedValue) * 100)
+            : null,
+      });
+    }
+    return map;
+  }, [placed]);
 
   const toggleCarryForward = async (item: PlacedProject) => {
     const next = !item.carried;
@@ -586,8 +894,10 @@ export function ProjectsView({
           )}
         </Link>
 
-        {/* What's wrong with it, in words (PLAN-8) */}
-        {d.health.reasons.length > 0 && (
+        {/* What's wrong with it, in words — the risk radar's own sentence
+            when last night's pass wrote one (AI-4), otherwise the health
+            engine's terser reason (PLAN-8). */}
+        {(p.risk_note || d.health.reasons.length > 0) && (
           <p
             className={cn(
               "mt-3 inline-flex items-start gap-1.5 rounded-lg px-2 py-1 text-[11px] font-medium",
@@ -595,7 +905,7 @@ export function ProjectsView({
                 ? "bg-rose-50 text-rose-700"
                 : "bg-amber-50 text-amber-700",
             )}
-            title={d.health.reasons.join(" · ")}
+            title={d.health.reasons.join(" · ") || undefined}
           >
             <span
               className={cn(
@@ -603,8 +913,10 @@ export function ProjectsView({
                 d.health.tone === "risk" ? "bg-rose-500" : "bg-amber-500",
               )}
             />
-            {d.health.reasons[0]}
-            {d.health.reasons.length > 1 && ` +${d.health.reasons.length - 1} more`}
+            {p.risk_note ?? d.health.reasons[0]}
+            {!p.risk_note && d.health.reasons.length > 1
+              ? ` +${d.health.reasons.length - 1} more`
+              : ""}
           </p>
         )}
 
@@ -733,16 +1045,28 @@ export function ProjectsView({
             </Link>
           ) : (
             <div className="flex flex-wrap gap-2">
-              <Link href="/projects/reports">
+              {/* BIG-5 — the phone-shaped view, offered only where it wins.
+                  Insights, Reports and Templates live in the section nav
+                  below the header rather than as more buttons up here. */}
+              <Link href="/projects/go" className="sm:hidden">
                 <Button variant="outline">
-                  <BarChart3 className="h-4 w-4" /> Reports
+                  <Smartphone className="h-4 w-4" /> On the go
                 </Button>
               </Link>
-              <Link href="/projects/templates">
-                <Button variant="outline">
-                  <Layers className="h-4 w-4" /> Templates
-                </Button>
-              </Link>
+              <Dropdown
+                trigger={
+                  <Button variant="outline" loading={exporting}>
+                    <Download className="h-4 w-4" /> Export
+                  </Button>
+                }
+              >
+                <DropdownItem onClick={handleExportCsv}>
+                  <FileSpreadsheet className="h-4 w-4" /> CSV for the accountant
+                </DropdownItem>
+                <DropdownItem onClick={handleExportPdf}>
+                  <FileText className="h-4 w-4" /> Branded PDF report
+                </DropdownItem>
+              </Dropdown>
               <Link href="/projects?archived=1">
                 <Button variant="outline">
                   <Archive className="h-4 w-4" /> Archive
@@ -777,6 +1101,56 @@ export function ProjectsView({
             delay={450}
           />
         </div>
+      )}
+
+      {/* One nav for the whole section — Board · Insights · Reports · Templates */}
+      {!showArchived && <ProjectsSectionNav />}
+
+      {/* How the board itself is laid out (VIEW-1) */}
+      {projects.length > 0 && !showArchived && (
+        <div className="-mx-1 overflow-x-auto px-1 pb-1">
+          <div className="inline-flex min-w-max items-center gap-1 rounded-xl border border-slate-200 bg-white p-1 shadow-sm">
+            {PROJECT_VIEW_MODES.map((m) => (
+              <button
+                key={m.value}
+                type="button"
+                onClick={() => setMode(m.value)}
+                title={m.hint}
+                aria-pressed={mode === m.value}
+                className={cn(
+                  "rounded-lg px-3.5 py-2 text-sm font-semibold transition-colors",
+                  mode === m.value
+                    ? "bg-primary-600 text-white shadow-sm"
+                    : "text-slate-600 hover:bg-slate-100",
+                )}
+              >
+                {m.label}
+              </button>
+            ))}
+            {/* PLAN-6 already draws the timeline on the reports page; drawing
+                it a second time here would be two implementations of one
+                chart, so the switcher links to the one that exists. */}
+            <Link
+              href="/projects/reports?tab=timeline"
+              className="rounded-lg px-3.5 py-2 text-sm font-semibold text-slate-500 transition-colors hover:bg-slate-100"
+              title="Start and due dates drawn across every project"
+            >
+              Timeline ↗
+            </Link>
+          </div>
+        </div>
+      )}
+
+      {/* Saved views (VIEW-2) */}
+      {projects.length > 0 && !showArchived && (
+        <SavedViewsBar
+          views={savedViews}
+          current={currentFilters}
+          activeId={activeViewId}
+          canSave={filtersOn || sort !== "recent" || mode !== "board"}
+          onApply={applyView}
+          onClear={clearFilters}
+        />
       )}
 
       {/* Filters (LOOP-7) */}
@@ -910,6 +1284,12 @@ export function ProjectsView({
           description="Try a different search or clear the filters."
           action={<Button onClick={clearFilters}>Clear filters</Button>}
         />
+      ) : mode === "kanban" ? (
+        <KanbanView projects={boardProjects} />
+      ) : mode === "table" ? (
+        <TableView projects={boardProjects} showMargin={isAdmin} />
+      ) : mode === "calendar" ? (
+        <CalendarView projects={boardProjects} />
       ) : (
         <div className="space-y-4">
           {monthGroups.map((group, gi) => {
@@ -946,9 +1326,22 @@ export function ProjectsView({
                   />
                 </button>
                 {open && (
-                  <div className="grid grid-cols-1 gap-4 border-t border-slate-200/60 p-5 sm:grid-cols-2 xl:grid-cols-3">
-                    {group.items.map((item) => renderCard(item, group.key))}
-                  </div>
+                  <>
+                    {/* VIEW-4 — how the month actually closed. Only on groups
+                        that booked something: an echo-only month has nothing
+                        of its own to close. */}
+                    {closeByMonth.has(group.key) && (
+                      <div className="border-t border-slate-200/60 px-5 pt-4">
+                        <MonthCloseCard
+                          figures={closeByMonth.get(group.key)!}
+                          showMargin={isAdmin}
+                        />
+                      </div>
+                    )}
+                    <div className="grid grid-cols-1 gap-4 border-t border-slate-200/60 p-5 sm:grid-cols-2 xl:grid-cols-3">
+                      {group.items.map((item) => renderCard(item, group.key))}
+                    </div>
+                  </>
                 )}
               </div>
             );

@@ -17,6 +17,8 @@ export type PlanInput = {
   title: string;
   client_id?: string | null;
   lead_id?: string | null;
+  /** 0091 — the project this schedule bills. NULL = a standalone plan. */
+  project_id?: string | null;
   contact_name: string;
   phone?: string | null;
   total: number;
@@ -43,6 +45,7 @@ export async function createPaymentPlan(input: PlanInput): Promise<ActionResult>
       title: input.title.trim(),
       client_id: input.client_id || null,
       lead_id: input.lead_id || null,
+      project_id: input.project_id || null,
       contact_name: input.contact_name.trim(),
       phone: input.phone?.trim() || null,
       total: input.total,
@@ -64,6 +67,8 @@ export async function createPaymentPlan(input: PlanInput): Promise<ActionResult>
   if (instError) return { ok: false, error: instError.message };
 
   revalidatePath("/finance");
+  // A schedule attached to a project shows on that project too.
+  if (input.project_id) revalidatePath(`/projects/${input.project_id}`);
   return { ok: true };
 }
 

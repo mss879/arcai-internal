@@ -17,6 +17,7 @@ export default async function DeliveryPage() {
     supabase
       .from("projects")
       .select("*, client:clients(id, name, company, phone)")
+      .is("deleted_at", null)
       .order("created_at", { ascending: false }),
     supabase
       .from("project_document_requests")

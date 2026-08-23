@@ -5,12 +5,21 @@ import {
   AlertTriangle,
   CheckCircle2,
   FileCheck2,
+  FileSignature,
   FileX2,
+  Gauge,
+  GitPullRequestArrow,
+  Lock,
+  LockOpen,
   Megaphone,
   MessageCircle,
+  MessageSquare,
   MoveRight,
+  PackageCheck,
   PartyPopper,
   Rocket,
+  Send,
+  Star,
 } from "lucide-react";
 
 import { EmptyState } from "@/components/ui/empty-state";
@@ -66,6 +75,67 @@ const KIND_META: Record<
     label: "Milestone sent",
     icon: <Megaphone className="h-3.5 w-3.5" />,
     tone: "bg-sky-50 text-sky-600",
+  },
+  // 0094 — client experience
+  portal_sent: {
+    label: "Portal sent",
+    icon: <Send className="h-3.5 w-3.5" />,
+    tone: "bg-sky-50 text-sky-600",
+  },
+  portal_unlocked: {
+    label: "Client opened the portal",
+    icon: <LockOpen className="h-3.5 w-3.5" />,
+    tone: "bg-emerald-50 text-emerald-600",
+  },
+  portal_locked: {
+    label: "Portal access changed",
+    icon: <Lock className="h-3.5 w-3.5" />,
+    tone: "bg-slate-100 text-slate-500",
+  },
+  review_requested: {
+    label: "Review asked for",
+    icon: <Star className="h-3.5 w-3.5" />,
+    tone: "bg-amber-50 text-amber-600",
+  },
+  review_received: {
+    label: "Review left",
+    icon: <Star className="h-3.5 w-3.5" />,
+    tone: "bg-emerald-50 text-emerald-600",
+  },
+  approval_requested: {
+    label: "Approval asked for",
+    icon: <FileSignature className="h-3.5 w-3.5" />,
+    tone: "bg-violet-50 text-violet-600",
+  },
+  approval_signed: {
+    label: "Client signed off",
+    icon: <FileSignature className="h-3.5 w-3.5" />,
+    tone: "bg-emerald-50 text-emerald-600",
+  },
+  change_requested: {
+    label: "Change requested",
+    icon: <GitPullRequestArrow className="h-3.5 w-3.5" />,
+    tone: "bg-amber-50 text-amber-600",
+  },
+  change_accepted: {
+    label: "Change accepted",
+    icon: <GitPullRequestArrow className="h-3.5 w-3.5" />,
+    tone: "bg-emerald-50 text-emerald-600",
+  },
+  comment: {
+    label: "Comment",
+    icon: <MessageSquare className="h-3.5 w-3.5" />,
+    tone: "bg-slate-100 text-slate-600",
+  },
+  pulse: {
+    label: "Client mood",
+    icon: <Gauge className="h-3.5 w-3.5" />,
+    tone: "bg-sky-50 text-sky-600",
+  },
+  handover_sent: {
+    label: "Handover pack sent",
+    icon: <PackageCheck className="h-3.5 w-3.5" />,
+    tone: "bg-emerald-50 text-emerald-600",
   },
 };
 

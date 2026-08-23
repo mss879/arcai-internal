@@ -19,6 +19,7 @@ export default async function PaymentsPage() {
     supabase
       .from("projects")
       .select("id, name, total_value, deposit_paid, currency")
+      .is("deleted_at", null)
       .order("created_at", { ascending: false }),
   ]);
 

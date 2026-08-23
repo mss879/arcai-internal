@@ -24,6 +24,25 @@ export type ProjectStatus =
 export type PaymentStatus = "pending" | "paid" | "overdue";
 export type WebsiteStatus = "in_progress" | "waiting_client" | "launched";
 export type CommissionStatus = "pending" | "approved" | "paid";
+
+/** 0091 — how a commission's owed figure is worked out. */
+export type CommissionBasis = "fixed" | "percent_of_received";
+
+/** 0092 — what a template item seeds when the plan is applied. */
+export type TemplateItemKind = "task" | "asset" | "milestone" | "launch_check";
+
+/** 0092 — client-facing phase vs internal pre-delivery gate. */
+export type MilestoneKind = "milestone" | "launch_check";
+export type MilestoneStatus = "pending" | "done" | "blocked";
+
+// 0094 — client experience
+/** The portal renders in one of these; same codes the WA agent uses. */
+export type PortalLanguage = "en" | "si" | "ta";
+export type ReviewStatus = "requested" | "submitted" | "declined";
+export type ApprovalStatus = "pending" | "approved" | "changes_requested";
+export type ChangeRequestStatus = "new" | "quoted" | "accepted" | "declined";
+export type ChangeRequestSource = "portal" | "team" | "whatsapp";
+export type CommentAuthor = "team" | "client";
 /** 0088 — staff advances. Tracks repayment, not authorisation. */
 export type MemberLoanStatus = "outstanding" | "repaid" | "written_off";
 /** 0089 — whether the loan was actually granted. Only `approved` is deducted. */
@@ -212,6 +231,7 @@ export type DeliveryStage =
 export type AssetCategory = "brand" | "content" | "photos" | "access";
 export type AssetRequestStatus = "pending" | "submitted" | "na";
 export type AssetRequestSource = "portal" | "whatsapp" | "team";
+// 0094 grew this list with the portal/review/approval/change events.
 export type DeliveryEventKind =
   | "kickoff"
   | "stage_changed"
@@ -221,7 +241,20 @@ export type DeliveryEventKind =
   | "chase_sent"
   | "stalled_alert"
   | "assets_complete"
-  | "milestone_sent";
+  | "milestone_sent"
+  // 0094 — client experience
+  | "portal_sent"
+  | "portal_unlocked"
+  | "portal_locked"
+  | "review_requested"
+  | "review_received"
+  | "approval_requested"
+  | "approval_signed"
+  | "change_requested"
+  | "change_accepted"
+  | "comment"
+  | "pulse"
+  | "handover_sent";
 /** Which brain the WhatsApp agent runs for a contact (0086). */
 export type WaContactMode = "sales" | "onboarding";
 /** WhatsApp system (0048). */
@@ -334,6 +367,9 @@ export type Database = {
           title: string | null;
           phone: string | null;
           avatar_url: string | null;
+          /** 0092 — what an hour of this member's time costs the agency, in
+           * LKR. Feeds project margin only; never shown to the member. */
+          hourly_cost: number | null;
           created_at: Timestamp;
         };
         Insert: {
@@ -345,6 +381,8 @@ export type Database = {
           title?: string | null;
           phone?: string | null;
           avatar_url?: string | null;
+          // 0092
+          hourly_cost?: number | null;
           created_at?: Timestamp;
         };
         Update: Partial<Database["public"]["Tables"]["profiles"]["Insert"]>;
@@ -414,6 +452,8 @@ export type Database = {
           due_date: Timestamp | null;
           assigned_to: UUID | null;
           project_id: UUID | null;
+          /** 0092 — the task that must finish first. */
+          depends_on_id: UUID | null;
           position: number;
           created_by: UUID | null;
           completed_at: Timestamp | null;
@@ -429,6 +469,8 @@ export type Database = {
           due_date?: Timestamp | null;
           assigned_to?: UUID | null;
           project_id?: UUID | null;
+          // 0092
+          depends_on_id?: UUID | null;
           position?: number;
           created_by?: UUID | null;
           completed_at?: Timestamp | null;
@@ -511,6 +553,43 @@ export type Database = {
           /** 0087 — while unfinished, list under the CURRENT month tagged
            * with the month it was created. False pins it to that month. */
           carry_forward: boolean;
+          // 0090 — archive instead of delete
+          deleted_at: Timestamp | null;
+          deleted_by: UUID | null;
+          // 0091 — money
+          budget_alerted_at: Timestamp | null;
+          expense_cap: number | null;
+          /** Share of total_value required before leaving the assets stage. */
+          deposit_required_percent: number | null;
+          is_retainer: boolean;
+          retainer_day: number | null;
+          retainer_parent_id: UUID | null;
+          retainer_last_run_on: string | null;
+          balance_chase_count: number;
+          balance_chased_at: Timestamp | null;
+          balance_chase_paused: boolean;
+          auto_invoice_on_delivery: boolean;
+          // 0094 — client portal access
+          portal_passcode: string | null;
+          portal_passcode_set_at: Timestamp | null;
+          portal_expires_at: Timestamp | null;
+          portal_revoked_at: Timestamp | null;
+          portal_last_sent_at: Timestamp | null;
+          portal_failed_attempts: number;
+          portal_locked_until: Timestamp | null;
+          portal_language: PortalLanguage;
+          review_requested_at: Timestamp | null;
+          handover_sent_at: Timestamp | null;
+          // 0093 — deposit confirmed against the bank
+          deposit_confirmed_at: Timestamp | null;
+          deposit_confirmed_by: UUID | null;
+          deposit_invoice_id: UUID | null;
+          // 0092 — planning
+          blocked_reason: string | null;
+          blocked_since: Timestamp | null;
+          template_id: UUID | null;
+          aftercare_enabled: boolean;
+          aftercare_last_run_on: string | null;
         };
         Insert: {
           id?: UUID;
@@ -545,6 +624,42 @@ export type Database = {
           updated_at?: Timestamp;
           // 0087
           carry_forward?: boolean;
+          // 0090
+          deleted_at?: Timestamp | null;
+          deleted_by?: UUID | null;
+          // 0091
+          budget_alerted_at?: Timestamp | null;
+          expense_cap?: number | null;
+          deposit_required_percent?: number | null;
+          is_retainer?: boolean;
+          retainer_day?: number | null;
+          retainer_parent_id?: UUID | null;
+          retainer_last_run_on?: string | null;
+          balance_chase_count?: number;
+          balance_chased_at?: Timestamp | null;
+          balance_chase_paused?: boolean;
+          auto_invoice_on_delivery?: boolean;
+          // 0094
+          portal_passcode?: string | null;
+          portal_passcode_set_at?: Timestamp | null;
+          portal_expires_at?: Timestamp | null;
+          portal_revoked_at?: Timestamp | null;
+          portal_last_sent_at?: Timestamp | null;
+          portal_failed_attempts?: number;
+          portal_locked_until?: Timestamp | null;
+          portal_language?: PortalLanguage;
+          review_requested_at?: Timestamp | null;
+          handover_sent_at?: Timestamp | null;
+          // 0093
+          deposit_confirmed_at?: Timestamp | null;
+          deposit_confirmed_by?: UUID | null;
+          deposit_invoice_id?: UUID | null;
+          // 0092
+          blocked_reason?: string | null;
+          blocked_since?: Timestamp | null;
+          template_id?: UUID | null;
+          aftercare_enabled?: boolean;
+          aftercare_last_run_on?: string | null;
         };
         Update: Partial<Database["public"]["Tables"]["projects"]["Insert"]>;
         Relationships: [];
@@ -603,6 +718,327 @@ export type Database = {
         Update: Partial<
           Database["public"]["Tables"]["project_expenses"]["Insert"]
         >;
+        Relationships: [];
+      };
+      // 0092 — the reusable plan behind a service type: the tasks, asset
+      // requests, milestones and launch checks every job of that kind needs.
+      project_templates: {
+        Row: {
+          id: UUID;
+          name: string;
+          service_type: string | null;
+          description: string | null;
+          default_value: number | null;
+          default_currency: string;
+          /** Days from start to due date, pre-filled on the new project. */
+          default_days: number | null;
+          is_active: boolean;
+          created_by: UUID | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          name: string;
+          service_type?: string | null;
+          description?: string | null;
+          default_value?: number | null;
+          default_currency?: string;
+          default_days?: number | null;
+          is_active?: boolean;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["project_templates"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      project_template_items: {
+        Row: {
+          id: UUID;
+          template_id: UUID;
+          kind: TemplateItemKind;
+          title: string;
+          detail: string | null;
+          category: string | null;
+          position: number;
+          /** Days after the project start date; null = no date. */
+          offset_days: number | null;
+          required: boolean;
+          /** Matched against project_members.role to auto-assign. */
+          role: string | null;
+          priority: TodoPriority;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          template_id: UUID;
+          kind?: TemplateItemKind;
+          title: string;
+          detail?: string | null;
+          category?: string | null;
+          position?: number;
+          offset_days?: number | null;
+          required?: boolean;
+          role?: string | null;
+          priority?: TodoPriority;
+          created_at?: Timestamp;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["project_template_items"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      // 0092 — named phases between the six coarse delivery stages.
+      project_milestones: {
+        Row: {
+          id: UUID;
+          project_id: UUID;
+          title: string;
+          detail: string | null;
+          kind: MilestoneKind;
+          status: MilestoneStatus;
+          due_date: string | null;
+          position: number;
+          /** Milestones can be shown on the portal; launch checks never are. */
+          client_visible: boolean;
+          owner_id: UUID | null;
+          completed_at: Timestamp | null;
+          completed_by: UUID | null;
+          /** 0093 — text the client when this milestone completes. */
+          notify_sms: boolean;
+          notified_at: Timestamp | null;
+          created_by: UUID | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          project_id: UUID;
+          title: string;
+          detail?: string | null;
+          kind?: MilestoneKind;
+          // 0093
+          notify_sms?: boolean;
+          notified_at?: Timestamp | null;
+          status?: MilestoneStatus;
+          due_date?: string | null;
+          position?: number;
+          client_visible?: boolean;
+          owner_id?: UUID | null;
+          completed_at?: Timestamp | null;
+          completed_by?: UUID | null;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["project_milestones"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      // 0092 — who is actually on the job (commissions are a payment
+      // record, not a staffing one).
+      project_members: {
+        Row: {
+          id: UUID;
+          project_id: UUID;
+          user_id: UUID;
+          role: string | null;
+          is_owner: boolean;
+          added_by: UUID | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          project_id: UUID;
+          user_id: UUID;
+          role?: string | null;
+          is_owner?: boolean;
+          added_by?: UUID | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["project_members"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      // 0092 — "log 2h", nothing heavier. Turns margin from an estimate
+      // into the truth once profiles.hourly_cost is set.
+      time_entries: {
+        Row: {
+          id: UUID;
+          project_id: UUID;
+          todo_id: UUID | null;
+          user_id: UUID;
+          minutes: number;
+          note: string | null;
+          worked_on: string;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          project_id: UUID;
+          todo_id?: UUID | null;
+          user_id: UUID;
+          minutes: number;
+          note?: string | null;
+          worked_on?: string;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["time_entries"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0094 — a review asked for by SMS after delivery. Its own token, so a
+      // review link never doubles as a way into the project.
+      project_reviews: {
+        Row: {
+          id: UUID;
+          project_id: UUID;
+          share_token: UUID;
+          status: ReviewStatus;
+          rating: number | null;
+          headline: string | null;
+          body: string | null;
+          /** Consent to publish — given, never assumed. */
+          publishable: boolean;
+          client_name: string | null;
+          requested_at: Timestamp;
+          requested_by: UUID | null;
+          reminded_at: Timestamp | null;
+          submitted_at: Timestamp | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          project_id: UUID;
+          share_token?: UUID;
+          status?: ReviewStatus;
+          rating?: number | null;
+          headline?: string | null;
+          body?: string | null;
+          publishable?: boolean;
+          client_name?: string | null;
+          requested_at?: Timestamp;
+          requested_by?: UUID | null;
+          reminded_at?: Timestamp | null;
+          submitted_at?: Timestamp | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["project_reviews"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0094 — "approve this", signed with a typed name and a timestamp.
+      project_approvals: {
+        Row: {
+          id: UUID;
+          project_id: UUID;
+          milestone_id: UUID | null;
+          title: string;
+          detail: string | null;
+          status: ApprovalStatus;
+          signer_name: string | null;
+          signed_at: Timestamp | null;
+          response_note: string | null;
+          requested_by: UUID | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          project_id: UUID;
+          milestone_id?: UUID | null;
+          title: string;
+          detail?: string | null;
+          status?: ApprovalStatus;
+          signer_name?: string | null;
+          signed_at?: Timestamp | null;
+          response_note?: string | null;
+          requested_by?: UUID | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["project_approvals"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0094 — scope creep, captured and priced instead of absorbed.
+      project_change_requests: {
+        Row: {
+          id: UUID;
+          project_id: UUID;
+          body: string;
+          status: ChangeRequestStatus;
+          quoted_amount: number | null;
+          quote_note: string | null;
+          /** The billable expense accepting it produced. */
+          expense_id: UUID | null;
+          todo_id: UUID | null;
+          source: ChangeRequestSource;
+          client_name: string | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          project_id: UUID;
+          body: string;
+          status?: ChangeRequestStatus;
+          quoted_amount?: number | null;
+          quote_note?: string | null;
+          expense_id?: UUID | null;
+          todo_id?: UUID | null;
+          source?: ChangeRequestSource;
+          client_name?: string | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["project_change_requests"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      // 0094 — feedback attached to the milestone it is about.
+      project_comments: {
+        Row: {
+          id: UUID;
+          project_id: UUID;
+          milestone_id: UUID | null;
+          author_type: CommentAuthor;
+          author_id: UUID | null;
+          author_name: string;
+          body: string;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          project_id: UUID;
+          milestone_id?: UUID | null;
+          author_type?: CommentAuthor;
+          author_id?: UUID | null;
+          author_name?: string;
+          body: string;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["project_comments"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0094 — one-tap "how's it going": 1 unhappy, 2 fine, 3 delighted.
+      project_pulses: {
+        Row: {
+          id: UUID;
+          project_id: UUID;
+          score: number;
+          note: string | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          project_id: UUID;
+          score: number;
+          note?: string | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["project_pulses"]["Insert"]>;
         Relationships: [];
       };
       // 0016 — per-project asset checklist; 0084 grew it into the
@@ -748,6 +1184,12 @@ export type Database = {
           bank_account: string | null;
           recipient_email: string | null;
           sent_at: Timestamp | null;
+          /** 0091 — the project this invoice billed. NULL = standalone. */
+          project_id: UUID | null;
+          /** 0093 — unguessable token for the public invoice page. */
+          share_token: UUID | null;
+          /** 0093 — when the link was last sent to the client. */
+          shared_at: Timestamp | null;
           created_by: UUID | null;
           created_at: Timestamp;
         };
@@ -765,6 +1207,11 @@ export type Database = {
           bank_account?: string | null;
           recipient_email?: string | null;
           sent_at?: Timestamp | null;
+          // 0091
+          project_id?: UUID | null;
+          // 0093
+          share_token?: UUID | null;
+          shared_at?: Timestamp | null;
           created_by?: UUID | null;
           created_at?: Timestamp;
         };
@@ -949,6 +1396,8 @@ export type Database = {
           status: WebsiteStatus;
           notes: string;
           launched_at: Timestamp | null;
+          /** 0092 — the project this build belongs to. NULL = unlinked. */
+          project_id: UUID | null;
           created_by: UUID | null;
           created_at: Timestamp;
           updated_at: Timestamp;
@@ -962,6 +1411,8 @@ export type Database = {
           status?: WebsiteStatus;
           notes?: string;
           launched_at?: Timestamp | null;
+          // 0092
+          project_id?: UUID | null;
           created_by?: UUID | null;
           created_at?: Timestamp;
           updated_at?: Timestamp;
@@ -1013,6 +1464,10 @@ export type Database = {
           note: string | null;
           allocated_by: UUID | null;
           created_at: Timestamp;
+          /** 0091 — 'fixed' = the amount is owed in full once approved.
+           * 'percent_of_received' = `percentage` of what the client has
+           * actually paid, so it accrues with the money in. */
+          basis: CommissionBasis;
         };
         Insert: {
           id?: UUID;
@@ -1025,6 +1480,8 @@ export type Database = {
           note?: string | null;
           allocated_by?: UUID | null;
           created_at?: Timestamp;
+          // 0091
+          basis?: CommissionBasis;
         };
         Update: Partial<Database["public"]["Tables"]["commissions"]["Insert"]>;
         Relationships: [];
@@ -1724,6 +2181,8 @@ export type Database = {
           invoice_id: UUID | null;
           workflow_id: UUID | null;
           lead_id: UUID | null;
+          /** 0093 — the project this text was about, when sent from one. */
+          project_id: UUID | null;
           segments: number;
           created_by: UUID | null;
           created_at: Timestamp;
@@ -1740,6 +2199,8 @@ export type Database = {
           invoice_id?: UUID | null;
           workflow_id?: UUID | null;
           lead_id?: UUID | null;
+          // 0093
+          project_id?: UUID | null;
           segments?: number;
           created_by?: UUID | null;
           created_at?: Timestamp;
@@ -2232,6 +2693,8 @@ export type Database = {
           client_id: UUID | null;
           lead_id: UUID | null;
           invoice_id: UUID | null;
+          /** 0091 — the project this schedule bills. NULL = standalone. */
+          project_id: UUID | null;
           contact_name: string;
           phone: string | null;
           total: number;
@@ -2249,6 +2712,8 @@ export type Database = {
           client_id?: UUID | null;
           lead_id?: UUID | null;
           invoice_id?: UUID | null;
+          // 0091
+          project_id?: UUID | null;
           contact_name?: string;
           phone?: string | null;
           total?: number;

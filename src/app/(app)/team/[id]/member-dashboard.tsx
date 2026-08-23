@@ -23,6 +23,7 @@ import {
   Calendar,
   CheckCircle2,
   ChevronDown,
+  Clock,
   HandCoins,
   Mail,
   MonitorSmartphone,
@@ -57,6 +58,8 @@ import { formatPhone } from "@/lib/sms-utils";
 import { cn, formatCurrency } from "@/lib/utils";
 import { useRealtimeSyncTables } from "@/hooks/use-realtime-sync";
 import type { Commission, MemberLoanApproval, Profile } from "@/lib/types";
+
+import { setMemberHourlyCost } from "@/app/(app)/projects/plan-actions";
 
 import { ActivityModal } from "../activity-modal";
 import type { MemberDevice } from "../team-view";
@@ -341,6 +344,9 @@ export function MemberDashboard({
         </section>
       </div>
 
+      {/* Cost rate (PLAN-5) --------------------------------------- */}
+      <CostRateCard member={member} />
+
       {/* Device lock (members only — admins are exempt) ----------- */}
       {member.role === "member" && (
         <section className="rounded-2xl border border-slate-200/80 bg-white shadow-[var(--shadow-card)]">
@@ -427,6 +433,75 @@ export function MemberDashboard({
         }}
       />
     </div>
+  );
+}
+
+/**
+ * What an hour of this person's time costs the agency (PLAN-5, 0092).
+ *
+ * Only ever entered here, on the admin-only member page, and only ever read
+ * back inside a project's margin — never shown to the member it belongs to.
+ * Without it, logged time still shows as hours; it just prices at zero.
+ */
+function CostRateCard({ member }: { member: Profile }) {
+  const router = useRouter();
+  const [value, setValue] = React.useState(
+    member.hourly_cost != null ? String(member.hourly_cost) : "",
+  );
+  const [saving, setSaving] = React.useState(false);
+
+  async function save() {
+    const trimmed = value.trim();
+    const parsed = trimmed === "" ? null : Number(trimmed);
+    if (parsed !== null && (!Number.isFinite(parsed) || parsed < 0)) {
+      toast.error("Enter a valid hourly cost.");
+      return;
+    }
+    setSaving(true);
+    const res = await setMemberHourlyCost(member.id, parsed);
+    setSaving(false);
+    if (res.ok) {
+      toast.success("Cost rate saved");
+      router.refresh();
+    } else {
+      toast.error(res.error);
+    }
+  }
+
+  return (
+    <section className="rounded-2xl border border-slate-200/80 bg-white shadow-[var(--shadow-card)]">
+      <div className="flex items-center gap-2.5 border-b border-slate-100 px-5 py-4">
+        <span className="grid h-9 w-9 place-items-center rounded-xl bg-amber-50 text-amber-500">
+          <Clock className="h-5 w-5" />
+        </span>
+        <div>
+          <h2 className="text-sm font-semibold text-slate-900">Cost rate</h2>
+          <p className="text-xs text-slate-400">
+            Turns their logged time into a real cost on project margin
+          </p>
+        </div>
+      </div>
+      <div className="flex flex-wrap items-end gap-3 px-5 py-4">
+        <div className="w-full max-w-[220px]">
+          <Field
+            label="Cost per hour (LKR)"
+            hint="What an hour of their time costs us — not their pay. Never shown to them."
+          >
+            <Input
+              type="number"
+              min={0}
+              step="0.01"
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              placeholder="e.g. 1200"
+            />
+          </Field>
+        </div>
+        <Button variant="outline" onClick={save} loading={saving}>
+          Save
+        </Button>
+      </div>
+    </section>
   );
 }
 

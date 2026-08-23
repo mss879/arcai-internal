@@ -23,6 +23,7 @@ export default async function TodosPage() {
     supabase
       .from("projects")
       .select("id, name")
+      .is("deleted_at", null)
       .order("created_at", { ascending: false }),
     getMembers(),
   ]);

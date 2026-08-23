@@ -264,3 +264,94 @@ export const ASSET_CATEGORY_LABELS: Record<string, string> = {
   photos: "Photos",
   access: "Access",
 };
+
+// ---------------------------------------------------------------------------
+// Projects — theme 1-3 (0090-0092)
+// ---------------------------------------------------------------------------
+
+/**
+ * Categories for a project's additional expenses.
+ *
+ * `project_expenses.category` was free text, so it could never be reported on.
+ * These are the buckets the profitability report groups by; the field still
+ * accepts anything, so existing rows keep their wording.
+ */
+export const PROJECT_EXPENSE_CATEGORIES = [
+  { value: "hosting", label: "Hosting & domains" },
+  { value: "licence", label: "Plugins & licences" },
+  { value: "stock", label: "Stock media" },
+  { value: "content", label: "Content & copywriting" },
+  { value: "design", label: "Design & assets" },
+  { value: "ads", label: "Ad spend" },
+  { value: "subcontract", label: "Subcontracted work" },
+  { value: "travel", label: "Travel" },
+  { value: "other", label: "Other" },
+] as const;
+
+export const PROJECT_EXPENSE_CATEGORY_LABELS: Record<string, string> =
+  Object.fromEntries(PROJECT_EXPENSE_CATEGORIES.map((c) => [c.value, c.label]));
+
+/** Suggested roles on a project. Free text underneath — add your own. */
+export const PROJECT_ROLES = [
+  "Lead",
+  "Designer",
+  "Developer",
+  "Content",
+  "Ads",
+  "QA",
+] as const;
+
+export const MILESTONE_STATUS_META: Record<
+  "pending" | "done" | "blocked",
+  { label: string; badge: string }
+> = {
+  pending: {
+    label: "Pending",
+    badge: "bg-slate-100 text-slate-600 ring-slate-200",
+  },
+  done: {
+    label: "Done",
+    badge: "bg-emerald-50 text-emerald-600 ring-emerald-200",
+  },
+  blocked: {
+    label: "Blocked",
+    badge: "bg-rose-50 text-rose-600 ring-rose-200",
+  },
+};
+
+/**
+ * The internal gate before a project may be marked delivered.
+ *
+ * Seeded onto a project on demand; every one of these is something that has
+ * bitten an agency at least once after a launch.
+ */
+export const DEFAULT_LAUNCH_CHECKS: { title: string; detail: string }[] = [
+  { title: "SSL certificate live", detail: "https loads with no warning on www and the bare domain." },
+  { title: "Analytics installed", detail: "Google Analytics / Search Console verified and recording." },
+  { title: "Backups configured", detail: "Automatic backups running, and a restore has been tested once." },
+  { title: "Forms tested end to end", detail: "Every form submits and the notification email actually arrives." },
+  { title: "Mobile checked", detail: "Every page walked through on a real phone, not just a narrow window." },
+  { title: "Speed acceptable", detail: "PageSpeed run and obvious wins (image sizes, caching) taken." },
+  { title: "SEO basics", detail: "Titles, descriptions, favicon, sitemap and robots.txt in place." },
+  { title: "Credentials handed over", detail: "Logins delivered to the client and recorded against the project." },
+];
+
+/** Monthly work an aftercare project generates once it's delivered. */
+export const AFTERCARE_TASKS: { title: string; description: string }[] = [
+  { title: "Run backups & check restore", description: "Monthly aftercare." },
+  { title: "Apply plugin / platform updates", description: "Monthly aftercare." },
+  { title: "Check uptime & speed", description: "Monthly aftercare." },
+  { title: "Review forms and enquiries", description: "Monthly aftercare." },
+];
+
+/** How the projects board can be sorted (LOOP-7). */
+export const PROJECT_SORTS = [
+  { value: "recent", label: "Newest first" },
+  { value: "due", label: "Due date" },
+  { value: "value", label: "Highest value" },
+  { value: "balance", label: "Biggest balance due" },
+  { value: "health", label: "Needs attention" },
+  { value: "name", label: "Name A–Z" },
+] as const;
+
+export type ProjectSort = (typeof PROJECT_SORTS)[number]["value"];

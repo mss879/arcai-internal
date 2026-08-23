@@ -16,11 +16,14 @@ export function WebsiteFormModal({
   onClose,
   site,
   clients,
+  projects,
 }: {
   open: boolean;
   onClose: () => void;
   site?: WebsiteProject | null;
   clients: Pick<Client, "id" | "name" | "company">[];
+  /** 0092 — linking a build to its project (PLAN-9). */
+  projects: { id: string; name: string }[];
 }) {
   const router = useRouter();
   const [pending, startTransition] = React.useTransition();
@@ -40,6 +43,7 @@ export function WebsiteFormModal({
             name: site.name,
             url: site.url,
             client_id: site.client_id,
+            project_id: site.project_id,
             progress: site.progress,
             status: site.status,
             notes: site.notes ?? "",
@@ -48,6 +52,7 @@ export function WebsiteFormModal({
             name: "",
             url: "",
             client_id: null,
+            project_id: null,
             progress: 0,
             status: "in_progress",
             notes: "",
@@ -124,6 +129,23 @@ export function WebsiteFormModal({
                 <option key={c.id} value={c.id}>
                   {c.name}
                   {c.company ? ` · ${c.company}` : ""}
+                </option>
+              ))}
+            </Select>
+          </Field>
+
+          <Field
+            label="Project"
+            hint="Links this build to the job it belongs to."
+          >
+            <Select
+              value={form.project_id ?? ""}
+              onChange={(e) => set("project_id", e.target.value || null)}
+            >
+              <option value="">Not linked</option>
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
                 </option>
               ))}
             </Select>

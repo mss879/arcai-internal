@@ -6,6 +6,7 @@ import {
   scanTimeBasedTriggers,
 } from "@/lib/automation";
 import { processDeliveryAutomations } from "@/lib/delivery";
+import { processProjectAutomations } from "@/lib/project-automation";
 import { processFinanceReminders } from "@/lib/finance";
 import { processDueSmsRuns } from "@/lib/sms-automation";
 import { processTodoReminders } from "@/lib/todo-reminders";
@@ -70,6 +71,10 @@ export async function GET(request: Request) {
     // nudges, quiet-hours aware, ≤5 sends/tick) + stalled-project alerts.
     // Fast DB work — the heavy AI paths live in the WA agent tick.
     const delivery = await processDeliveryAutomations(supabase);
+    // Projects (0090-0092): over-budget alerts, retainer months, the balance
+    // chase ladder and aftercare task batches. All DB work, all guarded by a
+    // stamp so nothing fires twice.
+    const projects = await processProjectAutomations(supabase);
     const research = await processPendingResearch(supabase);
     const schedules = await processDueProspectSchedules(supabase);
     const prospecting = await processPendingProspectScans(supabase);
@@ -111,6 +116,7 @@ export async function GET(request: Request) {
       todos,
       meetings,
       delivery,
+      projects,
       research,
       schedules,
       prospecting,

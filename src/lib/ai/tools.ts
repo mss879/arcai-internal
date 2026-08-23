@@ -707,8 +707,16 @@ export async function executeTool(
           .select("*", { count: "exact", head: true })
           .neq("status", "done")
           .eq("assigned_to", ctx.userId),
-        supabase.from("projects").select("*", { count: "exact", head: true }).eq("status", "active"),
-        supabase.from("projects").select("*", { count: "exact", head: true }),
+        // 0090 — archived projects are out of every count.
+        supabase
+          .from("projects")
+          .select("*", { count: "exact", head: true })
+          .eq("status", "active")
+          .is("deleted_at", null),
+        supabase
+          .from("projects")
+          .select("*", { count: "exact", head: true })
+          .is("deleted_at", null),
         supabase.from("leads").select("value"),
         supabase.from("clients").select("*", { count: "exact", head: true }),
         supabase
@@ -765,6 +773,7 @@ export async function executeTool(
             .from("projects")
             .select("id, name, status")
             .or(`name.ilike.${term},description.ilike.${term}`)
+            .is("deleted_at", null)
             .limit(5),
           supabase
             .from("leads")
@@ -933,6 +942,7 @@ export async function executeTool(
       let q = supabase
         .from("projects")
         .select("id, name, status, budget, currency, due_date")
+        .is("deleted_at", null)
         .order("created_at", { ascending: false })
         .limit(25);
       if (args.status) q = q.eq("status", args.status as ProjectStatus);

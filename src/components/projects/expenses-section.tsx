@@ -26,6 +26,7 @@ import {
   Plus,
   Receipt,
   RotateCcw,
+  Sparkles,
   Trash2,
   TrendingUp,
 } from "lucide-react";
@@ -36,7 +37,10 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dropdown, DropdownItem } from "@/components/ui/dropdown";
 import { Field, Input, Textarea } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
-import { STORAGE_BUCKETS } from "@/lib/constants";
+import {
+  PROJECT_EXPENSE_CATEGORIES,
+  STORAGE_BUCKETS,
+} from "@/lib/constants";
 import {
   INVOICE_HANDOFF_PARAM,
   INVOICE_HANDOFF_SOURCE_PROJECT,
@@ -48,6 +52,7 @@ import type { ProjectExpense } from "@/lib/types";
 
 import {
   deleteProjectExpense,
+  readReceipt,
   saveProjectExpense,
   setProjectExpensesInvoiced,
 } from "@/app/(app)/projects/actions";
@@ -419,6 +424,9 @@ function ExpenseModal({
   const [billable, setBillable] = React.useState(true);
   const [notes, setNotes] = React.useState("");
   const [file, setFile] = React.useState<File | null>(null);
+  // MON-8 — the receipt is read into the fields, never straight into the row.
+  const [reading, setReading] = React.useState(false);
+  const [readNote, setReadNote] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     if (!open) return;
@@ -434,7 +442,51 @@ function ExpenseModal({
     setBillable(expense?.billable ?? true);
     setNotes(expense?.notes ?? "");
     setFile(null);
+    setReadNote(null);
   }, [open, expense]);
+
+  /**
+   * Photograph a bill, get a filled-in form.
+   *
+   * The image is read straight out of the file input as a data URL, so a
+   * receipt the model can't make sense of never leaves anything behind in
+   * storage. Every parsed field is a suggestion — blank fields are filled,
+   * anything already typed is left alone.
+   */
+  async function readFromReceipt(picked: File) {
+    setReading(true);
+    setReadNote(null);
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(new Error("Couldn't open that file."));
+        reader.readAsDataURL(picked);
+      });
+
+      const res = await readReceipt(dataUrl);
+      if (!res.ok) {
+        setReadNote(res.error);
+        return;
+      }
+
+      const p = res.parsed;
+      if (p.vendor && !vendor) setVendor(p.vendor);
+      if (p.description && !description) setDescription(p.description);
+      if (p.amount && !Number(unitAmount)) setUnitAmount(String(p.amount));
+      if (p.date && !expense) setIncurredOn(p.date);
+      if (p.category && !category) setCategory(p.category);
+      setReadNote(
+        p.confidence === "high"
+          ? "Filled in from the receipt — check the total before saving."
+          : "Read it, but the image was hard to make out. Check every field.",
+      );
+    } catch (e) {
+      setReadNote(e instanceof Error ? e.message : "Couldn't read that one.");
+    } finally {
+      setReading(false);
+    }
+  }
 
   const qtyValue = Number(qty) > 0 ? Number(qty) : 1;
   const unitValue = Number(unitAmount) || 0;
@@ -565,12 +617,23 @@ function ExpenseModal({
           </Field>
         </div>
 
-        <Field label="Category" hint="Optional — e.g. Licence, Hosting, Scope.">
+        <Field
+          label="Category"
+          hint="Groups this cost in the profitability report. Type your own if none fit."
+        >
           <Input
+            list="project-expense-categories"
             value={category}
             onChange={(e) => setCategory(e.target.value)}
-            placeholder="Scope change"
+            placeholder="Plugins & licences"
           />
+          <datalist id="project-expense-categories">
+            {PROJECT_EXPENSE_CATEGORIES.map((c) => (
+              <option key={c.value} value={c.value}>
+                {c.label}
+              </option>
+            ))}
+          </datalist>
         </Field>
 
         <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-slate-200 bg-slate-50/60 px-3.5 py-3">
@@ -599,7 +662,10 @@ function ExpenseModal({
           />
         </Field>
 
-        <Field label="Receipt" hint="Supplier bill — PDF or image, optional.">
+        <Field
+          label="Receipt"
+          hint="Supplier bill — PDF or image, optional. Photograph one and it fills the form in for you."
+        >
           <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-dashed border-slate-300 px-3.5 py-3 text-sm text-slate-500 hover:border-primary-300 hover:bg-primary-50/40">
             <Paperclip className="h-4 w-4" />
             {file ? file.name : "Attach a receipt"}
@@ -607,9 +673,25 @@ function ExpenseModal({
               type="file"
               accept="image/*,application/pdf"
               className="hidden"
-              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              onChange={(e) => {
+                const picked = e.target.files?.[0] ?? null;
+                setFile(picked);
+                // Only images can be read; a PDF still attaches normally.
+                if (picked && picked.type.startsWith("image/")) {
+                  void readFromReceipt(picked);
+                }
+              }}
             />
           </label>
+          {reading && (
+            <p className="mt-1.5 inline-flex items-center gap-1.5 text-xs text-primary-600">
+              <Sparkles className="h-3.5 w-3.5 animate-pulse" />
+              Reading the receipt…
+            </p>
+          )}
+          {readNote && !reading && (
+            <p className="mt-1.5 text-xs text-slate-500">{readNote}</p>
+          )}
         </Field>
 
         {unitValue > 0 && (

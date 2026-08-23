@@ -1,9 +1,22 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { format } from "date-fns";
-import { ArrowLeft, CalendarRange } from "lucide-react";
+import { format, startOfToday } from "date-fns";
+import { ArrowLeft, ArchiveRestore, CalendarRange } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { ActivitySection } from "@/components/projects/activity-section";
+import {
+  ClientMessageCard,
+  type SentClientMessage,
+} from "@/components/projects/client-message-card";
+import { DepositConfirmCard } from "@/components/projects/deposit-confirm-card";
+import {
+  ClientDeskCard,
+  type DeskApproval,
+  type DeskChangeRequest,
+  type DeskComment,
+  type DeskReview,
+} from "@/components/projects/client-desk-card";
 import {
   CommissionsSection,
   type CommissionRow,
@@ -12,18 +25,41 @@ import {
   ExpensesSection,
   type ProjectExpenseRow,
 } from "@/components/projects/expenses-section";
+import { FilesSection, type ProjectFile } from "@/components/projects/files-section";
+import { LedgerSection } from "@/components/projects/ledger-section";
+import { MarginCard } from "@/components/projects/margin-card";
 import {
-  PaymentsSection,
-  type PaymentRow,
-} from "@/components/projects/payments-section";
+  PlanSection,
+  type ProjectMemberRow,
+  type TimeEntryRow,
+} from "@/components/projects/plan-section";
+import { ProjectSettingsCard } from "@/components/projects/project-settings-card";
+import {
+  ScheduleCard,
+  type ScheduleInstallment,
+} from "@/components/projects/schedule-card";
+import { StageControl } from "@/components/projects/stage-control";
+import { TasksSection, type ProjectTask } from "@/components/projects/tasks-section";
 import { PortalSection } from "./portal-section";
 import { ProjectTabs } from "./project-tabs";
-import { PROJECT_STATUS_META, STORAGE_BUCKETS, SERVICE_TYPE_LABELS } from "@/lib/constants";
+import {
+  PROJECT_STATUS_META,
+  STORAGE_BUCKETS,
+  SERVICE_TYPE_LABELS,
+} from "@/lib/constants";
 import { requireProfile } from "@/lib/auth";
 import { getMembers } from "@/lib/data";
+import {
+  buildLedger,
+  commissionEarned,
+  daysSince,
+  projectHealth,
+  projectMargin,
+  settledAmount,
+} from "@/lib/projects";
 import { createClient } from "@/lib/supabase/server";
-import { formatCurrency } from "@/lib/utils";
-import type { ProjectStatus } from "@/lib/types";
+import { cn, formatCurrency } from "@/lib/utils";
+import type { DeliveryEvent, ProjectMilestone, ProjectStatus } from "@/lib/types";
 
 export default async function ProjectDetailPage({
   params,
@@ -43,6 +79,22 @@ export default async function ProjectDetailPage({
     docRequestsRes,
     expensesRes,
     linkedPaymentsRes,
+    milestonesRes,
+    teamRes,
+    tasksRes,
+    timeRes,
+    templatesRes,
+    eventsRes,
+    costRatesRes,
+    siteRes,
+    changeRequestsRes,
+    approvalsRes,
+    reviewsRes,
+    commentsRes,
+    pulsesRes,
+    depositInvoiceRes,
+    clientSmsRes,
+    planRes,
   ] = await Promise.all([
     requireProfile(),
     (supabase as any)
@@ -69,20 +121,118 @@ export default async function ProjectDetailPage({
       .select("*")
       .eq("project_id", id)
       .order("created_at", { ascending: true }),
-    // 0087 — Additional expenses tab.
+    // 0087 — Additional expenses.
     supabase
       .from("project_expenses")
       .select("*")
       .eq("project_id", id)
       .order("incurred_on", { ascending: false })
       .order("created_at", { ascending: false }),
-    // 0083 — payments booked on /payments against this project. The same
-    // rows the projects board counts, so "already paid" agrees with the
-    // balance shown there.
+    // 0083 — payments booked on /payments against this project.
     supabase
       .from("company_payments")
-      .select("id, price_lkr, is_paid")
+      .select("id, price_lkr, is_paid, created_at, company_name")
       .eq("project_id", id),
+    // 0092 — the planning layer.
+    supabase
+      .from("project_milestones")
+      .select("*")
+      .eq("project_id", id)
+      .order("position", { ascending: true })
+      .order("created_at", { ascending: true }),
+    supabase
+      .from("project_members")
+      .select(
+        "*, profile:profiles!project_members_user_id_fkey(id, full_name, username, avatar_url)",
+      )
+      .eq("project_id", id),
+    supabase
+      .from("todos")
+      .select("id, title, status, priority, due_date, assigned_to, depends_on_id")
+      .eq("project_id", id)
+      .order("position", { ascending: true }),
+    supabase
+      .from("time_entries")
+      .select(
+        "*, profile:profiles!time_entries_user_id_fkey(id, full_name, avatar_url)",
+      )
+      .eq("project_id", id)
+      .order("worked_on", { ascending: false }),
+    supabase
+      .from("project_templates")
+      .select("id, name, service_type")
+      .eq("is_active", true)
+      .order("name"),
+    // 0084 — this project's own slice of the delivery feed.
+    supabase
+      .from("delivery_events")
+      .select("*")
+      .eq("project_id", id)
+      .order("created_at", { ascending: false })
+      .limit(80),
+    // Hourly cost rates. Deliberately their own query rather than widening
+    // getMembers(): 0092 says a cost rate is never shown to the member it
+    // belongs to, and getMembers feeds every picker in the app.
+    supabase.from("profiles").select("id, hourly_cost"),
+    // 0092 — the /website-progress build linked to this project (PLAN-9).
+    supabase
+      .from("website_projects")
+      .select("id, name, url, progress, status, notes, launched_at")
+      .eq("project_id", id)
+      .maybeSingle(),
+    // 0094 — what the client has sent in, and what we've asked of them.
+    supabase
+      .from("project_change_requests")
+      .select(
+        "id, body, status, quoted_amount, quote_note, client_name, created_at",
+      )
+      .eq("project_id", id)
+      .order("created_at", { ascending: false }),
+    supabase
+      .from("project_approvals")
+      .select(
+        "id, title, detail, status, signer_name, signed_at, response_note, created_at",
+      )
+      .eq("project_id", id)
+      .order("created_at", { ascending: false }),
+    supabase
+      .from("project_reviews")
+      .select(
+        "id, status, rating, headline, body, publishable, share_token, submitted_at, requested_at",
+      )
+      .eq("project_id", id)
+      .order("created_at", { ascending: false }),
+    supabase
+      .from("project_comments")
+      .select("id, author_type, author_name, body, created_at")
+      .eq("project_id", id)
+      .order("created_at", { ascending: true })
+      .limit(60),
+    supabase.from("project_pulses").select("score").eq("project_id", id),
+    // 0093 — the deposit invoice raised on confirmation, and the texts this
+    // project has already sent its client.
+    supabase
+      .from("invoices")
+      .select("id, invoice_number, share_token, shared_at")
+      .eq("project_id", id)
+      .eq("stamp", "deposit_paid")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    supabase
+      .from("sms_messages")
+      .select("id, message, status, created_at")
+      .eq("project_id", id)
+      .order("created_at", { ascending: false })
+      .limit(5),
+    // 0091 — the payment schedule billing this project, if there is one.
+    supabase
+      .from("payment_plans")
+      .select("id, title, installments:payment_installments(id, seq, amount, due_date, status)")
+      .eq("project_id", id)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
   ]);
 
   const project = projectRes.data;
@@ -98,7 +248,7 @@ export default async function ProjectDetailPage({
       .eq("id", id);
   }
 
-  const payments: PaymentRow[] = await Promise.all(
+  const payments = await Promise.all(
     (paymentsRes.data ?? []).map(async (p) => {
       if (!p.receipt_path) return p;
       const { data } = await supabase.storage
@@ -123,13 +273,6 @@ export default async function ProjectDetailPage({
   /** Billable extras still waiting to go on an invoice — the tab's badge. */
   const unbilledExpenses = expenses.filter((e) => e.billable && !e.invoiced_at);
 
-  const totalPaid = (paymentsRes.data ?? [])
-    .filter((p) => p.status === "paid")
-    .reduce((s, p) => s + Number(p.amount), 0);
-  const paidProjectPayments = (paymentsRes.data ?? []).filter(
-    (p) => p.status === "paid",
-  ).length;
-
   const client = project.client as unknown as {
     id: string;
     name: string;
@@ -138,29 +281,162 @@ export default async function ProjectDetailPage({
     phone: string | null;
   } | null;
 
-  // What the client has actually paid us, counted exactly the way the projects
-  // board counts it (0083): the deposit on the project plus every linked
-  // payment already ticked paid.
-  const depositPaid = Number(project.deposit_paid) || 0;
-  const linkedPaid = ((linkedPaymentsRes.data ?? []) as {
-    price_lkr: number;
-    is_paid: boolean;
-  }[]).filter((p) => p.is_paid);
-  const linkedPaidTotal = linkedPaid.reduce(
-    (s, p) => s + Number(p.price_lkr),
+  // ---- Money, counted once (LOOP-1/6) ------------------------------------
+  const money = {
+    total_value: project.total_value,
+    deposit_paid: project.deposit_paid,
+    payments: payments.map((p) => ({
+      id: p.id,
+      amount: p.amount,
+      status: p.status,
+      paid_at: p.paid_at,
+      method: p.method,
+      notes: p.notes,
+      receiptUrl: (p as { receiptUrl?: string | null }).receiptUrl ?? null,
+    })),
+    company_payments: linkedPaymentsRes.data ?? [],
+  };
+  const received = settledAmount(money);
+  const totalValue = Number(project.total_value) || 0;
+  const balance = Math.max(0, totalValue - received);
+  const ledger = buildLedger(money);
+
+  // ---- Time and margin (PLAN-5, MON-1) -----------------------------------
+  const timeEntries = (timeRes.data ?? []) as unknown as (TimeEntryRow & {
+    profile: { id: string; full_name: string; avatar_url: string | null } | null;
+  })[];
+  const costByUser = new Map(
+    (costRatesRes.data ?? []).map((p) => [p.id, Number(p.hourly_cost ?? 0)]),
+  );
+  const labourMinutes = timeEntries.reduce((s, e) => s + e.minutes, 0);
+  const labourCost = timeEntries.reduce(
+    (s, e) => s + (e.minutes / 60) * (costByUser.get(e.user_id) ?? 0),
     0,
   );
-  const paidSummary = {
-    total: depositPaid + linkedPaidTotal,
-    breakdown:
-      linkedPaid.length > 0
-        ? `${formatCurrency(depositPaid, project.currency)} deposit + ${linkedPaid.length} linked payment${linkedPaid.length === 1 ? "" : "s"} (${formatCurrency(linkedPaidTotal, project.currency)})`
-        : `Deposit recorded on this project${depositPaid > 0 ? "" : " — nothing yet"}`,
-    otherPayments:
-      totalPaid > 0
-        ? { amount: totalPaid, count: paidProjectPayments }
+  const hasCostRates = timeEntries.some(
+    (e) => (costByUser.get(e.user_id) ?? 0) > 0,
+  );
+
+  const commissions = (commissionsRes.data ?? []) as unknown as CommissionRow[];
+  const margin = projectMargin({
+    totalValue,
+    expenses,
+    // A percentage commission is only worth what the client has actually paid.
+    commissions: commissions.map((c) => ({
+      amount: commissionEarned(c, received),
+    })),
+    labourCost,
+  });
+
+  // ---- Health (PLAN-8) ---------------------------------------------------
+  const milestones = (milestonesRes.data ?? []) as ProjectMilestone[];
+  const tasks = (tasksRes.data ?? []) as ProjectTask[];
+  const docRequests = docRequestsRes.data ?? [];
+  // startOfToday() rather than Date.now(): react-hooks/purity forbids calling
+  // the impure global during render, and work due later today isn't late yet.
+  const now = startOfToday().getTime();
+  const health = projectHealth({
+    status: project.status,
+    deliveryStage: project.delivery_stage,
+    stageChangedAt: project.delivery_stage_changed_at,
+    updatedAt: project.updated_at,
+    dueDate: project.due_date,
+    blockedSince: project.blocked_since,
+    assetsOutstanding: docRequests.filter(
+      (r: { status: string; required: boolean }) =>
+        r.status === "pending" && r.required,
+    ).length,
+    overdueTasks: tasks.filter(
+      (t) =>
+        t.status !== "done" && t.due_date && new Date(t.due_date).getTime() < now,
+    ).length,
+    overdueMilestones: milestones.filter(
+      (m) =>
+        m.status !== "done" &&
+        m.due_date &&
+        new Date(`${m.due_date}T23:59:59`).getTime() < now,
+    ).length,
+    balance,
+    daysSinceDelivered:
+      project.delivery_stage === "delivered" || project.delivery_stage === "aftercare"
+        ? daysSince(project.delivery_stage_changed_at)
         : null,
-  };
+    budget: Number(project.expense_cap ?? project.budget ?? 0) || null,
+    spend: margin.expenses,
+  });
+
+  // ---- Files, from four different places (LOOP-9) ------------------------
+  const files: ProjectFile[] = [
+    ...(project.proposal_url
+      ? [
+          {
+            id: "proposal",
+            name: project.proposal_name || "Proposal",
+            url: project.proposal_url,
+            source: "proposal" as const,
+            date: project.created_at,
+          },
+        ]
+      : []),
+    ...(project.invoice_url
+      ? [
+          {
+            id: "invoice",
+            name: project.invoice_name || "Invoice",
+            url: project.invoice_url,
+            source: "invoice" as const,
+            date: project.created_at,
+          },
+        ]
+      : []),
+    ...docRequests
+      .filter((r: { file_url: string | null }) => r.file_url)
+      .map(
+        (r: {
+          id: string;
+          file_name: string | null;
+          file_url: string;
+          source: string;
+          submitted_at: string | null;
+          title: string;
+        }) => ({
+          id: r.id,
+          name: r.file_name || r.title,
+          url: r.file_url,
+          source: (r.source === "whatsapp" ? "whatsapp" : "portal") as
+            | "whatsapp"
+            | "portal",
+          date: r.submitted_at,
+          meta: r.title,
+        }),
+      ),
+    ...expenses
+      .filter((e) => e.receiptUrl)
+      .map((e) => ({
+        id: e.id,
+        name: e.vendor ? `${e.vendor} — ${e.description}` : e.description,
+        url: e.receiptUrl as string,
+        source: "receipt" as const,
+        date: e.incurred_on,
+        meta: formatCurrency(Number(e.amount), e.currency),
+      })),
+  ];
+
+  const openTasks = tasks.filter((t) => t.status !== "done").length;
+  // The client's invoice link is absolute — it goes out in a text, and the
+  // team copies it out of this page. Empty when NEXT_PUBLIC_APP_URL is unset,
+  // which the card then reports rather than showing a half-formed URL.
+  const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "").replace(/\/+$/, "");
+
+  // 0094 — how the client says it's going. Averaged rather than "latest", so
+  // one bad day doesn't define the project and one good one doesn't hide it.
+  const pulses = pulsesRes.data ?? [];
+  const pulseAverage = pulses.length
+    ? pulses.reduce((s, p) => s + Number(p.score), 0) / pulses.length
+    : null;
+  // Margin exposes what people cost us, so it sits behind the same door as
+  // commissions (0006): admins only.
+  const isAdmin = profile.role === "admin";
 
   return (
     <div className="space-y-6">
@@ -171,23 +447,40 @@ export default async function ProjectDetailPage({
         <ArrowLeft className="h-4 w-4" /> Projects
       </Link>
 
+      {project.deleted_at && (
+        <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-slate-300 bg-slate-100 px-5 py-3 text-sm text-slate-700">
+          <ArchiveRestore className="h-4 w-4" />
+          <span>
+            <span className="font-semibold">Archived</span> on{" "}
+            {format(new Date(project.deleted_at), "d MMM yyyy")}. It stays out of
+            every board until it&apos;s restored from the archive.
+          </span>
+        </div>
+      )}
+
       {/* Header */}
       <div className="rounded-2xl border border-slate-200/80 bg-white p-6 shadow-[var(--shadow-card)]">
         <div className="flex flex-col gap-4">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
-              <div className="flex items-center gap-3 flex-wrap">
+              <div className="flex flex-wrap items-center gap-3">
                 <h1 className="text-2xl font-semibold text-slate-900">
                   {project.name}
                 </h1>
-                <Badge className={PROJECT_STATUS_META[project.status as ProjectStatus].badge}>
+                <Badge
+                  className={
+                    PROJECT_STATUS_META[project.status as ProjectStatus].badge
+                  }
+                >
                   {PROJECT_STATUS_META[project.status as ProjectStatus].label}
                 </Badge>
                 {project.service_type && (
-                  <Badge className="bg-primary-50 text-primary-700 ring-primary-200 font-medium">
-                    {SERVICE_TYPE_LABELS[project.service_type] || project.service_type}
+                  <Badge className="bg-primary-50 font-medium text-primary-700 ring-primary-200">
+                    {SERVICE_TYPE_LABELS[project.service_type] ||
+                      project.service_type}
                   </Badge>
                 )}
+                <HealthPill health={health} />
               </div>
               {client && (
                 <p className="mt-1 text-sm text-slate-500">
@@ -215,97 +508,341 @@ export default async function ProjectDetailPage({
             </div>
           </div>
 
-          {/* Financial Indicators Grid */}
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4 text-right mt-2 pt-4 border-t border-slate-100">
-            <Stat label="Total Value" value={formatCurrency(Number(project.total_value) || 0, project.currency)} />
+          {/* Delivery stage, on the project at last (LOOP-3) */}
+          <div className="border-t border-slate-100 pt-4">
+            <StageControl
+              projectId={id}
+              stage={project.delivery_stage}
+              blockedReason={project.blocked_reason}
+              blockedSince={project.blocked_since}
+              canTextClient={Boolean(client?.phone)}
+            />
+          </div>
+
+          {/* Money, counted the same way everywhere (LOOP-1) */}
+          <div className="mt-2 grid grid-cols-2 gap-4 border-t border-slate-100 pt-4 text-right md:grid-cols-4">
+            <Stat
+              label="Total Value"
+              value={formatCurrency(totalValue, project.currency)}
+            />
             <Stat
               label="Received"
-              value={formatCurrency(paidSummary.total, project.currency)}
+              value={formatCurrency(received, project.currency)}
               accent="emerald"
-              hint={
-                linkedPaid.length > 0
-                  ? `${formatCurrency(depositPaid, project.currency)} deposit + ${linkedPaid.length} payment${linkedPaid.length === 1 ? "" : "s"}`
-                  : "Deposit paid"
-              }
+              hint={`${ledger.filter((r) => r.paid).length} payment${ledger.filter((r) => r.paid).length === 1 ? "" : "s"}`}
             />
-            {/* Counted the same way the projects board counts it (0083), so
-             * the two screens can't disagree about what's still owed. */}
             <Stat
               label="Balance Due"
-              value={formatCurrency(
-                Math.max(
-                  0,
-                  (Number(project.total_value) || 0) - paidSummary.total,
-                ),
-                project.currency,
-              )}
+              value={formatCurrency(balance, project.currency)}
               accent="amber"
             />
-            <Stat label="Internal Budget" value={formatCurrency(Number(project.budget) || 0, project.currency)} />
-            <Stat label="Budget Received" value={formatCurrency(totalPaid, project.currency)} />
+            {isAdmin ? (
+              <Stat
+                label="Profit"
+                value={formatCurrency(margin.profit, project.currency)}
+                accent={margin.profit >= 0 ? "emerald" : "rose"}
+                hint={
+                  margin.percent !== null ? `${margin.percent}% margin` : undefined
+                }
+              />
+            ) : (
+              <Stat
+                label="Internal budget"
+                value={formatCurrency(Number(project.budget) || 0, project.currency)}
+              />
+            )}
           </div>
         </div>
       </div>
 
-      {/* Main content split */}
       <ProjectTabs
         expenseBadge={
           unbilledExpenses.length > 0 ? String(unbilledExpenses.length) : undefined
         }
+        planBadge={openTasks > 0 ? String(openTasks) : undefined}
         overview={
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-            <div className="lg:col-span-2 space-y-6">
-              <PaymentsSection
-                projectId={id}
+            <div className="space-y-6 lg:col-span-2">
+              <LedgerSection
+                rows={ledger}
                 currency={project.currency}
-                payments={payments}
+                received={received}
+                totalValue={totalValue}
               />
-              <CommissionsSection
+              <TasksSection projectId={id} tasks={tasks} members={members} />
+            </div>
+            <div className="space-y-6">
+              <DepositConfirmCard
                 projectId={id}
                 currency={project.currency}
-                totalValue={Number(project.total_value) || 0}
-                isAdmin={profile.role === "admin"}
-                members={members}
-                commissions={
-                  (commissionsRes.data ?? []) as unknown as CommissionRow[]
+                received={received}
+                totalValue={totalValue}
+                clientName={client?.name ?? null}
+                clientPhone={client?.phone ?? null}
+                confirmedAt={project.deposit_confirmed_at}
+                invoiceNumber={depositInvoiceRes.data?.invoice_number ?? null}
+                invoiceLink={
+                  depositInvoiceRes.data?.share_token
+                    ? `${appUrl}/public/invoice/${depositInvoiceRes.data.share_token}`
+                    : null
+                }
+                lastSentAt={depositInvoiceRes.data?.shared_at ?? null}
+              />
+              <ClientDeskCard
+                projectId={id}
+                currency={project.currency}
+                canText={Boolean(client?.phone)}
+                changeRequests={
+                  (changeRequestsRes.data ?? []) as DeskChangeRequest[]
+                }
+                approvals={(approvalsRes.data ?? []) as DeskApproval[]}
+                reviews={(reviewsRes.data ?? []) as DeskReview[]}
+                comments={(commentsRes.data ?? []) as DeskComment[]}
+                pulseAverage={pulseAverage}
+                pulseCount={pulses.length}
+                isDelivered={
+                  project.delivery_stage === "delivered" ||
+                  project.delivery_stage === "aftercare" ||
+                  project.status === "completed"
                 }
               />
-            </div>
-            <div>
+              <ClientMessageCard
+                projectId={id}
+                projectName={project.name}
+                clientName={client?.name ?? null}
+                clientPhone={client?.phone ?? null}
+                sent={(clientSmsRes.data ?? []) as SentClientMessage[]}
+              />
+              {siteRes.data && (
+                <WebsiteBuildCard
+                  site={siteRes.data}
+                />
+              )}
               <PortalSection
                 projectId={id}
+                projectName={project.name}
                 shareToken={shareToken}
-                requests={docRequestsRes.data || []}
+                requests={docRequests}
                 isProjectCompleted={project.status === "completed"}
                 serviceType={project.service_type ?? null}
                 hasClient={!!project.client_id}
                 onboardingStartedAt={project.onboarding_started_at ?? null}
+                clientName={client?.name ?? null}
+                clientPhone={client?.phone ?? null}
+                access={{
+                  passcode: project.portal_passcode,
+                  expiresAt: project.portal_expires_at,
+                  revokedAt: project.portal_revoked_at,
+                  lastSentAt: project.portal_last_sent_at,
+                  language: project.portal_language ?? "en",
+                }}
               />
             </div>
           </div>
         }
-        expenses={
-          <ExpensesSection
+        plan={
+          <PlanSection
             projectId={id}
-            projectName={project.name}
-            projectDetail={
-              (project.service_type
-                ? SERVICE_TYPE_LABELS[project.service_type] ||
-                  project.service_type
-                : project.description) ?? ""
-            }
+            members={members}
+            team={(teamRes.data ?? []) as unknown as ProjectMemberRow[]}
+            milestones={milestones}
+            timeEntries={timeEntries}
+            templates={templatesRes.data ?? []}
             currency={project.currency}
-            totalValue={Number(project.total_value) || 0}
-            paid={paidSummary}
-            clientName={client?.name ?? ""}
-            clientDetails={[client?.company, client?.email, client?.phone]
-              .filter(Boolean)
-              .join("\n")}
-            expenses={expenses}
+            labourCost={labourCost}
           />
+        }
+        money={
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+            <div className="space-y-6 lg:col-span-2">
+              <ExpensesSection
+                projectId={id}
+                projectName={project.name}
+                projectDetail={
+                  (project.service_type
+                    ? SERVICE_TYPE_LABELS[project.service_type] ||
+                      project.service_type
+                    : project.description) ?? ""
+                }
+                currency={project.currency}
+                totalValue={totalValue}
+                paid={{
+                  total: received,
+                  breakdown: `${ledger.filter((r) => r.paid).length} settled payment${ledger.filter((r) => r.paid).length === 1 ? "" : "s"}`,
+                  otherPayments: null,
+                }}
+                clientName={client?.name ?? ""}
+                clientDetails={[client?.company, client?.email, client?.phone]
+                  .filter(Boolean)
+                  .join("\n")}
+                expenses={expenses}
+              />
+              <CommissionsSection
+                projectId={id}
+                currency={project.currency}
+                totalValue={totalValue}
+                receivedAmount={received}
+                isAdmin={profile.role === "admin"}
+                members={members}
+                commissions={commissions}
+              />
+            </div>
+            <div className="space-y-6">
+              {isAdmin && (
+                <MarginCard
+                  margin={margin}
+                  currency={project.currency}
+                  cap={Number(project.expense_cap ?? project.budget ?? 0) || null}
+                  labourHours={labourMinutes / 60}
+                  hasCostRates={hasCostRates}
+                />
+              )}
+              <ScheduleCard
+                projectId={id}
+                projectName={project.name}
+                currency={project.currency}
+                totalValue={totalValue}
+                clientId={project.client_id}
+                clientName={client?.name ?? ""}
+                clientPhone={client?.phone ?? null}
+                planTitle={planRes.data?.title ?? null}
+                installments={
+                  ((planRes.data?.installments ?? []) as ScheduleInstallment[])
+                    .slice()
+                    .sort((a, b) => a.seq - b.seq)
+                }
+              />
+              <ProjectSettingsCard
+                projectId={id}
+                currency={project.currency}
+                settings={{
+                  expense_cap: project.expense_cap,
+                  deposit_required_percent: project.deposit_required_percent,
+                  is_retainer: project.is_retainer ?? false,
+                  retainer_day: project.retainer_day,
+                  auto_invoice_on_delivery: project.auto_invoice_on_delivery ?? false,
+                  aftercare_enabled: project.aftercare_enabled ?? false,
+                  balance_chase_paused: project.balance_chase_paused ?? false,
+                  balance_chase_count: project.balance_chase_count ?? 0,
+                }}
+              />
+            </div>
+          </div>
+        }
+        files={<FilesSection files={files} />}
+        activity={
+          <ActivitySection events={(eventsRes.data ?? []) as DeliveryEvent[]} />
         }
       />
     </div>
+  );
+}
+
+/**
+ * The linked /website-progress build (PLAN-9).
+ *
+ * website_projects (0026) predates projects having a delivery pipeline, so the
+ * same job was tracked in two places that never spoke. Linked rows now surface
+ * here, so the project page is the whole picture.
+ */
+function WebsiteBuildCard({
+  site,
+}: {
+  site: {
+    id: string;
+    name: string;
+    url: string;
+    progress: number;
+    status: string;
+    notes: string;
+    launched_at: string | null;
+  };
+}) {
+  const label =
+    site.status === "launched"
+      ? "Live"
+      : site.status === "waiting_client"
+        ? "Waiting on the client"
+        : "In progress";
+
+  return (
+    <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[var(--shadow-card)]">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="text-sm font-semibold text-slate-900">Website build</h2>
+          <a
+            href={site.url}
+            target="_blank"
+            rel="noreferrer"
+            className="mt-0.5 block truncate text-xs text-primary-600 hover:underline"
+          >
+            {site.url}
+          </a>
+        </div>
+        <Badge
+          className={
+            site.status === "launched"
+              ? "bg-emerald-50 text-emerald-600 ring-emerald-200"
+              : site.status === "waiting_client"
+                ? "bg-amber-50 text-amber-600 ring-amber-200"
+                : "bg-primary-50 text-primary-600 ring-primary-200"
+          }
+        >
+          {label}
+        </Badge>
+      </div>
+
+      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-100">
+        <div
+          className={cn(
+            "h-full rounded-full transition-all",
+            site.progress >= 100 ? "bg-emerald-500" : "bg-primary-500",
+          )}
+          style={{ width: `${site.progress}%` }}
+        />
+      </div>
+      <p className="mt-1.5 flex items-center justify-between text-xs text-slate-400">
+        <span>{site.progress}% built</span>
+        <Link href="/website-progress" className="hover:text-primary-600">
+          Update
+        </Link>
+      </p>
+
+      {site.notes && (
+        <p className="mt-3 border-t border-slate-100 pt-3 text-xs text-slate-500">
+          {site.notes}
+        </p>
+      )}
+    </section>
+  );
+}
+
+/** The one-glance answer to "is this job in trouble" (PLAN-8). */
+function HealthPill({
+  health,
+}: {
+  health: { score: number; tone: string; reasons: string[] };
+}) {
+  if (health.reasons.length === 0) return null;
+  return (
+    <span
+      title={health.reasons.join(" · ")}
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-inset",
+        health.tone === "risk"
+          ? "bg-rose-50 text-rose-700 ring-rose-200"
+          : "bg-amber-50 text-amber-700 ring-amber-200",
+      )}
+    >
+      <span
+        className={cn(
+          "h-1.5 w-1.5 rounded-full",
+          health.tone === "risk" ? "bg-rose-500" : "bg-amber-500",
+        )}
+      />
+      {health.reasons[0]}
+      {health.reasons.length > 1 && ` +${health.reasons.length - 1}`}
+    </span>
   );
 }
 
@@ -317,7 +854,7 @@ function Stat({
 }: {
   label: string;
   value: string;
-  accent?: "emerald" | "amber";
+  accent?: "emerald" | "amber" | "rose";
   hint?: string;
 }) {
   const color =
@@ -325,11 +862,13 @@ function Stat({
       ? "text-emerald-600"
       : accent === "amber"
         ? "text-amber-600"
-        : "text-slate-900";
+        : accent === "rose"
+          ? "text-rose-600"
+          : "text-slate-900";
   return (
     <div>
       <p className="text-xs font-medium text-slate-400">{label}</p>
-      <p className={`mt-1 text-lg font-semibold ${color}`}>{value}</p>
+      <p className={`mt-1 text-lg font-semibold tabular-nums ${color}`}>{value}</p>
       {hint && <p className="mt-0.5 text-[11px] text-slate-400">{hint}</p>}
     </div>
   );

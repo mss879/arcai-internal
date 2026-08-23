@@ -216,6 +216,33 @@ export async function setProjectDeliveryStage(
       ...base,
       triggerKey: `${projectId}:delivered`,
     });
+
+    // MON-4 — raise the balance invoice, when the project asked for it.
+    // Soft on purpose: a project that is fully paid, or has nothing to bill,
+    // simply doesn't produce one, and a failure here must never stop a
+    // delivery from being recorded.
+    try {
+      const { data: settings } = await supabase
+        .from("projects")
+        .select("auto_invoice_on_delivery")
+        .eq("id", projectId)
+        .maybeSingle();
+      if (settings?.auto_invoice_on_delivery) {
+        const { generateProjectInvoice } = await import("@/lib/project-automation");
+        const invoice = await generateProjectInvoice(supabase, projectId);
+        await logDeliveryEvent(
+          supabase,
+          projectId,
+          "stage_changed",
+          invoice.ok
+            ? `Invoice ${invoice.invoiceNumber} raised automatically`
+            : `No invoice raised — ${invoice.detail}`,
+          "automation",
+        );
+      }
+    } catch (e) {
+      console.error("[delivery] auto-invoice failed:", e);
+    }
   }
 
   if (!opts.suppressMilestone) {
@@ -442,6 +469,11 @@ async function runContentChaser(
     .select("id, name, client_id, share_token")
     .in("delivery_stage", ["onboarding", "assets"])
     .eq("chaser_paused", false)
+    // 0090 — an archived project is not chased.
+    .is("deleted_at", null)
+    // 0092 — nor is one the team has already marked as waiting on something.
+    // Chasing a client we know we're blocked on is how nudges get ignored.
+    .is("blocked_reason", null)
     .limit(100);
   if (!projects?.length) return 0;
 
@@ -590,6 +622,11 @@ async function runStalledScan(
     .not("delivery_stage", "is", null)
     .not("delivery_stage", "in", "(delivered,aftercare)")
     .lt("updated_at", cutoff)
+    // 0090/0092 — archived projects are gone, and a blocked project is
+    // waiting, not stalled. Alerting on either trains the team to ignore
+    // the alert that matters.
+    .is("deleted_at", null)
+    .is("blocked_reason", null)
     .limit(100);
   if (!projects?.length) return 0;
 

@@ -13,9 +13,11 @@ import { Dropdown, DropdownItem } from "@/components/ui/dropdown";
 import { Field, Input, Select, Textarea } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { COMMISSION_STATUS_META } from "@/lib/constants";
+import { commissionEarned } from "@/lib/projects";
 import { formatCurrency } from "@/lib/utils";
 import type {
   Commission,
+  CommissionBasis,
   CommissionStatus,
   MemberLite,
 } from "@/lib/types";
@@ -34,6 +36,7 @@ export function CommissionsSection({
   projectId,
   currency,
   totalValue,
+  receivedAmount,
   isAdmin,
   members,
   commissions,
@@ -41,6 +44,8 @@ export function CommissionsSection({
   projectId: string;
   currency: string;
   totalValue: number;
+  /** 0091 — a percentage commission is only worth a share of THIS. */
+  receivedAmount: number;
   isAdmin: boolean;
   members: MemberLite[];
   commissions: CommissionRow[];
@@ -100,11 +105,19 @@ export function CommissionsSection({
                 )}
               </div>
               <div className="text-right">
-                <p className="font-semibold text-slate-900">
-                  {formatCurrency(Number(c.amount), currency)}
+                <p className="font-semibold tabular-nums text-slate-900">
+                  {formatCurrency(commissionEarned(c, receivedAmount), currency)}
                 </p>
-                {c.percentage != null && (
-                  <p className="text-xs text-slate-400">{c.percentage}%</p>
+                {c.basis === "percent_of_received" ? (
+                  <p className="text-xs text-slate-400">
+                    {c.percentage}% of money in
+                    {Number(c.amount) > 0 &&
+                      ` · ${formatCurrency(Number(c.amount), currency)} at full value`}
+                  </p>
+                ) : (
+                  c.percentage != null && (
+                    <p className="text-xs text-slate-400">{c.percentage}%</p>
+                  )
                 )}
               </div>
               <Badge className={COMMISSION_STATUS_META[c.status].badge}>
@@ -144,6 +157,7 @@ export function CommissionsSection({
           projectId={projectId}
           currency={currency}
           totalValue={totalValue}
+          receivedAmount={receivedAmount}
           members={members}
           commission={editing}
           onClose={() => {
@@ -175,6 +189,7 @@ function CommissionModal({
   projectId,
   currency,
   totalValue,
+  receivedAmount,
   members,
   commission,
   onClose,
@@ -183,6 +198,7 @@ function CommissionModal({
   projectId: string;
   currency: string;
   totalValue: number;
+  receivedAmount: number;
   members: MemberLite[];
   commission: Commission | null;
   onClose: () => void;
@@ -207,8 +223,15 @@ function CommissionModal({
           percentage: commission.percentage,
           status: commission.status,
           note: commission.note ?? "",
+          basis: commission.basis ?? "fixed",
         }
-        : { project_id: projectId, user_id: "", amount: 0, status: "pending" },
+        : {
+            project_id: projectId,
+            user_id: "",
+            amount: 0,
+            status: "pending",
+            basis: "fixed",
+          },
     );
   }, [open, commission, projectId]);
 
@@ -257,8 +280,35 @@ function CommissionModal({
             ))}
           </Select>
         </Field>
+        <Field
+          label="How it's worked out"
+          hint={
+            form.basis === "percent_of_received"
+              ? `Accrues as the client pays. Worth ${formatCurrency(
+                  (receivedAmount * Number(form.percentage ?? 0)) / 100,
+                  currency,
+                )} so far.`
+              : "A flat amount, owed in full once approved."
+          }
+        >
+          <Select
+            value={form.basis ?? "fixed"}
+            onChange={(e) => set("basis", e.target.value as CommissionBasis)}
+          >
+            <option value="fixed">Fixed amount</option>
+            <option value="percent_of_received">Percentage of money received</option>
+          </Select>
+        </Field>
         <div className="grid grid-cols-2 gap-4">
-          <Field label="Amount" required>
+          <Field
+            label="Amount"
+            required={form.basis !== "percent_of_received"}
+            hint={
+              form.basis === "percent_of_received"
+                ? "At full project value"
+                : undefined
+            }
+          >
             <Input
               type="number"
               min={0}
@@ -269,6 +319,7 @@ function CommissionModal({
           </Field>
           <Field
             label="Percentage"
+            required={form.basis === "percent_of_received"}
             hint={
               totalValue > 0
                 ? `of ${formatCurrency(totalValue, currency)} total`

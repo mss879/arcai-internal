@@ -42,6 +42,7 @@ export async function GET(request: Request) {
         .from("projects")
         .select("id, name, description, status")
         .or(`name.ilike.${term},description.ilike.${term}`)
+        .is("deleted_at", null)
         .limit(5),
       supabase
         .from("leads")

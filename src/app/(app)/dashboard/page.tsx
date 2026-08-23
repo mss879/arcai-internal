@@ -81,7 +81,9 @@ export default async function DashboardPage() {
     supabase
       .from("projects")
       .select("*", { count: "exact", head: true })
-      .eq("status", "active"),
+      .eq("status", "active")
+      // 0090 — archived projects are out of every count and board.
+      .is("deleted_at", null),
     supabase.from("clients").select("*", { count: "exact", head: true }),
     supabase
       .from("meeting_bookings")

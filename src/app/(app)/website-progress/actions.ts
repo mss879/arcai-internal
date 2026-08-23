@@ -30,6 +30,8 @@ export type WebsiteProjectInput = {
   name: string;
   url: string;
   client_id?: string | null;
+  /** 0092 — the project this build belongs to. NULL = unlinked. */
+  project_id?: string | null;
   progress?: number;
   status?: WebsiteStatus;
   notes?: string;
@@ -48,6 +50,7 @@ export async function saveWebsiteProject(
     name: input.name.trim(),
     url: normalizeUrl(input.url),
     client_id: input.client_id || null,
+    project_id: input.project_id || null,
     progress: status === "launched" ? 100 : clampProgress(input.progress),
     status,
     notes: input.notes?.trim() || "",

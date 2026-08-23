@@ -7,7 +7,9 @@ import { buildPaymentEvent } from "@/lib/delivery";
 import { createClient } from "@/lib/supabase/server";
 import type {
   ActionResult,
+  CommissionBasis,
   CommissionStatus,
+  DeliveryStage,
   PaymentStatus,
   ProjectStatus,
 } from "@/lib/types";
@@ -180,6 +182,12 @@ export type CommissionInput = {
   percentage?: number | null;
   status?: CommissionStatus;
   note?: string;
+  /**
+   * 0091 — 'fixed' keeps the historic behaviour (the amount is owed in full).
+   * 'percent_of_received' makes the stored amount a snapshot and the real
+   * figure `percentage` of what the client has actually paid.
+   */
+  basis?: CommissionBasis;
 };
 
 export async function saveCommission(
@@ -197,16 +205,25 @@ export async function saveCommission(
     return { ok: false, error: "Only an admin can allocate commissions." };
   }
   if (!input.user_id) return { ok: false, error: "Choose a recipient." };
-  if (!input.amount || input.amount <= 0)
+
+  const basis: CommissionBasis = input.basis ?? "fixed";
+  if (basis === "percent_of_received") {
+    if (!input.percentage || input.percentage <= 0 || input.percentage > 100)
+      return { ok: false, error: "Enter a percentage between 1 and 100." };
+  } else if (!input.amount || input.amount <= 0) {
     return { ok: false, error: "Enter a valid amount." };
+  }
 
   const payload = {
     project_id: input.project_id,
     user_id: input.user_id,
+    // For a percentage commission this is the figure as at today — the real
+    // owed amount is recomputed from money received every time it's read.
     amount: input.amount,
     percentage: input.percentage ?? null,
     status: input.status ?? "pending",
     note: input.note?.trim() || null,
+    basis,
     allocated_by: user.id,
   };
 
@@ -375,4 +392,335 @@ export async function setProjectExpensesInvoiced(
   revalidatePath(`/projects/${projectId}`);
   revalidatePath("/projects");
   return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Archive / restore (LOOP-8, 0090)
+// ---------------------------------------------------------------------------
+
+/**
+ * Archive a project instead of destroying it.
+ *
+ * `deleteProject` above cascades every payment, expense, asset request and
+ * delivery event the project owns, and orphans its commissions — that is the
+ * financial record of a job, one confirm dialog away from gone. Archiving
+ * hides it from every board, picker, count and automation scan while leaving
+ * all of that in place.
+ */
+export async function archiveProject(id: string): Promise<ActionResult> {
+  const { supabase, user } = await authed();
+  if (!user) return { ok: false, error: "Not authenticated." };
+
+  const { error } = await supabase
+    .from("projects")
+    .update({ deleted_at: new Date().toISOString(), deleted_by: user.id })
+    .eq("id", id);
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath("/projects");
+  revalidatePath("/delivery");
+  return { ok: true };
+}
+
+export async function restoreProject(id: string): Promise<ActionResult> {
+  const { supabase, user } = await authed();
+  if (!user) return { ok: false, error: "Not authenticated." };
+
+  const { error } = await supabase
+    .from("projects")
+    .update({ deleted_at: null, deleted_by: null })
+    .eq("id", id);
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath("/projects");
+  revalidatePath("/delivery");
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Delivery stage from the project page (LOOP-3) + the deposit gate (MON-5)
+// ---------------------------------------------------------------------------
+
+export type StageMoveResult = ActionResult & {
+  /** Set when a gate stopped the move; re-call with force to go ahead. */
+  gate?: { kind: "deposit" | "launch_checks"; message: string };
+};
+
+/**
+ * Move a project's delivery stage from the project page.
+ *
+ * Delegates to the same mutator the delivery board and the automation step
+ * use, so milestone messages and triggers fire identically however the stage
+ * moved. Two gates sit in front of it:
+ *
+ *   • the DEPOSIT GATE (MON-5) — a project with `deposit_required_percent`
+ *     set can't slide into Build on a promise;
+ *   • the LAUNCH CHECKLIST (PLAN-10) — a project can't be called Delivered
+ *     while its own pre-delivery checks are still open.
+ *
+ * Both warn and ask rather than refuse: the team can always confirm and
+ * proceed, because a rule that can't be overridden just gets worked around.
+ */
+export async function setProjectStage(
+  projectId: string,
+  stage: DeliveryStage,
+  opts?: { force?: boolean },
+): Promise<StageMoveResult> {
+  const { supabase, user } = await authed();
+  if (!user) return { ok: false, error: "Not authenticated." };
+
+  const [projectRes, linkedRes, ownRes] = await Promise.all([
+    supabase
+      .from("projects")
+      .select("id, name, total_value, deposit_paid, deposit_required_percent, currency")
+      .eq("id", projectId)
+      .maybeSingle(),
+    supabase
+      .from("company_payments")
+      .select("price_lkr, is_paid")
+      .eq("project_id", projectId),
+    supabase.from("payments").select("amount, status").eq("project_id", projectId),
+  ]);
+  const project = projectRes.data;
+  if (!project) return { ok: false, error: "Project not found." };
+
+  if (!opts?.force) {
+    const gate = await checkStageGates(
+      supabase,
+      {
+        ...project,
+        company_payments: linkedRes.data ?? [],
+        payments: ownRes.data ?? [],
+      },
+      stage,
+    );
+    if (gate) return { ok: false, error: gate.message, gate };
+  }
+
+  const { setProjectDeliveryStage } = await import("@/lib/delivery");
+  const res = await setProjectDeliveryStage(supabase, projectId, stage, {
+    actor: "team",
+  });
+  if (!res.ok) return { ok: false, error: res.detail };
+
+  revalidatePath(`/projects/${projectId}`);
+  revalidatePath("/projects");
+  revalidatePath("/delivery");
+  return { ok: true };
+}
+
+type GateProject = {
+  total_value: number | null;
+  deposit_paid: number | null;
+  deposit_required_percent: number | null;
+  currency: string;
+  company_payments?: { price_lkr: number; is_paid: boolean }[] | null;
+  payments?: { amount: number; status: string }[] | null;
+};
+
+async function checkStageGates(
+  supabase: Awaited<ReturnType<typeof authed>>["supabase"],
+  project: GateProject & { id: string },
+  stage: DeliveryStage,
+): Promise<StageMoveResult["gate"] | null> {
+  const { settledAmount } = await import("@/lib/projects");
+
+  // Deposit gate: only on the way INTO build (or anything past it).
+  const gatedStages: DeliveryStage[] = ["build", "review", "delivered", "aftercare"];
+  const required = Number(project.deposit_required_percent) || 0;
+  if (required > 0 && gatedStages.includes(stage)) {
+    const total = Number(project.total_value) || 0;
+    const received = settledAmount(project);
+    const needed = (total * required) / 100;
+    if (total > 0 && received < needed) {
+      return {
+        kind: "deposit",
+        message: `Only ${Math.round((received / total) * 100)}% received — this project asks for ${required}% before work starts.`,
+      };
+    }
+  }
+
+  // Launch checklist: only on the way into delivered.
+  if (stage === "delivered") {
+    const { count } = await supabase
+      .from("project_milestones")
+      .select("id", { count: "exact", head: true })
+      .eq("project_id", project.id)
+      .eq("kind", "launch_check")
+      .neq("status", "done");
+    if ((count ?? 0) > 0) {
+      return {
+        kind: "launch_checks",
+        message: `${count} launch check${count === 1 ? "" : "s"} still open.`,
+      };
+    }
+  }
+
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Blocked on the client (PLAN-7)
+// ---------------------------------------------------------------------------
+
+/**
+ * Mark a project as blocked, or unblock it.
+ *
+ * While blocked the delivery chaser and the stalled-project alert stand down —
+ * a project waiting on someone else isn't stalled, and nagging the team about
+ * it trains them to ignore the alerts. The days lost are kept so they can be
+ * quoted back when a deadline slips.
+ */
+export async function setProjectBlocked(
+  projectId: string,
+  reason: string | null,
+): Promise<ActionResult> {
+  const { supabase, user } = await authed();
+  if (!user) return { ok: false, error: "Not authenticated." };
+
+  const clean = reason?.trim() || null;
+  const { error } = await supabase
+    .from("projects")
+    .update({
+      blocked_reason: clean,
+      blocked_since: clean ? new Date().toISOString() : null,
+      // Leaving a block on also clears the stalled stamp, so the alert can
+      // fire again cleanly once the project is moving.
+      ...(clean ? {} : { stalled_alerted_at: null }),
+    })
+    .eq("id", projectId);
+  if (error) return { ok: false, error: error.message };
+
+  const { logDeliveryEvent } = await import("@/lib/delivery");
+  await logDeliveryEvent(
+    supabase,
+    projectId,
+    "stage_changed",
+    clean ? `Blocked — ${clean}` : "Unblocked",
+    "team",
+    { blocked: Boolean(clean) },
+  );
+
+  revalidatePath(`/projects/${projectId}`);
+  revalidatePath("/projects");
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Project settings that drive the automations (MON-2/5/6, PLAN-12)
+// ---------------------------------------------------------------------------
+
+export type ProjectAutomationSettings = {
+  expense_cap?: number | null;
+  deposit_required_percent?: number | null;
+  is_retainer?: boolean;
+  retainer_day?: number | null;
+  auto_invoice_on_delivery?: boolean;
+  aftercare_enabled?: boolean;
+  balance_chase_paused?: boolean;
+};
+
+/** The switches on the project's Money tab. Only writes what was passed. */
+export async function saveProjectAutomationSettings(
+  projectId: string,
+  input: ProjectAutomationSettings,
+): Promise<ActionResult> {
+  const { supabase, user } = await authed();
+  if (!user) return { ok: false, error: "Not authenticated." };
+
+  if (
+    input.deposit_required_percent != null &&
+    (input.deposit_required_percent < 0 || input.deposit_required_percent > 100)
+  ) {
+    return { ok: false, error: "Deposit percentage must be between 0 and 100." };
+  }
+  if (
+    input.retainer_day != null &&
+    (input.retainer_day < 1 || input.retainer_day > 28)
+  ) {
+    return {
+      ok: false,
+      error: "Pick a day between 1 and 28 — later days don't exist in every month.",
+    };
+  }
+
+  const payload: ProjectAutomationSettings & { budget_alerted_at?: null } = {};
+  for (const key of [
+    "expense_cap",
+    "deposit_required_percent",
+    "is_retainer",
+    "retainer_day",
+    "auto_invoice_on_delivery",
+    "aftercare_enabled",
+    "balance_chase_paused",
+  ] as const) {
+    if (input[key] !== undefined) {
+      // Narrowed one key at a time so the union of value types stays honest.
+      Object.assign(payload, { [key]: input[key] });
+    }
+  }
+  if (Object.keys(payload).length === 0) return { ok: true };
+
+  // Re-arm the budget alert whenever the cap changes, so raising a cap that
+  // has already alerted can alert again when the new one is passed.
+  if (payload.expense_cap !== undefined) payload.budget_alerted_at = null;
+
+  const { error } = await supabase
+    .from("projects")
+    .update(payload)
+    .eq("id", projectId);
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath(`/projects/${projectId}`);
+  revalidatePath("/projects");
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Read a supplier receipt (MON-8)
+// ---------------------------------------------------------------------------
+
+export type ReadReceiptResult =
+  | { ok: true; parsed: import("@/lib/ai/receipt").ParsedReceipt }
+  | { ok: false; error: string };
+
+/**
+ * Turn a photographed bill into a draft expense.
+ *
+ * Takes a data: URL straight from the file input rather than an uploaded
+ * object, so a receipt the model can't read never leaves anything behind in
+ * storage. Nothing is saved — the parsed fields land in the form for a human
+ * to confirm.
+ */
+export async function readReceipt(dataUrl: string): Promise<ReadReceiptResult> {
+  const { user } = await authed();
+  if (!user) return { ok: false, error: "Not authenticated." };
+
+  if (!dataUrl.startsWith("data:image/")) {
+    return {
+      ok: false,
+      error: "Reading works on photos and screenshots. Type a PDF bill in by hand.",
+    };
+  }
+  // ~8MB of base64 ≈ 6MB of image. Past that the vision call times out more
+  // often than it succeeds, and the error is unhelpful.
+  if (dataUrl.length > 8_000_000) {
+    return { ok: false, error: "That image is too large — take a smaller photo." };
+  }
+
+  const { parseReceipt } = await import("@/lib/ai/receipt");
+  const parsed = await parseReceipt(dataUrl);
+  if (!parsed) {
+    return {
+      ok: false,
+      error: "Couldn't read that one — fill it in by hand.",
+    };
+  }
+  if (!parsed.amount && !parsed.vendor) {
+    return {
+      ok: false,
+      error: "That doesn't look like a receipt. Fill it in by hand.",
+    };
+  }
+  return { ok: true, parsed };
 }

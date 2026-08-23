@@ -243,7 +243,8 @@ export async function scanChurn(supabase: DB): Promise<number> {
 
   const { data: projects } = await supabase
     .from("projects")
-    .select("id, client_id, created_at");
+    .select("id, client_id, created_at")
+    .is("deleted_at", null);
 
   const alerted = new Set((existing ?? []).map((a) => a.client_id));
   const recentSms = new Set(

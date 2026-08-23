@@ -19,6 +19,16 @@ export type Project = Tables["projects"]["Row"];
 export type ProjectDocumentRequest =
   Tables["project_document_requests"]["Row"];
 export type ProjectExpense = Tables["project_expenses"]["Row"];
+export type ProjectTemplate = Tables["project_templates"]["Row"];
+export type ProjectTemplateItem = Tables["project_template_items"]["Row"];
+export type ProjectMilestone = Tables["project_milestones"]["Row"];
+export type ProjectMember = Tables["project_members"]["Row"];
+export type TimeEntry = Tables["time_entries"]["Row"];
+export type ProjectReview = Tables["project_reviews"]["Row"];
+export type ProjectApproval = Tables["project_approvals"]["Row"];
+export type ProjectChangeRequest = Tables["project_change_requests"]["Row"];
+export type ProjectComment = Tables["project_comments"]["Row"];
+export type ProjectPulse = Tables["project_pulses"]["Row"];
 export type DeliverySettings = Tables["delivery_settings"]["Row"];
 export type DeliveryEvent = Tables["delivery_events"]["Row"];
 export type Proposal = Omit<
@@ -160,6 +170,16 @@ export type {
   AssetRequestSource,
   DeliveryEventKind,
   WaContactMode,
+  CommissionBasis,
+  TemplateItemKind,
+  MilestoneKind,
+  MilestoneStatus,
+  PortalLanguage,
+  ReviewStatus,
+  ApprovalStatus,
+  ChangeRequestStatus,
+  ChangeRequestSource,
+  CommentAuthor,
 } from "@/lib/database.types";
 
 /** A todo joined with the profile it's assigned to. */

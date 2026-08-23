@@ -39,9 +39,12 @@ function prettyUrl(url: string): string {
 export function WebsiteProgressView({
   sites,
   clients,
+  projects,
 }: {
   sites: WebsiteCard[];
   clients: Pick<Client, "id" | "name" | "company">[];
+  /** 0092 — offered in the form so a build can name its project (PLAN-9). */
+  projects: { id: string; name: string }[];
 }) {
   useRealtimeSyncTables(["website_projects"]);
 
@@ -244,6 +247,7 @@ export function WebsiteProgressView({
         }}
         site={editing}
         clients={clients}
+        projects={projects}
       />
 
       <ConfirmDialog

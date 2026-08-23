@@ -46,6 +46,7 @@ import {
 import {
   commissionEarned,
   daysSince,
+  marginIsMeaningful,
   projectHealth,
   projectMargin,
   settledAmount,
@@ -227,6 +228,9 @@ export function ProjectsView({
           amount: commissionEarned(c, received),
         })),
       });
+      // Null unless something has actually been spent — see
+      // marginIsMeaningful(). "100% margin" is an empty cost sheet, not a win.
+      const shownMargin = marginIsMeaningful(margin) ? margin.percent : null;
 
       const projectTasks = tasksBy.get(p.id) ?? [];
       const projectMilestones = milestonesBy.get(p.id) ?? [];
@@ -240,7 +244,7 @@ export function ProjectsView({
           ? Math.min(100, Math.round((received / totalValue) * 100))
           : 0,
         profit: margin.profit,
-        marginPercent: margin.percent,
+        marginPercent: shownMargin,
         team: teamBy.get(p.id) ?? [],
         daysInStage: p.delivery_stage
           ? daysSince(p.delivery_stage_changed_at)

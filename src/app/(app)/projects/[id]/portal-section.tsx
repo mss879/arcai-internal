@@ -61,10 +61,21 @@ export function PortalSection({
   access,
   clientName,
   clientPhone,
+  baseUrl,
 }: {
   projectId: string;
   projectName: string;
   shareToken: string;
+  /**
+   * Absolute origin from NEXT_PUBLIC_APP_URL, resolved on the server.
+   *
+   * Deriving the link from `window.location.origin` during render — which is
+   * what this did — makes the server emit an empty URL and the browser a real
+   * one, which is a hydration mismatch. It also now feeds the SMS preview, so
+   * the mismatch would be in visible body text, not just an input value.
+   * Empty is fine: the effect below fills it in after mount.
+   */
+  baseUrl?: string;
   requests: ProjectDocumentRequest[];
   isProjectCompleted?: boolean;
   serviceType?: string | null;
@@ -83,10 +94,16 @@ export function PortalSection({
   const [seeding, setSeeding] = React.useState(false);
   const [startingOnboarding, setStartingOnboarding] = React.useState(false);
 
-  const portalUrl = React.useMemo(() => {
-    if (typeof window === "undefined") return "";
-    return `${window.location.origin}/public/project/${shareToken}`;
-  }, [shareToken]);
+  const [origin, setOrigin] = React.useState(baseUrl ?? "");
+  // Only when the server couldn't supply one (NEXT_PUBLIC_APP_URL unset).
+  // Runs after mount, so first paint still matches what the server sent.
+  React.useEffect(() => {
+    if (!origin && typeof window !== "undefined") {
+      setOrigin(window.location.origin);
+    }
+  }, [origin]);
+
+  const portalUrl = origin ? `${origin}/public/project/${shareToken}` : "";
 
   async function handleSeed() {
     setSeeding(true);
@@ -416,7 +433,7 @@ function PortalAccessCard({
   }
 
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+    <div className="@container rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <LinkIcon className="h-5 w-5 text-primary-600" />
@@ -438,8 +455,8 @@ function PortalAccessCard({
       </div>
 
       {/* The link */}
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-        <div className="relative flex-1">
+      <div className="flex flex-col gap-2 @lg:flex-row @lg:items-center">
+        <div className="relative min-w-0 flex-1">
           <input
             type="text"
             readOnly
@@ -481,9 +498,13 @@ function PortalAccessCard({
       </div>
 
       {/* Passcode + expiry + language */}
-      <div className="mt-4 grid grid-cols-1 gap-3 rounded-xl border border-slate-200 bg-slate-50/60 p-3.5 sm:grid-cols-3">
-        <Field label="Passcode" hint="4–8 digits. Blank = anyone with the link.">
-          <div className="flex gap-1.5">
+      <div className="mt-4 grid grid-cols-1 gap-3 rounded-xl border border-slate-200 bg-slate-50/60 p-3.5 @md:grid-cols-3">
+        <Field
+          label="Passcode"
+          hint="4–8 digits. Blank = anyone with the link."
+          className="min-w-0"
+        >
+          <div className="flex min-w-0 gap-1.5">
             <Input
               value={passcode}
               inputMode="numeric"
@@ -504,7 +525,7 @@ function PortalAccessCard({
           </div>
         </Field>
 
-        <Field label="Expires" hint="Blank = never.">
+        <Field label="Expires" hint="Blank = never." className="min-w-0">
           <Input
             type="date"
             value={expiresAt}
@@ -513,7 +534,11 @@ function PortalAccessCard({
           />
         </Field>
 
-        <Field label="Language" hint="What the client's page is written in.">
+        <Field
+          label="Language"
+          hint="What the client's page is written in."
+          className="min-w-0"
+        >
           <Select
             value={language}
             onChange={(e) => {

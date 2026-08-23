@@ -20,15 +20,17 @@ import {
   LayoutDashboard,
   ListTodo,
   TrendingUp,
+  Users,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
-type Tab = "overview" | "plan" | "money" | "files" | "activity";
+type Tab = "overview" | "plan" | "client" | "money" | "files" | "activity";
 
 export function ProjectTabs({
   overview,
   plan,
+  client,
   money,
   files,
   activity,
@@ -36,14 +38,18 @@ export function ProjectTabs({
   expenseBadge,
   /** Open work, shown on Plan for the same reason. */
   planBadge,
+  /** Anything the client is waiting on an answer to. */
+  clientBadge,
 }: {
   overview: React.ReactNode;
   plan: React.ReactNode;
+  client: React.ReactNode;
   money: React.ReactNode;
   files: React.ReactNode;
   activity: React.ReactNode;
   expenseBadge?: string;
   planBadge?: string;
+  clientBadge?: string;
 }) {
   const [tab, setTab] = React.useState<Tab>("overview");
 
@@ -67,6 +73,16 @@ export function ProjectTabs({
             tabActive={tab === "plan"}
           >
             Plan
+          </TabButton>
+          <TabButton
+            active={tab === "client"}
+            onClick={() => setTab("client")}
+            icon={<Users className="h-4 w-4" />}
+            badge={clientBadge}
+            badgeTone="rose"
+            tabActive={tab === "client"}
+          >
+            Client
           </TabButton>
           <TabButton
             active={tab === "money"}
@@ -97,6 +113,7 @@ export function ProjectTabs({
 
       <div className={tab === "overview" ? undefined : "hidden"}>{overview}</div>
       <div className={tab === "plan" ? undefined : "hidden"}>{plan}</div>
+      <div className={tab === "client" ? undefined : "hidden"}>{client}</div>
       <div className={tab === "money" ? undefined : "hidden"}>{money}</div>
       <div className={tab === "files" ? undefined : "hidden"}>{files}</div>
       <div className={tab === "activity" ? undefined : "hidden"}>{activity}</div>
@@ -118,7 +135,7 @@ function TabButton({
   icon: React.ReactNode;
   children: React.ReactNode;
   badge?: string;
-  badgeTone?: "amber" | "sky";
+  badgeTone?: "amber" | "sky" | "rose";
   tabActive?: boolean;
 }) {
   return (
@@ -141,7 +158,9 @@ function TabButton({
               ? "bg-white/20 text-white"
               : badgeTone === "sky"
                 ? "bg-sky-50 text-sky-700"
-                : "bg-amber-50 text-amber-700",
+                : badgeTone === "rose"
+                  ? "bg-rose-50 text-rose-700"
+                  : "bg-amber-50 text-amber-700",
           )}
         >
           {badge}

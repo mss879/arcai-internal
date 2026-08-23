@@ -13,7 +13,11 @@
 import * as React from "react";
 import { TrendingDown, TrendingUp, Wallet } from "lucide-react";
 
-import { marginTone, type MarginBreakdown } from "@/lib/projects";
+import {
+  marginIsMeaningful,
+  marginTone,
+  type MarginBreakdown,
+} from "@/lib/projects";
 import { cn, formatCurrency } from "@/lib/utils";
 
 export function MarginCard({
@@ -31,7 +35,8 @@ export function MarginCard({
   /** False when nobody on the project has an hourly cost — labour reads as 0. */
   hasCostRates: boolean;
 }) {
-  const tone = marginTone(margin.percent);
+  const showPercent = marginIsMeaningful(margin);
+  const tone = showPercent ? marginTone(margin.percent) : "unknown";
   const spend = margin.expenses;
   const capPct = cap && cap > 0 ? Math.min(200, Math.round((spend / cap) * 100)) : null;
 
@@ -85,7 +90,7 @@ export function MarginCard({
               {formatCurrency(margin.profit, currency)}
             </p>
           </div>
-          {margin.percent !== null && (
+          {showPercent && margin.percent !== null && (
             <div className="text-right">
               <p className="text-[11px] font-medium uppercase tracking-wide text-slate-400">
                 Of revenue
@@ -180,10 +185,12 @@ export function MarginCard({
           </div>
         )}
 
-        {margin.percent === null && (
+        {!showPercent && (
           <p className="mt-4 flex items-center gap-1.5 border-t border-slate-100 pt-4 text-xs text-slate-400">
             <Wallet className="h-3.5 w-3.5" />
-            Set the project&apos;s total value to see a margin percentage.
+            {margin.revenue <= 0
+              ? "Set the project's total value to see a margin."
+              : "No costs recorded yet, so there's no margin to work out."}
           </p>
         )}
       </div>

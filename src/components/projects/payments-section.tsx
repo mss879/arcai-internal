@@ -150,7 +150,15 @@ export function PaymentsSection({
   );
 }
 
-function PaymentModal({
+/**
+ * Recording a payment, with its receipt.
+ *
+ * Exported since 0090: the unified money ledger owns the LIST, but this is
+ * still the only place a payment (and the PDF or photo of its receipt) gets
+ * entered, so both surfaces open the same modal rather than growing a second,
+ * subtly different form.
+ */
+export function PaymentModal({
   open,
   projectId,
   currency,

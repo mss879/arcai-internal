@@ -331,6 +331,18 @@ export function projectMargin(input: {
 
 type ExpenseLike = { amount: number | string | null; billable: boolean | null };
 
+/**
+ * Whether a margin percentage is worth showing at all.
+ *
+ * With no costs recorded the answer is always 100%, which isn't a margin —
+ * it's the absence of data wearing a margin's clothes. Showing it invites
+ * someone to believe a job is perfectly profitable when nobody has entered
+ * what it cost.
+ */
+export function marginIsMeaningful(margin: MarginBreakdown): boolean {
+  return margin.revenue > 0 && margin.cost > 0;
+}
+
 /** Traffic light for a margin percentage. Tuned for agency service work. */
 export function marginTone(percent: number | null): "good" | "thin" | "loss" | "unknown" {
   if (percent === null) return "unknown";

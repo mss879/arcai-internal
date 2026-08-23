@@ -53,6 +53,7 @@ import {
   buildLedger,
   commissionEarned,
   daysSince,
+  marginIsMeaningful,
   projectHealth,
   projectMargin,
   settledAmount,
@@ -428,6 +429,12 @@ export default async function ProjectDetailPage({
   // which the card then reports rather than showing a half-formed URL.
   const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "").replace(/\/+$/, "");
 
+  // Change requests nobody has answered yet — the one thing on the Client tab
+  // that is genuinely waiting on us rather than on them.
+  const waitingOnUs = (changeRequestsRes.data ?? []).filter((c) =>
+    ["new", "quoted"].includes(c.status),
+  ).length;
+
   // 0094 — how the client says it's going. Averaged rather than "latest", so
   // one bad day doesn't define the project and one good one doesn't hide it.
   const pulses = pulsesRes.data ?? [];
@@ -542,7 +549,9 @@ export default async function ProjectDetailPage({
                 value={formatCurrency(margin.profit, project.currency)}
                 accent={margin.profit >= 0 ? "emerald" : "rose"}
                 hint={
-                  margin.percent !== null ? `${margin.percent}% margin` : undefined
+                  marginIsMeaningful(margin)
+                    ? `${margin.percent}% margin`
+                    : "no costs recorded"
                 }
               />
             ) : (
@@ -560,10 +569,12 @@ export default async function ProjectDetailPage({
           unbilledExpenses.length > 0 ? String(unbilledExpenses.length) : undefined
         }
         planBadge={openTasks > 0 ? String(openTasks) : undefined}
+        clientBadge={waitingOnUs > 0 ? String(waitingOnUs) : undefined}
         overview={
-          <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-            <div className="space-y-6 lg:col-span-2">
+          <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
+            <div className="space-y-6 xl:col-span-2">
               <LedgerSection
+                projectId={id}
                 rows={ledger}
                 currency={project.currency}
                 received={received}
@@ -571,6 +582,9 @@ export default async function ProjectDetailPage({
               />
               <TasksSection projectId={id} tasks={tasks} members={members} />
             </div>
+            {/* Only short, glanceable cards sit in the narrow column — the
+             * client-facing surfaces need real width and live on their own
+             * tab now. */}
             <div className="space-y-6">
               <DepositConfirmCard
                 projectId={id}
@@ -588,6 +602,35 @@ export default async function ProjectDetailPage({
                 }
                 lastSentAt={depositInvoiceRes.data?.shared_at ?? null}
               />
+              {siteRes.data && <WebsiteBuildCard site={siteRes.data} />}
+            </div>
+          </div>
+        }
+        client={
+          <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
+            <div className="space-y-6 xl:col-span-2">
+              <PortalSection
+                projectId={id}
+                projectName={project.name}
+                shareToken={shareToken}
+                baseUrl={appUrl}
+                requests={docRequests}
+                isProjectCompleted={project.status === "completed"}
+                serviceType={project.service_type ?? null}
+                hasClient={!!project.client_id}
+                onboardingStartedAt={project.onboarding_started_at ?? null}
+                clientName={client?.name ?? null}
+                clientPhone={client?.phone ?? null}
+                access={{
+                  passcode: project.portal_passcode,
+                  expiresAt: project.portal_expires_at,
+                  revokedAt: project.portal_revoked_at,
+                  lastSentAt: project.portal_last_sent_at,
+                  language: project.portal_language ?? "en",
+                }}
+              />
+            </div>
+            <div className="space-y-6">
               <ClientDeskCard
                 projectId={id}
                 currency={project.currency}
@@ -612,30 +655,6 @@ export default async function ProjectDetailPage({
                 clientName={client?.name ?? null}
                 clientPhone={client?.phone ?? null}
                 sent={(clientSmsRes.data ?? []) as SentClientMessage[]}
-              />
-              {siteRes.data && (
-                <WebsiteBuildCard
-                  site={siteRes.data}
-                />
-              )}
-              <PortalSection
-                projectId={id}
-                projectName={project.name}
-                shareToken={shareToken}
-                requests={docRequests}
-                isProjectCompleted={project.status === "completed"}
-                serviceType={project.service_type ?? null}
-                hasClient={!!project.client_id}
-                onboardingStartedAt={project.onboarding_started_at ?? null}
-                clientName={client?.name ?? null}
-                clientPhone={client?.phone ?? null}
-                access={{
-                  passcode: project.portal_passcode,
-                  expiresAt: project.portal_expires_at,
-                  revokedAt: project.portal_revoked_at,
-                  lastSentAt: project.portal_last_sent_at,
-                  language: project.portal_language ?? "en",
-                }}
               />
             </div>
           </div>

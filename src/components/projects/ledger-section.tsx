@@ -20,10 +20,13 @@ import {
   CreditCard,
   ExternalLink,
   Landmark,
+  Plus,
   Receipt,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { PaymentModal } from "@/components/projects/payments-section";
 import type { LedgerRow } from "@/lib/projects";
 import { cn, formatCurrency } from "@/lib/utils";
 
@@ -47,16 +50,19 @@ const SOURCE_META: Record<
 };
 
 export function LedgerSection({
+  projectId,
   rows,
   currency,
   received,
   totalValue,
 }: {
+  projectId: string;
   rows: LedgerRow[];
   currency: string;
   received: number;
   totalValue: number;
 }) {
+  const [adding, setAdding] = React.useState(false);
   const duplicates = rows.filter((r) => r.possibleDuplicateOf).length;
   const pending = rows.filter((r) => !r.paid);
 
@@ -74,15 +80,20 @@ export function LedgerSection({
             </p>
           </div>
         </div>
-        <div className="text-right">
-          <p className="text-lg font-semibold tabular-nums text-slate-900">
-            {formatCurrency(received, currency)}
-          </p>
-          {totalValue > 0 && (
-            <p className="text-[11px] text-slate-400">
-              of {formatCurrency(totalValue, currency)}
+        <div className="flex items-center gap-3">
+          <div className="text-right">
+            <p className="text-lg font-semibold tabular-nums text-slate-900">
+              {formatCurrency(received, currency)}
             </p>
-          )}
+            {totalValue > 0 && (
+              <p className="text-[11px] text-slate-400">
+                of {formatCurrency(totalValue, currency)}
+              </p>
+            )}
+          </div>
+          <Button size="sm" variant="outline" onClick={() => setAdding(true)}>
+            <Plus className="h-4 w-4" /> Add payment
+          </Button>
         </div>
       </div>
 
@@ -102,7 +113,8 @@ export function LedgerSection({
 
       {rows.length === 0 ? (
         <p className="px-5 py-8 text-center text-sm text-slate-400">
-          Nothing received yet.
+          Nothing received yet. Use <span className="font-medium">Add payment</span>{" "}
+          to record one and attach its receipt.
         </p>
       ) : (
         <ul className="divide-y divide-slate-100">
@@ -174,6 +186,13 @@ export function LedgerSection({
           })}
         </ul>
       )}
+
+      <PaymentModal
+        open={adding}
+        projectId={projectId}
+        currency={currency}
+        onClose={() => setAdding(false)}
+      />
 
       {pending.length > 0 && (
         <p className="border-t border-slate-100 px-5 py-3 text-xs text-slate-400">

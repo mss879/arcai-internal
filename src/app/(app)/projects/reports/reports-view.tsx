@@ -21,6 +21,7 @@ import {
 import {
   commissionEarned,
   formatMinutes,
+  marginIsMeaningful,
   projectMargin,
   settledAmount,
 } from "@/lib/projects";
@@ -379,17 +380,26 @@ function ProfitTab({
                       {formatCurrency(margin.profit, project.currency)}
                     </td>
                     <td className="px-5 py-3 text-right">
-                      <Badge
-                        className={
-                          (margin.percent ?? 0) < 0
-                            ? "bg-rose-50 text-rose-600 ring-rose-200"
-                            : (margin.percent ?? 0) < 25
-                              ? "bg-amber-50 text-amber-600 ring-amber-200"
-                              : "bg-emerald-50 text-emerald-600 ring-emerald-200"
-                        }
-                      >
-                        {margin.percent}%
-                      </Badge>
+                      {marginIsMeaningful(margin) ? (
+                        <Badge
+                          className={
+                            (margin.percent ?? 0) < 0
+                              ? "bg-rose-50 text-rose-600 ring-rose-200"
+                              : (margin.percent ?? 0) < 25
+                                ? "bg-amber-50 text-amber-600 ring-amber-200"
+                                : "bg-emerald-50 text-emerald-600 ring-emerald-200"
+                          }
+                        >
+                          {margin.percent}%
+                        </Badge>
+                      ) : (
+                        <span
+                          className="text-slate-300"
+                          title="No costs recorded against this project"
+                        >
+                          —
+                        </span>
+                      )}
                     </td>
                   </tr>
                 ))}

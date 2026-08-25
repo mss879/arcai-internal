@@ -64,6 +64,26 @@ export type ProposalSelection = {
   maintenance: MaintenanceKey;
   monthlySeo: boolean;
   customFeatures: { name: string; price: number }[];
+  /**
+   * Prices FROZEN into this proposal the moment it was created — resolved from
+   * the /pricing page's saved amounts, or dictated by the team for this one
+   * client. Absent on every proposal saved before this field existed, and those
+   * therefore keep re-pricing from the catalog constants below exactly as they
+   * always have. Never backfill it onto an old row: a sent proposal must keep
+   * printing the numbers the client agreed to.
+   */
+  prices?: {
+    base?: number;
+    /** The package's LIST price at the time. Kept alongside `base` so a
+     * negotiated price prints as "~~Rs 175,000~~ Rs 140,000" — the client sees
+     * exactly what they were given off. Equal to `base` when nothing was
+     * discounted, which prints as a plain single price. */
+    baseList?: number;
+    maintenance?: number;
+    monthlySeo?: number;
+  };
+  /** Short note appended to the main line's label, e.g. "agreed rate". */
+  baseNote?: string;
 };
 
 export function defaultSelection(): ProposalSelection {
@@ -377,36 +397,82 @@ export const PAY_PER_FIX = 5000;
 
 // ---- Pricing -------------------------------------------------------------
 
-export type PriceLine = { label: string; amount: number };
+export type PriceLine = {
+  label: string;
+  amount: number;
+  /** List price, when `amount` is a discounted offer. Rendered struck through
+   * next to the amount so the client sees the reduction. */
+  original?: number;
+};
 export type Pricing = {
   lineItems: PriceLine[];
   oneTimeTotal: number;
   recurringNotes: string[];
 };
 
+/**
+ * The package's list price straight from the catalog, ignoring anything frozen
+ * onto the proposal. Used to record what a negotiated price was discounted
+ * FROM, so the proposal can show both figures.
+ */
+export function catalogBasePrice(sel: ProposalSelection): number {
+  if (sel.type === "business") return BUSINESS_TIERS[sel.tier].price;
+  if (sel.type === "agent") return AGENT_PLANS[sel.agentPlatform ?? "whatsapp"].price;
+  return (ECOMMERCE[sel.platform] ?? ECOMMERCE.store).price;
+}
+
+/** A usable frozen price, or null so the catalog default takes over. */
+function num(v: number | undefined): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
 /** Deterministically turn a selection into priced line items + recurring notes. */
 export function buildPricing(sel: ProposalSelection): Pricing {
   const lineItems: PriceLine[] = [];
   const recurringNotes: string[] = [];
 
+  // A price frozen into THIS proposal beats the catalog default. Once an exact
+  // figure has been agreed the package is no longer a "starts at" floor, so
+  // that suffix comes off.
+  const baseOverride = num(sel.prices?.base);
+  const note = sel.baseNote?.trim();
+  const mainLabel = (name: string, startsAt: boolean) =>
+    `${name}${startsAt && baseOverride === null ? " (starts at)" : ""}${
+      note ? ` (${note})` : ""
+    }`;
+  // What the package normally goes for. Only shown when the client is actually
+  // being charged less than that — never as a fake "was" price.
+  const listed = num(sel.prices?.baseList);
+  const struck = (charged: number) =>
+    listed !== null && listed > charged ? listed : undefined;
+
   if (sel.type === "business") {
     const t = BUSINESS_TIERS[sel.tier];
+    const amount = baseOverride ?? t.price;
     lineItems.push({
-      label: `${t.name} Website — ${t.pages} pages${t.startsAt ? " (starts at)" : ""}`,
-      amount: t.price,
+      label: mainLabel(`${t.name} Website — ${t.pages} pages`, Boolean(t.startsAt)),
+      amount,
+      original: struck(amount),
     });
     if (t.monthlyNote) recurringNotes.push(t.monthlyNote);
   } else if (sel.type === "agent") {
     const plan = AGENT_PLANS[sel.agentPlatform ?? "whatsapp"];
-    lineItems.push({ label: `${plan.name} — setup`, amount: plan.price });
+    const amount = baseOverride ?? plan.price;
+    lineItems.push({
+      label: mainLabel(`${plan.name} — setup`, false),
+      amount,
+      original: struck(amount),
+    });
     recurringNotes.push(plan.monthlyNote);
   } else {
     // A selection saved before the 2026-08 repricing can carry a legacy
     // platform — it must keep pricing exactly as it did the day it was sent.
     const plan = ECOMMERCE[sel.platform] ?? ECOMMERCE.store;
+    const amount = baseOverride ?? plan.price;
     lineItems.push({
-      label: plan.startsAt ? `${plan.name} (starts at)` : plan.name,
-      amount: plan.price,
+      label: mainLabel(plan.name, plan.startsAt),
+      amount,
+      original: struck(amount),
     });
     recurringNotes.push(plan.monthlyNote);
     // Gateway & delivery were separate add-ons only on the legacy custom
@@ -429,11 +495,15 @@ export function buildPricing(sel: ProposalSelection): Pricing {
 
   if (sel.maintenance !== "none") {
     const m = MAINTENANCE[sel.maintenance];
-    lineItems.push({ label: m.name, amount: m.price });
+    lineItems.push({
+      label: m.name,
+      amount: num(sel.prices?.maintenance) ?? m.price,
+    });
   }
 
   if (sel.monthlySeo) {
-    recurringNotes.push(`Monthly SEO — ${money(MONTHLY_SEO)}/month`);
+    const seo = num(sel.prices?.monthlySeo) ?? MONTHLY_SEO;
+    recurringNotes.push(`Monthly SEO — ${money(seo)}/month`);
   }
 
   // Add custom features to pricing

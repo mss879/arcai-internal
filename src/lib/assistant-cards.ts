@@ -10,6 +10,8 @@
  * verify the invoice and the recipient address before anything is sent.
  */
 
+import type { ProposalContent, ProposalSelection } from "@/lib/proposal";
+
 export type InvoiceCardItem = {
   /** Short item / service label (may be empty). */
   item: string;
@@ -33,6 +35,27 @@ export type InvoiceCardData = {
   items: InvoiceCardItem[];
   grand_total: number;
   due_today: number;
+};
+
+/**
+ * A proposal the assistant drafted and saved. Carries the full selection and
+ * content so the card can render the branded PDF straight from what's already
+ * in the transcript — no second round-trip to fetch the row back.
+ */
+export type ProposalCardData = {
+  id: string;
+  client_name: string;
+  project_name: string;
+  /** ISO date (YYYY-MM-DD). */
+  proposal_date: string;
+  /** Human label for the chosen package, from selectionSummary(). */
+  package_summary: string;
+  line_items: { label: string; amount: number; original?: number }[];
+  grand_total: number;
+  /** Monthly/at-cost notes that sit under the total (never part of it). */
+  recurring_notes: string[];
+  selection: ProposalSelection;
+  content: ProposalContent;
 };
 
 export type SmsCardData = {
@@ -81,4 +104,6 @@ export type AssistantCard =
    * A pending SMS (custom text or payment reminder) the user must explicitly
    * confirm. Like emails, nothing is sent until the user taps Send or says yes.
    */
-  | { type: "confirm_send_sms"; sms: SmsCardData; resolution?: CardResolution };
+  | { type: "confirm_send_sms"; sms: SmsCardData; resolution?: CardResolution }
+  /** A saved proposal shown for review, with a PDF download (no send action). */
+  | { type: "proposal"; proposal: ProposalCardData };

@@ -17,7 +17,9 @@ import type { AssistantCard } from "@/lib/assistant-cards";
 
 export const runtime = "nodejs";
 
-const MAX_TOOL_TURNS = 6;
+// Proposal conversations chain more calls than an invoice does (read the
+// pricing, write it, then revise it), so there's a little more headroom here.
+const MAX_TOOL_TURNS = 8;
 
 function systemPrompt(name: string, today: string): string {
   const weekday = new Date(today + "T00:00:00").toLocaleDateString("en-US", {
@@ -64,6 +66,16 @@ function systemPrompt(name: string, today: string): string {
     `- To text someone by name, pass their name as client_query — saved clients are checked first, then CRM pipeline leads, and their saved phone number is used automatically, so you don't need to ask for it. Only pass 'phone' when the user dictates a number out loud. Keep messages short and natural; it's a text message.`,
     `- For an SMS payment reminder: (1) call list_payments (or list_clients) to get the real outstanding amount; (2) call prepare_sms with kind "payment_reminder" and a short reminder that states the amount, e.g. "Hi Nimal, a friendly reminder from ARC AI: Rs. 45,000 is still outstanding on your account. Thank you!". If the reminder is about a specific saved invoice, pass its invoice_number so it's linked. Never invent an amount — look it up first.`,
     `- CRITICAL: prepare_sms does NOT send anything. It shows the user the number and the exact message to confirm; the text only goes when they confirm — by saying yes or tapping Send. NEVER say the SMS has been sent — say "Here's the text — check the number and message, then say yes to send it." Read the phone number back so they can verify it.`,
+    ``,
+    `PROPOSALS & PRICING — you can read the agency's price list and write real client proposals:`,
+    `- get_pricing returns the live price list from the Pricing page: every package, what it includes, and its current price with the team's own edits applied. Call it before you quote, compare or explain any package, and whenever the user asks what something costs or what's in it. NEVER state a price from memory — only figures this tool returned.`,
+    `- create_proposal writes the whole proposal (AI narrative + priced line items) and saves it under Proposals. The user sees it as a card with a PDF download, so just confirm briefly out loud: the client, the package and the one-time total.`,
+    `- NEVER INVENT ANYTHING TO FILL A GAP. Before calling create_proposal you must actually know three things: who it's for, which package they want, and what their business does and needs. If any of those is missing or vague, ASK — one short question at a time, and wait for the answer. A vague reply is a reason to ask again, not to guess. Do not invent a business description, a package, a requirement, a client name or a price. If the tool replies that something is missing, ask the user for exactly that.`,
+    `- Pass everything the user told you the client wants as 'requirements' — short, near their own words, one per item. The proposal is written around them, so a thin list makes a generic proposal. Anything about tone, emphasis or what to leave out goes in 'instructions', in their wording.`,
+    `- PRICING IS THE USER'S CALL, NOT YOURS. When they name a figure for the package ("do it for three hundred thousand"), pass it as package_price exactly as they said it — never round it, never argue it, never "correct" it against the price list. Extra features they want at a price they state go in custom_items. A discount is a custom item with a NEGATIVE price (e.g. "Introductory discount", -25000). If they want a price changed but haven't said to what, ask.`,
+    `- OFFER PRICES SHOW THE REDUCTION. When the user says something like "the package is 175 thousand but I gave them 140", package_price is 140000 — the price the client PAYS. You don't have to do anything else: the proposal automatically prints the normal price struck through next to the offer price, so the client sees what they were given off. Only pass list_price if the original they quote isn't the Pricing page figure, and only pass hide_original if they explicitly ask for a single price with nothing struck through.`,
+    `- update_proposal changes a proposal that already exists — the price, the package, extra lines, the client details, or the wording (set rewrite true). Use it for every follow-up change. NEVER create a second proposal for a client who is asking you to change the first one.`,
+    `- You cannot edit the Pricing page itself, and you should not offer to. Prices you set on a proposal apply to that one proposal only; the official price list is unchanged.`,
   ].join("\n");
 }
 

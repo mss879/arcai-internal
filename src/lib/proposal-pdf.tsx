@@ -167,6 +167,7 @@ const styles = StyleSheet.create({
   th: { fontFamily: "Helvetica-Bold", color: INK },
   hCell: { paddingHorizontal: 8, paddingVertical: 6 },
   bCell: { paddingHorizontal: 8, paddingVertical: 9 },
+  wasPrice: { textDecoration: "line-through", color: MUTED },
   vLine: { borderLeftWidth: 1, borderLeftColor: LINE },
   vSoft: { borderLeftWidth: 1, borderLeftColor: LINE_SOFT },
   cDesc: { width: "78%" },
@@ -387,6 +388,16 @@ function ProposalPdfDoc({ data }: { data: ProposalPdfData }) {
             <View style={styles.tRow} key={i} wrap={false}>
               <Text style={[styles.bCell, styles.cDesc]}>{l.label}</Text>
               <Text style={[styles.bCell, styles.cAmount, styles.vSoft, styles.right]}>
+                {/* A negotiated price shows what it came down from, so the
+                    client can see the reduction they were given. */}
+                {typeof l.original === "number" ? (
+                  <>
+                    <Text style={styles.wasPrice}>{money(l.original)}</Text>
+                    {/* Spacer kept OUTSIDE the struck run, or the line runs on
+                        into the gap and the two figures read as one. */}
+                    <Text>{"   "}</Text>
+                  </>
+                ) : null}
                 {money(l.amount)}
               </Text>
             </View>

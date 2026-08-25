@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Field, Input, Select, Textarea } from "@/components/ui/input";
 import { useDictation } from "@/hooks/use-dictation";
 import { cn } from "@/lib/utils";
+import { selectionPrices } from "@/lib/proposal-pricing";
 import {
   AGENT_PLANS,
   AGENT_TIMELINE,
@@ -99,7 +100,14 @@ function clean(c: ProposalContent): ProposalContent {
   };
 }
 
-export function ProposalGenerator({ clients }: { clients: ClientLite[] }) {
+export function ProposalGenerator({
+  clients,
+  priceAmounts,
+}: {
+  clients: ClientLite[];
+  /** Live /pricing amounts, keyed by PriceField.key. */
+  priceAmounts: Record<string, number>;
+}) {
   const router = useRouter();
 
   const [clientName, setClientName] = React.useState("");
@@ -128,7 +136,17 @@ export function ProposalGenerator({ clients }: { clients: ClientLite[] }) {
   const [generated, setGenerated] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
 
-  const pricing = buildPricing(selection);
+  /**
+   * The selection with today's /pricing amounts resolved onto it. Everything
+   * downstream — the total, the PDF, the saved row — uses this, so the numbers
+   * follow the Pricing page instead of the constants in proposal.ts. Saving
+   * freezes them, which is what stops an old proposal re-pricing itself later.
+   */
+  const priced = React.useMemo(
+    () => ({ ...selection, prices: selectionPrices(priceAmounts, selection) }),
+    [selection, priceAmounts],
+  );
+  const pricing = buildPricing(priced);
   const cleaned = clean(content);
 
   function patchSelection(patch: Partial<ProposalSelection>) {
@@ -149,7 +167,7 @@ export function ProposalGenerator({ clients }: { clients: ClientLite[] }) {
         businessDescription,
         clientName,
         projectName,
-        selection,
+        selection: priced,
         extraInstructions,
       });
       if (res.ok) {
@@ -178,7 +196,7 @@ export function ProposalGenerator({ clients }: { clients: ClientLite[] }) {
       client_name: clientName,
       project_name: projectName,
       proposal_date: date,
-      selection,
+      selection: priced,
       content: cleaned,
       grand_total: pricing.oneTimeTotal,
     });
@@ -210,7 +228,7 @@ export function ProposalGenerator({ clients }: { clients: ClientLite[] }) {
       client_name: clientName,
       project_name: projectName,
       proposal_date: date,
-      selection,
+      selection: priced,
       content: cleaned,
     };
     const saveRes = await saveProposal({
@@ -843,7 +861,7 @@ export function ProposalGenerator({ clients }: { clients: ClientLite[] }) {
               client_name: clientName,
               project_name: projectName,
               proposal_date: date,
-              selection,
+              selection: priced,
               content: cleaned,
             }}
           />

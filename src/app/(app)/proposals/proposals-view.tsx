@@ -14,9 +14,12 @@ type ClientLite = Pick<Client, "id" | "name" | "company">;
 export function ProposalsView({
   pastProposals,
   clients,
+  priceAmounts,
 }: {
   pastProposals: Proposal[];
   clients: ClientLite[];
+  /** Live /pricing amounts, keyed by PriceField.key. */
+  priceAmounts: Record<string, number>;
 }) {
   const [tab, setTab] = React.useState<"create" | "past">("create");
 
@@ -52,7 +55,7 @@ export function ProposalsView({
       </div>
 
       {tab === "create" ? (
-        <ProposalGenerator clients={clients} />
+        <ProposalGenerator clients={clients} priceAmounts={priceAmounts} />
       ) : (
         <PastProposals proposals={pastProposals} />
       )}

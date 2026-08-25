@@ -7,7 +7,23 @@
  * the AI text generator is never allowed to invent a price.
  *
  * Figures come from the ARC AI pricing catalog (LKR, one-time unless noted).
+ *
+ * TWO SHAPES LIVE HERE, and which one a proposal uses is decided by PRESENCE:
+ *   - LEGACY: one package (`type` + `tier`/`platform`/`agentPlatform`) priced
+ *     off the constants below. Every proposal saved before multi-item support
+ *     is this shape and must keep re-pricing byte-identically forever.
+ *   - ITEM-DRIVEN: `selection.items` — any number of priced lines, drawn from
+ *     the /pricing catalog or written bespoke, with mixed recurrence. This is
+ *     what lets ONE proposal quote a website AND a monthly social retainer.
+ * A selection with no `items` key takes the legacy path, character for
+ * character. Nothing is ever backfilled onto a stored row.
  */
+
+import type {
+  PriceField,
+  PricingGroup,
+  PricingPackage,
+} from "@/lib/pricing-catalog";
 
 // ---- Company / sign-off (printed on the proposal) ------------------------
 
@@ -52,6 +68,61 @@ export type BusinessTierKey =
 export type EcommercePlatform = "store" | "smart" | "shopify" | "custom";
 export type MaintenanceKey = "none" | "m3" | "m6" | "m12";
 
+// ---- Multi-item proposals (additive; a selection without `items` is untouched) ----
+
+/**
+ * How often a line is charged. This is the ONLY thing that decides which total
+ * a line lands in — a monthly social retainer must never be summed into the
+ * one-time build cost, which is precisely why a proposal could not carry one
+ * before.
+ */
+export type LineRecurrence = "one_time" | "monthly" | "yearly" | "at_cost";
+
+/**
+ * One priced thing the client is buying. A proposal may carry any number of
+ * these, drawn from the /pricing catalog or written bespoke — this is what
+ * lets a single proposal quote a website AND a social-media retainer.
+ */
+export type ProposalLineItem = {
+  /** Stable within one proposal; how update_proposal targets a line for edit
+   * or removal. Use the catalog key when there is one, else a slug of `label`. */
+  id: string;
+  /** PriceField.key from PRICING_CATALOG, e.g. "smm.intermediate.monthly".
+   * null for a bespoke line the team wrote by hand. Never invented. */
+  catalogKey: string | null;
+  /** PricingPackage.key the line came from, e.g. "smm_intermediate". Kept so a
+   * future reader can find the package again even if a price key is retired. */
+  packageKey?: string | null;
+  /** Prints in the Investment table's DESCRIPTION cell. */
+  label: string;
+  /** Short qualifier appended in brackets, e.g. "agreed rate", "12 months". */
+  note?: string;
+  /**
+   * The package's feature bullets, COPIED IN at write time — never looked up
+   * live. This is what makes the proposal print what the client is actually
+   * buying, and it must stay frozen for the same reason `prices` is frozen:
+   * the catalog will change, the sent proposal must not.
+   */
+  features: string[];
+  /** Hide the copied features on this one line without deleting them.
+   * Absent = show them whenever `features` is non-empty. */
+  showFeatures?: boolean;
+  /** What the client pays, per unit, in LKR. Exactly the figure the team
+   * stated — never rounded, never reconciled against the catalog. */
+  amount: number;
+  /** The list price this came down from. Rendered struck through, and ONLY
+   * when it is strictly greater than `amount` (same rule as the legacy
+   * `prices.baseList`). Absent = single plain price. */
+  listAmount?: number;
+  /** Default 1. Multiplies `amount` for the printed line total. */
+  quantity?: number;
+  recurrence: LineRecurrence;
+  /** Print " (starts at)" after the label — mirrors PriceField.prefix === "from".
+   * The writer MUST clear this whenever the team dictated an exact amount, the
+   * same rule buildPricing already applies to the legacy base line. */
+  startsAt?: boolean;
+};
+
 export type ProposalSelection = {
   type: ProjectType;
   tier: BusinessTierKey; // used when type === "business"
@@ -84,6 +155,20 @@ export type ProposalSelection = {
   };
   /** Short note appended to the main line's label, e.g. "agreed rate". */
   baseNote?: string;
+  /**
+   * Any number of priced lines. PRESENT = this proposal is item-driven: the
+   * legacy single-package block (type/tier/platform/agentPlatform + prices.base
+   * + baseList + baseNote) is IGNORED for pricing entirely. ABSENT = every
+   * existing code path runs exactly as it does today. Never backfilled onto a
+   * stored row — a sent proposal keeps printing the numbers the client agreed to.
+   */
+  items?: ProposalLineItem[];
+  /**
+   * Extra notes printed under the totals (the at-cost / monthly-fee sentences).
+   * With `items` present the package's own `monthlyNote` is gone, so this is
+   * where "AI usage billed at cost — no monthly fee to ARC" is carried.
+   */
+  notes?: string[];
 };
 
 export function defaultSelection(): ProposalSelection {
@@ -403,19 +488,111 @@ export type PriceLine = {
   /** List price, when `amount` is a discounted offer. Rendered struck through
    * next to the amount so the client sees the reduction. */
   original?: number;
+  /** Absent = "one_time". Legacy proposals never set it, so nothing changes. */
+  recurrence?: LineRecurrence;
+  /** Feature bullets to print under the label, small and muted. Absent = none. */
+  features?: string[];
 };
 export type Pricing = {
   lineItems: PriceLine[];
+  /** Sum of the ONE-TIME lines only. Identical to today for any legacy row,
+   * because a legacy row can only produce one-time lines. This is what goes
+   * into `proposals.grand_total` — Finance reads it as money-now. */
   oneTimeTotal: number;
   recurringNotes: string[];
+  /** Absent or 0 when nothing recurs — the PDF prints no extra total row. */
+  monthlyTotal?: number;
+  yearlyTotal?: number;
 };
+
+/**
+ * True only when this proposal was WRITTEN item-driven. A legacy row has no
+ * `items` key at all, so it can never take the new path by accident — which is
+ * what keeps every already-sent proposal re-pricing exactly as it always has.
+ */
+export function hasItems(
+  sel: ProposalSelection,
+): sel is ProposalSelection & { items: ProposalLineItem[] } {
+  return Array.isArray(sel.items) && sel.items.length > 0;
+}
+
+/** How many of a line are being bought. Guarded because items arrive as JSON. */
+function qty(item: ProposalLineItem): number {
+  const q = Number(item.quantity);
+  return Number.isFinite(q) && q > 0 ? q : 1;
+}
+
+/**
+ * A line's recurrence, coerced to one of the four known values. Items arrive as
+ * JSON that nothing validates on the way in, and an unrecognised string must
+ * not fall between the totals and the printed suffix — `recurrenceSuffix()`
+ * would call it one-time while `buildPricing` summed it into nothing, so the
+ * table would silently stop adding up. Anything unknown is one-time.
+ */
+function recurrenceOf(item: ProposalLineItem): LineRecurrence {
+  switch (item.recurrence) {
+    case "monthly":
+    case "yearly":
+    case "at_cost":
+      return item.recurrence;
+    default:
+      return "one_time";
+  }
+}
+
+/** A line's printed amount. `at_cost` is deliberately zero: it must never move
+ * a total, and the PDF prints the words "At cost" in the amount cell instead. */
+function lineAmount(item: ProposalLineItem): number {
+  if (recurrenceOf(item) === "at_cost") return 0;
+  const a = Number(item.amount);
+  return (Number.isFinite(a) ? a : 0) * qty(item);
+}
+
+/**
+ * A line's feature bullets as a clean string array. `features` is stored JSON,
+ * so it can be null, a bare string, or hold blanks — and every one of those
+ * reaches the PDF, where `.map()` on a non-array throws and takes the whole
+ * document down with it. Nothing downstream should have to defend itself.
+ */
+function featuresOf(item: ProposalLineItem): string[] {
+  if (!Array.isArray(item.features)) return [];
+  const out: string[] = [];
+  for (const f of item.features) {
+    if (typeof f === "string" && f.trim()) out.push(f.trim());
+  }
+  return out;
+}
+
+/** Drop anything malformed before it can reach the renderer: one bad entry in
+ * a stored JSON blob must not make a sent proposal unopenable. */
+function validItems(sel: ProposalSelection): ProposalLineItem[] {
+  if (!hasItems(sel)) return [];
+  return sel.items.filter(
+    (i): i is ProposalLineItem =>
+      Boolean(i) && typeof i === "object" && typeof i.label === "string" && i.label.trim() !== "",
+  );
+}
 
 /**
  * The package's list price straight from the catalog, ignoring anything frozen
  * onto the proposal. Used to record what a negotiated price was discounted
  * FROM, so the proposal can show both figures.
+ *
+ * Item-driven: the sum of what the ONE-TIME lines would normally have cost.
+ * That value is inert for pricing (an item-driven proposal never reads
+ * `prices.base`), but it must still be a sane number rather than a stale
+ * single-package price in case a reader shows "normally Rs X".
  */
 export function catalogBasePrice(sel: ProposalSelection): number {
+  if (hasItems(sel)) {
+    return validItems(sel)
+      .filter((i) => recurrenceOf(i) === "one_time")
+      .reduce((s, i) => {
+        const list = Number(i.listAmount);
+        const base = Number.isFinite(list) ? list : Number(i.amount);
+        return s + (Number.isFinite(base) ? base : 0) * qty(i);
+      }, 0);
+  }
   if (sel.type === "business") return BUSINESS_TIERS[sel.tier].price;
   if (sel.type === "agent") return AGENT_PLANS[sel.agentPlatform ?? "whatsapp"].price;
   return (ECOMMERCE[sel.platform] ?? ECOMMERCE.store).price;
@@ -446,7 +623,47 @@ export function buildPricing(sel: ProposalSelection): Pricing {
   const struck = (charged: number) =>
     listed !== null && listed > charged ? listed : undefined;
 
-  if (sel.type === "business") {
+  if (hasItems(sel)) {
+    // ITEM-DRIVEN. The legacy package block below is skipped ENTIRELY — and
+    // with it `prices.base`, `prices.baseList`, `baseNote`, `paymentGateway`
+    // and `delivery`, which all describe a single package line that no longer
+    // exists here. Reading a stale frozen `base` alongside the items would
+    // print a phantom line and double-count the build.
+    for (const item of validItems(sel)) {
+      const recurrence = recurrenceOf(item);
+      const label = `${item.label.trim()}${item.startsAt ? " (starts at)" : ""}${
+        item.note?.trim() ? ` (${item.note.trim()})` : ""
+      }`;
+      const amount = lineAmount(item);
+      // Same rule as the legacy `struck()`: only ever shown when the client is
+      // genuinely being charged less than the list price.
+      //
+      // `listAmount` is PER UNIT, exactly like `amount` — the builder's "Was"
+      // field sits beside "Price (LKR)", and `catalogBasePrice` multiplies it
+      // out the same way. So it has to be multiplied by the quantity before it
+      // can be compared with, or printed beside, a line TOTAL. Comparing a
+      // per-unit list price against a multiplied amount silently dropped the
+      // strike-through the moment a line carried a quantity above one: two
+      // reels at Rs 25,000 discounted to Rs 20,000 each printed Rs 40,000 with
+      // no reduction shown at all.
+      const list = Number(item.listAmount);
+      const listTotal = Number.isFinite(list) ? list * qty(item) : Number.NaN;
+      const original =
+        Number.isFinite(listTotal) && listTotal > amount && recurrence !== "at_cost"
+          ? listTotal
+          : undefined;
+      lineItems.push({
+        label,
+        amount,
+        original,
+        recurrence,
+        features: item.showFeatures === false ? undefined : featuresOf(item),
+      });
+      // At-cost work is charged through with no ARC margin, so it carries no
+      // figure at all — it belongs in the notes, not in any total.
+      if (recurrence === "at_cost") recurringNotes.push(`${label} — at cost`);
+    }
+  } else if (sel.type === "business") {
     const t = BUSINESS_TIERS[sel.tier];
     const amount = baseOverride ?? t.price;
     lineItems.push({
@@ -518,12 +735,56 @@ export function buildPricing(sel: ProposalSelection): Pricing {
     }
   }
 
-  const oneTimeTotal = lineItems.reduce((s, l) => s + l.amount, 0);
-  return { lineItems, oneTimeTotal, recurringNotes };
+  // Free-text notes that belong to the proposal as a whole ("no monthly fee to
+  // ARC…"), printed under the totals. Only item-driven proposals carry them —
+  // a legacy one gets its note from the package's own `monthlyNote`.
+  if (hasItems(sel) && Array.isArray(sel.notes)) {
+    for (const n of sel.notes) {
+      if (typeof n === "string" && n.trim()) recurringNotes.push(n.trim());
+    }
+  }
+
+  // A line with no `recurrence` is one-time — which is every line a legacy
+  // selection can produce, so this reduce is identical to the old
+  // `lineItems.reduce((s, l) => s + l.amount, 0)` for them.
+  const sumOf = (r: LineRecurrence) =>
+    lineItems.reduce((s, l) => s + ((l.recurrence ?? "one_time") === r ? l.amount : 0), 0);
+  const oneTimeTotal = sumOf("one_time");
+
+  // Legacy proposals return the exact same three-key object they always have.
+  if (!hasItems(sel)) return { lineItems, oneTimeTotal, recurringNotes };
+
+  return {
+    lineItems,
+    oneTimeTotal,
+    recurringNotes,
+    monthlyTotal: sumOf("monthly"),
+    yearlyTotal: sumOf("yearly"),
+  };
+}
+
+/** The labels a summary/name is built from: real packages, not pass-through
+ * costs. An "AI usage" at-cost line is not something the proposal is FOR. */
+function summaryLabels(sel: ProposalSelection): string[] {
+  return validItems(sel)
+    .filter((i) => recurrenceOf(i) !== "at_cost")
+    .map((i) => i.label.trim())
+    .filter(Boolean);
 }
 
 /** Short human label for the selected package, e.g. for the cover + AI prompt. */
 export function selectionSummary(sel: ProposalSelection): string {
+  // Item-driven: name everything being sold, e.g.
+  // "Smart Business Website + Halo Media — Intermediate". Falls through to the
+  // legacy summary if the items yield no usable label, so a caller is never
+  // handed an empty string.
+  const labels = summaryLabels(sel);
+  if (labels.length > 0) {
+    const shown = labels.slice(0, 4).join(" + ");
+    const rest = labels.length - 4;
+    return rest > 0 ? `${shown} + ${rest} more` : shown;
+  }
+
   if (sel.type === "business") {
     const t = BUSINESS_TIERS[sel.tier];
     const scope = t.hasAI
@@ -554,6 +815,8 @@ export function selectionSummary(sel: ProposalSelection): string {
 
 /** Short project name suggestion for the cover (e.g. "Website + AI Agent"). */
 export function suggestedProjectName(sel: ProposalSelection): string {
+  const labels = summaryLabels(sel);
+  if (labels.length > 0) return labels.slice(0, 2).join(" + ");
   if (sel.type === "agent") return AGENT_PLANS[sel.agentPlatform ?? "whatsapp"].name;
   if (sel.type === "ecommerce")
     return sel.platform === "smart" ? "Smart Store System" : "E-Commerce Store";
@@ -565,10 +828,65 @@ export function suggestedProjectName(sel: ProposalSelection): string {
 
 /** Feature bullets of the selected package — handed to the AI as grounding. */
 export function includedFeatures(sel: ProposalSelection): string[] {
+  // Item-driven: the features of EVERY package on the proposal, flattened and
+  // de-duplicated. This is what makes "get the pricing, then include all of
+  // those features" structural rather than a thing the prompt has to beg for.
+  // Prefer `proposalPackages()` where the caller can group them per package.
+  if (hasItems(sel)) {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const item of validItems(sel)) {
+      for (const t of featuresOf(item)) {
+        const k = t.toLowerCase();
+        if (seen.has(k)) continue;
+        seen.add(k);
+        out.push(t);
+      }
+    }
+    // Every item bespoke and featureless — fall through so the writer is never
+    // handed nothing to work with.
+    if (out.length > 0) return out;
+  }
   if (sel.type === "business") return BUSINESS_TIERS[sel.tier].features;
   if (sel.type === "agent")
     return AGENT_PLANS[sel.agentPlatform ?? "whatsapp"].features;
   return (ECOMMERCE[sel.platform] ?? ECOMMERCE.store).features;
+}
+
+/**
+ * Every package on the proposal with its OWN features kept together — the
+ * grouped view of `includedFeatures()`. Handed to the narrative writer so it
+ * can talk about the website and the social retainer as two separate things
+ * instead of one undifferentiated bullet soup. Empty for a legacy selection,
+ * whose single package is already described by `includedFeatures()`.
+ */
+export function proposalPackages(
+  sel: ProposalSelection,
+): { label: string; features: string[]; recurrence: LineRecurrence }[] {
+  return validItems(sel).map((i) => ({
+    label: i.label.trim(),
+    features: featuresOf(i),
+    recurrence: recurrenceOf(i),
+  }));
+}
+
+/**
+ * What follows the figure in the Investment table's AMOUNT cell. Derived from
+ * `recurrence` and never from stored text, so a monthly line can only ever
+ * print one way. `at_cost` returns null — that cell prints "At cost" instead
+ * of a number, which is why it has no suffix to give.
+ */
+export function recurrenceSuffix(r: LineRecurrence | undefined): string | null {
+  switch (r) {
+    case "monthly":
+      return "/month";
+    case "yearly":
+      return "/year";
+    case "at_cost":
+      return null;
+    default:
+      return "";
+  }
 }
 
 /** "Rs 60,000" */
@@ -582,6 +900,63 @@ export function money(n: number): string {
 export type ObjectiveGroup = { group: string; items: string[] };
 export type FeatureBlock = { heading: string; intro: string; bullets: string[] };
 export type TimelineStep = { title: string; description: string; duration: string };
+
+// ---- Free-form sections (additive; content without `sections` is untouched) ----
+
+/**
+ * The closed set of shapes the proposal PDF can render beautifully. The AGENT
+ * is free in CONTENT and ORDER — it is not free in LAYOUT, because every shape
+ * here maps onto styles that already exist in src/lib/proposal-pdf.tsx. That is
+ * what keeps an arbitrary section looking like an ARC AI proposal.
+ */
+export type ProposalBody =
+  /** Paragraphs, one per entry. Renders with the standard paragraph style. */
+  | { kind: "prose"; paragraphs: string[] }
+  /** Flat bullet list. Renders through the existing <Bullets/>. */
+  | { kind: "bullets"; items: string[] }
+  /** Bold sub-heading + optional intro + bullets, repeated. Exactly the shape
+   * Objectives and Key Features already use. */
+  | {
+      kind: "groups";
+      groups: { heading: string; intro?: string; items: string[] }[];
+    }
+  /** Numbered steps in the black chip. Same rows as the timeline, without the
+   * duration line. */
+  | { kind: "steps"; steps: { title: string; description?: string }[] }
+  /** Two-column feature grid: bold title over one muted line, 50% cells,
+   * flexWrap. The right shape for "what's included" across two packages. */
+  | {
+      kind: "features";
+      items: { title: string; description?: string }[];
+    }
+  /** The dated timeline — reuses TimelineStep so an agent-written schedule
+   * renders identically to content.timeline. */
+  | { kind: "timeline"; steps: TimelineStep[] }
+  /** Two-column labelled table, drawn with the Investment grid's own styles. */
+  | {
+      kind: "table";
+      columns: [string, string];
+      rows: [string, string][];
+      /** Left column width, default "32%". The right column takes the rest. */
+      labelWidth?: string;
+    }
+  /** Small muted footnote. */
+  | { kind: "note"; text: string };
+
+/** One numbered section of the proposal, written by the agent. */
+export type ProposalSection = {
+  /** Stable within one proposal; how update_proposal edits or drops a section. */
+  id: string;
+  /** Printed uppercase next to its number, exactly like every fixed section. */
+  heading: string;
+  /** Where it sits relative to the Investment table. Default "before". */
+  placement?: "before" | "after";
+  /** One or more bodies, rendered in order — intro prose then bullets, etc. */
+  body: ProposalBody[];
+};
+
+/** What free-form sections do to the fixed skeleton. See `ProposalContent`. */
+export type ProposalSectionsMode = "replace_narrative" | "append" | "replace_all";
 
 export type ProposalContent = {
   overview: string;
@@ -598,6 +973,26 @@ export type ProposalContent = {
   hosting: { hosting: string; storage: string; domain: string };
   maintenance: string[];
   quality: { bullets: string[]; assumptions: string[]; nextSteps: string[] };
+  /**
+   * The agent's own sections, in its own order. ABSENT or EMPTY = the fixed
+   * skeleton above renders exactly as it always has. Never backfilled.
+   */
+  sections?: ProposalSection[];
+  /**
+   * What `sections` does to the fixed skeleton. Only consulted when `sections`
+   * is non-empty; absent behaves as "replace_narrative".
+   *   replace_narrative — the six narrative sections (Overview, Objectives,
+   *     Key Features, Educational Strategy, SEO, Timeline) are SUPPRESSED and
+   *     the agent's sections take their place. Investment, Terms of Payment,
+   *     Maintenance & Support, Quality Standards and the sign-off still print.
+   *     This is the default because an SEO heading on a proposal with no SEO in
+   *     it is the exact complaint being fixed.
+   *   append — the fixed narrative prints first, then the agent's sections.
+   *     For adding one section to an existing proposal without rewriting it.
+   *   replace_all — only Investment and the sign-off survive; the agent must
+   *     then write its own terms. Never the default; never chosen implicitly.
+   */
+  sectionsMode?: ProposalSectionsMode;
 };
 
 /**
@@ -656,4 +1051,135 @@ export function defaultContent(): ProposalContent {
       ],
     },
   };
+}
+
+// ---- Catalog -> line item bridge ----------------------------------------
+
+/**
+ * The /pricing catalog and the proposal catalog above only ever met in ONE
+ * direction: `proposal-pricing.ts` resolved a selection into up to three bare
+ * numbers. Nothing could go the other way, so two thirds of the price list —
+ * every social retainer, every AI automation tier, every /post and /reel
+ * add-on — was unreachable from a proposal, and a package's real features
+ * could never be carried across.
+ *
+ * These three functions invert it: name a price key, get a fully-formed line
+ * item with the package's own features copied in. That is "get the pricing,
+ * then put those features in the proposal" as a single call, and it cannot
+ * drift from the /pricing page because it reads the same catalog.
+ */
+
+/** Locate one price field in the live catalog, with its package for context. */
+export function findCatalogPrice(
+  groups: PricingGroup[],
+  key: string,
+): { group: PricingGroup; pkg: PricingPackage; field: PriceField } | null {
+  for (const group of groups) {
+    for (const pkg of group.packages) {
+      for (const field of pkg.prices) {
+        if (field.key === key) return { group, pkg, field };
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Recurrence inferred from PriceField.suffix — the catalog already encodes it.
+ * "/month" -> monthly; "/year" -> yearly; everything else ("one-time", "each",
+ * "/post", "/reel", "/shoot", "/session", "/request", "/page", undefined) ->
+ * one_time. "at_cost" is never inferred: only a human or the tool layer,
+ * saying so explicitly, can mark a line as charged through at cost.
+ */
+export function recurrenceForField(f: PriceField): LineRecurrence {
+  const suffix = (f.suffix ?? "").trim().toLowerCase();
+  if (suffix === "/month") return "monthly";
+  if (suffix === "/year") return "yearly";
+  return "one_time";
+}
+
+/** A stable, readable id for a bespoke line the team wrote by hand. */
+export function lineItemId(label: string): string {
+  const slug = label
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug || "item";
+}
+
+/**
+ * A package's default printed name. Catalog packages inside a group are often
+ * named by tier alone ("Intermediate", "Flow"), which is meaningless on its own
+ * in an Investment table — so a single-word name is qualified by its group.
+ * A package carrying more than one price gets the price's own label too, so
+ * "Smart Store System — Total" and "— AI layer" stay distinguishable.
+ */
+function catalogLabel(group: PricingGroup, pkg: PricingPackage, field: PriceField): string {
+  const base = pkg.name.trim().includes(" ") ? pkg.name.trim() : `${group.title} — ${pkg.name.trim()}`;
+  return pkg.prices.length > 1 ? `${base} — ${field.label}` : base;
+}
+
+/**
+ * Build a ProposalLineItem from a catalog key, COPYING the package's features
+ * in so the proposal prints what the client is buying — the whole point.
+ *
+ * `over` lets the team's dictated figures win: `amount` is used EXACTLY as
+ * given and is never rounded or reconciled against the catalog. Passing an
+ * amount below the catalog price records that price as `listAmount`, so the
+ * proposal prints "~~Rs 250,000~~ Rs 200,000" without anyone typing it twice,
+ * and clears "(starts at)" because an exact figure has now been agreed.
+ *
+ * Returns null for an unknown key or a USD-priced field — the proposal PDF
+ * totals in LKR only, and silently mixing currencies into one column would
+ * misstate the total.
+ */
+export function lineItemFromCatalog(
+  groups: PricingGroup[],
+  key: string,
+  over?: {
+    label?: string;
+    amount?: number;
+    listAmount?: number;
+    quantity?: number;
+    features?: string[];
+    note?: string;
+    recurrence?: LineRecurrence;
+  },
+): ProposalLineItem | null {
+  const found = findCatalogPrice(groups, key);
+  if (!found) return null;
+  const { group, pkg, field } = found;
+  if ((field.currency ?? "LKR") !== "LKR") return null;
+
+  const dictated = typeof over?.amount === "number" && Number.isFinite(over.amount);
+  const amount = dictated ? (over as { amount: number }).amount : field.amount;
+  const listAmount =
+    typeof over?.listAmount === "number" && Number.isFinite(over.listAmount)
+      ? over.listAmount
+      : dictated && field.amount > amount
+        ? field.amount
+        : undefined;
+
+  const item: ProposalLineItem = {
+    id: key,
+    catalogKey: key,
+    packageKey: pkg.key,
+    label: over?.label?.trim() || catalogLabel(group, pkg, field),
+    // Copy, never alias: this array otherwise IS the module-level catalog's
+    // own, and one in-place edit downstream would silently rewrite the price
+    // list for the whole process.
+    features: [...(over?.features ?? pkg.features ?? [])],
+    amount,
+    recurrence: over?.recurrence ?? recurrenceForField(field),
+    // "from Rs 450,000" is a floor. Once a figure has been agreed it is no
+    // longer a floor, so the suffix comes off — the same rule buildPricing
+    // has always applied to the legacy base line.
+    startsAt: field.prefix === "from" && !dictated,
+  };
+  if (listAmount !== undefined) item.listAmount = listAmount;
+  if (typeof over?.quantity === "number" && Number.isFinite(over.quantity) && over.quantity > 0) {
+    item.quantity = over.quantity;
+  }
+  if (over?.note?.trim()) item.note = over.note.trim();
+  return item;
 }

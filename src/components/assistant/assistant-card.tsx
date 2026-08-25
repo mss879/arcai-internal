@@ -5,6 +5,7 @@ import {
   AlertCircle,
   Check,
   Download,
+  Eye,
   FileText,
   Loader2,
   Mail,
@@ -22,6 +23,7 @@ import type {
   ProposalCardData,
   SmsCardData,
 } from "@/lib/assistant-cards";
+import { cardArtifactId } from "@/lib/assistant-artifacts";
 import { downloadProposalPdf } from "@/app/(app)/proposals/download-pdf";
 import type { SendInvoiceResult } from "@/components/assistant/use-voice-chat";
 
@@ -344,7 +346,14 @@ function ConfirmSendSms({
  * anything — the proposal is already stored under Proposals; this is the
  * review copy.
  */
-function ProposalBody({ proposal }: { proposal: ProposalCardData }) {
+function ProposalBody({
+  proposal,
+  onOpen,
+}: {
+  proposal: ProposalCardData;
+  /** Show this proposal in the preview canvas instead of navigating away. */
+  onOpen?: () => void;
+}) {
   const [downloading, setDownloading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
@@ -455,12 +464,27 @@ function ProposalBody({ proposal }: { proposal: ProposalCardData }) {
             </>
           )}
         </button>
-        <a
-          href="/proposals"
-          className="rounded-xl px-4 py-2.5 text-sm font-semibold text-slate-500 transition hover:bg-slate-100"
-        >
-          Open
-        </a>
+        {/* "Open" means open it HERE. Leaving the assistant for the
+            Proposals list to look at the thing Arc just wrote is the long way
+            round — the preview canvas already renders the real PDF. The link
+            is kept only for surfaces with nowhere to put a preview. */}
+        {onOpen ? (
+          <button
+            type="button"
+            onClick={onOpen}
+            className="inline-flex items-center gap-1.5 rounded-xl px-4 py-2.5 text-sm font-semibold text-slate-500 transition hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-300"
+          >
+            <Eye className="h-4 w-4" />
+            Open
+          </button>
+        ) : (
+          <a
+            href="/proposals"
+            className="rounded-xl px-4 py-2.5 text-sm font-semibold text-slate-500 transition hover:bg-slate-100"
+          >
+            Open
+          </a>
+        )}
       </div>
     </>
   );
@@ -475,6 +499,7 @@ export function AssistantCardView({
   card,
   onSend,
   onSendSms,
+  onOpenPreview,
 }: {
   card: AssistantCard;
   onSend: (
@@ -483,7 +508,17 @@ export function AssistantCardView({
     message?: string,
   ) => Promise<SendInvoiceResult>;
   onSendSms: (sms: SmsCardData) => Promise<SendInvoiceResult>;
+  /**
+   * Show this card's document in the preview canvas. Given the artifact id
+   * from `cardArtifactId()`. Omitted on a surface with no canvas, and the
+   * card then falls back to a link into the app.
+   */
+  onOpenPreview?: (artifactId: string) => void;
 }) {
+  const previewId = cardArtifactId(card);
+  const openPreview =
+    onOpenPreview && previewId ? () => onOpenPreview(previewId) : undefined;
+
   return (
     <div className="w-full max-w-[320px] rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm">
       {card.type === "confirm_send_sms" && (
@@ -493,10 +528,22 @@ export function AssistantCardView({
           onSendSms={onSendSms}
         />
       )}
-      {card.type === "proposal" && <ProposalBody proposal={card.proposal} />}
+      {card.type === "proposal" && (
+        <ProposalBody proposal={card.proposal} onOpen={openPreview} />
+      )}
       {(card.type === "invoice" || card.type === "confirm_send") && (
         <>
           <InvoiceBody invoice={card.invoice} />
+          {card.type === "invoice" && openPreview && (
+            <button
+              type="button"
+              onClick={openPreview}
+              className="mt-3 inline-flex w-full items-center justify-center gap-1.5 rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 transition hover:border-primary-300 hover:text-primary-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-300"
+            >
+              <Eye className="h-4 w-4" />
+              Open the PDF here
+            </button>
+          )}
           {card.type === "confirm_send" && (
             <ConfirmSend
               invoice={card.invoice}

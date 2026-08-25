@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import dynamic from "next/dynamic";
+import { useSearchParams } from "next/navigation";
 
 import { Sidebar } from "@/components/layout/sidebar";
 import { Topbar } from "@/components/layout/topbar";
@@ -38,6 +39,8 @@ export function AppShell({
 }) {
   useRealtimeSync("notifications");
 
+  const embed = useSearchParams().get("embed") === "1";
+
   const firstName = profile.full_name.split(" ")[0] || "there";
 
   const [mobileOpen, setMobileOpen] = React.useState(false);
@@ -60,6 +63,25 @@ export function AppShell({
       return next;
     });
   }, []);
+
+  // Embedded inside the Arc Studio preview canvas (`?embed=1`): render the
+  // page and nothing else — no sidebar, no topbar, no idle timeout, and
+  // crucially no assistant, or a `page` artifact would mount a second Arc
+  // inside Arc's own preview and recurse until the tab locks up.
+  //
+  // Placed AFTER every hook so hook order is identical on both branches.
+  // `useSearchParams()` is legal here: the (app) layout already wraps this
+  // tree in a <Suspense> boundary, which is what the Next docs require of a
+  // client component that reads the query string.
+  if (embed) {
+    return (
+      <div className="app-bg min-h-screen">
+        <main className="mx-auto w-full max-w-[1400px] px-4 py-6 sm:px-6 lg:px-8">
+          {children}
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="app-bg flex min-h-screen lg:h-screen lg:overflow-hidden">

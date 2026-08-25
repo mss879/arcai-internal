@@ -7,10 +7,11 @@ export const runtime = "nodejs";
 
 /**
  * Render an invoice to a real PDF and stream it back as a file download
- * (Content-Disposition: attachment). This is what the "Download PDF" buttons
- * call so the browser saves the file straight away instead of opening the
- * print dialog. It reuses the same @react-pdf renderer that email attachments
- * use, so the downloaded file matches exactly what gets emailed.
+ * (Content-Disposition: attachment, or inline with ?preview=1). This is what
+ * the "Download PDF" buttons call so the browser saves the file straight away
+ * instead of opening the print dialog. It reuses the same @react-pdf renderer
+ * that email attachments use, so the downloaded file matches exactly what gets
+ * emailed.
  */
 export async function POST(request: Request) {
   const profile = await getProfile();
@@ -57,10 +58,15 @@ export async function POST(request: Request) {
   const safeNumber =
     invoice.invoice_number.replace(/[^a-zA-Z0-9._-]/g, "") || "invoice";
 
+  // ?preview=1 → serve inline so a live preview can render it in an <iframe>;
+  // the default stays a download. Same bytes either way — the preview IS the
+  // file the client receives. Mirrors /api/proposals/pdf.
+  const inline = new URL(request.url).searchParams.get("preview") === "1";
+
   return new NextResponse(new Uint8Array(pdf), {
     headers: {
       "Content-Type": "application/pdf",
-      "Content-Disposition": `attachment; filename="Invoice-${safeNumber}.pdf"`,
+      "Content-Disposition": `${inline ? "inline" : "attachment"}; filename="Invoice-${safeNumber}.pdf"`,
       "Content-Length": String(pdf.length),
       "Cache-Control": "no-store",
     },

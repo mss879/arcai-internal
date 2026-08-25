@@ -22,6 +22,10 @@ export function ProposalsView({
   priceAmounts: Record<string, number>;
 }) {
   const [tab, setTab] = React.useState<"create" | "past">("create");
+  /** The saved proposal open in the generator, if any. Editing happens in the
+   * generator itself rather than a second, thinner form — one editor means a
+   * saved proposal can never be reshaped by a screen that knows less about it. */
+  const [editing, setEditing] = React.useState<Proposal | null>(null);
 
   return (
     <div className="space-y-6">
@@ -31,7 +35,7 @@ export function ProposalsView({
           onClick={() => setTab("create")}
           icon={<FilePlus2 className="h-4 w-4" />}
         >
-          Create
+          {editing ? "Editing" : "Create"}
         </TabButton>
         <TabButton
           active={tab === "past"}
@@ -55,9 +59,23 @@ export function ProposalsView({
       </div>
 
       {tab === "create" ? (
-        <ProposalGenerator clients={clients} priceAmounts={priceAmounts} />
+        <ProposalGenerator
+          // Remount on switch: the generator reads the row once, at mount, so
+          // the form state and the proposal it belongs to can never drift.
+          key={editing?.id ?? "new"}
+          clients={clients}
+          priceAmounts={priceAmounts}
+          editing={editing}
+          onExitEdit={() => setEditing(null)}
+        />
       ) : (
-        <PastProposals proposals={pastProposals} />
+        <PastProposals
+          proposals={pastProposals}
+          onEdit={(p) => {
+            setEditing(p);
+            setTab("create");
+          }}
+        />
       )}
     </div>
   );

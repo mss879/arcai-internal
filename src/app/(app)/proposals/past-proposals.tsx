@@ -4,13 +4,13 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import { format } from "date-fns";
 import { toast } from "sonner";
-import { Download, ScrollText, Trash2 } from "lucide-react";
+import { Download, Pencil, ScrollText, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Modal } from "@/components/ui/modal";
-import { money } from "@/lib/proposal";
+import { buildPricing, money } from "@/lib/proposal";
 import type { Proposal } from "@/lib/types";
 import { useRealtimeSync } from "@/hooks/use-realtime-sync";
 
@@ -18,7 +18,14 @@ import { deleteProposal } from "./actions";
 import { downloadProposalPdf } from "./download-pdf";
 import { ProposalPdfFrame } from "./proposal-pdf-frame";
 
-export function PastProposals({ proposals }: { proposals: Proposal[] }) {
+export function PastProposals({
+  proposals,
+  onEdit,
+}: {
+  proposals: Proposal[];
+  /** Reopen a saved proposal in the generator. */
+  onEdit: (p: Proposal) => void;
+}) {
   useRealtimeSync("proposals");
   const router = useRouter();
   const [viewing, setViewing] = React.useState<Proposal | null>(null);
@@ -95,6 +102,7 @@ export function PastProposals({ proposals }: { proposals: Proposal[] }) {
                 </td>
                 <td className="px-4 py-3 text-right font-medium text-slate-900">
                   {money(Number(p.grand_total))}
+                  <Recurring proposal={p} />
                 </td>
                 <td className="px-4 py-3">
                   <div className="flex items-center justify-end gap-1">
@@ -105,6 +113,10 @@ export function PastProposals({ proposals }: { proposals: Proposal[] }) {
                     >
                       <Download className="h-4 w-4" />
                       View
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => onEdit(p)}>
+                      <Pencil className="h-4 w-4" />
+                      Edit
                     </Button>
                     <button
                       onClick={() => setToDelete(p)}
@@ -129,7 +141,18 @@ export function PastProposals({ proposals }: { proposals: Proposal[] }) {
       >
         {viewing && (
           <div className="space-y-4">
-            <div className="no-print flex justify-end">
+            <div className="no-print flex justify-end gap-2">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  const p = viewing;
+                  setViewing(null);
+                  onEdit(p);
+                }}
+              >
+                <Pencil className="h-4 w-4" />
+                Edit
+              </Button>
               <Button onClick={() => handleDownload(viewing)} loading={downloading}>
                 <Download className="h-4 w-4" />
                 Download PDF
@@ -162,6 +185,39 @@ export function PastProposals({ proposals }: { proposals: Proposal[] }) {
         }
       />
     </div>
+  );
+}
+
+/**
+ * What this proposal is worth every month, printed under the one-time total.
+ *
+ * `grand_total` is the ONE-TIME money — the figure Finance reads as cash now —
+ * so a proposal carrying a monthly retainer is worth more than the number in
+ * this column, every month, and showing only that number would understate it.
+ * Re-priced from the stored selection exactly as the PDF does; a legacy
+ * proposal can't produce a recurring line, so nothing prints for one.
+ */
+function Recurring({ proposal }: { proposal: Proposal }) {
+  const pricing = React.useMemo(() => {
+    try {
+      return buildPricing(proposal.selection);
+    } catch {
+      // A malformed stored selection must cost this one row its subtitle, not
+      // take the whole table down.
+      return null;
+    }
+  }, [proposal.selection]);
+
+  const monthly = pricing?.monthlyTotal ?? 0;
+  const yearly = pricing?.yearlyTotal ?? 0;
+  if (monthly <= 0 && yearly <= 0) return null;
+
+  return (
+    <span className="block text-[11px] font-normal text-slate-400">
+      {monthly > 0 && `+ ${money(monthly)}/month`}
+      {monthly > 0 && yearly > 0 && " · "}
+      {yearly > 0 && `+ ${money(yearly)}/year`}
+    </span>
   );
 }
 

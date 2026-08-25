@@ -4,12 +4,23 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import { format } from "date-fns";
 import { toast } from "sonner";
-import { Download, Loader2, Mic, Plus, Receipt, Sparkles, Square, Trash2 } from "lucide-react";
+import {
+  Download,
+  FilePlus2,
+  Loader2,
+  Mic,
+  Plus,
+  Receipt,
+  Sparkles,
+  Square,
+  Trash2,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select, Textarea } from "@/components/ui/input";
 import { useDictation } from "@/hooks/use-dictation";
 import { cn } from "@/lib/utils";
+import { applyOverrides, type PricingGroup } from "@/lib/pricing-catalog";
 import { selectionPrices } from "@/lib/proposal-pricing";
 import {
   AGENT_PLANS,
@@ -20,15 +31,22 @@ import {
   buildPricing,
   defaultContent,
   defaultSelection,
+  hasItems,
+  includedFeatures,
+  lineItemFromCatalog,
   money,
+  selectionSummary,
   suggestedProjectName,
   type AgentPlatform,
   type BusinessTierKey,
   type MaintenanceKey,
   type ProposalContent,
+  type ProposalLineItem,
+  type ProposalSection,
+  type ProposalSectionsMode,
   type ProposalSelection,
 } from "@/lib/proposal";
-import type { Client } from "@/lib/types";
+import type { Client, Proposal } from "@/lib/types";
 
 import {
   INVOICE_HANDOFF_PARAM,
@@ -36,11 +54,31 @@ import {
   stashInvoiceDraft,
 } from "@/lib/invoice-handoff";
 
-import { generateProposal, saveProposal } from "./actions";
+import { generateProposal, saveProposal, updateProposal } from "./actions";
 import { downloadProposalPdf } from "./download-pdf";
 import { ProposalPdfFrame } from "./proposal-pdf-frame";
+import { ItemBuilder, bespokeLine } from "./item-builder";
+import { SectionsEditor, cleanSections } from "./section-editor";
 
 type ClientLite = Pick<Client, "id" | "name" | "company">;
+
+/**
+ * Which shape this proposal is being written in.
+ *
+ *   "package" — the original single-package selection. A proposal saved this
+ *     way carries no `items` key at all, and every reader treats it exactly as
+ *     it always has.
+ *   "items"   — the multi-item builder: any number of priced lines off the
+ *     live price list, mixed one-time and recurring, which is the only way to
+ *     quote a website AND a monthly social retainer on one document.
+ *
+ * Moving from "package" to "items" is a real change of shape, so it is never
+ * done silently — see the conversion notice below.
+ */
+type Shape = "package" | "items";
+
+/** How much freedom the writer gets over the document's structure. */
+type Structure = "auto" | "free" | "fixed";
 
 /** The current lineup — legacy tiers (starter–scale) live only inside old
  * stored proposals and are never offered here. */
@@ -52,9 +90,60 @@ const BUSINESS_TIER_OPTIONS: BusinessTierKey[] = [
 
 const trimArr = (a: string[]) => a.map((s) => s.trim()).filter(Boolean);
 
-/** Strip empty/whitespace entries so the preview + PDF never show blank rows. */
+/**
+ * The /pricing key of the package the single-package picker is on.
+ *
+ * This mirrors the private `baseKey()` in proposal-pricing.ts, which resolves a
+ * selection to an AMOUNT. Converting to the item builder needs the KEY instead:
+ * that is what carries the package's real features across with it. Legacy tiers
+ * map to null — they exist only inside old stored proposals and have no entry
+ * on the current price list.
+ */
+function legacyCatalogKey(sel: ProposalSelection): string | null {
+  if (sel.type === "business") {
+    switch (sel.tier) {
+      case "smart_site":
+        return "web.smart_site.onetime";
+      case "smart_business":
+        return "web.smart_business.onetime";
+      case "smart_system":
+        return "web.smart_system.onetime";
+      default:
+        return null;
+    }
+  }
+  if (sel.type === "agent") {
+    switch (sel.agentPlatform ?? "whatsapp") {
+      case "instagram":
+        return "ai.instagram_crm.setup";
+      case "smart_system_budget":
+        return "system.budget.onetime";
+      default:
+        return "ai.whatsapp_crm.setup";
+    }
+  }
+  switch (sel.platform) {
+    case "store":
+      return "ecom.store.setup";
+    case "smart":
+      return "ecom.smart.total";
+    default:
+      return null;
+  }
+}
+
+/**
+ * Strip empty/whitespace entries so the preview + PDF never show blank rows.
+ *
+ * SPREADS FIRST, deliberately. This used to rebuild the content object key by
+ * key, which silently dropped every key it didn't name — so anything the
+ * writer added beyond the fixed skeleton died the moment a proposal passed
+ * through this form. Nothing may be lost on a round-trip here.
+ */
 function clean(c: ProposalContent): ProposalContent {
-  return {
+  const sections = cleanSections(c.sections);
+  const out: ProposalContent = {
+    ...c,
     overview: c.overview.trim(),
     objectives: c.objectives
       .map((g) => ({ group: g.group.trim(), items: trimArr(g.items) }))
@@ -98,29 +187,71 @@ function clean(c: ProposalContent): ProposalContent {
       nextSteps: trimArr(c.quality.nextSteps),
     },
   };
+  // PRESENCE of `sections` is what tells the PDF this proposal was composed
+  // rather than templated. A proposal with none must come out of here with no
+  // key at all — `[]` would re-classify it.
+  if (sections) {
+    out.sections = sections;
+    out.sectionsMode = c.sectionsMode;
+  } else {
+    delete out.sections;
+    delete out.sectionsMode;
+  }
+  return out;
 }
 
 export function ProposalGenerator({
   clients,
   priceAmounts,
+  editing,
+  onExitEdit,
 }: {
   clients: ClientLite[];
   /** Live /pricing amounts, keyed by PriceField.key. */
   priceAmounts: Record<string, number>;
+  /** A saved proposal being edited, or null for a fresh one. The parent keys
+   * this component on the row id, so this is read once at mount. */
+  editing?: Proposal | null;
+  onExitEdit?: () => void;
 }) {
   const router = useRouter();
 
-  const [clientName, setClientName] = React.useState("");
+  /**
+   * The saved row as this form sees it. Merged over the defaults exactly the
+   * way every other reader does it, so a proposal saved before a field existed
+   * simply gets the default for it and nothing is invented.
+   */
+  const initial = React.useMemo(() => {
+    const sel: ProposalSelection = {
+      ...defaultSelection(),
+      ...((editing?.selection ?? {}) as Partial<ProposalSelection>),
+    };
+    const cnt: ProposalContent = {
+      ...defaultContent(),
+      ...((editing?.content ?? {}) as Partial<ProposalContent>),
+    };
+    return { sel, cnt, shape: (hasItems(sel) ? "items" : "package") as Shape };
+  }, [editing]);
+
+  /** The shape the saved row is stored in, or null for a fresh proposal. Fixed
+   * for the life of this form — converting must not rewrite what it was. */
+  const savedShape: Shape | null = editing ? initial.shape : null;
+
+  const [clientName, setClientName] = React.useState(editing?.client_name ?? "");
   const [projectName, setProjectName] = React.useState(
-    suggestedProjectName(defaultSelection()),
+    editing?.project_name || suggestedProjectName(initial.sel),
   );
-  const projectTouched = React.useRef(false);
-  const [date, setDate] = React.useState(format(new Date(), "yyyy-MM-dd"));
+  const projectTouched = React.useRef(Boolean(editing?.project_name));
+  const [date, setDate] = React.useState(
+    editing?.proposal_date || format(new Date(), "yyyy-MM-dd"),
+  );
   const [businessDescription, setBusinessDescription] = React.useState("");
-  const [selection, setSelection] = React.useState<ProposalSelection>(
-    defaultSelection(),
-  );
-  const [content, setContent] = React.useState<ProposalContent>(defaultContent());
+  const [selection, setSelection] = React.useState<ProposalSelection>(initial.sel);
+  const [content, setContent] = React.useState<ProposalContent>(initial.cnt);
+  const [shape, setShape] = React.useState<Shape>(initial.shape);
+  const [convertTo, setConvertTo] = React.useState<Shape | null>(null);
+  const [structure, setStructure] = React.useState<Structure>("auto");
+  const [showFixed, setShowFixed] = React.useState(false);
   const [extraInstructions, setExtraInstructions] = React.useState("");
   const dictation = useDictation((text) =>
     setExtraInstructions((prev) => (prev ? `${prev.trimEnd()} ${text}` : text)),
@@ -133,8 +264,21 @@ export function ProposalGenerator({
   }, [dictationError, clearDictationError]);
 
   const [generating, startGen] = React.useTransition();
-  const [generated, setGenerated] = React.useState(false);
+  // An existing proposal already has its content — it opens ready to edit,
+  // download and re-save without being regenerated first.
+  const [generated, setGenerated] = React.useState(Boolean(editing));
   const [saving, setSaving] = React.useState(false);
+
+  /**
+   * The live price list with the team's saved edits applied — the same catalog
+   * the /pricing page shows, rebuilt here from the amounts the server resolved.
+   * Every line the builder offers comes from this, features included, so a
+   * proposal can never quote a package that isn't on the price list.
+   */
+  const catalog: PricingGroup[] = React.useMemo(
+    () => applyOverrides(priceAmounts),
+    [priceAmounts],
+  );
 
   /**
    * The selection with today's /pricing amounts resolved onto it. Everything
@@ -149,12 +293,116 @@ export function ProposalGenerator({
   const pricing = buildPricing(priced);
   const cleaned = clean(content);
 
+  const items = selection.items ?? [];
+  const sections = content.sections ?? [];
+  const sectionsMode: ProposalSectionsMode = content.sectionsMode ?? "replace_narrative";
+  /** Whether the fixed narrative fields still reach the page at all. */
+  const narrativePrinted = sections.length === 0 || sectionsMode === "append";
+  const termsPrinted = sections.length === 0 || sectionsMode !== "replace_all";
+
   function patchSelection(patch: Partial<ProposalSelection>) {
     setSelection((prev) => {
       const next = { ...prev, ...patch };
       if (!projectTouched.current) setProjectName(suggestedProjectName(next));
       return next;
     });
+  }
+
+  /**
+   * Write the line items — or REMOVE the key entirely when the list empties.
+   * `items: []` must never be stored: presence of the key is what marks a
+   * proposal item-driven, so an empty array would re-classify a proposal that
+   * has nothing in it.
+   */
+  function setItems(next: ProposalLineItem[]) {
+    setSelection((prev) => {
+      const out = { ...prev };
+      if (next.length > 0) out.items = next;
+      else {
+        delete out.items;
+        delete out.notes;
+      }
+      if (!projectTouched.current) setProjectName(suggestedProjectName(out));
+      return out;
+    });
+  }
+
+  function setNotes(lines: string[]) {
+    setSelection((prev) => {
+      const out = { ...prev };
+      const kept = trimArr(lines);
+      if (kept.length > 0) out.notes = lines;
+      else delete out.notes;
+      return out;
+    });
+  }
+
+  function setSections(
+    next: ProposalSection[],
+    mode: ProposalSectionsMode | undefined,
+  ) {
+    setContent((prev) => {
+      const out = { ...prev };
+      if (next.length > 0) {
+        out.sections = next;
+        out.sectionsMode = mode ?? "replace_narrative";
+      } else {
+        delete out.sections;
+        delete out.sectionsMode;
+      }
+      return out;
+    });
+  }
+
+  /**
+   * The single package turned into the first line of an item-driven proposal,
+   * with its features copied across from the price list. Falls back to a
+   * bespoke line for a legacy tier that has no entry on the current list, so
+   * an old proposal can still be converted without losing its price.
+   */
+  function seedFromPackage(): ProposalLineItem {
+    const line = pricing.lineItems[0];
+    const key = legacyCatalogKey(selection);
+    if (key) {
+      const catalogAmount = priceAmounts[key];
+      // Only override when the team is actually charging something else —
+      // passing the list price back in would strip a package's "(starts at)".
+      const negotiated =
+        line && Number.isFinite(line.amount) && line.amount !== catalogAmount
+          ? { amount: line.amount, listAmount: line.original }
+          : undefined;
+      const built = lineItemFromCatalog(catalog, key, negotiated);
+      if (built) return built;
+    }
+    return bespokeLine(
+      line?.label ?? selectionSummary(selection),
+      line?.amount ?? 0,
+      includedFeatures(selection),
+    );
+  }
+
+  function applyConversion(to: Shape) {
+    if (to === "items") {
+      if (items.length === 0) setItems([seedFromPackage()]);
+      setShape("items");
+    } else {
+      setItems([]);
+      setShape("package");
+    }
+    setConvertTo(null);
+  }
+
+  function requestShape(to: Shape) {
+    if (to === shape) return;
+    // Converting a SAVED single-package proposal changes how it is stored, and
+    // dropping the lines off an item-driven one throws real work away. Both get
+    // said out loud before they happen; a brand-new proposal has nothing to
+    // lose, so it just switches.
+    const needsNotice =
+      (to === "items" && savedShape === "package") ||
+      (to === "package" && items.length > 0);
+    if (needsNotice) setConvertTo(to);
+    else applyConversion(to);
   }
 
   function generate() {
@@ -169,15 +417,42 @@ export function ProposalGenerator({
         projectName,
         selection: priced,
         extraInstructions,
+        freeSections:
+          structure === "auto" ? undefined : structure === "free",
       });
       if (res.ok) {
-        setContent((prev) => ({ ...prev, ...res.content }));
+        setContent((prev) => {
+          const next = { ...prev, ...res.content };
+          // A run that filled the fixed skeleton returns no sections. Leaving
+          // the previous run's sections behind would suppress the narrative it
+          // just wrote — the proposal would print the OLD document.
+          if (!res.content.sections) {
+            delete next.sections;
+            delete next.sectionsMode;
+          }
+          return next;
+        });
         setGenerated(true);
         toast.success("Draft ready — edit anything below, then download.");
       } else {
         toast.error(res.error);
       }
     });
+  }
+
+  /** Save an existing proposal back over itself; insert a brand-new one. */
+  async function persist() {
+    const payload = {
+      client_name: clientName,
+      project_name: projectName,
+      proposal_date: date,
+      selection: priced,
+      content: cleaned,
+      grand_total: pricing.oneTimeTotal,
+    };
+    return editing
+      ? updateProposal({ ...payload, id: editing.id })
+      : saveProposal(payload);
   }
 
   /**
@@ -192,20 +467,21 @@ export function ProposalGenerator({
       return;
     }
     setSaving(true);
-    const saveRes = await saveProposal({
-      client_name: clientName,
-      project_name: projectName,
-      proposal_date: date,
-      selection: priced,
-      content: cleaned,
-      grand_total: pricing.oneTimeTotal,
-    });
+    const saveRes = await persist();
     if (!saveRes.ok) toast.error(`Couldn't save the proposal: ${saveRes.error}`);
+
+    // ONE-TIME lines only. An invoice bills once, so a monthly retainer or an
+    // at-cost pass-through on it would charge the client a recurring fee as a
+    // single up-front amount — and the items would no longer sum to the total.
+    const billable = pricing.lineItems.filter(
+      (l) => (l.recurrence ?? "one_time") === "one_time",
+    );
+    const skipped = pricing.lineItems.length - billable.length;
 
     stashInvoiceDraft({
       billToName: clientName.trim(),
       billToDetails: "",
-      items: pricing.lineItems.map((l) => ({
+      items: billable.map((l) => ({
         item: l.label,
         description: "",
         total: l.amount,
@@ -213,6 +489,11 @@ export function ProposalGenerator({
       sourceLabel: projectName.trim() || `${clientName.trim()} proposal`,
     });
     setSaving(false);
+    if (skipped > 0) {
+      toast.info(
+        `${skipped} recurring line${skipped === 1 ? "" : "s"} left off the invoice — bill those on their own cycle.`,
+      );
+    }
     router.push(
       `/invoices?${INVOICE_HANDOFF_PARAM}=${INVOICE_HANDOFF_SOURCE}`,
     );
@@ -224,25 +505,23 @@ export function ProposalGenerator({
       return;
     }
     setSaving(true);
-    const payload = {
-      client_name: clientName,
-      project_name: projectName,
-      proposal_date: date,
-      selection: priced,
-      content: cleaned,
-    };
-    const saveRes = await saveProposal({
-      ...payload,
-      grand_total: pricing.oneTimeTotal,
-    });
+    const saveRes = await persist();
     if (saveRes.ok) {
-      toast.success("Saved to Past proposals.");
+      toast.success(
+        editing ? "Saved over the existing proposal." : "Saved to Past proposals.",
+      );
       router.refresh();
     } else {
       toast.error(`Couldn't save: ${saveRes.error}`);
     }
     try {
-      await downloadProposalPdf(payload);
+      await downloadProposalPdf({
+        client_name: clientName,
+        project_name: projectName,
+        proposal_date: date,
+        selection: priced,
+        content: cleaned,
+      });
     } catch (err) {
       toast.error(
         err instanceof Error ? err.message : "Couldn't download the PDF.",
@@ -252,34 +531,53 @@ export function ProposalGenerator({
     }
   }
 
-
   return (
     <div className="space-y-6">
       <div className="no-print flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
-            Proposal Generator
+            {editing ? "Editing proposal" : "Proposal Generator"}
           </h1>
           <p className="text-sm text-slate-500">
-            Describe the business, pick the package, generate with AI, then edit
-            and download.
+            {editing
+              ? `Saved proposal for ${editing.client_name || "this client"} — changes overwrite it.`
+              : "Describe the business, pick what they're buying, generate with AI, then edit and download."}
           </p>
         </div>
-        {generated && (
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              variant="outline"
-              onClick={handleGenerateInvoice}
-              disabled={saving}
-            >
-              <Receipt className="h-4 w-4" /> Generate invoice
+        <div className="flex flex-wrap items-center gap-2">
+          {editing && onExitEdit && (
+            <Button variant="ghost" onClick={onExitEdit}>
+              <FilePlus2 className="h-4 w-4" /> New proposal
             </Button>
-            <Button onClick={handleDownload} loading={saving}>
-              <Download className="h-4 w-4" /> Download PDF
-            </Button>
-          </div>
-        )}
+          )}
+          {generated && (
+            <>
+              <Button
+                variant="outline"
+                onClick={handleGenerateInvoice}
+                disabled={saving}
+              >
+                <Receipt className="h-4 w-4" /> Generate invoice
+              </Button>
+              <Button onClick={handleDownload} loading={saving}>
+                <Download className="h-4 w-4" />
+                {editing ? "Save & download PDF" : "Download PDF"}
+              </Button>
+            </>
+          )}
+        </div>
       </div>
+
+      {editing && savedShape === "package" && shape === "package" && (
+        <div className="no-print rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3 text-xs text-slate-600">
+          <strong className="font-semibold text-slate-800">
+            Saved as a single-package proposal.
+          </strong>{" "}
+          It keeps printing exactly the numbers it was sent with. Switching it to
+          multiple packages changes how it&rsquo;s stored — you&rsquo;ll be told
+          before that happens.
+        </div>
+      )}
 
       <div className="grid gap-6 xl:grid-cols-[minmax(360px,440px)_1fr]">
         {/* ---------- FORM ---------- */}
@@ -335,120 +633,171 @@ export function ProposalGenerator({
             </Field>
           </Card>
 
-          <Card title="What the client wants">
-            <Field label="Project type">
+          <Card title="What the client is buying">
+            <Field
+              label="How this proposal is priced"
+              hint={
+                shape === "items"
+                  ? "Any number of packages — website, social retainer, add-ons — each with its own price and billing."
+                  : "One package, priced from the list. Switch to multiple if they're buying more than one thing."
+              }
+            >
               <Segmented
                 options={[
-                  { value: "business", label: "Business website" },
-                  { value: "ecommerce", label: "E-commerce" },
-                  { value: "agent", label: "AI agent" },
+                  { value: "package", label: "One package" },
+                  { value: "items", label: "Multiple packages" },
                 ]}
-                value={selection.type}
-                onChange={(v) => {
-                  const type = v as ProposalSelection["type"];
-                  patchSelection({ type });
-                  // The stock timeline talks pages & design — swap it for the
-                  // agent deployment plan (and back) while nothing's generated.
-                  if (!generated) {
-                    setContent((c) => ({
-                      ...c,
-                      timeline:
-                        type === "agent" ? AGENT_TIMELINE : defaultContent().timeline,
-                    }));
-                  }
-                }}
+                value={shape}
+                onChange={(v) => requestShape(v as Shape)}
               />
             </Field>
 
-            {selection.type === "agent" ? (
+            {convertTo && (
+              <ConversionNotice
+                to={convertTo}
+                seedLabel={pricing.lineItems[0]?.label ?? ""}
+                seedAmount={pricing.lineItems[0]?.amount ?? 0}
+                itemCount={items.length}
+                savedShape={savedShape}
+                onConfirm={() => applyConversion(convertTo)}
+                onCancel={() => setConvertTo(null)}
+              />
+            )}
+
+            {shape === "items" ? (
               <>
-                <Field label="Package">
-                  <Segmented
-                    options={[
-                      {
-                        value: "whatsapp",
-                        label: `WhatsApp — ${money(AGENT_PLANS.whatsapp.price)}`,
-                      },
-                      {
-                        value: "instagram",
-                        label: `Instagram — ${money(AGENT_PLANS.instagram.price)}`,
-                      },
-                      {
-                        value: "smart_system_budget",
-                        label: `System Budget — ${money(AGENT_PLANS.smart_system_budget.price)}`,
-                      },
-                    ]}
-                    value={selection.agentPlatform ?? "whatsapp"}
-                    onChange={(v) =>
-                      patchSelection({ agentPlatform: v as AgentPlatform })
-                    }
-                  />
-                </Field>
-                <p className="text-[11px] text-slate-400">
-                  {AGENT_PLANS[selection.agentPlatform ?? "whatsapp"].name} — no
-                  website build. CRM included. One-time{" "}
-                  {money(AGENT_PLANS[selection.agentPlatform ?? "whatsapp"].price)}
-                  , no monthly fee; the client pays only their own AI usage, at
-                  cost.
-                </p>
-              </>
-            ) : selection.type === "business" ? (
-              <>
-                <Field label="Package">
-                  <div className="grid grid-cols-3 gap-2">
-                    {BUSINESS_TIER_OPTIONS.map((t) => (
-                      <TierButton
-                        key={t}
-                        tier={t}
-                        active={selection.tier === t}
-                        onClick={() => patchSelection({ tier: t })}
-                      />
-                    ))}
-                  </div>
-                </Field>
-                <PackageSummary tier={selection.tier} />
+                <ItemBuilder
+                  items={items}
+                  catalog={catalog}
+                  onChange={setItems}
+                />
+                <Lines
+                  label="Notes under the totals"
+                  value={selection.notes ?? []}
+                  rows={2}
+                  placeholder="e.g. No monthly fee to ARC — the client pays only their own AI usage, at cost."
+                  onChange={setNotes}
+                />
               </>
             ) : (
               <>
-                <Field label="Package">
+                <Field label="Project type">
                   <Segmented
                     options={[
-                      { value: "store", label: `Store — from ${money(ECOMMERCE.store.price)}` },
-                      { value: "smart", label: `Smart Store — from ${money(ECOMMERCE.smart.price)}` },
+                      { value: "business", label: "Business website" },
+                      { value: "ecommerce", label: "E-commerce" },
+                      { value: "agent", label: "AI agent" },
                     ]}
-                    value={selection.platform}
-                    onChange={(v) =>
-                      patchSelection({
-                        platform: v as ProposalSelection["platform"],
-                      })
-                    }
+                    value={selection.type}
+                    onChange={(v) => {
+                      const type = v as ProposalSelection["type"];
+                      patchSelection({ type });
+                      // The stock timeline talks pages & design — swap it for the
+                      // agent deployment plan (and back) while nothing's generated.
+                      if (!generated) {
+                        setContent((c) => ({
+                          ...c,
+                          timeline:
+                            type === "agent"
+                              ? AGENT_TIMELINE
+                              : defaultContent().timeline,
+                        }));
+                      }
+                    }}
                   />
                 </Field>
-                {selection.platform === "smart" && (
-                  <p className="text-[11px] text-slate-400">
-                    Store + customer profiles + automations. Extra automations
-                    beyond the standard set go in as custom line items at{" "}
-                    {money(ECOMMERCE.addons.automation)} each.
-                  </p>
-                )}
-                {selection.platform === "custom" && (
-                  <div className="space-y-2">
-                    <Toggle
-                      label={`Payment gateway (+${money(ECOMMERCE.addons.paymentGateway)})`}
-                      checked={selection.paymentGateway}
-                      onChange={(v) => patchSelection({ paymentGateway: v })}
-                    />
-                    <Toggle
-                      label={`Delivery integration (+${money(ECOMMERCE.addons.delivery)})`}
-                      checked={selection.delivery}
-                      onChange={(v) => patchSelection({ delivery: v })}
-                    />
-                  </div>
+
+                {selection.type === "agent" ? (
+                  <>
+                    <Field label="Package">
+                      <Segmented
+                        options={[
+                          {
+                            value: "whatsapp",
+                            label: `WhatsApp — ${money(AGENT_PLANS.whatsapp.price)}`,
+                          },
+                          {
+                            value: "instagram",
+                            label: `Instagram — ${money(AGENT_PLANS.instagram.price)}`,
+                          },
+                          {
+                            value: "smart_system_budget",
+                            label: `System Budget — ${money(AGENT_PLANS.smart_system_budget.price)}`,
+                          },
+                        ]}
+                        value={selection.agentPlatform ?? "whatsapp"}
+                        onChange={(v) =>
+                          patchSelection({ agentPlatform: v as AgentPlatform })
+                        }
+                      />
+                    </Field>
+                    <p className="text-[11px] text-slate-400">
+                      {AGENT_PLANS[selection.agentPlatform ?? "whatsapp"].name} — no
+                      website build. CRM included. One-time{" "}
+                      {money(AGENT_PLANS[selection.agentPlatform ?? "whatsapp"].price)}
+                      , no monthly fee; the client pays only their own AI usage, at
+                      cost.
+                    </p>
+                  </>
+                ) : selection.type === "business" ? (
+                  <>
+                    <Field label="Package">
+                      <div className="grid grid-cols-3 gap-2">
+                        {BUSINESS_TIER_OPTIONS.map((t) => (
+                          <TierButton
+                            key={t}
+                            tier={t}
+                            active={selection.tier === t}
+                            onClick={() => patchSelection({ tier: t })}
+                          />
+                        ))}
+                      </div>
+                    </Field>
+                    <PackageSummary tier={selection.tier} />
+                  </>
+                ) : (
+                  <>
+                    <Field label="Package">
+                      <Segmented
+                        options={[
+                          { value: "store", label: `Store — from ${money(ECOMMERCE.store.price)}` },
+                          { value: "smart", label: `Smart Store — from ${money(ECOMMERCE.smart.price)}` },
+                        ]}
+                        value={selection.platform}
+                        onChange={(v) =>
+                          patchSelection({
+                            platform: v as ProposalSelection["platform"],
+                          })
+                        }
+                      />
+                    </Field>
+                    {selection.platform === "smart" && (
+                      <p className="text-[11px] text-slate-400">
+                        Store + customer profiles + automations. Extra automations
+                        beyond the standard set go in as custom line items at{" "}
+                        {money(ECOMMERCE.addons.automation)} each.
+                      </p>
+                    )}
+                    {selection.platform === "custom" && (
+                      <div className="space-y-2">
+                        <Toggle
+                          label={`Payment gateway (+${money(ECOMMERCE.addons.paymentGateway)})`}
+                          checked={selection.paymentGateway}
+                          onChange={(v) => patchSelection({ paymentGateway: v })}
+                        />
+                        <Toggle
+                          label={`Delivery integration (+${money(ECOMMERCE.addons.delivery)})`}
+                          checked={selection.delivery}
+                          onChange={(v) => patchSelection({ delivery: v })}
+                        />
+                      </div>
+                    )}
+                  </>
                 )}
               </>
             )}
 
-            {selection.type !== "agent" && (
+            {(shape === "items" || selection.type !== "agent") && (
               <div className="grid grid-cols-2 gap-3 pt-1">
                 <Field label="Maintenance">
                   <Select
@@ -477,17 +826,14 @@ export function ProposalGenerator({
               </div>
             )}
 
-            <div className="mt-2 flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2.5">
-              <span className="text-sm font-medium text-slate-500">
-                One-time total
-              </span>
-              <span className="text-lg font-bold text-slate-900">
-                {money(pricing.oneTimeTotal)}
-              </span>
-            </div>
+            <Totals pricing={pricing} />
           </Card>
 
           <Card title="Extra features the client wants">
+            <p className="-mt-1 text-[11px] text-slate-400">
+              One-time additions on top of everything above. A negative price is
+              a discount.
+            </p>
             <div className="space-y-3">
               {(selection.customFeatures || []).map((feat, i) => (
                 <div key={i} className="flex gap-2 items-end">
@@ -611,6 +957,24 @@ export function ProposalGenerator({
                 )}
               </p>
             )}
+
+            <div className="mt-4">
+              <Field
+                label="Structure"
+                hint="Free-form lets the AI choose the sections this client needs — no SEO heading on a proposal with no SEO in it."
+              >
+                <Select
+                  value={structure}
+                  onChange={(e) => setStructure(e.target.value as Structure)}
+                >
+                  <option value="auto">
+                    Let the AI decide (free-form for multi-package)
+                  </option>
+                  <option value="free">Free-form — the AI designs the sections</option>
+                  <option value="fixed">Standard sections</option>
+                </Select>
+              </Field>
+            </div>
           </section>
 
           {/* Generate */}
@@ -633,14 +997,47 @@ export function ProposalGenerator({
             </div>
           )}
 
+          {generated && (
+            <Card title="Written sections">
+              <p className="-mt-1 mb-1 text-xs text-slate-400">
+                The sections the AI composed for this client, in its order. Edit,
+                reorder, add or remove them — the preview updates live.
+              </p>
+              <SectionsEditor
+                sections={sections}
+                mode={content.sectionsMode}
+                onChange={setSections}
+              />
+            </Card>
+          )}
+
           {/* Editable content (after generation) */}
           {generated && (
-          <Card title="Edit proposal content">
-            <p className="-mt-1 mb-1 text-xs text-slate-400">
-              Edit anything below — the preview updates live. Lists are one item
-              per line.
-            </p>
+          <Card title="Standard sections">
+            {narrativePrinted ? (
+              <p className="-mt-1 mb-1 text-xs text-slate-400">
+                Edit anything below — the preview updates live. Lists are one item
+                per line.
+              </p>
+            ) : (
+              <div className="-mt-1 space-y-2">
+                <p className="rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                  {termsPrinted
+                    ? "Your written sections replace the write-up below, so none of it prints. The terms, maintenance and quality standards still do."
+                    : "Your written sections are the whole proposal — only the Investment table and the sign-off print alongside them. Nothing below is on this document."}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setShowFixed((v) => !v)}
+                  className="text-[11px] font-semibold text-primary-700 transition hover:text-primary-800"
+                >
+                  {showFixed ? "Hide" : "Show"} the standard fields anyway
+                </button>
+              </div>
+            )}
 
+            {(narrativePrinted || showFixed) && (
+              <>
             <Field label="Overview">
               <Textarea
                 value={content.overview}
@@ -802,6 +1199,8 @@ export function ProposalGenerator({
                 }
               />
             </Field>
+              </>
+            )}
 
             <Lines
               label="Payment terms"
@@ -872,6 +1271,116 @@ export function ProposalGenerator({
 }
 
 /* ---------------- small building blocks ---------------- */
+
+/**
+ * Said out loud before the shape of a stored proposal changes. The rule this
+ * enforces: a proposal is never quietly rewritten into the other shape —
+ * whoever is editing it decides, knowing what it costs them.
+ */
+function ConversionNotice({
+  to,
+  seedLabel,
+  seedAmount,
+  itemCount,
+  savedShape,
+  onConfirm,
+  onCancel,
+}: {
+  to: Shape;
+  seedLabel: string;
+  seedAmount: number;
+  itemCount: number;
+  savedShape: Shape | null;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="space-y-2.5 rounded-xl border border-amber-200 bg-amber-50/70 p-3.5">
+      <p className="text-xs font-semibold text-amber-900">
+        {to === "items"
+          ? "This changes how the proposal is stored"
+          : "The lines you've added will be dropped"}
+      </p>
+      {to === "items" ? (
+        <ul className="list-disc space-y-1 pl-4 text-[11px] leading-relaxed text-amber-800">
+          <li>
+            <strong>{seedLabel || "The selected package"}</strong> becomes the
+            first line at {money(seedAmount)}, with its features copied in from
+            the price list.
+          </li>
+          <li>
+            The package picker stops setting the price — the lines do. Nothing is
+            re-priced: the figure above is exactly what it is now.
+          </li>
+          {savedShape === "package" && (
+            <li>
+              This proposal was <strong>saved in the single-package shape</strong>
+              . Saving after this converts it; until you save, the stored one is
+              untouched.
+            </li>
+          )}
+        </ul>
+      ) : (
+        <p className="text-[11px] leading-relaxed text-amber-800">
+          {itemCount} line{itemCount === 1 ? "" : "s"} will be removed and the
+          proposal goes back to being priced from a single package. The package
+          picker&rsquo;s own price takes over.
+        </p>
+      )}
+      <div className="flex gap-2">
+        <Button type="button" size="sm" onClick={onConfirm}>
+          {to === "items" ? "Convert to multiple packages" : "Go back to one package"}
+        </Button>
+        <Button type="button" size="sm" variant="ghost" onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** The money summary. One-time is what the client pays now (and what the saved
+ * proposal's total means); anything recurring is shown on its own so a monthly
+ * retainer can never be read as a one-off. */
+function Totals({ pricing }: { pricing: ReturnType<typeof buildPricing> }) {
+  const monthly = pricing.monthlyTotal ?? 0;
+  const yearly = pricing.yearlyTotal ?? 0;
+  return (
+    <div className="mt-2 space-y-1.5 rounded-xl bg-slate-50 px-3 py-2.5">
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-medium text-slate-500">One-time total</span>
+        <span className="text-lg font-bold text-slate-900">
+          {money(pricing.oneTimeTotal)}
+        </span>
+      </div>
+      {monthly > 0 && (
+        <div className="flex items-center justify-between border-t border-slate-200/70 pt-1.5">
+          <span className="text-xs font-medium text-slate-500">Monthly</span>
+          <span className="text-sm font-semibold text-slate-700">
+            {money(monthly)}/month
+          </span>
+        </div>
+      )}
+      {yearly > 0 && (
+        <div className="flex items-center justify-between border-t border-slate-200/70 pt-1.5">
+          <span className="text-xs font-medium text-slate-500">Yearly</span>
+          <span className="text-sm font-semibold text-slate-700">
+            {money(yearly)}/year
+          </span>
+        </div>
+      )}
+      {pricing.recurringNotes.length > 0 && (
+        <ul className="space-y-0.5 border-t border-slate-200/70 pt-1.5">
+          {pricing.recurringNotes.map((n, i) => (
+            <li key={i} className="text-[11px] leading-snug text-slate-400">
+              {n}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 function Card({
   title,

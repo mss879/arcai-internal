@@ -65,6 +65,17 @@ export type LinkedPaymentLike = {
   company_name?: string | null;
 };
 
+/**
+ * The relations a `projects` query MUST select for `settledAmount()` and
+ * `balanceDue()` below to be right.
+ *
+ * Leaving either one out doesn't fail — it silently under-counts, which is how
+ * the Payments board came to show a different balance from the Projects board
+ * for the same job. Every surface that reports project money selects this.
+ */
+export const PROJECT_MONEY_SELECT =
+  "payments(id, amount, status, paid_at, method, notes), company_payments(id, price_lkr, is_paid, created_at, company_name)";
+
 export type MoneyProject = {
   total_value?: number | string | null;
   deposit_paid?: number | string | null;

@@ -16,26 +16,48 @@ import type {
   ProposalCardData,
   SmsCardData,
 } from "@/lib/assistant-cards";
+import type {
+  Artifact,
+  ArtifactColumn,
+  ArtifactTone,
+} from "@/lib/assistant-artifacts";
+import { rowsToTable, tableArtifact } from "@/lib/assistant-artifacts";
 import { DELIVERY_STAGES } from "@/lib/constants";
 import { topLeadPosition } from "@/lib/crm";
 import { nextInvoiceNumber } from "@/lib/invoice";
-import { formatPriceField } from "@/lib/pricing-catalog";
+import { formatPriceField, type PricingGroup } from "@/lib/pricing-catalog";
+import {
+  PROJECT_MONEY_SELECT,
+  balanceDue,
+  paidPercent,
+  settledAmount,
+} from "@/lib/projects";
 import {
   AGENT_TIMELINE,
   buildPricing,
   catalogBasePrice,
   defaultContent,
   defaultSelection,
+  findCatalogPrice,
+  hasItems,
   includedFeatures,
+  lineItemFromCatalog,
+  lineItemId,
   money,
+  proposalPackages,
+  recurrenceForField,
   selectionSummary,
   suggestedProjectName,
+  type LineRecurrence,
   type ProposalContent,
+  type ProposalLineItem,
   type ProposalSelection,
 } from "@/lib/proposal";
 import {
+  flattenPricing,
   pricingSnapshot,
   resolveSelectionPrices,
+  selectionPrices,
 } from "@/lib/proposal-pricing";
 import { generateProposalContent } from "@/lib/ai/proposal";
 import { isSmsConfigured } from "@/lib/sms";
@@ -78,9 +100,74 @@ export type ToolResult = {
   event?: ToolEvent;
   /** Optional rich card rendered in the assistant transcript (e.g. an invoice). */
   card?: AssistantCard;
+  /**
+   * Optional documents for the assistant's preview canvas — tables, records,
+   * charts, PDFs or an embedded page. Cards live inline in the transcript;
+   * artifacts open in the pane beside it. See `@/lib/assistant-artifacts`.
+   */
+  artifacts?: Artifact[];
 };
 
 // ---- Tool schemas advertised to the model --------------------------------
+
+/**
+ * One priced line on a proposal — shared by create_proposal and
+ * update_proposal so the two can never drift.
+ *
+ * A proposal is a LIST of these, not a single package: a client buying the
+ * website AND the premium social package gets both lines on one document.
+ * Naming `catalog_key` is what makes a line trustworthy — the package's
+ * feature bullets and its list price are then read from the Pricing page
+ * server-side, so they land on the document without being retyped and cannot
+ * be invented.
+ */
+const PROPOSAL_LINE_ITEM = {
+  type: "object",
+  properties: {
+    catalog_key: {
+      type: "string",
+      description:
+        "The price_key of a package from get_pricing, e.g. 'web.smart_business.onetime' or 'smm.intermediate.monthly'. Pass it whenever the line is something on the price list: the package's full feature list and its normal price are then taken from the Pricing page automatically and printed on the proposal. Never guess a key — call get_pricing and copy it. Omit only for something bespoke the user described that is not on the list.",
+    },
+    name: {
+      type: "string",
+      description:
+        "For a bespoke line, what it should print as, e.g. 'Custom booking system'. With catalog_key it is optional and only overrides the package's printed name.",
+    },
+    price: {
+      type: "number",
+      description:
+        "What the client PAYS for this line, in LKR, exactly as the user said it — never rounded, never checked against the price list. With catalog_key, omit it to charge the current Pricing page amount; pass it whenever the user names a different figure. For a monthly package this is the monthly amount.",
+    },
+    list_price: {
+      type: "number",
+      description:
+        "What this line NORMALLY costs, when the client is being given it for less. With catalog_key you rarely need it — the Pricing page figure is used automatically, so 'normally 250 but give it at 200' is just price 200. Pass it only when the user states an original that is not the Pricing page figure. Whenever it is higher than price, the proposal prints it struck through next to what they pay.",
+    },
+    quantity: {
+      type: "number",
+      description: "How many of this line, when more than one. Defaults to 1.",
+    },
+    recurrence: {
+      type: "string",
+      enum: ["one_time", "monthly", "yearly", "at_cost"],
+      description:
+        "How this line is charged. For a bespoke line you must say: one_time for something built and handed over, monthly / yearly for an ongoing fee, at_cost for something passed through with no agency margin (leave its price out — it prints as 'At cost' and is never added to a total). With catalog_key this is taken from the price list and cannot be overridden, except that you may set at_cost.",
+    },
+    note: {
+      type: "string",
+      description:
+        "Short qualifier printed in brackets after the line, e.g. 'agreed rate', '12 months'. Only when the user asks for one.",
+    },
+    features: {
+      type: "array",
+      items: { type: "string" },
+      description:
+        "Bullets printed under a BESPOKE line to say what it includes. Ignored when catalog_key is set — that package's real feature list is used instead, so it can never drift from the Pricing page.",
+    },
+  },
+  additionalProperties: false,
+} as const;
 
 export const ASSISTANT_TOOLS: ToolSchema[] = [
   {
@@ -212,13 +299,22 @@ export const ASSISTANT_TOOLS: ToolSchema[] = [
     type: "function",
     function: {
       name: "list_projects",
-      description: "List projects, optionally filtered by status.",
+      description:
+        "List projects WITH their money: contract value, how much has been received, the balance still owed, how far through payment they are, the client and the due date — exactly the figures the Projects board shows. Optionally filtered by status or a name search. Use it for 'what are we working on', 'which projects still owe us' or 'how much has that job been paid'. The balance here is authoritative: never subtract a deposit from a total yourself.",
       parameters: {
         type: "object",
         properties: {
           status: {
             type: "string",
             enum: ["planning", "active", "on_hold", "completed", "cancelled"],
+          },
+          query: {
+            type: "string",
+            description: "Filter by project name or client name (contains match).",
+          },
+          limit: {
+            type: "integer",
+            description: "How many projects to return. Default 25, max 100.",
           },
         },
         additionalProperties: false,
@@ -428,17 +524,28 @@ export const ASSISTANT_TOOLS: ToolSchema[] = [
     function: {
       name: "list_payments",
       description:
-        "List company payments from the Payments page — what clients/companies owe. Defaults to outstanding (unpaid) payments only. Use this to find how much a client still owes, e.g. before sending a payment reminder.",
+        "What clients still owe us, from BOTH ledgers that hold it: every live project's own balance as the Projects board computes it (total value minus everything received), plus Payments-board rows that belong to no project. Defaults to money still outstanding. Every row is labelled with which ledger it came from, and board rows say whether the money is due now or only expected later. Call this before any payment reminder, invoice or SMS about an amount owed — `owed_by_name` gives a per-client total so you never have to add figures up yourself. Bill from `owed_now`; `not_due_yet` beside it is money only expected later and must never go on an invoice or a reminder. Cancelled and archived projects are excluded, and a board row already linked to a project is not listed twice.",
       parameters: {
         type: "object",
         properties: {
           query: {
             type: "string",
-            description: "Filter by client / company name.",
+            description: "Filter by client / company / project name.",
           },
           include_paid: {
             type: "boolean",
-            description: "Set true to also include payments already marked paid.",
+            description:
+              "Set true to also include fully settled projects and paid board rows.",
+          },
+          source: {
+            type: "string",
+            enum: ["all", "projects", "payments_board"],
+            description:
+              "Which ledger to read. Default 'all'. 'projects' = project balances only; 'payments_board' = only the hand-kept rows with no project.",
+          },
+          limit: {
+            type: "integer",
+            description: "How many rows to return. Default 50, max 200. Totals always cover every match, not just the rows returned.",
           },
         },
         additionalProperties: false,
@@ -759,13 +866,30 @@ export const ASSISTANT_TOOLS: ToolSchema[] = [
     function: {
       name: "create_proposal",
       description:
-        "Write and save a full client proposal — the narrative is generated by AI around what the client actually asked for, and the pricing is built from the package plus anything the user adds or changes. The saved proposal appears under Proposals and is shown to the user as a card with a PDF download. IMPORTANT: never guess your way into this tool. If you do not know the client's name, which package they want, or enough about their business to describe it in two sentences, ASK the user first — a proposal built on assumptions is worse than no proposal. The tool will tell you what is missing if you call it early.",
+        "Write and save a full client proposal — the narrative is written by AI around what the client actually asked for, and the pricing is built from the lines you pass. A proposal can carry AS MANY PACKAGES as the client is buying: pass `items` with one entry per thing (the website AND the social retainer AND anything bespoke), each naming a catalog_key from get_pricing so its real features and price come across. The saved proposal appears under Proposals and is shown to the user as a card with a PDF download. IMPORTANT: never guess your way into this tool. If you do not know the client's name, what they are buying, or enough about their business to describe it in two sentences, ASK the user first — a proposal built on assumptions is worse than no proposal. The tool will tell you what is missing if you call it early.",
       parameters: {
         type: "object",
         properties: {
           client_name: {
             type: "string",
             description: "The client or company the proposal is for.",
+          },
+          items: {
+            type: "array",
+            items: PROPOSAL_LINE_ITEM,
+            description:
+              "EVERYTHING the client is buying, one entry per package or bespoke line — this is how a proposal quotes a website and a social media retainer together. Call get_pricing first and pass each package's price_key as catalog_key; its feature list and normal price are then carried onto the document for you. One-time lines are totalled separately from monthly ones, so a retainer is never folded into the build cost. Use this instead of project_type/tier/platform whenever more than one thing is being sold, or whenever the thing being sold is not a website, a store or a standalone agent.",
+          },
+          notes: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "Short sentences printed under the totals — the caveats that are not a priced line, e.g. 'No monthly fee to ARC — the client pays only their own AI usage, at cost.' Only used with `items`.",
+          },
+          free_form: {
+            type: "boolean",
+            description:
+              "Whether the writer designs the proposal's own sections instead of the fixed Overview / Objectives / Key Features / SEO layout. Leave it out to decide automatically — a proposal with `items` composes its own sections by default, which is what lets it describe a build and an ongoing service properly. Set false only if the user asks for the classic layout.",
           },
           project_name: {
             type: "string",
@@ -780,7 +904,7 @@ export const ASSISTANT_TOOLS: ToolSchema[] = [
             type: "string",
             enum: ["business", "ecommerce", "agent"],
             description:
-              "What the client is buying: a business website, an e-commerce store, or a standalone AI agent + CRM with no website build.",
+              "The SINGLE-PACKAGE shortcut, for when the client is buying exactly one of these and nothing else: a business website, an e-commerce store, or a standalone AI agent + CRM with no website build. Required only when you are not passing `items`. Never pass both — put every line in `items` instead.",
           },
           tier: {
             type: "string",
@@ -819,27 +943,27 @@ export const ASSISTANT_TOOLS: ToolSchema[] = [
           package_price: {
             type: "number",
             description:
-              "What the client is actually being charged for the main package, in LKR — for THIS proposal only. Use it whenever the user names a figure ('the package is 175,000 but I gave them 140,000' means package_price is 140000). Pass exactly what they said — never round it, never check it against the price list. Omit to charge the current Pricing page amount.",
+              "SINGLE-PACKAGE FORM ONLY — never with `items`, where the price goes on the line itself. What the client is actually being charged for the package, in LKR, for THIS proposal only. Use it whenever the user names a figure ('the package is 175,000 but I gave them 140,000' means package_price is 140000). Pass exactly what they said — never round it, never check it against the price list. Omit to charge the current Pricing page amount.",
           },
           list_price: {
             type: "number",
             description:
-              "The package's NORMAL price, when it differs from what's being charged. You rarely need this: the list price is taken from the Pricing page automatically, and whenever package_price is lower the proposal prints the normal price struck through next to the offer price, so the client sees exactly what they were given off. Only pass it when the user states an original that is NOT the Pricing page figure.",
+              "SINGLE-PACKAGE FORM ONLY — with `items` use items[].list_price. The package's NORMAL price, when it differs from what's being charged. You rarely need this: the list price is taken from the Pricing page automatically, and whenever package_price is lower the proposal prints the normal price struck through next to the offer price, so the client sees exactly what they were given off. Only pass it when the user states an original that is NOT the Pricing page figure.",
           },
           hide_original: {
             type: "boolean",
             description:
-              "Set true only if the user explicitly wants just the one price shown, with no struck-through original.",
+              "SINGLE-PACKAGE FORM ONLY. Set true if the user explicitly wants just the one price shown, with no struck-through original.",
           },
           price_note: {
             type: "string",
             description:
-              "Short note printed next to the package line when the price was negotiated, e.g. 'agreed rate' or 'launch offer'. Only when the user asks for one.",
+              "SINGLE-PACKAGE FORM ONLY — with `items` use items[].note. Short note printed next to the package line when the price was negotiated, e.g. 'agreed rate' or 'launch offer'. Only when the user asks for one.",
           },
           custom_items: {
             type: "array",
             description:
-              "Extra priced lines on top of the package — features the client wants that are not in it, or a DISCOUNT as a negative amount (e.g. name 'Introductory discount', price -25000).",
+              "One-time extras printed after the packages — a small add-on the client wants, or a DISCOUNT as a negative amount (e.g. name 'Introductory discount', price -25000). For anything that is a package in its own right, or anything charged monthly, use `items` instead.",
             items: {
               type: "object",
               properties: {
@@ -875,7 +999,10 @@ export const ASSISTANT_TOOLS: ToolSchema[] = [
               "Overrides the monthly SEO amount for this proposal, in LKR. Only when the user names a figure.",
           },
         },
-        required: ["client_name", "project_type", "business_description"],
+        // `project_type` is no longer structurally required: a proposal that
+        // passes `items` is describing several packages at once, which no
+        // single type can name. The tool enforces "items OR a type" itself.
+        required: ["client_name", "business_description"],
         additionalProperties: false,
       },
     },
@@ -885,7 +1012,7 @@ export const ASSISTANT_TOOLS: ToolSchema[] = [
     function: {
       name: "update_proposal",
       description:
-        "Change a proposal that already exists — the price, the package, the extra line items, the client details, or the written narrative. Use this for every follow-up change ('make it three hundred thousand', 'add live chat for forty thousand', 'give them a discount', 'rewrite it warmer'). Never create a second proposal for the same client when they are asking you to change the first one. The updated proposal is shown to the user again as a card.",
+        "Change a proposal that already exists — what is on it, what each line costs, the order the lines print in, the client details, or the written narrative. Use this for EVERY follow-up change ('add the social media package too', 'make the website two hundred thousand', 'drop the maintenance', 'put the website first', 'rewrite it warmer'). Never create a second proposal for the same client when they are asking you to change the first one — that leaves them with two documents and one real deal. The updated proposal is shown to the user again as a card.",
       parameters: {
         type: "object",
         properties: {
@@ -901,10 +1028,89 @@ export const ASSISTANT_TOOLS: ToolSchema[] = [
           client_name: { type: "string", description: "Corrected client / company name." },
           project_name: { type: "string", description: "Corrected project name." },
           proposal_date: { type: "string", description: "Corrected date as ISO YYYY-MM-DD." },
+          add_line_items: {
+            type: "array",
+            items: PROPOSAL_LINE_ITEM,
+            description:
+              "Packages or bespoke lines to ADD to what the client is buying — this is how 'they want the social media package as well' gets onto an existing proposal. Call get_pricing first and pass each package's price_key as catalog_key. Anything already on the proposal stays exactly as it prints today.",
+          },
+          remove_line_items: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "Lines to take off the proposal, named by their printed label or id — a close match is enough, e.g. 'social media'. Never leave the proposal with nothing on it.",
+          },
+          reprice_line_items: {
+            type: "array",
+            description:
+              "Change what an existing line costs, without touching anything else on the proposal.",
+            items: {
+              type: "object",
+              properties: {
+                match: {
+                  type: "string",
+                  description:
+                    "Which line — its printed label or its id; a close match is enough, e.g. 'website'.",
+                },
+                price: {
+                  type: "number",
+                  description:
+                    "The new price the client pays for that line, in LKR, exactly as the user said it. If it comes in under what the line was listed at, the original is printed struck through beside it automatically.",
+                },
+                list_price: {
+                  type: "number",
+                  description:
+                    "What that line normally costs, when the user states an original that isn't already on the proposal.",
+                },
+                quantity: { type: "number", description: "How many of that line." },
+                note: {
+                  type: "string",
+                  description: "Short bracketed qualifier, e.g. 'agreed rate'.",
+                },
+                hide_original: {
+                  type: "boolean",
+                  description:
+                    "Set true to show one price on that line with nothing struck through.",
+                },
+              },
+              required: ["match"],
+              additionalProperties: false,
+            },
+          },
+          reorder_line_items: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "The lines you want first, in the order they should print, named by label or id. Anything you don't name keeps its place behind them.",
+          },
+          items: {
+            type: "array",
+            items: PROPOSAL_LINE_ITEM,
+            description:
+              "REPLACES every line on the proposal with this list. Use it only when the deal has been reshaped from scratch — for an ordinary change use add_line_items / remove_line_items / reprice_line_items, which leave the rest of the document alone.",
+          },
+          notes: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "Replaces the short sentences printed under the totals, e.g. 'No monthly fee to ARC — the client pays only their own AI usage, at cost.'",
+          },
+          remove_sections: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "Written sections to drop from the proposal, named by their heading — e.g. 'Where You Are Today'. Only for a proposal whose writer composed its own sections.",
+          },
+          free_form: {
+            type: "boolean",
+            description:
+              "Only used when the narrative is being rewritten. Leave it out to decide automatically. Set false to force the classic fixed layout.",
+          },
           project_type: {
             type: "string",
             enum: ["business", "ecommerce", "agent"],
-            description: "Switch what they're buying. Only pass it if the package itself is changing.",
+            description:
+              "Switch what they're buying, on a proposal written as a SINGLE package. Only pass it if the package itself is changing. On a proposal with separate lines, change the lines instead.",
           },
           tier: {
             type: "string",
@@ -924,26 +1130,27 @@ export const ASSISTANT_TOOLS: ToolSchema[] = [
           package_price: {
             type: "number",
             description:
-              "New price for the main package line, in LKR, exactly as the user said it. If it comes in under the normal price, the proposal automatically prints the original struck through next to it. Pass 0 or less only if they genuinely want the package free.",
+              "SINGLE-PACKAGE PROPOSALS ONLY — on one with separate lines, use reprice_line_items. New price for the package line, in LKR, exactly as the user said it. If it comes in under the normal price, the proposal automatically prints the original struck through next to it. Pass 0 or less only if they genuinely want the package free.",
           },
           list_price: {
             type: "number",
             description:
-              "The package's normal price, when the user states an original that isn't the Pricing page figure. Usually unnecessary.",
+              "SINGLE-PACKAGE PROPOSALS ONLY. The package's normal price, when the user states an original that isn't the Pricing page figure. Usually unnecessary.",
           },
           hide_original: {
             type: "boolean",
             description:
-              "Set true only if the user explicitly wants the struck-through original removed, leaving one price.",
+              "SINGLE-PACKAGE PROPOSALS ONLY. Set true if the user explicitly wants the struck-through original removed, leaving one price.",
           },
           price_note: {
             type: "string",
-            description: "Short note next to the package line, e.g. 'agreed rate'.",
+            description:
+              "SINGLE-PACKAGE PROPOSALS ONLY — otherwise use reprice_line_items' note. Short note next to the package line, e.g. 'agreed rate'.",
           },
           add_items: {
             type: "array",
             description:
-              "Priced lines to ADD. A discount is a negative amount, e.g. name 'Loyalty discount', price -30000.",
+              "One-time EXTRAS to add after the packages — a small add-on, or a discount as a negative amount (e.g. name 'Loyalty discount', price -30000). For a package in its own right, or anything monthly, use add_line_items.",
             items: {
               type: "object",
               properties: {
@@ -958,7 +1165,7 @@ export const ASSISTANT_TOOLS: ToolSchema[] = [
             type: "array",
             items: { type: "string" },
             description:
-              "Labels of existing extra lines to remove — a close match is enough, e.g. 'live chat'.",
+              "Labels of existing one-time EXTRAS to remove — a close match is enough, e.g. 'live chat'. To take a package off, use remove_line_items.",
           },
           maintenance: {
             type: "string",
@@ -1119,6 +1326,218 @@ async function findClient(
   return data?.[0] ?? null;
 }
 
+// ---- Project money helpers -----------------------------------------------
+
+/**
+ * The one projects read that can answer a money question.
+ *
+ * `PROJECT_MONEY_SELECT` names the two relations `settledAmount()` needs — the
+ * project's own itemised ledger (`payments`, 0006) and the Payments-board rows
+ * linked to it (`company_payments`, 0083). Leaving either out doesn't fail, it
+ * silently under-counts, which is exactly how the Payments page came to quote a
+ * different balance from the Projects board for the same job.
+ *
+ * The arithmetic itself is never repeated here. `@/lib/projects` owns it, and
+ * everything below only calls it, so the assistant can never disagree with the
+ * board the user is looking at.
+ */
+const PROJECT_MONEY_QUERY =
+  "id, name, status, currency, total_value, deposit_paid, due_date, " +
+  "client:clients(id, name, company), " +
+  PROJECT_MONEY_SELECT;
+
+/** The row shape `PROJECT_MONEY_QUERY` returns, with its two relations. */
+type ProjectMoneyQueryRow = {
+  id: string;
+  name: string;
+  status: ProjectStatus;
+  currency: string | null;
+  total_value: number | null;
+  deposit_paid: number | null;
+  due_date: string | null;
+  client: { id: string; name: string; company: string | null } | null;
+  payments:
+    | {
+        id: string;
+        amount: number;
+        status: string | null;
+        paid_at: string | null;
+        method: string | null;
+        notes: string | null;
+      }[]
+    | null;
+  company_payments:
+    | {
+        id: string;
+        price_lkr: number;
+        is_paid: boolean;
+        created_at: string;
+        company_name: string;
+      }[]
+    | null;
+};
+
+/** One project with its money already resolved by `@/lib/projects`. */
+type ProjectMoneyRow = {
+  id: string;
+  name: string;
+  status: ProjectStatus;
+  currency: string;
+  clientName: string | null;
+  totalValue: number;
+  received: number;
+  balance: number;
+  percent: number;
+  due: string | null;
+};
+
+/** Money to two decimals — float noise never reaches the model or a client. */
+function round2(value: unknown): number {
+  const n = Number(value ?? 0);
+  return Number.isFinite(n) ? Math.round(n * 100) / 100 : 0;
+}
+
+function argText(value: unknown): string {
+  return String(value ?? "").trim();
+}
+
+/** Case-insensitive contains, for the free-text filters the model supplies. */
+function hits(haystack: string | null | undefined, needle: string): boolean {
+  return (haystack ?? "").toLowerCase().includes(needle.toLowerCase());
+}
+
+function clampRows(value: unknown, fallback: number, max: number): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(1, Math.round(n)));
+}
+
+/** A name from an embedded `clients` row — PostgREST may hand back either shape. */
+function clientLabel(value: unknown): string | null {
+  const row = Array.isArray(value) ? value[0] : value;
+  if (!row || typeof row !== "object") return null;
+  const r = row as { name?: unknown; company?: unknown };
+  const name = String(r.name ?? "").trim();
+  const company = String(r.company ?? "").trim();
+  return name || company || null;
+}
+
+/**
+ * Live projects with value, received, balance and paid percent.
+ *
+ * Archived projects (0090) are excluded: acting on one by voice is how a
+ * mistake gets made silently, and an archived job is nobody's balance.
+ */
+async function loadProjectMoney(
+  supabase: DB,
+  opts: { status?: ProjectStatus | null; limit: number },
+): Promise<{ rows: ProjectMoneyRow[]; error: string | null }> {
+  let q = supabase
+    .from("projects")
+    .select(PROJECT_MONEY_QUERY)
+    .is("deleted_at", null);
+  if (opts.status) q = q.eq("status", opts.status);
+
+  const { data, error } = await q
+    .order("created_at", { ascending: false })
+    .limit(opts.limit);
+  if (error) return { rows: [], error: error.message };
+
+  // The embedded relations are past what the hand-written Database types
+  // describe, so the shape is asserted once here instead of `any` at each use.
+  const rows = (data ?? []) as unknown as ProjectMoneyQueryRow[];
+  return {
+    error: null,
+    rows: rows.map((p) => {
+      const money = {
+        total_value: p.total_value,
+        deposit_paid: p.deposit_paid,
+        payments: p.payments ?? [],
+        company_payments: p.company_payments ?? [],
+      };
+      return {
+        id: p.id,
+        name: p.name,
+        status: p.status,
+        currency: p.currency ?? "LKR",
+        clientName: clientLabel(p.client),
+        totalValue: round2(p.total_value),
+        received: round2(settledAmount(money)),
+        balance: round2(balanceDue(money)),
+        percent: paidPercent(money),
+        due: fmtDateTime(p.due_date),
+      };
+    }),
+  };
+}
+
+/** A Payments-board row that has no project behind it. */
+type BoardRow = {
+  id: string;
+  company: string;
+  amount: number;
+  /** `status` says WHEN the money is expected, not whether it arrived. */
+  expected: "due now" | "due later";
+  paid: boolean;
+};
+
+/**
+ * Payments-board rows with no project.
+ *
+ * Rows that ARE linked to a project are left out on purpose: `settledAmount()`
+ * already folds the paid ones into that project's received figure, and an
+ * unpaid one is part of the same balance — listing it again would bill a
+ * client twice for one debt.
+ */
+async function loadStandaloneBoard(
+  supabase: DB,
+): Promise<{ rows: BoardRow[]; error: string | null }> {
+  const { data, error } = await supabase
+    .from("company_payments")
+    .select("id, company_name, price_lkr, status, is_paid")
+    .is("project_id", null)
+    .order("created_at", { ascending: false })
+    .limit(500);
+  if (error) return { rows: [], error: error.message };
+  return {
+    error: null,
+    rows: (data ?? []).map((p) => ({
+      id: p.id,
+      company: p.company_name,
+      amount: round2(p.price_lkr),
+      expected: p.status === "upcoming" ? ("due later" as const) : ("due now" as const),
+      paid: p.is_paid === true,
+    })),
+  };
+}
+
+/** Where a figure came from — printed on every row so the model can say so. */
+type MoneySource = "Projects board" | "Payments board";
+const PROJECT_SOURCE: MoneySource = "Projects board";
+const BOARD_SOURCE: MoneySource = "Payments board";
+
+/** One line of "who still owes us what", from either ledger, labelled. */
+type OwedRow = {
+  id: string;
+  who: string;
+  what: string;
+  source: MoneySource;
+  href: string;
+  value: number;
+  received: number;
+  owed: number;
+  when: string;
+  paid: boolean;
+};
+
+/** How each figure in a money answer is arrived at, in the model's own words. */
+const MONEY_BASIS = {
+  projects:
+    "Project balance = total value − received, where received reconciles the deposit with the project's own paid payment rows (whichever is larger, never their sum) and adds paid Payments-board rows linked to that project. This is the same figure the Projects board and the client portal show.",
+  payments_board:
+    "Payments-board rows with no project are a separate hand-kept ledger. `due now` (pending) is payable; `due later` (upcoming) is expected money that is NOT yet due — never bill it.",
+} as const;
+
 // ---- Proposal helpers ----------------------------------------------------
 
 /** Trimmed, non-empty strings out of whatever the model sent. */
@@ -1177,6 +1596,294 @@ function applyPackage(sel: ProposalSelection, args: Record<string, unknown>): bo
     changed = true;
   }
   return changed;
+}
+
+// ---- Multi-package proposals ---------------------------------------------
+//
+// A proposal used to be able to carry exactly ONE package, because the whole
+// selection was a `type` plus a `tier`. That made "the website AND the premium
+// social package" impossible to quote, and it put two thirds of the price list
+// — every retainer, every add-on — out of reach. The helpers below turn the
+// model's `items` argument into real `ProposalLineItem`s so a proposal can
+// carry as many packages as the client is actually buying.
+//
+// The division of labour is deliberate: anything the model names by CATALOG
+// KEY has its feature list and its list price resolved server-side from the
+// live /pricing catalog, so a package's contents can never drift or be
+// invented. Anything bespoke comes from the user's own words, and the price is
+// whatever they said it is.
+
+/** One line as the model asked for it, before it is resolved. */
+type LineItemRequest = {
+  catalog_key?: unknown;
+  name?: unknown;
+  price?: unknown;
+  list_price?: unknown;
+  quantity?: unknown;
+  recurrence?: unknown;
+  note?: unknown;
+  features?: unknown;
+};
+
+const RECURRENCES = ["one_time", "monthly", "yearly", "at_cost"] as const;
+
+/** A recurrence the model actually sent, or null. */
+function recurrenceArg(v: unknown): LineRecurrence | null {
+  const r = String(v ?? "").trim();
+  return (RECURRENCES as readonly string[]).includes(r) ? (r as LineRecurrence) : null;
+}
+
+/** Bespoke feature bullets are capped: the Investment table prints them under
+ * the line, and an unbounded list turns one row into a page. */
+const MAX_ITEM_FEATURES = 8;
+
+/**
+ * Turn the model's `items` argument into priced proposal lines.
+ *
+ * Errors are COLLECTED rather than thrown. A proposal built on a price key the
+ * model half-remembered is worse than no proposal, so every problem comes back
+ * at once and the model fixes them all in a single turn.
+ *
+ * @param groups The live /pricing catalog, team overrides already applied.
+ * @param raw Whatever arrived in the tool argument.
+ * @param taken Ids already in use on this proposal, so a second copy of a
+ *   package gets its own id and stays separately addressable.
+ */
+function parseLineItems(
+  groups: PricingGroup[],
+  raw: unknown,
+  taken: Set<string> = new Set(),
+): { items: ProposalLineItem[]; errors: string[] } {
+  const items: ProposalLineItem[] = [];
+  const errors: string[] = [];
+
+  for (const entry of Array.isArray(raw) ? raw : []) {
+    const o = (entry ?? {}) as LineItemRequest;
+    const key = String(o.catalog_key ?? "").trim();
+    const label = String(o.name ?? "").trim();
+    const price = dictated(o.price);
+    const list = dictated(o.list_price);
+    const quantity = dictated(o.quantity);
+    const note = String(o.note ?? "").trim();
+    const asked = recurrenceArg(o.recurrence);
+
+    let item: ProposalLineItem | null;
+
+    if (key) {
+      const found = findCatalogPrice(groups, key);
+      if (!found) {
+        errors.push(
+          `"${key}" is not a price key on the Pricing page — call get_pricing and use a key exactly as it is returned.`,
+        );
+        continue;
+      }
+      if ((found.field.currency ?? "LKR") !== "LKR") {
+        errors.push(
+          `"${key}" is priced in ${found.field.currency}. A proposal totals in LKR only, so quote it as a line of its own with the LKR figure the user names.`,
+        );
+        continue;
+      }
+      item = lineItemFromCatalog(groups, key, {
+        label: label || undefined,
+        amount: price ?? undefined,
+        listAmount: list ?? undefined,
+        quantity: quantity ?? undefined,
+        note: note || undefined,
+        // A catalog line's recurrence is a FACT of its price field ("/month"),
+        // not something to restate: letting the model call a retainer one-time
+        // would fold it into the one-time total and overstate the proposal by
+        // a year of fees. "at_cost" is the one exception — that is a
+        // commercial decision, and an at-cost line can never move a total.
+        recurrence: asked === "at_cost" ? "at_cost" : undefined,
+      });
+      if (!item) {
+        errors.push(`"${key}" could not be turned into a proposal line.`);
+        continue;
+      }
+      // Feature bullets are the catalog's to give, never the model's: this is
+      // what makes "grab the pricing, then put those features on the document"
+      // structural instead of something the prompt has to beg for.
+    } else {
+      if (!label) {
+        errors.push(
+          "A line with no catalog_key needs a name — say what the client is paying for.",
+        );
+        continue;
+      }
+      const recurrence = asked ?? "one_time";
+      if (price === null && recurrence !== "at_cost") {
+        errors.push(
+          `"${label}" has no price. Every line the user described needs the figure they gave for it.`,
+        );
+        continue;
+      }
+      item = {
+        id: lineItemId(label),
+        catalogKey: null,
+        label,
+        features: strings(o.features).slice(0, MAX_ITEM_FEATURES),
+        amount: price ?? 0,
+        recurrence,
+      };
+      if (list !== null && list > (price ?? 0)) item.listAmount = list;
+      if (quantity !== null && quantity > 0) item.quantity = quantity;
+      if (note) item.note = note;
+    }
+
+    // An id addresses a line for a later edit, so two of the same package on
+    // one proposal must not both answer to the same name.
+    let id = item.id;
+    for (let n = 2; taken.has(id); n += 1) id = `${item.id}-${n}`;
+    taken.add(id);
+    item.id = id;
+    items.push(item);
+  }
+
+  return { items, errors };
+}
+
+/** Does one of the user's words point at this line? Matched loosely against
+ * the id, the catalog key and the printed label, because the model quotes
+ * whichever of the three it happens to have in front of it. */
+function matchesLine(item: ProposalLineItem, needles: string[]): boolean {
+  const hay = [item.id, item.catalogKey ?? "", item.label]
+    .map((s) => s.toLowerCase().trim())
+    .filter(Boolean);
+  return needles.some((n) => Boolean(n) && hay.some((h) => h.includes(n) || n.includes(h)));
+}
+
+/**
+ * The priced lines as the MODEL should read them back — each one carrying how
+ * it is charged. The card shows the same figures, but the model is the one
+ * that speaks them aloud, and a monthly retainer read out as part of the
+ * one-time total is exactly the error this is here to prevent.
+ */
+function spokenLines(pricing: ReturnType<typeof buildPricing>) {
+  return pricing.lineItems.map((l) => ({
+    label: l.label,
+    amount: l.amount,
+    ...(typeof l.original === "number" ? { normally: l.original } : {}),
+    recurrence: l.recurrence ?? "one_time",
+  }));
+}
+
+/**
+ * Drop the frozen single-package block. Once a proposal prices each thing on
+ * its own line there is no "base" package left for `prices.base`, `baseList`
+ * or `baseNote` to describe — and leaving them behind would invite a later
+ * `package_price` edit that reports success while changing nothing.
+ */
+function clearLegacyPackage(sel: ProposalSelection): void {
+  if (sel.prices) {
+    delete sel.prices.base;
+    delete sel.prices.baseList;
+  }
+  delete sel.baseNote;
+}
+
+/**
+ * Convert a single-package proposal into an item-driven one WITHOUT changing
+ * what it prints.
+ *
+ * The package line is lifted out of `buildPricing()`'s own output, so the
+ * label, the amount and the struck-through original are exactly the ones
+ * already on the document; the package's feature bullets are the only
+ * addition, and they are what the user asked for in the first place. The
+ * package's monthly note moves across too, or it would be silently lost.
+ *
+ * Called ONLY when the user is genuinely changing what is being sold — adding
+ * a second package to a proposal that has one. Never on a price edit, a date
+ * edit or a rewrite, and never on read: a proposal nobody is restructuring
+ * keeps its legacy shape forever.
+ */
+function materializeLegacyPackage(sel: ProposalSelection): void {
+  if (hasItems(sel)) return;
+  const legacy = buildPricing(sel);
+  // The legacy package block emits the package plus, on the old "custom"
+  // e-commerce plan only, its two add-ons. Everything after that is
+  // maintenance and custom features, which the item path re-emits unchanged.
+  const packageLines =
+    1 +
+    (sel.type === "ecommerce" && sel.platform === "custom"
+      ? (sel.paymentGateway ? 1 : 0) + (sel.delivery ? 1 : 0)
+      : 0);
+  const lines = legacy.lineItems.slice(0, packageLines);
+  if (!lines.length) return;
+
+  const features = includedFeatures(sel).slice(0, MAX_ITEM_FEATURES);
+  sel.items = lines.map((l, i) => {
+    const item: ProposalLineItem = {
+      id: lineItemId(l.label),
+      catalogKey: null,
+      label: l.label,
+      // Only the package itself carries the feature list; its add-ons are one
+      // line each and describe themselves.
+      features: i === 0 ? features : [],
+      amount: l.amount,
+      recurrence: "one_time",
+    };
+    if (typeof l.original === "number") item.listAmount = l.original;
+    return item;
+  });
+
+  // buildPricing pushes the package's own monthly note first and the
+  // monthly-SEO note after it. The SEO note is re-emitted by the item path;
+  // the package's is not, so it moves onto the proposal as a free-text note.
+  const packageNotes = sel.monthlySeo
+    ? legacy.recurringNotes.slice(0, -1)
+    : legacy.recurringNotes;
+  if (packageNotes.length) sel.notes = [...(sel.notes ?? []), ...packageNotes];
+
+  // The add-ons are lines of their own now; re-reading these flags would
+  // print them twice if this proposal ever went back through the legacy path.
+  sel.paymentGateway = false;
+  sel.delivery = false;
+  clearLegacyPackage(sel);
+}
+
+/**
+ * Which narrative rules and which stock timeline this proposal gets. "agent"
+ * means NOTHING is being built — no pages, no SEO — so the writer must not
+ * invent any. An item-driven proposal decides from what is actually on the
+ * document rather than from the legacy `type`, which no longer describes it.
+ */
+function proposalProjectKind(sel: ProposalSelection): "website" | "agent" {
+  if (!hasItems(sel)) return sel.type === "agent" ? "agent" : "website";
+  const keys = sel.items
+    .map((i) => (typeof i.catalogKey === "string" ? i.catalogKey : ""))
+    .filter(Boolean);
+  // All-bespoke: nothing to judge from, so keep the permissive default rather
+  // than forbidding the writer from mentioning a build it may well be for.
+  if (!keys.length) return "website";
+  return keys.some((k) => /^(web|ecom|system)\./.test(k)) ? "website" : "agent";
+}
+
+/**
+ * The narrative inputs a selection implies — the grouped package/feature
+ * ground truth, and whether the writer composes its own sections.
+ *
+ * A legacy single-package selection yields `undefined` for both, which is what
+ * keeps its prompt byte-identical to the one it has always sent. An
+ * item-driven one is free-form by default: the fixed Overview/Objectives/Key
+ * Features/SEO skeleton structurally cannot describe a build and a retainer in
+ * the same document, and printing an SEO heading over a social package is the
+ * exact complaint this exists to fix.
+ */
+function narrativeShape(
+  sel: ProposalSelection,
+  freeForm: unknown,
+): {
+  packages: ReturnType<typeof proposalPackages> | undefined;
+  allowFreeSections: boolean | undefined;
+  projectKind: "website" | "agent";
+} {
+  const packages = proposalPackages(sel);
+  return {
+    packages: packages.length ? packages : undefined,
+    allowFreeSections:
+      typeof freeForm === "boolean" ? freeForm : packages.length ? true : undefined,
+    projectKind: proposalProjectKind(sel),
+  };
 }
 
 /** Everything the proposal card needs, priced from the stored selection. */
@@ -1492,25 +2199,107 @@ export async function executeTool(
     }
 
     case "list_projects": {
-      let q = supabase
-        .from("projects")
-        .select("id, name, status, budget, currency, due_date")
-        .is("deleted_at", null)
-        .order("created_at", { ascending: false })
-        .limit(25);
-      if (args.status) q = q.eq("status", args.status as ProjectStatus);
-      const { data } = await q;
+      const term = argText(args.query);
+      const limit = clampRows(args.limit, 25, 100);
+      // A name search has to see the client column too, which lives in an
+      // embedded relation — so it scans a wider slice and filters here. The
+      // plain list stays one small read.
+      const { rows, error } = await loadProjectMoney(supabase, {
+        status: (args.status as ProjectStatus | undefined) ?? null,
+        limit: term ? 200 : limit,
+      });
+      if (error) return { content: { ok: false, error } };
+
+      const matched = term
+        ? rows.filter((p) => hits(p.name, term) || hits(p.clientName, term))
+        : rows;
+      const shown = matched.slice(0, limit);
+
+      const columns: ArtifactColumn[] = [
+        { key: "project", label: "Project" },
+        { key: "client", label: "Client", secondary: true },
+        { key: "status", label: "Status", format: "status" },
+        { key: "value", label: "Value", format: "money", align: "right" },
+        { key: "received", label: "Received", format: "money", align: "right", secondary: true },
+        { key: "balance", label: "Balance", format: "money", align: "right" },
+        { key: "percent", label: "Paid", format: "percent", align: "right", secondary: true },
+        { key: "due", label: "Due", secondary: true },
+      ];
+
       return {
         content: {
-          projects: (data ?? []).map((p) => ({
+          ok: true,
+          currency: "LKR",
+          basis: MONEY_BASIS.projects,
+          matched: matched.length,
+          shown: shown.length,
+          // Totals cover every match, not just the rows returned, so a capped
+          // list can still be totalled without silently dropping projects.
+          totals: {
+            total_value: round2(matched.reduce((t, p) => t + p.totalValue, 0)),
+            received: round2(matched.reduce((t, p) => t + p.received, 0)),
+            balance: round2(matched.reduce((t, p) => t + p.balance, 0)),
+          },
+          projects: shown.map((p) => ({
             name: p.name,
+            client: p.clientName,
             status: p.status,
-            budget: p.budget,
             currency: p.currency,
-            due: fmtDateTime(p.due_date),
+            total_value: p.totalValue,
+            received: p.received,
+            balance: p.balance,
+            paid_percent: p.percent,
+            due: p.due,
+            source: PROJECT_SOURCE,
           })),
+          note:
+            matched.length === 0
+              ? "No project matches that. Say so plainly rather than estimating."
+              : null,
         },
         event: { kind: "read", label: "Looked up projects", href: "/projects" },
+        artifacts: [
+          tableArtifact({
+            title: "Projects",
+            subtitle: term
+              ? `Matching "${term}"`
+              : args.status
+                ? `Status: ${String(args.status)}`
+                : "Newest first",
+            summary:
+              "Balance is total value minus everything received — the Projects board figure, not a re-derived one.",
+            href: "/projects",
+            area: "projects",
+            columns,
+            rows: rowsToTable(shown, columns, (p) => ({
+              id: p.id,
+              href: `/projects/${p.id}`,
+              tone: (p.totalValue > 0 && p.balance <= 0
+                ? "positive"
+                : p.balance > 0
+                  ? "warning"
+                  : "neutral") as ArtifactTone,
+              cells: {
+                project: p.name,
+                client: p.clientName,
+                status: p.status,
+                value: p.totalValue,
+                received: p.received,
+                balance: p.balance,
+                percent: p.percent,
+                due: p.due,
+              },
+            })),
+            ...(matched.length > shown.length
+              ? { truncated: matched.length - shown.length }
+              : {}),
+            total_label: "Still owed, all matches",
+            total_value: round2(matched.reduce((t, p) => t + p.balance, 0)),
+            total_format: "money",
+            footnote:
+              "Archived projects are excluded. A project's internal budget is a cost cap, not money owed, so it is not shown here and must never be quoted to a client.",
+          }),
+        ],
       };
     }
 
@@ -1902,27 +2691,221 @@ export async function executeTool(
     }
 
     case "list_payments": {
-      let q = supabase
-        .from("company_payments")
-        .select("company_name, price_lkr, status, is_paid")
-        .order("created_at", { ascending: false })
-        .limit(25);
-      if (!args.include_paid) q = q.eq("is_paid", false);
-      if (args.query) {
-        q = q.ilike("company_name", `%${String(args.query)}%`);
+      const includePaid = args.include_paid === true;
+      const term = argText(args.query);
+      const limit = clampRows(args.limit, 50, 200);
+      const source = argText(args.source).toLowerCase();
+      const wantProjects = source !== "payments_board";
+      const wantBoard = source !== "projects";
+
+      const [projects, board] = await Promise.all([
+        wantProjects
+          ? loadProjectMoney(supabase, { limit: 500 })
+          : Promise.resolve({ rows: [] as ProjectMoneyRow[], error: null }),
+        wantBoard
+          ? loadStandaloneBoard(supabase)
+          : Promise.resolve({ rows: [] as BoardRow[], error: null }),
+      ]);
+      const failed = projects.error ?? board.error;
+      if (failed) return { content: { ok: false, error: failed } };
+
+      const rows: OwedRow[] = [
+        ...projects.rows
+          // A cancelled job is not a debt to chase, and a project with neither
+          // a contract value nor money in has no balance worth reporting.
+          .filter(
+            (p) =>
+              p.status !== "cancelled" && (p.totalValue > 0 || p.received > 0),
+          )
+          .filter((p) => includePaid || p.balance > 0)
+          .map((p) => ({
+            id: p.id,
+            who: p.clientName ?? p.name,
+            what: p.name,
+            source: PROJECT_SOURCE,
+            href: `/projects/${p.id}`,
+            value: p.totalValue,
+            received: p.received,
+            owed: p.balance,
+            when: p.balance > 0 ? "balance on the project" : "settled",
+            paid: p.balance <= 0,
+          })),
+        ...board.rows
+          .filter((b) => includePaid || !b.paid)
+          .map((b) => ({
+            id: b.id,
+            who: b.company,
+            what: "Payments board entry (no project)",
+            source: BOARD_SOURCE,
+            href: "/payments",
+            value: b.amount,
+            received: b.paid ? b.amount : 0,
+            owed: b.paid ? 0 : b.amount,
+            when: b.paid ? "settled" : b.expected,
+            paid: b.paid,
+          })),
+      ];
+
+      const matched = (
+        term ? rows.filter((r) => hits(r.who, term) || hits(r.what, term)) : rows
+      ).sort((a, b) => b.owed - a.owed || b.value - a.value);
+      const shown = matched.slice(0, limit);
+
+      // Totals cover every match, not just the rows returned — the old tool
+      // capped the list at 25 while the prompt told the model to total it, so
+      // rows fell off the end of an invoice.
+      const owedIn = (list: OwedRow[]) =>
+        round2(list.reduce((t, r) => t + r.owed, 0));
+      const fromProjects = matched.filter((r) => r.source === PROJECT_SOURCE);
+      const fromBoard = matched.filter((r) => r.source === BOARD_SOURCE);
+
+      // Per-name rollup so a reminder for a client with three projects is one
+      // exact figure the model reads off, never a sum it does in its head.
+      //
+      // `owed_now` deliberately leaves out board rows marked 'upcoming'. Their
+      // money is expected, not payable — and this is the one figure the system
+      // prompt sends the model to for a payment reminder, so folding not-yet-due
+      // money into it would bill a client early for the tool's own arithmetic.
+      // It is reported beside the total instead, never inside it.
+      const isNotDueYet = (r: OwedRow) => r.when === "due later";
+      const byName = new Map<
+        string,
+        {
+          name: string;
+          from_projects: number;
+          from_payments_board: number;
+          owed_now: number;
+          not_due_yet: number;
+          entries: number;
+        }
+      >();
+      for (const r of matched) {
+        if (r.owed <= 0) continue;
+        const key = r.who.toLowerCase();
+        const entry = byName.get(key) ?? {
+          name: r.who,
+          from_projects: 0,
+          from_payments_board: 0,
+          owed_now: 0,
+          not_due_yet: 0,
+          entries: 0,
+        };
+        if (isNotDueYet(r)) {
+          entry.not_due_yet += r.owed;
+        } else {
+          if (r.source === PROJECT_SOURCE) entry.from_projects += r.owed;
+          else entry.from_payments_board += r.owed;
+          entry.owed_now += r.owed;
+        }
+        entry.entries += 1;
+        byName.set(key, entry);
       }
-      const { data } = await q;
+      const owedByName = [...byName.values()]
+        .map((e) => ({
+          name: e.name,
+          from_projects: round2(e.from_projects),
+          from_payments_board: round2(e.from_payments_board),
+          owed_now: round2(e.owed_now),
+          not_due_yet: round2(e.not_due_yet),
+          entries: e.entries,
+        }))
+        .sort((a, b) => b.owed_now - a.owed_now || b.not_due_yet - a.not_due_yet)
+        .slice(0, 25);
+
+      const columns: ArtifactColumn[] = [
+        { key: "who", label: "Client / company" },
+        { key: "what", label: "What", secondary: true },
+        { key: "source", label: "Source", format: "status" },
+        { key: "value", label: "Value", format: "money", align: "right", secondary: true },
+        { key: "received", label: "Received", format: "money", align: "right", secondary: true },
+        { key: "owed", label: "Still owed", format: "money", align: "right" },
+        { key: "when", label: "When", format: "status" },
+      ];
+
+      const artifact = tableArtifact({
+        title: "What clients still owe",
+        subtitle: term
+          ? `Matching "${term}"`
+          : includePaid
+            ? "Outstanding and settled"
+            : "Outstanding only",
+        summary:
+          "Project balances come from the Projects board and are the authority on what a client owes. Board rows with no project are separate money the team tracks by hand.",
+        href: "/payments",
+        area: "payments",
+        columns,
+        rows: rowsToTable(shown, columns, (r) => ({
+          id: r.id,
+          href: r.href,
+          tone: (r.paid
+            ? "positive"
+            : r.when === "due later"
+              ? "neutral"
+              : "warning") as ArtifactTone,
+          cells: {
+            who: r.who,
+            what: r.what,
+            source: r.source,
+            value: r.value,
+            received: r.received,
+            owed: r.owed,
+            when: r.when,
+          },
+        })),
+        ...(matched.length > shown.length
+          ? { truncated: matched.length - shown.length }
+          : {}),
+        // Payable today only. The rows below can include 'due later' money, so
+        // the footer says which figure it is rather than letting the reader
+        // assume the column adds up to it.
+        total_label: "Owed now, all matches",
+        total_value: owedIn(matched.filter((r) => !isNotDueYet(r))),
+        total_format: "money",
+        footnote:
+          "Board rows already linked to a project are folded into that project's balance rather than listed twice. 'Due later' is money expected in future — it is not payable yet. Cancelled and archived projects are excluded.",
+      });
+
       return {
         content: {
-          payments: (data ?? []).map((p) => ({
-            company: p.company_name,
-            amount: Number(p.price_lkr),
-            currency: "LKR",
-            status: p.status,
-            paid: p.is_paid,
+          ok: true,
+          currency: "LKR",
+          basis: MONEY_BASIS,
+          matched: matched.length,
+          shown: shown.length,
+          totals: {
+            owed_on_projects: owedIn(fromProjects),
+            owed_on_board_due_now: owedIn(
+              fromBoard.filter((r) => !isNotDueYet(r)),
+            ),
+            owed_on_board_due_later: owedIn(fromBoard.filter(isNotDueYet)),
+            // The billable figure: everything payable today. Quote this one.
+            owed_now_total: owedIn(matched.filter((r) => !isNotDueYet(r))),
+            // Payable today PLUS money only expected later — a forecast, never
+            // an invoice. Split out so the two can never be confused.
+            owed_including_not_due_yet: owedIn(matched),
+          },
+          owed_by_name: owedByName,
+          rows: shown.map((r) => ({
+            who: r.who,
+            what: r.what,
+            source: r.source,
+            total_value: r.value,
+            received: r.received,
+            still_owed: r.owed,
+            when: r.when,
+            paid: r.paid,
           })),
+          note:
+            matched.length === 0
+              ? "Nothing outstanding matches that. Say so plainly — do not estimate a figure."
+              : "Bill only what is owed now. Never invoice a 'due later' board row.",
         },
-        event: { kind: "read", label: "Looked up payments", href: "/payments" },
+        event: {
+          kind: "read",
+          label: "Looked up what clients owe",
+          href: "/payments",
+        },
+        artifacts: [artifact],
       };
     }
 
@@ -2521,18 +3504,33 @@ export async function executeTool(
 
     case "get_pricing": {
       const groups = await pricingSnapshot(supabase);
+      // Every package carries its KEY and its real feature list, because this
+      // is the tool a proposal is built from: `price_key` goes straight into
+      // create_proposal's `items[].catalog_key`, and the features on that
+      // package are then copied onto the document server-side. Without the
+      // keys the model could only describe a package it had no way to quote.
       const shaped = groups.map((g) => ({
         group: g.title,
+        group_key: g.key,
         about: g.subtitle ?? "",
         packages: g.packages.map((p) => ({
+          package_key: p.key,
           name: p.name,
           tagline: p.tagline ?? "",
           badge: p.badge ?? "",
           includes: p.features ?? [],
           prices: p.prices.map((f) => ({
+            price_key: f.key,
             label: f.label,
             amount: f.amount,
             currency: f.currency ?? "LKR",
+            // "from" means the amount is a floor, not a fixed figure.
+            starts_at: f.prefix === "from",
+            unit: f.suffix ?? "",
+            // How it is charged, in the exact words create_proposal expects.
+            // Derived from the catalog, never guessed: this is what keeps a
+            // monthly retainer out of the one-time total.
+            recurrence: recurrenceForField(f),
             display: formatPriceField(f),
           })),
           note: p.note ?? "",
@@ -2560,6 +3558,8 @@ export async function executeTool(
           currency: "LKR",
           pricing: narrowed.length ? narrowed : shaped,
           note: "These are the agency's live prices, including any edits made on the Pricing page. Quote them exactly. The user can still set a different price for one client on a specific proposal.",
+          how_to_quote:
+            "To put any of these on a proposal, pass its price_key as items[].catalog_key in create_proposal or update_proposal. The package's feature list and its list price are then taken from here automatically, so you never retype them and they cannot drift. A proposal may combine as many of these as the client is buying. Anything with recurrence 'monthly' or 'yearly' is an ongoing fee and is totalled separately from the one-time build — never add the two together.",
         },
         event: { kind: "read", label: "Checked pricing", href: "/pricing" },
       };
@@ -2569,13 +3569,20 @@ export async function executeTool(
       const clientName = String(args.client_name ?? "").trim();
       const type = String(args.project_type ?? "").trim();
       const description = String(args.business_description ?? "").trim();
+      // `items` is the multi-package form: any number of priced lines, drawn
+      // from the price list or described by the user. `project_type` is the
+      // older single-package form and stays required only for it — "a website
+      // AND the social package" is not one of the three types, which is
+      // exactly why one type could never express it.
+      const itemsRaw = Array.isArray(args.items) ? args.items : [];
+      const wantsItems = itemsRaw.length > 0;
 
       // Rather than inventing the gaps, hand them back so the model asks.
       const missing: string[] = [];
       if (!clientName) missing.push("who the proposal is for — the client or company name");
-      if (!["business", "ecommerce", "agent"].includes(type))
+      if (!wantsItems && !["business", "ecommerce", "agent"].includes(type))
         missing.push(
-          "what they're buying — a business website, an e-commerce store, or a standalone AI agent with CRM",
+          "what they're buying — either an `items` list of the packages they want, or a business website / e-commerce store / standalone AI agent with CRM",
         );
       if (description.length < 40)
         missing.push(
@@ -2599,33 +3606,96 @@ export async function executeTool(
       selection.monthlySeo = args.monthly_seo === true;
       selection.customFeatures = customItems(args.custom_items);
 
+      // One read of the live Pricing page, used both to resolve the catalog
+      // lines and to freeze today's maintenance / SEO amounts onto the
+      // proposal so it never re-prices when /pricing is edited later.
+      const catalog = await pricingSnapshot(supabase);
+
+      if (wantsItems) {
+        const parsed = parseLineItems(catalog, itemsRaw);
+        if (parsed.errors.length)
+          return {
+            content: {
+              ok: false,
+              error: "Some of those lines couldn't be priced, so nothing was saved.",
+              problems: parsed.errors,
+              ask: "Call get_pricing and use the price_key exactly as it comes back, or give the line a name and the price the user stated. Do not guess a key.",
+            },
+          };
+        if (!parsed.items.length)
+          return {
+            content: {
+              ok: false,
+              error: "None of those lines had anything on them.",
+              ask: "Each item needs either a catalog_key from get_pricing, or a name and a price.",
+            },
+          };
+        selection.items = parsed.items;
+        selection.notes = strings(args.notes).slice(0, 6);
+        if (!selection.notes.length) delete selection.notes;
+      }
+
+      // The single-package price arguments describe a base package line that
+      // an item-driven proposal does not have. Silently dropping them would
+      // lose a figure the user actually stated — the one thing this must
+      // never do — so say so and let the model put it on the right line.
+      const priceNote = String(args.price_note ?? "").trim();
+      if (
+        hasItems(selection) &&
+        (dictated(args.package_price) !== null ||
+          dictated(args.list_price) !== null ||
+          args.hide_original === true ||
+          priceNote)
+      )
+        return {
+          content: {
+            ok: false,
+            error:
+              "This proposal prices each thing on its own line, so there is no single package price to set.",
+            ask: "Put the figure on the line it belongs to: items[].price is what the client pays for that line, items[].list_price is what it normally goes for, and items[].note is the short label like 'agreed rate'.",
+          },
+        };
+
       // Start from what the team charges today, then let anything the user
       // dictated override it — and freeze the result onto this proposal so it
       // never re-prices when the Pricing page is edited later.
-      selection.prices = await resolveSelectionPrices(supabase, selection);
-      // Remember what the package normally goes for BEFORE any offer price is
-      // applied, so a reduction prints as the list price struck through next
-      // to what the client is actually paying.
-      selection.prices.baseList =
-        dictated(args.list_price) ??
-        selection.prices.base ??
-        catalogBasePrice(selection);
-      const base = dictated(args.package_price);
-      if (base !== null) selection.prices.base = base;
-      if (args.hide_original === true) delete selection.prices.baseList;
+      selection.prices = selectionPrices(flattenPricing(catalog), selection);
+      if (hasItems(selection)) {
+        // Each line carries its own price and its own list price, so the
+        // frozen base block would describe a line that never prints.
+        clearLegacyPackage(selection);
+      } else {
+        // Remember what the package normally goes for BEFORE any offer price
+        // is applied, so a reduction prints as the list price struck through
+        // next to what the client is actually paying.
+        selection.prices.baseList =
+          dictated(args.list_price) ??
+          selection.prices.base ??
+          catalogBasePrice(selection);
+        const base = dictated(args.package_price);
+        if (base !== null) selection.prices.base = base;
+        if (args.hide_original === true) delete selection.prices.baseList;
+        if (priceNote) selection.baseNote = priceNote;
+      }
       const maint = dictated(args.maintenance_price);
       if (maint !== null) selection.prices.maintenance = maint;
       const seo = dictated(args.monthly_seo_price);
       if (seo !== null) selection.prices.monthlySeo = seo;
-      const priceNote = String(args.price_note ?? "").trim();
-      if (priceNote) selection.baseNote = priceNote;
 
       const pricing = buildPricing(selection);
-      if (pricing.oneTimeTotal < 0)
+      const negative =
+        pricing.oneTimeTotal < 0
+          ? { what: "one-time total", amount: pricing.oneTimeTotal }
+          : (pricing.monthlyTotal ?? 0) < 0
+            ? { what: "monthly total", amount: pricing.monthlyTotal ?? 0 }
+            : (pricing.yearlyTotal ?? 0) < 0
+              ? { what: "yearly total", amount: pricing.yearlyTotal ?? 0 }
+              : null;
+      if (negative)
         return {
           content: {
             ok: false,
-            error: `That works out to ${money(pricing.oneTimeTotal)} — the discount is larger than everything it's being taken off. Check the figures with the user before saving.`,
+            error: `That works out to a ${negative.what} of ${money(negative.amount)} — the discount is larger than everything it's being taken off. Check the figures with the user before saving.`,
           },
         };
 
@@ -2633,6 +3703,7 @@ export async function executeTool(
         String(args.project_name ?? "").trim() || suggestedProjectName(selection);
       const instructions = String(args.instructions ?? "").trim();
 
+      const shape = narrativeShape(selection, args.free_form);
       const narrative = await generateProposalContent({
         businessDescription: description,
         clientName,
@@ -2642,7 +3713,9 @@ export async function executeTool(
         customFeatures: selection.customFeatures,
         requirements: strings(args.requirements).slice(0, 25),
         teamInstructions: instructions || undefined,
-        projectKind: selection.type === "agent" ? "agent" : "website",
+        projectKind: shape.projectKind,
+        packages: shape.packages,
+        allowFreeSections: shape.allowFreeSections,
       });
 
       const proposalDate =
@@ -2652,9 +3725,9 @@ export async function executeTool(
 
       const content: ProposalContent = {
         ...defaultContent(),
-        // The stock timeline talks pages and design — wrong for an agent-only
-        // deployment, which builds nothing of the sort.
-        ...(selection.type === "agent" ? { timeline: AGENT_TIMELINE } : {}),
+        // The stock timeline talks pages and design — wrong for a deployment
+        // that builds nothing of the sort.
+        ...(shape.projectKind === "agent" ? { timeline: AGENT_TIMELINE } : {}),
         ...narrative,
       };
 
@@ -2694,11 +3767,14 @@ export async function executeTool(
           client: clientName,
           project: projectName,
           package: card.package_summary,
-          line_items: card.line_items,
+          line_items: spokenLines(pricing),
           grand_total: card.grand_total,
+          one_time_total: pricing.oneTimeTotal,
+          monthly_total: pricing.monthlyTotal ?? 0,
+          yearly_total: pricing.yearlyTotal ?? 0,
           recurring_notes: card.recurring_notes,
           currency: "LKR",
-          note: "Saved under Proposals and shown to the user for review. Read back the client, the package and the total. To change anything, call update_proposal — never create a second proposal for the same client.",
+          note: "Saved under Proposals and shown to the user for review. Read back the client, what's on it, and the one-time total — and, when monthly_total is above zero, the monthly figure SEPARATELY. The two are never added together. To change anything, call update_proposal — never create a second proposal for the same client.",
         },
         event: {
           kind: "created",
@@ -2744,7 +3820,208 @@ export async function executeTool(
         ...(row.content as unknown as ProposalContent),
       };
 
-      const packageChanged = applyPackage(selection, args);
+      // ---- What is being sold: the line items -----------------------------
+      const replaceItems = Array.isArray(args.items) ? args.items : null;
+      const addLines = Array.isArray(args.add_line_items) ? args.add_line_items : null;
+      const dropLines = strings(args.remove_line_items).map((s) => s.toLowerCase());
+      const repriceLines = Array.isArray(args.reprice_line_items)
+        ? args.reprice_line_items
+        : null;
+      const orderLines = strings(args.reorder_line_items).map((s) => s.toLowerCase());
+      // Adding or removing a package changes the SCOPE, which makes the
+      // existing copy describe the wrong deal — repricing and reordering do
+      // not, and must not throw away wording the team may have edited.
+      const scopeChanged = Boolean(
+        replaceItems?.length || addLines?.length || dropLines.length,
+      );
+      const wantsItemOps = Boolean(
+        scopeChanged || repriceLines?.length || orderLines.length,
+      );
+
+      if (wantsItemOps) {
+        const catalog = await pricingSnapshot(supabase);
+
+        if (replaceItems?.length) {
+          const parsed = parseLineItems(catalog, replaceItems);
+          if (parsed.errors.length)
+            return {
+              content: {
+                ok: false,
+                error: "Some of those lines couldn't be priced, so nothing was changed.",
+                problems: parsed.errors,
+                ask: "Call get_pricing and use the price_key exactly as it comes back, or give the line a name and the price the user stated.",
+              },
+            };
+          selection.items = parsed.items;
+          clearLegacyPackage(selection);
+        } else if (addLines?.length) {
+          // Adding a second package to a proposal written as one package: the
+          // existing package becomes a line of its own first, printing exactly
+          // what it prints today, so nothing on the document moves.
+          materializeLegacyPackage(selection);
+        }
+
+        if (!hasItems(selection))
+          return {
+            content: {
+              ok: false,
+              error:
+                "This proposal is written as a single package, so it has no separate lines to remove, reprice or reorder.",
+              ask: "Change the package itself with tier / platform / agent_platform and its price with package_price — or pass a full `items` list to rebuild the proposal line by line.",
+            },
+          };
+
+        if (addLines?.length) {
+          const parsed = parseLineItems(
+            catalog,
+            addLines,
+            new Set((selection.items ?? []).map((i) => i.id)),
+          );
+          if (parsed.errors.length)
+            return {
+              content: {
+                ok: false,
+                error: "Some of those lines couldn't be priced, so nothing was changed.",
+                problems: parsed.errors,
+                ask: "Call get_pricing and use the price_key exactly as it comes back, or give the line a name and the price the user stated.",
+              },
+            };
+          selection.items = [...(selection.items ?? []), ...parsed.items];
+        }
+
+        if (dropLines.length) {
+          const before = (selection.items ?? []).length;
+          selection.items = (selection.items ?? []).filter(
+            (i) => !matchesLine(i, dropLines),
+          );
+          // Reporting "removed" for a name that matched nothing would leave
+          // the user believing a package is off the proposal when it is still
+          // on it — and still in the total.
+          if (selection.items.length === before)
+            return {
+              content: {
+                ok: false,
+                error: "Nothing on this proposal matches what you asked to remove, so nothing was changed.",
+                lines: selection.items.map((i) => ({ id: i.id, label: i.label })),
+                ask: "Name the line by its printed label or its id, exactly as listed here.",
+              },
+            };
+        }
+
+        const repriceProblems: string[] = [];
+        for (const raw of repriceLines ?? []) {
+          const o = (raw ?? {}) as Record<string, unknown>;
+          const needle = String(o.match ?? "").trim().toLowerCase();
+          if (!needle) {
+            repriceProblems.push("A reprice entry had no `match` naming which line it means.");
+            continue;
+          }
+          const target = (selection.items ?? []).find((i) => matchesLine(i, [needle]));
+          if (!target) {
+            repriceProblems.push(`No line on this proposal matches "${o.match}".`);
+            continue;
+          }
+          const price = dictated(o.price);
+          if (price !== null) {
+            // The figure the user states is the figure. When it comes in under
+            // what the line was listed at, the original is remembered so the
+            // reduction prints struck through instead of quietly vanishing.
+            const wasList =
+              typeof target.listAmount === "number" ? target.listAmount : target.amount;
+            target.amount = price;
+            if (wasList > price) target.listAmount = wasList;
+            else delete target.listAmount;
+            // An agreed figure is no longer a "from" floor.
+            target.startsAt = false;
+          }
+          const list = dictated(o.list_price);
+          if (list !== null) {
+            if (list > target.amount) target.listAmount = list;
+            else delete target.listAmount;
+          }
+          const q = dictated(o.quantity);
+          if (q !== null && q > 0) target.quantity = q;
+          const lineNote = String(o.note ?? "").trim();
+          if (lineNote) target.note = lineNote;
+          if (o.hide_original === true) delete target.listAmount;
+        }
+        if (repriceProblems.length)
+          return {
+            content: {
+              ok: false,
+              error: "Nothing was changed — those lines couldn't be found.",
+              problems: repriceProblems,
+              lines: (selection.items ?? []).map((i) => ({ id: i.id, label: i.label })),
+              ask: "Match a line by its id or its printed label, exactly as listed here.",
+            },
+          };
+
+        if (orderLines.length) {
+          const rest = [...(selection.items ?? [])];
+          const ordered: ProposalLineItem[] = [];
+          for (const n of orderLines) {
+            const at = rest.findIndex((i) => matchesLine(i, [n]));
+            if (at >= 0) ordered.push(...rest.splice(at, 1));
+          }
+          if (!ordered.length)
+            return {
+              content: {
+                ok: false,
+                error: "None of those names match a line on this proposal, so the order was left alone.",
+                lines: rest.map((i) => ({ id: i.id, label: i.label })),
+                ask: "Name the lines by their printed labels or ids, exactly as listed here, in the order they should print.",
+              },
+            };
+          // Anything the user didn't name keeps its place behind the ones
+          // they did — a partial order is not a licence to drop lines.
+          selection.items = [...ordered, ...rest];
+        }
+
+        if (!selection.items?.length)
+          return {
+            content: {
+              ok: false,
+              error:
+                "That would leave the proposal with nothing on it. Nothing was changed.",
+              ask: "Ask the user what the client is actually buying before removing the last line.",
+            },
+          };
+      }
+
+      const itemDriven = hasItems(selection);
+      const newNotes = strings(args.notes).slice(0, 6);
+      if (itemDriven && newNotes.length) selection.notes = newNotes;
+
+      // A proposal that prices each thing on its own line has no single
+      // package to switch and no single price to set. Saying so beats
+      // dropping a figure the user actually stated.
+      if (
+        itemDriven &&
+        (String(args.project_type ?? "").trim() ||
+          String(args.tier ?? "").trim() ||
+          String(args.platform ?? "").trim() ||
+          String(args.agent_platform ?? "").trim() ||
+          dictated(args.package_price) !== null ||
+          dictated(args.list_price) !== null ||
+          args.hide_original === true ||
+          String(args.price_note ?? "").trim())
+      )
+        return {
+          content: {
+            ok: false,
+            error:
+              "This proposal lists each thing being sold on its own line, so there is no single package or package price to change.",
+            lines: (selection.items ?? []).map((i) => ({
+              id: i.id,
+              label: i.label,
+              amount: i.amount,
+              recurrence: i.recurrence,
+            })),
+            ask: "Use reprice_line_items to change what a line costs, add_line_items / remove_line_items to change what's on it, or items to rebuild the whole list.",
+          },
+        };
+
+      const packageChanged = itemDriven ? false : applyPackage(selection, args);
 
       const maintenance = String(args.maintenance ?? "");
       const maintenanceChanged =
@@ -2812,11 +4089,19 @@ export async function executeTool(
       if (priceNote) selection.baseNote = priceNote;
 
       const pricing = buildPricing(selection);
-      if (pricing.oneTimeTotal < 0)
+      const wrongWay =
+        pricing.oneTimeTotal < 0
+          ? { what: "one-time total", amount: pricing.oneTimeTotal }
+          : (pricing.monthlyTotal ?? 0) < 0
+            ? { what: "monthly total", amount: pricing.monthlyTotal ?? 0 }
+            : (pricing.yearlyTotal ?? 0) < 0
+              ? { what: "yearly total", amount: pricing.yearlyTotal ?? 0 }
+              : null;
+      if (wrongWay)
         return {
           content: {
             ok: false,
-            error: `That would come to ${money(pricing.oneTimeTotal)} — the discount is larger than everything it's being taken off. Nothing was changed; check the figures with the user.`,
+            error: `That would come to a ${wrongWay.what} of ${money(wrongWay.amount)} — the discount is larger than everything it's being taken off. Nothing was changed; check the figures with the user.`,
           },
         };
 
@@ -2831,11 +4116,17 @@ export async function executeTool(
       // SEO or an agent the client is no longer buying — so a package change
       // always rewrites, whether or not the model thought to ask for it.
       let next = content;
-      if (args.rewrite === true || packageChanged) {
+      if (args.rewrite === true || packageChanged || scopeChanged) {
         const instructions = String(args.instructions ?? "").trim();
         const requirements = strings(args.requirements).slice(0, 25);
         const description = content.overview.trim();
-        if (!description && !instructions && !requirements.length && !packageChanged)
+        if (
+          !description &&
+          !instructions &&
+          !requirements.length &&
+          !packageChanged &&
+          !scopeChanged
+        )
           return {
             content: {
               ok: false,
@@ -2843,6 +4134,7 @@ export async function executeTool(
               ask: "Ask the user what should change about the wording, or what else the client told them, before rewriting.",
             },
           };
+        const shape = narrativeShape(selection, args.free_form);
         const narrative = await generateProposalContent({
           businessDescription: description || `${clientName} — ${projectName}`,
           clientName,
@@ -2852,22 +4144,55 @@ export async function executeTool(
           customFeatures: selection.customFeatures,
           requirements,
           teamInstructions: instructions || undefined,
-          projectKind: selection.type === "agent" ? "agent" : "website",
+          projectKind: shape.projectKind,
+          packages: shape.packages,
+          allowFreeSections: shape.allowFreeSections,
         });
-        next = {
+        const rewritten: ProposalContent = {
           ...content,
           // The agent timeline and the website timeline describe different
           // work, so a switch in either direction has to swap it back.
-          ...(packageChanged
+          ...(packageChanged || scopeChanged
             ? {
                 timeline:
-                  selection.type === "agent"
+                  shape.projectKind === "agent"
                     ? AGENT_TIMELINE
                     : defaultContent().timeline,
               }
             : {}),
           ...narrative,
         };
+        // A rewrite replaces the WHOLE narrative. If the new one came back as
+        // the fixed skeleton, the sections the old one composed have to go
+        // with it — left behind they are what the PDF would print, and the
+        // rewrite the user just asked for would be invisible.
+        if (!narrative.sections) {
+          delete rewritten.sections;
+          delete rewritten.sectionsMode;
+        }
+        next = rewritten;
+      }
+
+      // Drop a written section by name, without rewriting the rest.
+      const dropSections = strings(args.remove_sections).map((s) => s.toLowerCase());
+      if (dropSections.length && Array.isArray(next.sections) && next.sections.length) {
+        const kept = next.sections.filter((s) => {
+          const hay = [s.id ?? "", s.heading ?? ""]
+            .map((v) => String(v).toLowerCase().trim())
+            .filter(Boolean);
+          return !dropSections.some((n) => hay.some((h) => h.includes(n) || n.includes(h)));
+        });
+        if (!kept.length)
+          return {
+            content: {
+              ok: false,
+              error:
+                "That would remove every written section and leave the proposal with only its pricing table. Nothing was changed.",
+              sections: next.sections.map((s) => s.heading),
+              ask: "Name only the sections to drop, or rewrite the proposal instead.",
+            },
+          };
+        next = { ...next, sections: kept };
       }
 
       const { error } = await supabase
@@ -2900,11 +4225,14 @@ export async function executeTool(
           client: clientName,
           project: projectName,
           package: card.package_summary,
-          line_items: card.line_items,
+          line_items: spokenLines(pricing),
           grand_total: card.grand_total,
+          one_time_total: pricing.oneTimeTotal,
+          monthly_total: pricing.monthlyTotal ?? 0,
+          yearly_total: pricing.yearlyTotal ?? 0,
           recurring_notes: card.recurring_notes,
           currency: "LKR",
-          note: "The same proposal was updated and shown to the user again. Confirm what changed and read back the new total.",
+          note: "The same proposal was updated and shown to the user again. Confirm what changed and read back the new one-time total — and, when monthly_total is above zero, the monthly figure SEPARATELY. The two are never added together.",
         },
         event: {
           kind: "updated",

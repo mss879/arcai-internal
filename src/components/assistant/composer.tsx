@@ -598,7 +598,9 @@ export function Composer({
           </div>
         </div>
 
-        <p className="mt-1.5 px-1 text-[11px] text-slate-400">
+        {/* Keyboard hints, for people with a keyboard. On a phone the row is
+            both useless and too wide, so it is dropped rather than clipped. */}
+        <p className="mt-1.5 hidden px-1 text-[11px] text-slate-400 sm:block">
           ⏎ send · ⇧⏎ new line · / commands · @ mention
         </p>
       </div>

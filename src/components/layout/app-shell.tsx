@@ -20,13 +20,6 @@ const VoiceAssistant = dynamic(
     ),
   { ssr: false },
 );
-const MobileVoiceScreen = dynamic(
-  () =>
-    import("@/components/assistant/mobile-voice-screen").then(
-      (m) => m.MobileVoiceScreen,
-    ),
-  { ssr: false },
-);
 
 export function AppShell({
   profile,
@@ -147,17 +140,12 @@ export function AppShell({
           reads and acts across every area of the workspace, which is an
           admin's reach, not a member's; the assistant API routes enforce the
           same rule server-side, so this hide is presentation, not security.
-          Desktop: floating panel. Mobile: full-screen voice-first experience
-          that auto-opens after login. */}
+          ONE component at every size (0104-fix). Phones used to get a
+          separate voice-only popup with its own engine and its own history,
+          which meant the assistant you talked to on your phone knew nothing
+          about the one on your desk. Studio now simply adapts. */}
       {profile.role !== "member" && (
-      <div className="hidden lg:block">
         <VoiceAssistant firstName={firstName} isTerminal={isTerminal} />
-      </div>
-      )}
-      {profile.role !== "member" && (
-      <div className="lg:hidden">
-        <MobileVoiceScreen />
-      </div>
       )}
     </div>
   );

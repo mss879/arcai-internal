@@ -54,8 +54,8 @@ import { useArcusRealtime } from "@/components/assistant/use-arcus-realtime";
  * consume it stay purely presentational.
  *
  * Called EXACTLY ONCE per surface. Two instances would mean two microphones
- * and two histories, so `<VoiceAssistant>` owns the desktop instance and
- * passes it down; `<MobileVoiceScreen>` owns its own (the two never coexist).
+ * and two histories, so `<VoiceAssistant>` owns the ONE instance and passes
+ * it down to every surface — phone included.
  */
 
 /** @deprecated Use `AssistantEvent` from `@/lib/assistant-stream`. */

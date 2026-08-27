@@ -17,9 +17,16 @@
  * would mean two microphones and two histories, so changing mode must never
  * remount the engine — it only changes what is rendered around it.
  *
- * Everything global (hotkeys, portals, the body-scroll lock) is gated on a
- * real `matchMedia` check, because `AppShell` hides this component with
- * `hidden lg:block` — which is CSS, so it is still MOUNTED on phones.
+ * It now runs at EVERY size (0104-fix). Phones used to get a separate
+ * voice-only popup with its own `useVoiceChat()`, so the assistant on your
+ * phone and the one on your desk were two different agents with two
+ * different histories. There is one agent; only the layout differs — on a
+ * phone there is no dock and no side-by-side canvas, so the bubble opens
+ * straight into the full workspace and artifacts arrive as an overlay.
+ *
+ * `desktop` therefore no longer decides whether to render at all — it
+ * decides which SHAPE to render, and which desktop-only affordances
+ * (hotkeys, the dock, the always-on wake word) are wired up.
  */
 
 import * as React from "react";
@@ -95,20 +102,20 @@ export function VoiceAssistant({
   const embedded = useIsEmbedded();
   // Never inside the preview canvas: a framed copy of the app would raise a
   // second badge for the same events behind the one already on screen.
-  const inbox = useAssistantInbox(desktop && !embedded);
-  const arcus = useArcusConfig(desktop && !embedded);
+  const inbox = useAssistantInbox(!embedded);
+  const arcus = useArcusConfig(!embedded);
 
   // The two lines that must be INSTANT, synthesised ahead of time (0104).
   // The greeting is composed once per session from the hour and the persona's
   // honorific — "Good evening, sir. How may I assist you today?" — which is
   // the whole JARVIS handshake: it speaks first, and it speaks immediately.
   const greetingText = React.useMemo(() => {
-    if (!arcus.loaded || !desktop || embedded) return null;
+    if (!arcus.loaded || embedded) return null;
     const who = arcus.honorific || firstName;
     // The exact line that was asked for — a greeting is a signature, not a
     // place for the model of the day to improvise.
     return `Hi ${who}, how may I help you today?`;
-  }, [arcus.loaded, arcus.honorific, desktop, embedded, firstName]);
+  }, [arcus.loaded, arcus.honorific, embedded, firstName]);
   const greetingUrl = useVoiceClip(greetingText);
   const wakeAckUrl = useVoiceClip(
     arcus.loaded && (arcus.wakeWord || isTerminal) && desktop && !embedded
@@ -229,7 +236,7 @@ export function VoiceAssistant({
   // in the SAME thread store — the stage cannot tell which engine served it.
   const realtime = useRealtimeVoice({
     enabled:
-      arcus.loaded && arcus.voiceEngine === "realtime" && desktop && !embedded,
+      arcus.loaded && arcus.voiceEngine === "realtime" && !embedded,
     onArtifacts: chat.ingestArtifacts,
     onTurn: chat.ingestTurn,
   });
@@ -375,9 +382,10 @@ export function VoiceAssistant({
     });
   }, [silence]);
 
-  // Phones keep MobileVoiceScreen; full mode is impossible there.
+  // A 400px panel inside a 390px phone is not a panel. On mobile the dock
+  // collapses into the full workspace rather than being offered at all.
   React.useEffect(() => {
-    if (!desktop && mode !== "bubble") setMode("bubble");
+    if (!desktop && mode === "dock") setMode("full");
   }, [desktop, mode]);
 
   /**
@@ -390,7 +398,7 @@ export function VoiceAssistant({
    */
   const { selectThread } = chat;
   React.useEffect(() => {
-    if (!mounted || !desktop || embedded) return;
+    if (!mounted || embedded) return;
     const params = new URLSearchParams(window.location.search);
     const target = params.get("arc");
     if (!target?.startsWith("thread:")) return;
@@ -408,7 +416,7 @@ export function VoiceAssistant({
       `${window.location.pathname}${query ? `?${query}` : ""}`,
     );
     return () => window.clearTimeout(timer);
-  }, [mounted, desktop, embedded, open, selectThread]);
+  }, [mounted, embedded, open, selectThread]);
 
   // Stepping out of the full-screen dialog has to put focus somewhere real:
   // the browser drops it on <body> when the panel unmounts, which restarts
@@ -620,11 +628,9 @@ export function VoiceAssistant({
     [open],
   );
 
-  // Phones, and any embedded copy of the app, get nothing at all — no
-  // listeners, no portals, no launcher. Both guards matter: `hidden lg:block`
-  // only hides this, and an embedded page artifact would otherwise mount the
-  // assistant inside the assistant's own preview.
-  if (!mounted || !desktop || embedded) return null;
+  // Only an EMBEDDED copy gets nothing: a page artifact would otherwise
+  // mount the assistant inside the assistant's own preview canvas.
+  if (!mounted || embedded) return null;
 
   const greeting = `Hi ${firstName}, I'm Arcus. Ask me anything about your workspace — or open the full studio for previews.`;
 
@@ -657,7 +663,11 @@ export function VoiceAssistant({
             onClick={() => {
               // Suppress the click that fires at the end of a drag.
               if (Date.now() - draggedAtRef.current < 200) return;
-              open(lastOpenModeRef.current === "dock" ? "dock" : "full");
+              open(
+                desktop && lastOpenModeRef.current === "dock"
+                  ? "dock"
+                  : "full",
+              );
             }}
             aria-label="Open Arcus Studio — drag to reposition, or press Command K"
             className="fixed bottom-6 right-6 z-50 grid h-14 w-14 cursor-grab touch-none place-items-center rounded-full bg-gradient-to-br from-primary-500 to-primary-700 text-white shadow-lift ring-1 ring-white/30 active:cursor-grabbing"

@@ -66,6 +66,7 @@ import {
   CANVAS_MIN_RATIO,
   CENTRE_MIN_PX,
   clamp,
+  COMPACT_MAX_PX,
   RAIL_INLINE_MIN_PX,
   RAIL_PX,
   readLayout,
@@ -79,6 +80,10 @@ import {
 
 /** How many preview tabs a single conversation may keep open. */
 const MAX_TABS = 8;
+/** The phone's canvas: the whole panel. Module scope, because a fresh object
+ *  every render would defeat `PreviewPane`'s memo — the exact reason
+ *  `canvasStyle` is memoised. */
+const CANVAS_FULL_STYLE: React.CSSProperties = { width: "100%" };
 /** Handle thickness, needed when computing the centre column's floor. */
 const HANDLE_PX = 6;
 /** "Pinned to the bottom" tolerance for the transcript's auto-scroll. */
@@ -443,7 +448,24 @@ export function AssistantWorkspace({
     setView(readView());
   }, []);
 
-  const command = view === "command";
+  // The saved preference still stands on desktop; a phone simply cannot
+  // draw the HUD, so it is overridden rather than offered and broken.
+
+  /**
+   * A phone (0104-fix). Measured from the panel, like `railInline`, so it is
+   * the real drawing width rather than the viewport's opinion of it.
+   *
+   * Compact changes three things: the panel goes full-bleed (a rounded card
+   * floating on a 390px screen wastes the only space there is), the canvas
+   * stops being a side column and becomes a full-screen overlay, and the
+   * command HUD is not offered — its rail alone is 296px, which would leave
+   * the stage about ninety.
+   */
+  const compact = panelWidth > 0 && panelWidth < COMPACT_MAX_PX;
+
+  // The saved preference still stands on desktop; a phone simply cannot
+  // draw the HUD, so it is overridden rather than offered and broken.
+  const command = view === "command" && !compact;
   const iconButton = command ? ICON_BUTTON_DARK : ICON_BUTTON;
 
   const toggleView = React.useCallback(() => {
@@ -469,6 +491,7 @@ export function AssistantWorkspace({
   // breakpoint would be measuring the viewport, and the panel is inset by its
   // margin — the two disagree by exactly enough to matter near the boundary.
   const railInline = panelWidth === 0 || panelWidth >= RAIL_INLINE_MIN_PX;
+
 
   // Dropping below the inline threshold turns the rail into a drawer; leaving
   // it open would bury the conversation under it. This is a layout reaction,
@@ -815,9 +838,21 @@ export function AssistantWorkspace({
 
   // The canvas can never be hidden while expanded — the un-expand button
   // lives in its own toolbar, and hiding it would strand the user.
-  const showCanvas = canvasOpen || expanded;
+  // On a phone the preview takes the whole panel — there is no room to put
+  // it beside the conversation, and half a PDF is worse than none. It only
+  // takes over once there is something to SHOW, though: `canvasOpen` is a
+  // remembered desktop preference and defaults to true, which would
+  // otherwise greet every phone with an empty pane where the chat should be.
+  const canvasOverlay = compact && canvasOpen && Boolean(activeArtifactId);
+  // On a phone the canvas is ONLY ever the overlay. Left as a column it kept
+  // its 360px minimum next to the conversation, which on a 375px screen left
+  // the composer a few characters wide and stacked "Ask Arcus" letter by
+  // letter down the page.
+  const showCanvas = compact
+    ? canvasOverlay
+    : canvasOpen || expanded;
   const showRail = railVisible;
-  const showCentre = !expanded;
+  const showCentre = !expanded && !canvasOverlay;
 
   return (
     <div
@@ -851,7 +886,9 @@ export function AssistantWorkspace({
           "relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
           command
             ? "bg-[#07060b]"
-            : "m-3 rounded-3xl border border-white/60 bg-white/90 shadow-[var(--shadow-lift)] backdrop-blur-2xl xl:m-6",
+            : compact
+              ? "bg-white"
+              : "m-3 rounded-3xl border border-white/60 bg-white/90 shadow-[var(--shadow-lift)] backdrop-blur-2xl xl:m-6",
         )}
       >
         {/* Top bar */}
@@ -885,7 +922,13 @@ export function AssistantWorkspace({
             </p>
           </div>
 
+          {/* A phone fits about five of these. The four that go are the ones
+              with no meaning there: the HUD switch (no HUD), the canvas
+              toggle (the canvas opens from a chip), hands-free (a settings
+              choice, and the composer already has a mic) and minimise-to-dock
+              (there is no dock). */}
           <div className="ml-auto flex items-center gap-1">
+            {!compact && (
             <button
               type="button"
               onClick={toggleView}
@@ -902,6 +945,7 @@ export function AssistantWorkspace({
                 <Scan className="h-4 w-4" />
               )}
             </button>
+            )}
             {!command && (
               <>
                 <button
@@ -919,6 +963,7 @@ export function AssistantWorkspace({
                     <PanelRight className="h-4 w-4 rotate-180" />
                   )}
                 </button>
+                {!compact && (
                 <button
                   type="button"
                   onClick={toggleCanvas}
@@ -932,6 +977,7 @@ export function AssistantWorkspace({
                     <PanelRight className="h-4 w-4" />
                   )}
                 </button>
+                )}
               </>
             )}
             <button
@@ -949,6 +995,7 @@ export function AssistantWorkspace({
             </button>
             {/* Hands-free: after each reply the mic reopens, so a
                 conversation continues without a tap (0104). */}
+            {!compact && (
             <button
               type="button"
               onClick={() => chat.setHandsFree(!chat.handsFree)}
@@ -966,6 +1013,7 @@ export function AssistantWorkspace({
             >
               <Radio className="h-4 w-4" />
             </button>
+            )}
             <ApprovalsTray chat={chat} />
             <button
               type="button"
@@ -975,6 +1023,7 @@ export function AssistantWorkspace({
             >
               <Settings2 className="h-4 w-4" />
             </button>
+            {!compact && (
             <button
               type="button"
               onClick={onDock}
@@ -983,6 +1032,7 @@ export function AssistantWorkspace({
             >
               <Minimize2 className="h-4 w-4" />
             </button>
+            )}
             <button
               type="button"
               onClick={onClose}
@@ -1036,7 +1086,12 @@ export function AssistantWorkspace({
           )}
 
           {showCentre && (
-            <div className="flex min-h-0 min-w-[420px] flex-1 flex-col">
+            <div
+              className={cn(
+                "flex min-h-0 flex-1 flex-col",
+                !compact && "min-w-[420px]",
+              )}
+            >
               <Conversation
                 className="min-h-0 flex-1"
                 messages={chat.messages}
@@ -1054,7 +1109,12 @@ export function AssistantWorkspace({
                 onSendSms={chat.sendSms}
                 onApproveMission={chat.approveMission}
               />
-              <div className="shrink-0 border-t border-slate-200/70 bg-white/70 px-6 py-4">
+              <div
+                className={cn(
+                  "shrink-0 border-t border-slate-200/70 bg-white/70 py-3",
+                  compact ? "px-3" : "px-6 py-4",
+                )}
+              >
                 <div className="mx-auto w-full max-w-[820px]">
                   <Composer
                     value={chat.text}
@@ -1078,7 +1138,7 @@ export function AssistantWorkspace({
 
           {showCanvas && (
             <>
-              {!expanded && (
+              {!expanded && !canvasOverlay && (
                 <div
                   role="separator"
                   aria-orientation="vertical"
@@ -1110,7 +1170,7 @@ export function AssistantWorkspace({
                 onCollapse={collapseCanvas}
                 expanded={expanded}
                 onToggleExpand={toggleExpand}
-                style={canvasStyle}
+                style={canvasOverlay ? CANVAS_FULL_STYLE : canvasStyle}
               />
             </>
           )}

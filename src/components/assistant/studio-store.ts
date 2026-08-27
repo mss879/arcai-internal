@@ -95,6 +95,10 @@ export const CENTRE_MIN_PX = 420;
 export const RAIL_PX = 264;
 /** Below this PANEL width the rail becomes an overlay drawer. */
 export const RAIL_INLINE_MIN_PX = 1280;
+
+/** Below this PANEL width the studio draws its phone layout: full bleed,
+ *  no side-by-side canvas, no command HUD. */
+export const COMPACT_MAX_PX = 768;
 export const CANVAS_MIN_RATIO = 0.25;
 export const CANVAS_MAX_RATIO = 0.7;
 
@@ -103,7 +107,8 @@ export const DOCK_MIN_W = 360;
 export const DOCK_MAX_W = 760;
 export const DOCK_MIN_H = 420;
 
-/** Full mode needs a real desktop; phones keep `MobileVoiceScreen`. */
+/** Desktop affordances — the dock, keyboard shortcuts, the always-on wake
+ *  word. Studio itself now renders at every size. */
 export const DESKTOP_QUERY = "(min-width: 1024px)";
 
 /**

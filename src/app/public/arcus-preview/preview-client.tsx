@@ -211,6 +211,7 @@ export function PreviewClient() {
       ingestTurn: noop,
       stopListening: noop,
       stop: () => setStatus("idle"),
+      silence: () => setStatus("idle"),
       reset: noop,
       steps: status === "thinking" ? STEPS : [],
       streamingText,

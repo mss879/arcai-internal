@@ -339,6 +339,9 @@ export type VoiceChat = {
   stopListening: () => void;
   /** Stop capture + playback without wiping the transcript. */
   stop: () => void;
+  /** Shut up NOW — clears the clip queue and blocks any reply already being
+   *  synthesised from ever playing. What closing the panel must call. */
+  silence: () => void;
   /** Stop everything and clear the ACTIVE thread. */
   reset: () => void;
 
@@ -464,6 +467,33 @@ export function useVoiceChat(): VoiceChat {
   const autoListenTimerRef = React.useRef<number | null>(null);
   /** A capture is being opened RIGHT NOW — guards overlapping getUserMedia. */
   const micOpeningRef = React.useRef(false);
+  /**
+   * Bumped by `silence()`. Every speech path captures this before its first
+   * await and refuses to make a sound if it has moved on since — the only
+   * reliable way to stop a reply whose TTS was already in flight when the
+   * user closed the panel.
+   */
+  const speechEpochRef = React.useRef(0);
+  /**
+   * The next capture is a WAKE-INITIATED one-shot: snappy conversational
+   * timings without turning hands-free on. Consumed by `openMicrophone`.
+   */
+  const conversationalRef = React.useRef(false);
+  /**
+   * This turn came from the wake word, so it gets ONE answer and then the
+   * microphone closes — even when hands-free is switched on. Being called by
+   * name is a command, not an invitation to transcribe the room; hands-free
+   * still governs turns the user starts by tapping the mic themselves.
+   */
+  const oneShotRef = React.useRef(false);
+  /**
+   * Silenced until the user asks for something again. `speak()` has several
+   * early exits (muted, empty reply, a failed TTS fetch) that re-arm the
+   * microphone without ever touching the player, so the epoch checks alone
+   * do not cover them — this does. Cleared by any deliberate act: tapping
+   * the mic, typing, or a fresh wake.
+   */
+  const silencedRef = React.useRef(false);
   const startListeningRef = React.useRef<() => void>(() => {});
 
   // The turn in flight.
@@ -904,8 +934,20 @@ export function useVoiceChat(): VoiceChat {
    *     having: wake it once, then talk.
    */
   const maybeAutoListen = React.useCallback(() => {
+    // Closed, cancelled or otherwise hushed: nothing automatic re-opens the
+    // microphone until the user does something deliberate.
+    if (silencedRef.current) return;
     const wantsConfirm = Boolean(pendingConfirmRef.current);
-    const wantsHandsFree = handsFreeRef.current && lastInputVoiceRef.current;
+    // A wake-word turn is over when its answer lands. The only thing allowed
+    // to re-open the mic is a confirm card, because that IS a direct question
+    // ("shall I send it?") and answering it out loud is the whole point.
+    const oneShot = oneShotRef.current;
+    if (oneShot && !wantsConfirm) {
+      oneShotRef.current = false;
+      return;
+    }
+    const wantsHandsFree =
+      handsFreeRef.current && lastInputVoiceRef.current && !oneShot;
     if (!wantsHandsFree && !(wantsConfirm && lastInputVoiceRef.current)) return;
     // Tracked so unmounting during the delay can cancel it — otherwise the
     // microphone opens after the surface is gone, with nothing left alive to
@@ -938,6 +980,10 @@ export function useVoiceChat(): VoiceChat {
         maybeAutoListen();
         return;
       }
+      // Everything below is on the far side of a network round trip. If the
+      // user closes the panel while the voice is being synthesised, this is
+      // what stops the finished audio from playing into an empty room.
+      const epoch = speechEpochRef.current;
       try {
         setStatus("speaking");
         const res = await fetch("/api/assistant/speak", {
@@ -951,21 +997,20 @@ export function useVoiceChat(): VoiceChat {
           return;
         }
         const blob = await res.blob();
+        if (epoch !== speechEpochRef.current) return; // silenced meanwhile
         if (currentUrlRef.current) URL.revokeObjectURL(currentUrlRef.current);
         const url = URL.createObjectURL(blob);
         currentUrlRef.current = url;
         el.muted = false;
         el.src = url;
-        el.onended = () => {
+        const done = () => {
           stopSpeechMeter();
+          if (epoch !== speechEpochRef.current) return; // silenced meanwhile
           setStatus("idle");
           maybeAutoListen();
         };
-        el.onerror = () => {
-          stopSpeechMeter();
-          setStatus("idle");
-          maybeAutoListen();
-        };
+        el.onended = done;
+        el.onerror = done;
         await el.play();
         // After play() resolves, so the AudioContext resume isn't racing the
         // browser's own autoplay decision.
@@ -1010,9 +1055,13 @@ export function useVoiceChat(): VoiceChat {
    * the wake word's self-suspension all behave exactly as for a real reply.
    */
   const playClip = React.useCallback(
-    (url: string) =>
-      enqueuePlayback(async () => {
+    (url: string) => {
+      // Captured at QUEUE time, checked at PLAY time: a clip queued behind
+      // the greeting must not still speak up after the panel was closed.
+      const epoch = speechEpochRef.current;
+      return enqueuePlayback(async () => {
         if (mutedRef.current || !url) return;
+        if (epoch !== speechEpochRef.current) return; // silenced meanwhile
         const el = getPlayer();
         if (!el) return;
         // Resolves when PLAYBACK ENDS, not when it starts — the wake flow
@@ -1028,13 +1077,22 @@ export function useVoiceChat(): VoiceChat {
             el.onpause = null;
             el.onemptied = null;
             stopSpeechMeter();
-            // "preempted" means another speaker (a reply via speak()) now
-            // owns the player AND the status — stomping it to idle here
-            // would un-suspend the wake word while Arcus is mid-sentence.
-            if (mode !== "preempted") setStatus("idle");
-            // Only a clip that PLAYED OUT re-arms the mic; a pause means
-            // someone intervened (stop, cancel) and silence is the answer.
-            if (mode === "natural") maybeAutoListen();
+            // Silenced while this was playing: settle the promise so nothing
+            // awaiting it hangs, but touch NOTHING else — the panel is shut,
+            // and re-arming the mic here is the bug this whole pass is about.
+            if (epoch === speechEpochRef.current) {
+              // "preempted" means another speaker (a reply via speak()) now
+              // owns the player AND the status — stomping it to idle here
+              // would un-suspend the wake word while Arcus is mid-sentence.
+              // The guard also keeps a finished clip from clobbering the
+              // status of a turn that is still thinking.
+              if (mode !== "preempted") {
+                setStatus((s) => (s === "speaking" ? "idle" : s));
+              }
+              // Only a clip that PLAYED OUT re-arms the mic; a pause means
+              // someone intervened (stop, cancel) and silence is the answer.
+              if (mode === "natural") maybeAutoListen();
+            }
             resolve();
           };
           try {
@@ -1062,7 +1120,8 @@ export function useVoiceChat(): VoiceChat {
             finish("stopped");
           }
         });
-      }),
+      });
+    },
     [enqueuePlayback, getPlayer, maybeAutoListen, startSpeechMeter, stopSpeechMeter],
   );
 
@@ -1601,6 +1660,7 @@ export function useVoiceChat(): VoiceChat {
       if (!trimmed || busy) return;
       unlockAudio(); // we're in the tap/submit gesture — prime voice output
       setText("");
+      silencedRef.current = false;
       lastInputVoiceRef.current = false;
       void (async () => {
         // A typed "yes" resolves a pending confirm card too.
@@ -1668,10 +1728,14 @@ export function useVoiceChat(): VoiceChat {
     // it stops fast after a short reply instead of waiting out dictation.
     const confirmMode = autoListenRef.current;
     autoListenRef.current = false;
-    // Hands-free = conversational timings on EVERY capture, tap or auto.
+    // A wake-initiated turn is a conversation, not dictation — snappy
+    // timings without hands-free having to be on. Hands-free implies the
+    // same, since it IS a conversation by definition.
+    const conversational = conversationalRef.current || handsFreeRef.current;
+    conversationalRef.current = false;
     const silenceMs = confirmMode
       ? CONFIRM_SILENCE_MS
-      : handsFreeRef.current
+      : conversational
         ? CONVERSATION_SILENCE_MS
         : SILENCE_MS;
 
@@ -1826,7 +1890,9 @@ export function useVoiceChat(): VoiceChat {
    * ever OPENS — an already-listening mic is left alone.
    */
   const listenWhenQuiet = React.useCallback(async () => {
+    const epoch = speechEpochRef.current;
     await playbackChainRef.current;
+    if (epoch !== speechEpochRef.current) return; // closed while greeting
     // A reply spoken via speak() is not on the chain; wait for the player.
     const el = playerRef.current;
     if (el && !el.paused && !el.ended) {
@@ -1841,7 +1907,14 @@ export function useVoiceChat(): VoiceChat {
       });
     }
     await new Promise((resolve) => window.setTimeout(resolve, 180));
+    if (epoch !== speechEpochRef.current) return; // closed while acking
     if (statusRef.current !== "idle") return;
+    // This one capture is a conversation turn, so it closes 2.5s after the
+    // user stops talking rather than sitting open for dictation — and it is
+    // the ONLY one this wake buys.
+    conversationalRef.current = true;
+    oneShotRef.current = true;
+    silencedRef.current = false;
     await startListening();
   }, [startListening]);
 
@@ -1854,13 +1927,25 @@ export function useVoiceChat(): VoiceChat {
   }, [startListening]);
 
   const toggleMic = React.useCallback(() => {
-    if (status === "listening") stopListening();
-    else if (!busy) void startListening();
+    if (status === "listening") {
+      stopListening();
+      return;
+    }
+    // Reaching for the button is a deliberate conversation, so hands-free
+    // applies again from here — the wake word's one-shot rule ends.
+    oneShotRef.current = false;
+    silencedRef.current = false;
+    if (!busy) void startListening();
   }, [status, busy, startListening, stopListening]);
 
   const cancel = React.useCallback(() => {
     turnAbortRef.current?.abort();
     turnAbortRef.current = null;
+    // Cancelling means cancelling the VOICE too: without these, a clip queued
+    // behind the one being paused simply took over, and a reply already being
+    // synthesised still arrived and spoke.
+    speechEpochRef.current += 1;
+    playbackChainRef.current = Promise.resolve();
     cancelDeltaFlush();
     setStreaming(false);
     setStreamingText("");
@@ -1871,13 +1956,43 @@ export function useVoiceChat(): VoiceChat {
     setStatus("idle");
   }, [cancelDeltaFlush]);
 
-  const stop = React.useCallback(() => {
-    pendingConfirmRef.current = null; // don't re-arm the mic after a manual stop
+  /**
+   * Shut up, completely and immediately (0104-fix).
+   *
+   * `stop()` used to only pause the player, which left three ways for Arcus
+   * to keep talking after the user had closed it:
+   *   - a clip QUEUED behind the paused one simply started playing next;
+   *   - a reply whose TTS was still being fetched arrived and played;
+   *   - the mic re-armed itself on the way out and started another turn.
+   *
+   * So this bumps the speech epoch (every path checks it before making a
+   * sound), empties the queue, kills the pending re-arm, and closes the
+   * microphone. The turn in flight is deliberately NOT aborted — it finishes
+   * silently and its answer is waiting in the transcript when you come back.
+   */
+  const silence = React.useCallback(() => {
+    speechEpochRef.current += 1;
+    playbackChainRef.current = Promise.resolve();
+    window.clearTimeout(autoListenTimerRef.current ?? undefined);
+    autoListenTimerRef.current = null;
+    pendingConfirmRef.current = null;
+    conversationalRef.current = false;
+    oneShotRef.current = false;
+    silencedRef.current = true;
     stopListening();
+    // Pause, but leave the handlers attached: they are what SETTLES the
+    // clip's promise (detaching them stranded every caller awaiting it
+    // forever). The epoch bump above is what neuters their side effects.
     playerRef.current?.pause();
     stopSpeechMeter();
-    setStatus("idle");
+    // Only the audible states are a lie once silenced; a turn still thinking
+    // is still thinking, and claiming otherwise would hide real work.
+    setStatus((s) => (s === "listening" || s === "speaking" ? "idle" : s));
   }, [stopListening, stopSpeechMeter]);
+
+  const stop = React.useCallback(() => {
+    silence();
+  }, [silence]);
 
   const reset = React.useCallback(() => {
     stop();
@@ -2009,6 +2124,7 @@ export function useVoiceChat(): VoiceChat {
     ingestTurn,
     stopListening,
     stop,
+    silence,
     reset,
 
     steps,

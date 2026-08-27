@@ -135,7 +135,7 @@ export function VoiceAssistant({
     modeRef.current = mode;
   }, [mode]);
 
-  const { setMuted, stop } = chat;
+  const { setMuted, stop, silence } = chat;
 
   // The engine's idleness, as a ref: `open` fires inside a click and needs
   // the CURRENT status without rebuilding itself on every status change.
@@ -234,6 +234,15 @@ export function VoiceAssistant({
     onTurn: chat.ingestTurn,
   });
 
+  // `realtime.stop` behind a ref: closing must be able to end a live call
+  // without every close handler rebuilding each time the call's state moves.
+  const realtimeRef = React.useRef<(() => void) | null>(null);
+  React.useEffect(() => {
+    realtimeRef.current = realtime.live || realtime.connecting
+      ? realtime.stop
+      : null;
+  }, [realtime.live, realtime.connecting, realtime.stop]);
+
   const busy = chat.status !== "idle" || realtime.live || realtime.connecting;
   const {
     listening: wakeListening,
@@ -260,9 +269,12 @@ export function VoiceAssistant({
       lastOpenModeRef.current = "full";
       writePref(STUDIO_KEYS.mode, "full");
       setMode("full");
-      // Hands-free from a wake word is implied: someone who called across the
-      // room is not about to reach for the mic button for their next turn.
-      setHandsFree(true);
+      // ONE turn per wake, deliberately. Forcing hands-free on here meant the
+      // microphone re-armed after every reply and quietly transcribed the
+      // whole room — "it picks up random conversations". Now waking buys a
+      // single command; when the answer lands the mic closes and Arcus goes
+      // back to listening only for its own name. Hands-free stays available
+      // as a deliberate setting for anyone who wants the open channel.
       // The spoken line queues BEHIND anything already being said, and
       // `listenWhenQuiet` opens the mic only once Arcus has gone silent —
       // never over its own voice, and only ever OPENS: the old toggle could
@@ -274,7 +286,7 @@ export function VoiceAssistant({
       const clipUrl = (fresh && greetingUrl) || wakeAckUrl;
       if (clipUrl) void playClip(clipUrl).then(engageMic);
       else engageMic();
-    }, [setHandsFree, listenWhenQuiet, greetingUrl, wakeAckUrl, playClip, arcus.voiceEngine, realtime]),
+    }, [listenWhenQuiet, greetingUrl, wakeAckUrl, playClip, arcus.voiceEngine, realtime]),
     // The terminal keeps listening across window switches — that is what
     // registering the machine MEANS — and pins the mic channel open so it
     // stops chirping headsets on every recogniser restart.
@@ -332,16 +344,23 @@ export function VoiceAssistant({
   }, [arcus.loaded, arcus.handsFree, setHandsFree]);
 
   const toBubble = React.useCallback(() => {
-    // `stop()` and not `reset()`: with saved conversations, wiping the
-    // transcript on close would throw away history the rail now shows.
-    stop();
+    // `silence()` and not `reset()`: with saved conversations, wiping the
+    // transcript on close would throw away history the rail now shows. But
+    // closing must actually SHUT IT UP — queued clips, a reply still being
+    // synthesised, the open microphone and a live call all end here.
+    silence();
+    realtimeRef.current?.();
     setMode("bubble");
     setPromoteArtifactId(null);
     window.requestAnimationFrame(() => launcherRef.current?.focus());
-  }, [stop]);
+  }, [silence]);
 
   /** Esc steps down one level rather than closing outright. */
   const stepDown = React.useCallback(() => {
+    // Minimising is putting it away, so the voice stops either way — the
+    // answer stays readable in the dock and the transcript. Only the step
+    // all the way out to the bubble also ends a live call.
+    silence();
     setMode((current) => {
       if (current === "full") {
         lastOpenModeRef.current = "dock";
@@ -349,12 +368,12 @@ export function VoiceAssistant({
         return "dock";
       }
       if (current === "dock") {
-        stop();
+        realtimeRef.current?.();
         return "bubble";
       }
       return current;
     });
-  }, [stop]);
+  }, [silence]);
 
   // Phones keep MobileVoiceScreen; full mode is impossible there.
   React.useEffect(() => {
@@ -420,6 +439,7 @@ export function VoiceAssistant({
       setMode((current) => {
         if (current === "full") {
           stop();
+          realtimeRef.current?.();
           return "bubble";
         }
         lastOpenModeRef.current = "full";
@@ -436,12 +456,14 @@ export function VoiceAssistant({
       if (event.key !== "Escape" || event.defaultPrevented) return;
       setMode((current) => {
         if (current === "bubble") return current;
+        // Stepping down at all stops the voice — see `stepDown`.
+        stop();
         if (current === "full") {
           lastOpenModeRef.current = "dock";
           writePref(STUDIO_KEYS.mode, "dock");
           return "dock";
         }
-        stop();
+        realtimeRef.current?.();
         return "bubble";
       });
     };

@@ -121,6 +121,11 @@ export async function GET(request: Request) {
     const insights = await processWaInsights(supabase);
     // One agent-scoreboard push per morning (08:30–11:00 local, CAS-gated).
     const agentDigest = await processAgentDigest(supabase);
+    // NOTE: Arcus's own passes — the memory miner, the pulse, nudges, the
+    // morning briefing, missions and the janitor — used to run here. They now
+    // have their own scheduled function (/api/assistant/tick) for the same
+    // reason the WhatsApp agent does: a mission step is a model call with
+    // tools, and three of those would crowd the twenty timers in this one.
     const sms = isSmsConfigured()
       ? await processDueSmsRuns(supabase)
       : { processed: 0, sent: 0, failed: 0 };

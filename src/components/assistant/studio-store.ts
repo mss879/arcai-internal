@@ -30,6 +30,17 @@ import { useReducedMotion } from "motion/react";
  */
 export type StudioMode = "bubble" | "dock" | "full";
 
+/**
+ * Which shape the full-screen surface takes.
+ *
+ * - `command` — the stage: results fill the screen, chat docks bottom-right.
+ * - `classic` — the original three columns: rail | transcript | canvas.
+ *
+ * `command` is the default because that is the point of the room; `classic`
+ * stays one click away in the header, and nothing about it changed.
+ */
+export type StudioView = "command" | "classic";
+
 /** Everything about the geometry the user is allowed to change. */
 export type StudioLayout = {
   dock: { w: number; h: number };
@@ -50,7 +61,23 @@ export const STUDIO_KEYS = {
   rail: "arc-studio-rail",
   canvasOpen: "arc-studio-canvas-open",
   muted: "arc-studio-muted",
+  view: "arc-studio-view",
 } as const;
+
+/** The stage, unless this browser has been told otherwise. */
+export const DEFAULT_VIEW: StudioView = "command";
+
+/**
+ * Restore the view, treating anything unrecognised as the default.
+ *
+ * A hand-edited or half-written value must not strand the user in a surface
+ * that does not exist — there are only two, and one of them is always right.
+ */
+export function readView(): StudioView {
+  return readPref(STUDIO_KEYS.view, DEFAULT_VIEW) === "classic"
+    ? "classic"
+    : "command";
+}
 
 export const DEFAULT_LAYOUT: StudioLayout = {
   dock: { w: 400, h: 640 },

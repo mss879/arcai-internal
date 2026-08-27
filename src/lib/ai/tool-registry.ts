@@ -26,6 +26,8 @@ import { ASSISTANT_TOOLS, executeTool } from "@/lib/ai/tools";
 import { DELIVERY_TOOLS, executeDeliveryTool } from "@/lib/ai/tools-delivery";
 import { FINANCE_TOOLS, executeFinanceTool } from "@/lib/ai/tools-finance";
 import { GROWTH_TOOLS, executeGrowthTool } from "@/lib/ai/tools-growth";
+import { MEMORY_TOOLS, executeMemoryTool } from "@/lib/ai/tools-memory";
+import { MISSION_TOOLS, executeMissionTool } from "@/lib/ai/tools-missions";
 import { NAV_TOOLS, executeNavTool } from "@/lib/ai/tools-nav";
 import { defaultToolLabel } from "@/lib/assistant-stream";
 
@@ -39,6 +41,8 @@ type ToolModule = { module: string; tools: ToolSchema[] };
  */
 const TOOL_MODULES: ToolModule[] = [
   { module: "nav", tools: NAV_TOOLS },
+  { module: "memory", tools: MEMORY_TOOLS },
+  { module: "missions", tools: MISSION_TOOLS },
   { module: "finance", tools: FINANCE_TOOLS },
   { module: "delivery", tools: DELIVERY_TOOLS },
   { module: "growth", tools: GROWTH_TOOLS },
@@ -79,6 +83,8 @@ const MODULE_EXECUTORS: ((
   ctx: ToolContext,
 ) => Promise<ToolResult | null>)[] = [
   executeNavTool,
+  executeMemoryTool,
+  executeMissionTool,
   executeFinanceTool,
   executeDeliveryTool,
   executeGrowthTool,
@@ -117,6 +123,17 @@ const TOOL_LABELS: Record<string, string> = {
   app_capabilities: "Checking what I can do",
   open_record: "Finding the record",
 
+  // Memory — @/lib/ai/tools-memory
+  remember: "Remembering that",
+  forget: "Forgetting that",
+  list_memories: "Reading what I remember",
+
+  // Missions — @/lib/ai/tools-missions
+  propose_mission: "Working out a plan",
+  mission_status: "Checking the missions",
+  control_mission: "Changing the mission",
+  mission_step: "Working through the plan",
+
   // Workspace — @/lib/ai/tools
   get_workspace_overview: "Reading the workspace",
   search_workspace: "Searching the workspace",
@@ -136,6 +153,8 @@ const TOOL_LABELS: Record<string, string> = {
   update_client: "Updating the client",
   update_lead: "Updating the lead",
   reschedule_meeting: "Rescheduling the meeting",
+  create_meeting: "Scheduling the meeting",
+  cancel_meeting: "Cancelling the meeting",
   list_payments: "Reading payments",
   create_invoice: "Writing the invoice",
   prepare_invoice_email: "Preparing the email",
@@ -148,6 +167,9 @@ const TOOL_LABELS: Record<string, string> = {
   projects_at_risk: "Checking what's at risk",
   ask_projects: "Digging through the projects",
   get_pricing: "Reading the price list",
+  list_proposals: "Reading the proposals",
+  get_proposal: "Opening the proposal",
+  delete_proposal: "Deleting the proposal",
   create_proposal: "Writing the proposal",
   update_proposal: "Revising the proposal",
 
@@ -158,6 +180,8 @@ const TOOL_LABELS: Record<string, string> = {
   member_money: "Reading commission and loans",
   record_expense: "Logging the expense",
   mark_money_received: "Marking the money received",
+  create_notice: "Writing the notice",
+  create_quote: "Writing the quote",
 
   // Delivery — @/lib/ai/tools-delivery
   project_dossier: "Reading the whole project",
@@ -167,6 +191,7 @@ const TOOL_LABELS: Record<string, string> = {
   delivery_reports: "Working out the numbers",
   log_project_time: "Logging the hours",
   set_project_blocked: "Marking what it is waiting on",
+  complete_milestone: "Ticking the milestone off",
 
   // Growth — @/lib/ai/tools-growth
   pipeline_report: "Reading the pipeline",
@@ -175,6 +200,16 @@ const TOOL_LABELS: Record<string, string> = {
   whatsapp_report: "Checking the WhatsApp agent",
   growth_query: "Reading automations and intelligence",
   team_report: "Reading the team's week",
+  create_crm_task: "Adding the CRM task",
+  log_lead_activity: "Writing it on the lead's timeline",
+  pause_automation: "Pausing the automation",
+  resume_automation: "Resuming the automation",
+  find_leads_nearby: "Sweeping the area for leads",
+  preview_campaign: "Previewing the campaign",
+  run_weekly_digest: "Writing the weekly digest",
+  run_churn_scan: "Scanning for churn risk",
+  save_website_project: "Updating Website Progress",
+  apply_project_template: "Seeding from the template",
 };
 
 /** The human label the streaming UI shows while `name` is running. */

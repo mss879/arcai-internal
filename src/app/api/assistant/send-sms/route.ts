@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { revalidatePath } from "next/cache";
 
-import { getProfile } from "@/lib/auth";
+import { getAssistantProfile } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { sendSms } from "@/lib/sms";
 import { SMS_MAX_LENGTH, countSmsSegments, normalizePhone } from "@/lib/sms-utils";
@@ -16,7 +16,7 @@ export const runtime = "nodejs";
  * Every attempt is logged to sms_messages so it shows up in SMS → History.
  */
 export async function POST(request: Request) {
-  const profile = await getProfile();
+  const profile = await getAssistantProfile();
   if (!profile) {
     return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
   }

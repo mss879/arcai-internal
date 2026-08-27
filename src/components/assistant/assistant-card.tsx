@@ -4,12 +4,15 @@ import * as React from "react";
 import {
   AlertCircle,
   Check,
+  CheckCircle2,
   Download,
   Eye,
   FileText,
+  ListChecks,
   Loader2,
   Mail,
   MessageSquareText,
+  Play,
   ScrollText,
   Send,
 } from "lucide-react";
@@ -233,6 +236,117 @@ function ConfirmSend({
 }
 
 /** A pending SMS the user must confirm — recipient, message, then Send. */
+/**
+ * A mission Arcus has planned but not started (0103).
+ *
+ * The plan is shown in full BEFORE anything runs, for the same reason a
+ * confirm card shows the recipients before an email goes: you should be able
+ * to see exactly what was about to happen and say no. Approving posts to the
+ * approve route with the user's own session — there is no tool that starts a
+ * mission, so the model can propose this plan and never authorise it.
+ */
+function MissionPlanBody({
+  mission,
+  resolution,
+  onApprove,
+}: {
+  mission: {
+    id: string;
+    title: string;
+    goal: string;
+    steps: { n: number; title: string }[];
+  };
+  resolution?: CardResolution;
+  onApprove?: (missionId: string) => Promise<SendInvoiceResult>;
+}) {
+  const [localState, setLocalState] = React.useState<SendState>("idle");
+  const [localError, setLocalError] = React.useState<string | null>(null);
+  const state = resolution?.state ?? localState;
+  const error = resolution?.error ?? localError;
+
+  const approve = async () => {
+    if (!onApprove) return;
+    setLocalState("sending");
+    setLocalError(null);
+    const res = await onApprove(mission.id);
+    if (res.ok) {
+      setLocalState("sent");
+    } else {
+      setLocalError(res.error || "Could not start it.");
+      setLocalState("error");
+    }
+  };
+
+  return (
+    <>
+      <div className="flex items-center gap-2.5">
+        <div className="grid h-9 w-9 place-items-center rounded-xl bg-primary-50 text-primary-600">
+          <ListChecks className="h-4.5 w-4.5" />
+        </div>
+        <div className="min-w-0 leading-tight">
+          <p className="truncate text-sm font-semibold text-slate-900">
+            {mission.title}
+          </p>
+          <p className="text-[11px] text-slate-400">
+            {mission.steps.length} steps · nothing has started
+          </p>
+        </div>
+      </div>
+
+      <ol className="mt-3 space-y-1.5">
+        {mission.steps.map((step) => (
+          <li key={step.n} className="flex gap-2 text-[13px] text-slate-600">
+            <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-slate-100 text-[11px] font-semibold text-slate-500">
+              {step.n}
+            </span>
+            <span className="min-w-0">{step.title}</span>
+          </li>
+        ))}
+      </ol>
+
+      {error && (
+        <p className="mt-2 flex items-start gap-1.5 text-[12px] text-rose-600">
+          <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          {error}
+        </p>
+      )}
+
+      {state === "sent" ? (
+        <p className="mt-3 flex items-center gap-1.5 text-[13px] font-medium text-emerald-600">
+          <CheckCircle2 className="h-4 w-4" />
+          Off it goes — I&apos;ll report back.
+        </p>
+      ) : (
+        onApprove && (
+          <button
+            onClick={approve}
+            disabled={state === "sending"}
+            className={cn(
+              "mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white transition",
+              "hover:bg-primary-700 active:scale-[0.98] disabled:opacity-60",
+            )}
+          >
+            {state === "sending" ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Starting…
+              </>
+            ) : (
+              <>
+                <Play className="h-4 w-4" />
+                {state === "error" ? "Try again" : "Approve and run"}
+              </>
+            )}
+          </button>
+        )
+      )}
+      <p className="mt-2 text-[11px] text-slate-400">
+        Anything meant for a client still waits for your Send afterwards.
+      </p>
+    </>
+  );
+}
+
 function ConfirmSendSms({
   sms,
   resolution,
@@ -500,6 +614,7 @@ export function AssistantCardView({
   onSend,
   onSendSms,
   onOpenPreview,
+  onApproveMission,
 }: {
   card: AssistantCard;
   onSend: (
@@ -508,6 +623,12 @@ export function AssistantCardView({
     message?: string,
   ) => Promise<SendInvoiceResult>;
   onSendSms: (sms: SmsCardData) => Promise<SendInvoiceResult>;
+  /**
+   * Approve a planned mission. Omitted on surfaces that cannot start one —
+   * the card then shows the plan without an Approve button rather than a
+   * button that would do nothing.
+   */
+  onApproveMission?: (missionId: string) => Promise<SendInvoiceResult>;
   /**
    * Show this card's document in the preview canvas. Given the artifact id
    * from `cardArtifactId()`. Omitted on a surface with no canvas, and the
@@ -530,6 +651,13 @@ export function AssistantCardView({
       )}
       {card.type === "proposal" && (
         <ProposalBody proposal={card.proposal} onOpen={openPreview} />
+      )}
+      {card.type === "mission_plan" && (
+        <MissionPlanBody
+          mission={card.mission}
+          resolution={card.resolution}
+          onApprove={onApproveMission}
+        />
       )}
       {(card.type === "invoice" || card.type === "confirm_send") && (
         <>

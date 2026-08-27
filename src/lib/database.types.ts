@@ -53,7 +53,9 @@ export type NotificationType =
   | "mention"
   | "assignment"
   | "commission"
-  | "system";
+  | "system"
+  // 0102 — a briefing or a nudge from Arcus.
+  | "assistant";
 export type SmsKind =
   | "custom"
   | "payment_reminder"
@@ -343,6 +345,70 @@ export type WaLessonStatus = "pending" | "approved" | "rejected";
 
 // 0076 — revival of aged dead threads
 export type WaRevivalStatus = "queued" | "sent" | "replied" | "skipped" | "failed";
+
+// 0101 — Arcus foundation: server-side threads, memories and per-member config
+export type AssistantThreadKind = "chat" | "briefing" | "mission";
+export type AssistantRole = "user" | "assistant";
+export type AssistantMemoryKind = "instruction" | "preference" | "fact";
+export type AssistantMemorySource = "user" | "mined";
+export type AssistantMemoryStatus = "active" | "pending" | "rejected" | "archived";
+export type AssistantVerbosity = "brief" | "normal" | "detailed";
+/**
+ * Which voice loop is in use (0104).
+ *
+ * `classic` records with MediaRecorder, transcribes, streams a reply and
+ * speaks it — four round trips, works everywhere. `realtime` opens a WebRTC
+ * speech-to-speech session straight to OpenAI: far lower latency and real
+ * barge-in, but metered per audio minute, so it stays opt-in.
+ */
+export type AssistantVoiceEngine = "classic" | "realtime";
+
+// 0102 — the proactive events feed
+export type AssistantEventKind = "info" | "warning" | "win" | "action";
+export type AssistantEventStatus = "new" | "surfaced" | "dismissed" | "done";
+
+// 0103 — missions and the approvals tray
+export type MissionStatus =
+  | "proposed"
+  | "approved"
+  | "running"
+  | "waiting_approval"
+  | "paused"
+  | "completed"
+  | "failed"
+  | "cancelled";
+export type MissionStepStatus =
+  | "pending"
+  | "running"
+  | "done"
+  | "failed"
+  | "skipped";
+/** One entry of a mission's plan, as stored in `assistant_missions.plan`. */
+export type MissionStep = {
+  n: number;
+  title: string;
+  status: MissionStepStatus;
+  note?: string;
+};
+/**
+ * What is waiting for a human's OK.
+ *
+ * 0103 shipped the two things that could reach a client — an email and an
+ * SMS. 0104 adds the two that can spend money or arm a live sender: starting
+ * a campaign, and starting an engine (a research run, a scan, a recipe).
+ * Same tray, same "nothing happens until you tap it" contract.
+ */
+export type AssistantApprovalKind =
+  | "invoice_email"
+  | "sms"
+  | "campaign_launch"
+  | "engine_start";
+export type AssistantApprovalStatus =
+  | "pending"
+  | "sent"
+  | "declined"
+  | "failed"
+  | "expired";
 // 0077 — campaign first-reply A/B
 export type WaFirstReplyVariant = "a" | "b";
 export type AutomationRunStatus =
@@ -2056,6 +2122,10 @@ export type Database = {
           address: string;
           phone: string;
           website: string;
+          // 0104 — from the Places `location` field mask, for the map panel.
+          // Null forever for Firecrawl-found and pre-0104 candidates.
+          lat: number | null;
+          lng: number | null;
           rating: number | null;
           rating_count: number;
           website_verdict: ProspectVerdict;
@@ -2080,6 +2150,8 @@ export type Database = {
           address?: string;
           phone?: string;
           website?: string;
+          lat?: number | null;
+          lng?: number | null;
           rating?: number | null;
           rating_count?: number;
           website_verdict?: ProspectVerdict;
@@ -2280,6 +2352,11 @@ export type Database = {
           token_hash: string;
           label: string;
           user_agent: string | null;
+          /**
+           * 0104 — the one machine Arcus lives on: no idle logout, always
+           * listening. At most one row per user carries it.
+           */
+          is_terminal: boolean;
           created_at: Timestamp;
           last_used_at: Timestamp | null;
         };
@@ -2289,6 +2366,7 @@ export type Database = {
           token_hash: string;
           label?: string;
           user_agent?: string | null;
+          is_terminal?: boolean;
           created_at?: Timestamp;
           last_used_at?: Timestamp | null;
         };
@@ -3952,6 +4030,290 @@ export type Database = {
           updated_at?: Timestamp;
         };
         Update: Partial<Database["public"]["Tables"]["wa_revival"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0101 — Arcus foundation
+      assistant_threads: {
+        Row: {
+          /** Client-minted ("thread-…") or server-minted ("briefing-…") — text on purpose. */
+          id: string;
+          user_id: UUID;
+          title: string;
+          kind: AssistantThreadKind;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+          /** Tombstone — set instead of deleting, so stale caches can't resurrect it. */
+          deleted_at: Timestamp | null;
+        };
+        Insert: {
+          id: string;
+          user_id: UUID;
+          title?: string;
+          kind?: AssistantThreadKind;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+          deleted_at?: Timestamp | null;
+        };
+        Update: Partial<Database["public"]["Tables"]["assistant_threads"]["Insert"]>;
+        Relationships: [];
+      };
+      assistant_messages: {
+        Row: {
+          id: string;
+          thread_id: string;
+          user_id: UUID;
+          role: AssistantRole;
+          content: string;
+          /** Epoch milliseconds — AssistantMessage.at verbatim; the merge sorts on it. */
+          at: number;
+          /** {events, cards, artifacts, steps, error} — the message's UI payload. */
+          payload: Record<string, unknown>;
+        };
+        Insert: {
+          id: string;
+          thread_id: string;
+          user_id: UUID;
+          role: AssistantRole;
+          content?: string;
+          at: number;
+          payload?: Record<string, unknown>;
+        };
+        Update: Partial<Database["public"]["Tables"]["assistant_messages"]["Insert"]>;
+        Relationships: [];
+      };
+      assistant_memories: {
+        Row: {
+          id: UUID;
+          user_id: UUID;
+          kind: AssistantMemoryKind;
+          content: string;
+          source: AssistantMemorySource;
+          /** 'user' rows are born active; 'mined' rows wait at pending for approval. */
+          status: AssistantMemoryStatus;
+          evidence: Record<string, unknown>;
+          decided_by: UUID | null;
+          decided_at: Timestamp | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          user_id: UUID;
+          kind: AssistantMemoryKind;
+          content: string;
+          source?: AssistantMemorySource;
+          status?: AssistantMemoryStatus;
+          evidence?: Record<string, unknown>;
+          decided_by?: UUID | null;
+          decided_at?: Timestamp | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["assistant_memories"]["Insert"]>;
+        Relationships: [];
+      };
+      assistant_config: {
+        Row: {
+          user_id: UUID;
+          persona_name: string;
+          tone: string;
+          verbosity: AssistantVerbosity;
+          voice_style: string;
+          hands_free: boolean;
+          wake_word: boolean;
+          // 0104 — persona + the command terminal's ambient layer.
+          /** What it calls them: "sir", "boss", "" for none. */
+          honorific: string;
+          /** Spoken the instant the wake word lands. */
+          wake_ack: string;
+          voice_engine: AssistantVoiceEngine;
+          ambient_stage: boolean;
+          ambient_voice: boolean;
+          /** Spoken-alert budget — separate from the push nudge quota. */
+          ambient_spoken_on: string | null;
+          ambient_spoken_count: number;
+          timezone: string;
+          briefing_enabled: boolean;
+          /** "HH:MM" local to `timezone`. */
+          briefing_time: string;
+          quiet_start: string;
+          quiet_end: string;
+          nudges_per_day: number;
+          // CAS claim stamps — conditional updates on these decide which tick wins.
+          briefing_sent_for: string | null;
+          briefing_job_id: string | null;
+          briefing_job_started_at: Timestamp | null;
+          memories_mined_for: string | null;
+          nudges_sent_on: string | null;
+          nudge_count: number;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          user_id: UUID;
+          persona_name?: string;
+          tone?: string;
+          verbosity?: AssistantVerbosity;
+          voice_style?: string;
+          hands_free?: boolean;
+          wake_word?: boolean;
+          honorific?: string;
+          wake_ack?: string;
+          voice_engine?: AssistantVoiceEngine;
+          ambient_stage?: boolean;
+          ambient_voice?: boolean;
+          ambient_spoken_on?: string | null;
+          ambient_spoken_count?: number;
+          timezone?: string;
+          briefing_enabled?: boolean;
+          briefing_time?: string;
+          quiet_start?: string;
+          quiet_end?: string;
+          nudges_per_day?: number;
+          briefing_sent_for?: string | null;
+          briefing_job_id?: string | null;
+          briefing_job_started_at?: Timestamp | null;
+          memories_mined_for?: string | null;
+          nudges_sent_on?: string | null;
+          nudge_count?: number;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["assistant_config"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0102 — the proactive events feed
+      assistant_events: {
+        Row: {
+          id: UUID;
+          /** null = the whole workspace, which is most of them. */
+          user_id: UUID | null;
+          source: string;
+          kind: AssistantEventKind;
+          title: string;
+          body: string | null;
+          href: string | null;
+          /** 1 trivia · 2 briefing-worthy · 3 interrupt today · 4 interrupt now. */
+          importance: number;
+          /** Same condition twice = one row. Unique where not null. */
+          dedupe_key: string | null;
+          payload: Record<string, unknown>;
+          status: AssistantEventStatus;
+          /** Where it has already been shown: 'nudge', 'briefing'. */
+          surfaced_via: string[];
+          created_at: Timestamp;
+          expires_at: Timestamp | null;
+        };
+        Insert: {
+          id?: UUID;
+          user_id?: UUID | null;
+          source: string;
+          kind?: AssistantEventKind;
+          title: string;
+          body?: string | null;
+          href?: string | null;
+          importance?: number;
+          dedupe_key?: string | null;
+          payload?: Record<string, unknown>;
+          status?: AssistantEventStatus;
+          surfaced_via?: string[];
+          created_at?: Timestamp;
+          expires_at?: Timestamp | null;
+        };
+        Update: Partial<Database["public"]["Tables"]["assistant_events"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0103 — missions, approvals, run log
+      assistant_missions: {
+        Row: {
+          id: UUID;
+          user_id: UUID;
+          thread_id: string | null;
+          title: string;
+          goal: string;
+          plan: MissionStep[];
+          status: MissionStatus;
+          /** Lease cursor — a tick claims by pushing this forward. */
+          due_at: Timestamp | null;
+          attempts: number;
+          steps_done: number;
+          max_steps: number;
+          result: Record<string, unknown> | null;
+          error: string | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          user_id: UUID;
+          thread_id?: string | null;
+          title: string;
+          goal: string;
+          plan?: MissionStep[];
+          status?: MissionStatus;
+          due_at?: Timestamp | null;
+          attempts?: number;
+          steps_done?: number;
+          max_steps?: number;
+          result?: Record<string, unknown> | null;
+          error?: string | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["assistant_missions"]["Insert"]>;
+        Relationships: [];
+      };
+      assistant_approvals: {
+        Row: {
+          id: UUID;
+          user_id: UUID;
+          mission_id: UUID | null;
+          thread_id: string | null;
+          kind: AssistantApprovalKind;
+          /** The exact AssistantCard the tool produced. */
+          card: Record<string, unknown>;
+          status: AssistantApprovalStatus;
+          error: string | null;
+          decided_at: Timestamp | null;
+          created_at: Timestamp;
+          expires_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          user_id: UUID;
+          mission_id?: UUID | null;
+          thread_id?: string | null;
+          kind: AssistantApprovalKind;
+          card: Record<string, unknown>;
+          status?: AssistantApprovalStatus;
+          error?: string | null;
+          decided_at?: Timestamp | null;
+          created_at?: Timestamp;
+          expires_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["assistant_approvals"]["Insert"]>;
+        Relationships: [];
+      };
+      assistant_run_logs: {
+        Row: {
+          id: UUID;
+          mission_id: UUID | null;
+          tool: string;
+          args: Record<string, unknown>;
+          ok: boolean;
+          result: string | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          mission_id?: UUID | null;
+          tool: string;
+          args?: Record<string, unknown>;
+          ok?: boolean;
+          result?: string | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["assistant_run_logs"]["Insert"]>;
         Relationships: [];
       };
     };

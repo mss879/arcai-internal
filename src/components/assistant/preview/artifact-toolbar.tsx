@@ -197,7 +197,7 @@ export function ArtifactToolbar({
             size="sm"
             variant="outline"
             onClick={() => onPrompt(`Revise this: ${artifact.title}`)}
-            aria-label="Ask Arc to revise this"
+            aria-label="Ask Arcus to revise this"
           >
             <RefreshCw className="h-3.5 w-3.5" />
             {showLabels && <span>Revise</span>}

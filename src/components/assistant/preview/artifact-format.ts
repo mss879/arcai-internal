@@ -40,6 +40,7 @@ import {
   PackageCheck,
   Pencil,
   Plus,
+  Radar,
   RefreshCw,
   ScrollText,
   Send,
@@ -163,6 +164,15 @@ export function deltaTone(delta: number): ArtifactTone {
 // ---- Tone ----------------------------------------------------------------
 
 /** Pill classes per tone (background + text + ring, for `ring-1 ring-inset`). */
+/** The same tone pills on the dark command stage (0104). */
+export const TONE_PILL_STAGE: Record<ArtifactTone, string> = {
+  neutral: "bg-white/10 text-slate-300 ring-white/15",
+  positive: "bg-emerald-500/15 text-emerald-300 ring-emerald-500/30",
+  warning: "bg-amber-500/15 text-amber-300 ring-amber-500/30",
+  danger: "bg-rose-500/15 text-rose-300 ring-rose-500/30",
+  info: "bg-sky-500/15 text-sky-300 ring-sky-500/30",
+};
+
 export const TONE_PILL: Record<ArtifactTone, string> = {
   neutral: "bg-slate-100 text-slate-600 ring-slate-200",
   positive: "bg-emerald-50 text-emerald-700 ring-emerald-200",
@@ -257,6 +267,8 @@ const KIND_ICON: Record<ArtifactKind, LucideIcon> = {
   page: Globe,
   invoice: FileText,
   proposal: ScrollText,
+  briefing: Sparkles,
+  scan: Radar,
 };
 
 /** The area an artifact belongs to, inferred from its kind when unset. */
@@ -264,6 +276,7 @@ export function artifactArea(artifact: Artifact): AppArea {
   if (artifact.area) return artifact.area;
   if (artifact.kind === "invoice") return "invoices";
   if (artifact.kind === "proposal") return "proposals";
+  if (artifact.kind === "scan") return "crm";
   return "workspace";
 }
 

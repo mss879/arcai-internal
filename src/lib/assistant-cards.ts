@@ -106,4 +106,22 @@ export type AssistantCard =
    */
   | { type: "confirm_send_sms"; sms: SmsCardData; resolution?: CardResolution }
   /** A saved proposal shown for review, with a PDF download (no send action). */
-  | { type: "proposal"; proposal: ProposalCardData };
+  | { type: "proposal"; proposal: ProposalCardData }
+  /**
+   * A mission Arcus has planned but not started (0103).
+   *
+   * The same shape of promise as a confirm card: it shows exactly what would
+   * happen, and nothing happens until a person taps Approve. Approval goes
+   * through an HTTP route, never a tool, so the model can propose a plan but
+   * can never authorise its own.
+   */
+  | {
+      type: "mission_plan";
+      mission: {
+        id: string;
+        title: string;
+        goal: string;
+        steps: { n: number; title: string }[];
+      };
+      resolution?: CardResolution;
+    };

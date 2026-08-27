@@ -125,7 +125,7 @@ const CORE_COMMANDS: Omit<AssistantCommand, "id">[] = [
   },
   {
     label: "What can you do",
-    hint: "Everything Arc has access to",
+    hint: "Everything Arcus has access to",
     icon: Command,
     insert: "What can you do?",
     send: true,
@@ -538,8 +538,8 @@ export function Composer({
               onClick={syncCaret}
               onSelect={syncCaret}
               onKeyDown={onKeyDown}
-              placeholder={listening ? "Listening…" : "Ask Arc anything — or type / for commands"}
-              aria-label="Message Arc"
+              placeholder={listening ? "Listening…" : "Ask Arcus anything — or type / for commands"}
+              aria-label="Message Arcus"
               role="combobox"
               aria-expanded={paletteOpen || mentionOpen}
               aria-controls={paletteOpen || mentionOpen ? listboxId : undefined}
@@ -579,7 +579,7 @@ export function Composer({
               <button
                 type="button"
                 onClick={onCancel}
-                aria-label="Stop Arc"
+                aria-label="Stop Arcus"
                 className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-slate-200 text-slate-700 transition hover:bg-slate-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-300"
               >
                 <Square className="h-4 w-4" fill="currentColor" />

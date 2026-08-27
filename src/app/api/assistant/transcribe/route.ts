@@ -1,13 +1,13 @@
 import { NextResponse } from "next/server";
 
-import { getProfile } from "@/lib/auth";
+import { getAssistantProfile } from "@/lib/auth";
 import { isOpenAIConfigured, openaiTranscribe } from "@/lib/ai/openai";
 
 export const runtime = "nodejs";
 
 /** POST audio (multipart "audio") -> { text }. Speech-to-text via OpenAI. */
 export async function POST(request: Request) {
-  const profile = await getProfile();
+  const profile = await getAssistantProfile();
   if (!profile) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }

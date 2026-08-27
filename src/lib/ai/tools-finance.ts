@@ -30,8 +30,10 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { ToolSchema } from "@/lib/ai/openai";
+import { draftNotice, isNoticeAIConfigured } from "@/lib/ai/notice";
 import type { ToolContext, ToolResult } from "@/lib/ai/tools";
 import type { InvoiceCardData } from "@/lib/assistant-cards";
+import { nextNoticeNumber } from "@/lib/notice";
 import type {
   AppArea,
   Artifact,
@@ -268,6 +270,72 @@ export const FINANCE_TOOLS: ToolSchema[] = [
           },
         },
         required: ["kind", "reference"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "create_notice",
+      description:
+        "Write and file a formal client notice under /notices — the invoice-shaped letters the user normally dictates there. Pass what the notice is about in the user's own rough words; the writer turns it into formal prose and it is SAVED, never sent. Use for 'write a notice to Silva about the late payment', 'file a notice that hosting renews next month'. Sending stays on the Notices page where the user presses Send themselves.",
+      parameters: {
+        type: "object",
+        properties: {
+          about: {
+            type: "string",
+            description:
+              "What the notice should say, as close to the user's own words as possible — the writer formalises it.",
+          },
+          to_name: {
+            type: "string",
+            description:
+              "Who it addresses. A saved client's name fills their details onto the letter automatically.",
+          },
+          subject: {
+            type: "string",
+            description: "Subject line, only when the user states one — otherwise the writer titles it.",
+          },
+          notice_date: { type: "string", description: "ISO date (YYYY-MM-DD). Defaults to today." },
+        },
+        required: ["about", "to_name"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "create_quote",
+      description:
+        "Create a formal quote under /quotes with numbered line items — the document a lead signs before work starts. Each line needs a description and its amount; the quote number continues the Q-YYYY-NNN sequence automatically. Use for 'quote Nimal 250,000 for the website and 45,000 for hosting'. Creating is not sending: the quote sits on the Quotes page with its share link until the user sends it themselves. Never invent an amount — use figures the user stated or get_pricing returned.",
+      parameters: {
+        type: "object",
+        properties: {
+          customer_name: { type: "string", description: "Who the quote is for." },
+          title: { type: "string", description: "Short title, e.g. 'Website build — Sunrise Bakery'." },
+          items: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                item: { type: "string", description: "The service or product name." },
+                description: { type: "string", description: "Extra detail for the line, if any." },
+                amount: { type: "number", description: "The line's total in LKR." },
+              },
+              required: ["item", "amount"],
+              additionalProperties: false,
+            },
+            description: "One entry per priced line.",
+          },
+          customer_email: { type: "string", description: "Their email, if known." },
+          customer_phone: { type: "string", description: "Their phone, if known." },
+          discount: { type: "number", description: "Flat discount off the subtotal, in LKR." },
+          valid_until: { type: "string", description: "ISO date the quote expires, if stated." },
+          notes: { type: "string", description: "Notes printed on the quote." },
+        },
+        required: ["customer_name", "items"],
         additionalProperties: false,
       },
     },
@@ -2581,7 +2649,203 @@ export async function executeFinanceTool(
       return recordExpense(args, ctx);
     case "mark_money_received":
       return markMoneyReceived(args, ctx);
+    case "create_notice":
+      return createNotice(args, ctx);
+    case "create_quote":
+      return createQuote(args, ctx);
     default:
       return null;
   }
+}
+
+// ---- create_notice / create_quote (Phase 0 writes) ------------------------
+
+/**
+ * File a notice the way /notices does: AI formalises the user's rough words,
+ * the number continues the past sequence, and the row is SAVED — the send
+ * button stays on the Notices page.
+ */
+async function createNotice(
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+): Promise<ToolResult> {
+  const { supabase } = ctx;
+  const about = String(args.about ?? "").trim();
+  const toName = String(args.to_name ?? "").trim();
+  if (!about || about.length < 12)
+    return {
+      content: {
+        ok: false,
+        error: "Say what the notice is about — a sentence or two in the user's words.",
+      },
+    };
+  if (!toName)
+    return { content: { ok: false, error: "Say who the notice is addressed to." } };
+  if (!isNoticeAIConfigured())
+    return {
+      content: { ok: false, error: "AI writing isn't configured. Add OPENAI_API_KEY." },
+    };
+
+  // A saved client's details go under their name on the letter, exactly as
+  // the generator page fills them.
+  const { data: clients } = await supabase
+    .from("clients")
+    .select("name, company, email, phone")
+    .or(`name.ilike.%${toName}%,company.ilike.%${toName}%`)
+    .limit(1);
+  const client = clients?.[0] ?? null;
+  const toDetails = client
+    ? [client.company, client.email, client.phone].filter(Boolean).join("\n")
+    : "";
+
+  let drafted: { subject: string; body: string };
+  try {
+    drafted = await draftNotice({
+      rawInput: about,
+      toName: client?.name ?? toName,
+      subject: String(args.subject ?? "").trim() || undefined,
+    });
+  } catch (err) {
+    return {
+      content: {
+        ok: false,
+        error: `The writer couldn't draft it: ${(err as Error).message}`,
+      },
+    };
+  }
+
+  const { data: past } = await supabase.from("notices").select("notice_number");
+  const noticeNumber = nextNoticeNumber((past ?? []).map((n) => n.notice_number));
+  const noticeDate =
+    String(args.notice_date ?? "").trim() || ctx.today;
+
+  const { data: saved, error } = await supabase
+    .from("notices")
+    .insert({
+      notice_number: noticeNumber,
+      notice_date: noticeDate,
+      to_name: client?.name ?? toName,
+      to_details: toDetails,
+      subject: drafted.subject,
+      body: drafted.body,
+      source_input: about,
+      created_by: ctx.userId,
+    })
+    .select("id")
+    .single();
+  if (error) return { content: { ok: false, error: error.message } };
+
+  return {
+    content: {
+      ok: true,
+      notice_id: saved.id,
+      notice_number: noticeNumber,
+      to: client?.name ?? toName,
+      subject: drafted.subject,
+      body: drafted.body,
+      note: "Filed under Past notices — NOT sent. Read the subject back; the user sends it from the Notices page when they are ready.",
+    },
+    event: {
+      kind: "created",
+      label: `Notice ${noticeNumber} — ${client?.name ?? toName}`,
+      href: "/notices",
+    },
+  };
+}
+
+/** Create a quote the way /quotes does, numbering it Q-YYYY-NNN in sequence. */
+async function createQuote(
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+): Promise<ToolResult> {
+  const { supabase } = ctx;
+  const customer = String(args.customer_name ?? "").trim();
+  if (!customer)
+    return { content: { ok: false, error: "Say who the quote is for." } };
+
+  const rawItems = Array.isArray(args.items) ? args.items : [];
+  const items = rawItems
+    .map((raw) => {
+      const it = raw as Record<string, unknown>;
+      const amount = Number(it.amount);
+      return {
+        item: String(it.item ?? "").trim(),
+        description: String(it.description ?? "").trim(),
+        qty: "1",
+        rate: String(Number.isFinite(amount) ? amount : 0),
+        total: Number.isFinite(amount) ? amount : 0,
+      };
+    })
+    .filter((it) => it.item && it.total > 0);
+  if (!items.length)
+    return {
+      content: {
+        ok: false,
+        error: "Every line needs a name and a real amount. Nothing was saved.",
+      },
+    };
+
+  // Attach the customer when they are already in the workspace, so the quote
+  // shows up against their record.
+  const { data: clients } = await supabase
+    .from("clients")
+    .select("id, name, email, phone")
+    .or(`name.ilike.%${customer}%,company.ilike.%${customer}%`)
+    .limit(1);
+  const client = clients?.[0] ?? null;
+
+  const subtotal = items.reduce((sum, it) => sum + it.total, 0);
+  const discount = Math.max(0, Number(args.discount) || 0);
+  const grandTotal = Math.max(0, subtotal - discount);
+
+  // Same numbering rule as the Quotes page: count + 1 within this year.
+  const { count } = await supabase
+    .from("quotes")
+    .select("*", { count: "exact", head: true });
+  const quoteNumber = `Q-${new Date().getFullYear()}-${String((count ?? 0) + 1).padStart(3, "0")}`;
+
+  const { data: saved, error } = await supabase
+    .from("quotes")
+    .insert({
+      quote_number: quoteNumber,
+      title: String(args.title ?? "").trim() || `Quote for ${client?.name ?? customer}`,
+      customer_name: client?.name ?? customer,
+      customer_email:
+        String(args.customer_email ?? "").trim() || client?.email || null,
+      customer_phone:
+        String(args.customer_phone ?? "").trim() || client?.phone || null,
+      client_id: client?.id ?? null,
+      items,
+      subtotal,
+      discount,
+      tax_rate: 0,
+      tax_amount: 0,
+      grand_total: grandTotal,
+      currency: "LKR",
+      valid_until: String(args.valid_until ?? "").trim() || null,
+      notes: String(args.notes ?? "").trim() || null,
+    })
+    .select("id, quote_number, share_token")
+    .single();
+  if (error) return { content: { ok: false, error: error.message } };
+
+  return {
+    content: {
+      ok: true,
+      quote_id: saved.id,
+      quote_number: saved.quote_number,
+      customer: client?.name ?? customer,
+      lines: items.map((it) => ({ item: it.item, amount: it.total })),
+      subtotal,
+      ...(discount ? { discount } : {}),
+      grand_total: grandTotal,
+      currency: "LKR",
+      note: "Saved under Quotes — NOT sent. Read the total back; the user shares or sends it from the Quotes page themselves.",
+    },
+    event: {
+      kind: "created",
+      label: `Quote ${saved.quote_number} — ${client?.name ?? customer}`,
+      href: "/quotes",
+    },
+  };
 }

@@ -168,7 +168,7 @@ export function ActivityTrail({
     return (
       <div
         aria-live="polite"
-        aria-label="What Arc is doing"
+        aria-label="What Arcus is doing"
         className={cn(
           "space-y-1.5 rounded-2xl border border-slate-200/70 bg-white/70 px-3.5 py-2.5",
           className,

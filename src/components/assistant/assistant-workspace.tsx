@@ -27,8 +27,12 @@ import {
   Loader2,
   Minimize2,
   PanelLeftClose,
+  LayoutPanelLeft,
   PanelRight,
   PanelRightClose,
+  Radio,
+  Scan,
+  Settings2,
   Sparkles,
   Volume2,
   VolumeX,
@@ -42,8 +46,11 @@ import type { AssistantMessage } from "@/lib/assistant-threads";
 import type { SmsCardData } from "@/lib/assistant-cards";
 import { AssistantCardView } from "@/components/assistant/assistant-card";
 import { ActivityTrail } from "@/components/assistant/activity-trail";
+import { ApprovalsTray } from "@/components/assistant/approvals-tray";
 import { Composer } from "@/components/assistant/composer";
+import { StudioSettings } from "@/components/assistant/studio-settings";
 import { ThreadRail } from "@/components/assistant/thread-rail";
+import { CommandView } from "@/components/assistant/command/command-view";
 import { PreviewPane } from "@/components/assistant/preview/preview-pane";
 import { artifactIcon } from "@/components/assistant/preview/artifact-format";
 import { clearPdfCache } from "@/components/assistant/preview/pdf-artifact";
@@ -52,6 +59,7 @@ import type {
   Status,
   VoiceChat,
 } from "@/components/assistant/use-voice-chat";
+import type { WakeWordState } from "@/components/assistant/use-wake-word";
 import {
   CANVAS_MAX_RATIO,
   CANVAS_MIN_PX,
@@ -61,10 +69,12 @@ import {
   RAIL_INLINE_MIN_PX,
   RAIL_PX,
   readLayout,
+  readView,
   STUDIO_KEYS,
   STUDIO_SUGGESTIONS,
   useReducedMotionSafe,
   writePref,
+  type StudioView,
 } from "@/components/assistant/studio-store";
 
 /** How many preview tabs a single conversation may keep open. */
@@ -76,6 +86,10 @@ const PIN_TOLERANCE_PX = 120;
 
 const ICON_BUTTON =
   "grid h-9 w-9 place-items-center rounded-xl text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-300";
+
+/** The same button on the command view's dark chrome. */
+const ICON_BUTTON_DARK =
+  "grid h-9 w-9 place-items-center rounded-xl text-slate-400 transition hover:bg-white/10 hover:text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400";
 
 const FOCUSABLE =
   '[href],button:not([disabled]),textarea,input,select,[tabindex]:not([tabindex="-1"])';
@@ -125,6 +139,7 @@ type ConversationProps = {
     message?: string,
   ) => Promise<SendInvoiceResult>;
   onSendSms: (sms: SmsCardData) => Promise<SendInvoiceResult>;
+  onApproveMission: (missionId: string) => Promise<SendInvoiceResult>;
   className?: string;
 };
 
@@ -142,6 +157,7 @@ function ConversationImpl({
   onNavigate,
   onSendInvoice,
   onSendSms,
+  onApproveMission,
   className,
 }: ConversationProps): React.ReactElement {
   const scrollRef = React.useRef<HTMLDivElement | null>(null);
@@ -283,6 +299,7 @@ function ConversationImpl({
                         card={card}
                         onSend={onSendInvoice}
                         onSendSms={onSendSms}
+                        onApproveMission={onApproveMission}
                         onOpenPreview={onOpenArtifact}
                       />
                     ))}
@@ -353,6 +370,16 @@ export type AssistantWorkspaceProps = {
   onClose: () => void;
   /** Artifact to select on open, when promoted from a dock chip. */
   initialArtifactId?: string | null;
+  /** What the assistant calls itself — drives the HUD nameplate. */
+  personaName?: string;
+  /** True while the wake-word recogniser is actually running. */
+  wakeListening?: boolean;
+  /** WHY it is or isn't — drives the rail's wake indicator. */
+  wakeState?: WakeWordState;
+  /** Prompt for the microphone and revive the recogniser. */
+  onWakeFix?: () => void;
+  isTerminal?: boolean;
+  ambientStage?: boolean;
 };
 
 /**
@@ -365,6 +392,12 @@ export function AssistantWorkspace({
   onDock,
   onClose,
   initialArtifactId,
+  personaName,
+  wakeListening,
+  wakeState,
+  onWakeFix,
+  isTerminal,
+  ambientStage,
 }: AssistantWorkspaceProps): React.ReactElement {
   const router = useRouter();
   const reduced = useReducedMotionSafe();
@@ -374,8 +407,15 @@ export function AssistantWorkspace({
 
   // ---- layout ------------------------------------------------------------
 
+  // Which surface is on screen. Server-rendered as "classic" and corrected in
+  // the mount effect below with every other stored preference — a first-render
+  // localStorage read would be a hydration mismatch, and guessing "command"
+  // here would flash the wrong layout for users who chose the other one.
+  const [view, setView] = React.useState<StudioView>("classic");
+
   const [railOpen, setRailOpen] = React.useState(true);
   const [canvasOpen, setCanvasOpen] = React.useState(true);
+  const [settingsOpen, setSettingsOpen] = React.useState(false);
   const [ratio, setRatio] = React.useState(0.46);
   const [expanded, setExpanded] = React.useState(false);
   const [panelWidth, setPanelWidth] = React.useState(0);
@@ -388,6 +428,18 @@ export function AssistantWorkspace({
     setRailOpen(layout.railOpen);
     setCanvasOpen(layout.canvasOpen);
     setRatio(layout.canvasRatio);
+    setView(readView());
+  }, []);
+
+  const command = view === "command";
+  const iconButton = command ? ICON_BUTTON_DARK : ICON_BUTTON;
+
+  const toggleView = React.useCallback(() => {
+    setView((prev) => {
+      const next: StudioView = prev === "command" ? "classic" : "command";
+      writePref(STUDIO_KEYS.view, next);
+      return next;
+    });
   }, []);
 
   React.useEffect(() => {
@@ -760,7 +812,7 @@ export function AssistantWorkspace({
       className="fixed inset-0 z-[70] flex"
       role="dialog"
       aria-modal="true"
-      aria-label="Arc Studio"
+      aria-label="Arcus Studio"
     >
       <motion.div
         aria-hidden
@@ -783,18 +835,40 @@ export function AssistantWorkspace({
             ? { duration: 0.12 }
             : { type: "spring", duration: 0.4, bounce: 0.12 }
         }
-        className="relative m-3 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-3xl border border-white/60 bg-white/90 shadow-[var(--shadow-lift)] backdrop-blur-2xl xl:m-6"
+        className={cn(
+          "relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
+          command
+            ? "bg-[#07060b]"
+            : "m-3 rounded-3xl border border-white/60 bg-white/90 shadow-[var(--shadow-lift)] backdrop-blur-2xl xl:m-6",
+        )}
       >
         {/* Top bar */}
-        <header className="flex h-14 shrink-0 items-center gap-3 border-b border-slate-200/70 bg-white/70 px-3 pr-2">
+        <header
+          className={cn(
+            "flex h-14 shrink-0 items-center gap-3 border-b px-3 pr-2",
+            command
+              ? "border-white/10 bg-white/[0.03]"
+              : "border-slate-200/70 bg-white/70",
+          )}
+        >
           <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl gradient-primary text-white">
             <Sparkles className="h-4.5 w-4.5" />
           </div>
           <div className="min-w-0 leading-tight">
-            <p className="truncate text-sm font-semibold text-slate-900">
-              Arc Studio
+            <p
+              className={cn(
+                "truncate text-sm font-semibold",
+                command ? "text-slate-100" : "text-slate-900",
+              )}
+            >
+              Arcus Studio
             </p>
-            <p className="truncate text-[11px] font-medium text-slate-500">
+            <p
+              className={cn(
+                "truncate text-[11px] font-medium",
+                command ? "text-slate-400" : "text-slate-500",
+              )}
+            >
               {statusLine}
             </p>
           </div>
@@ -802,36 +876,58 @@ export function AssistantWorkspace({
           <div className="ml-auto flex items-center gap-1">
             <button
               type="button"
-              onClick={toggleRail}
-              aria-label={showRail ? "Hide conversations" : "Show conversations"}
-              aria-pressed={showRail}
-              className={ICON_BUTTON}
+              onClick={toggleView}
+              aria-label={
+                command ? "Switch to the classic layout" : "Switch to command view"
+              }
+              aria-pressed={command}
+              title={command ? "Classic layout" : "Command view"}
+              className={iconButton}
             >
-              {showRail ? (
-                <PanelLeftClose className="h-4 w-4" />
+              {command ? (
+                <LayoutPanelLeft className="h-4 w-4" />
               ) : (
-                <PanelRight className="h-4 w-4 rotate-180" />
+                <Scan className="h-4 w-4" />
               )}
             </button>
-            <button
-              type="button"
-              onClick={toggleCanvas}
-              aria-label={showCanvas ? "Hide the preview" : "Show the preview"}
-              aria-pressed={showCanvas}
-              className={ICON_BUTTON}
-            >
-              {showCanvas ? (
-                <PanelRightClose className="h-4 w-4" />
-              ) : (
-                <PanelRight className="h-4 w-4" />
-              )}
-            </button>
+            {!command && (
+              <>
+                <button
+                  type="button"
+                  onClick={toggleRail}
+                  aria-label={
+                    showRail ? "Hide conversations" : "Show conversations"
+                  }
+                  aria-pressed={showRail}
+                  className={iconButton}
+                >
+                  {showRail ? (
+                    <PanelLeftClose className="h-4 w-4" />
+                  ) : (
+                    <PanelRight className="h-4 w-4 rotate-180" />
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={toggleCanvas}
+                  aria-label={showCanvas ? "Hide the preview" : "Show the preview"}
+                  aria-pressed={showCanvas}
+                  className={iconButton}
+                >
+                  {showCanvas ? (
+                    <PanelRightClose className="h-4 w-4" />
+                  ) : (
+                    <PanelRight className="h-4 w-4" />
+                  )}
+                </button>
+              </>
+            )}
             <button
               type="button"
               onClick={() => chat.setMuted((m) => !m)}
               aria-label={chat.muted ? "Unmute voice" : "Mute voice"}
               aria-pressed={chat.muted}
-              className={ICON_BUTTON}
+              className={iconButton}
             >
               {chat.muted ? (
                 <VolumeX className="h-4 w-4" />
@@ -839,26 +935,72 @@ export function AssistantWorkspace({
                 <Volume2 className="h-4 w-4" />
               )}
             </button>
+            {/* Hands-free: after each reply the mic reopens, so a
+                conversation continues without a tap (0104). */}
+            <button
+              type="button"
+              onClick={() => chat.setHandsFree(!chat.handsFree)}
+              aria-label={
+                chat.handsFree ? "Turn hands-free off" : "Turn hands-free on"
+              }
+              aria-pressed={chat.handsFree}
+              className={cn(
+                iconButton,
+                chat.handsFree &&
+                  (command
+                    ? "bg-emerald-400/15 text-emerald-300 hover:bg-emerald-400/25"
+                    : "bg-emerald-50 text-emerald-600 hover:bg-emerald-100"),
+              )}
+            >
+              <Radio className="h-4 w-4" />
+            </button>
+            <ApprovalsTray chat={chat} />
+            <button
+              type="button"
+              onClick={() => setSettingsOpen(true)}
+              aria-label="Arcus settings"
+              className={iconButton}
+            >
+              <Settings2 className="h-4 w-4" />
+            </button>
             <button
               type="button"
               onClick={onDock}
               aria-label="Shrink to the corner"
-              className={ICON_BUTTON}
+              className={iconButton}
             >
               <Minimize2 className="h-4 w-4" />
             </button>
             <button
               type="button"
               onClick={onClose}
-              aria-label="Close Arc Studio"
-              className={ICON_BUTTON}
+              aria-label="Close Arcus Studio"
+              className={iconButton}
             >
               <X className="h-4 w-4" />
             </button>
           </div>
         </header>
 
-        {/* Columns */}
+        {/* The stage. A second presentation of the same `chat`, so the header
+            toggle can never lose a thread, an artifact or a turn in flight. */}
+        {command ? (
+          <CommandView
+            chat={chat}
+            firstName={firstName}
+            personaName={personaName || "Arcus"}
+            onNavigate={onNavigate}
+            onPrompt={send}
+            composerRef={composerRef}
+            initialArtifactId={initialArtifactId}
+            wakeListening={wakeListening}
+            wakeState={wakeState}
+            onWakeFix={onWakeFix}
+            isTerminal={isTerminal}
+            ambientStage={ambientStage}
+          />
+        ) : (
+        /* Columns */
         <div className="relative flex min-h-0 min-w-0 flex-1">
           {/* Below 1280px of PANEL width the rail becomes a drawer; it owns
               its own scrim and positioning, so nothing is restyled here. */}
@@ -894,6 +1036,7 @@ export function AssistantWorkspace({
                 onNavigate={onNavigate}
                 onSendInvoice={chat.sendInvoice}
                 onSendSms={chat.sendSms}
+                onApproveMission={chat.approveMission}
               />
               <div className="shrink-0 border-t border-slate-200/70 bg-white/70 px-6 py-4">
                 <div className="mx-auto w-full max-w-[820px]">
@@ -962,7 +1105,10 @@ export function AssistantWorkspace({
             <div aria-hidden className="absolute inset-0 z-40 cursor-col-resize" />
           )}
         </div>
+        )}
       </motion.div>
+
+      <StudioSettings open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>
   );
 }

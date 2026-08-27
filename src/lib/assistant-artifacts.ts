@@ -18,6 +18,7 @@ import type {
   InvoiceCardData,
   ProposalCardData,
 } from "@/lib/assistant-cards";
+import type { ProspectScanStatus } from "@/lib/database.types";
 
 /** How a value should be rendered. */
 export type ArtifactFormat =
@@ -176,7 +177,58 @@ export type Artifact =
   /** A saved invoice, previewed as the actual PDF the client receives. */
   | (ArtifactBase & { kind: "invoice"; invoice: InvoiceCardData })
   /** A saved proposal, previewed as the actual branded PDF. */
-  | (ArtifactBase & { kind: "proposal"; proposal: ProposalCardData });
+  | (ArtifactBase & { kind: "proposal"; proposal: ProposalCardData })
+  /**
+   * The morning briefing (0102) — the one artifact Arcus writes without
+   * being asked. A headline, a few sections of real figures, and the
+   * priorities as chips that send themselves back as prompts, so reading the
+   * briefing and acting on it are the same gesture.
+   */
+  | (ArtifactBase & {
+      kind: "briefing";
+      headline: string;
+      /** What a voice reply reads aloud, if the user is in voice mode. */
+      spokenScript?: string;
+      sections: {
+        title: string;
+        lines: string[];
+        href?: string;
+        tone?: ArtifactTone;
+      }[];
+      priorities?: { label: string; prompt: string }[];
+    })
+  /**
+   * A Find Leads area scan, live (0104).
+   *
+   * The odd one out: every other artifact is a picture of something already
+   * finished, but a scan sweeps a town for minutes — far past the assistant's
+   * own turn budget. So this carries only the scan's id and a snapshot taken
+   * the moment it was created, and the renderer subscribes to the real rows
+   * for the rest. The tool that starts a scan therefore never has counts to
+   * report, which is exactly what it is told to say.
+   *
+   * The id is derived from `scanId` (`prospect-scan-<uuid>`) so that asking
+   * "how's the scan going" re-emits the *same* artifact and updates the panel
+   * already on screen, rather than stacking a second one beside it.
+   */
+  | (ArtifactBase & {
+      kind: "scan";
+      scanId: string;
+      /** What was true at emit time; the panel paints this until data lands. */
+      snapshot: {
+        status: ProspectScanStatus;
+        city: string;
+        country: string;
+        categories: string[];
+        max_results: number;
+        min_score: number;
+        found: number;
+        qualified: number;
+        skipped: number;
+        imported: number;
+        error?: string | null;
+      };
+    });
 
 export type ArtifactKind = Artifact["kind"];
 
@@ -242,6 +294,31 @@ export function textArtifact(
 ): Artifact {
   const { id, ...rest } = input;
   return { kind: "text", id: id ?? artifactId("text"), ...rest };
+}
+
+export function briefingArtifact(
+  input: Omit<Extract<Artifact, { kind: "briefing" }>, "kind" | "id"> & {
+    id?: string;
+  },
+): Artifact {
+  const { id, ...rest } = input;
+  return { kind: "briefing", id: id ?? artifactId("briefing"), ...rest };
+}
+
+/** The stable id for a scan's panel. See `scanArtifact` for why it matters. */
+export function scanArtifactId(scanId: string): string {
+  return `prospect-scan-${scanId}`;
+}
+
+/**
+ * A live scan panel. Unlike every other constructor the id is *derived*, not
+ * generated: re-emitting the same scan must replace the panel already open
+ * rather than open a second one beside it.
+ */
+export function scanArtifact(
+  input: Omit<Extract<Artifact, { kind: "scan" }>, "kind" | "id">,
+): Artifact {
+  return { kind: "scan", id: scanArtifactId(input.scanId), ...input };
 }
 
 export function pageArtifact(

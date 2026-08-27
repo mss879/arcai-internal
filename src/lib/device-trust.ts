@@ -192,6 +192,32 @@ export const getDeviceStatus = cache(
 );
 
 /**
+ * Is THIS browser the user's Arcus terminal (0104)?
+ *
+ * The terminal is the one machine the assistant lives on: no idle logout,
+ * wake word always armed. Identity is the same 400-day httpOnly cookie the
+ * member device-lock uses — matched by hash against the row that carries
+ * `is_terminal`. Cached per request, and fail-CLOSED: an error here must
+ * produce a normal machine, never an accidentally immortal session.
+ */
+export const isTerminalDevice = cache(async (userId: string): Promise<boolean> => {
+  try {
+    const token = (await cookies()).get(deviceCookieName(userId))?.value;
+    if (!token) return false;
+    const { data } = await createAdminClient()
+      .from("trusted_devices")
+      .select("id")
+      .eq("user_id", userId)
+      .eq("token_hash", sha256(token))
+      .eq("is_terminal", true)
+      .maybeSingle();
+    return Boolean(data);
+  } catch {
+    return false;
+  }
+});
+
+/**
  * Register the CURRENT browser as one of the user's trusted devices and set
  * its device cookie. Server Actions only (cookie writes). Callers enforce
  * the slot rules; this just writes the row + cookie.

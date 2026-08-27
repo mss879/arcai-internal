@@ -298,3 +298,198 @@ body {
   }
 }
 
+/* ============================================================
+   THE COMMAND STAGE (0104)
+
+   The app is light. This is the one room that isn't — a dark
+   surface the results are projected onto, scoped entirely to
+   `.arc-command` so nothing here can leak into a page.
+
+   Tokens rather than literals because the artifact renderers
+   opt in with a `stage` prop and need the same palette without
+   importing anything.
+   ============================================================ */
+.arc-command {
+  --stage-bg: #07060b;
+  --stage-panel: rgb(255 255 255 / 0.04);
+  --stage-panel-hover: rgb(255 255 255 / 0.07);
+  --stage-border: rgb(255 255 255 / 0.1);
+  --stage-border-strong: rgb(255 255 255 / 0.18);
+  --stage-text: #e2e8f0;
+  --stage-dim: #94a3b8;
+  --stage-faint: #64748b;
+  --stage-accent: #f97316;
+  color: var(--stage-text);
+}
+
+/* The ambient wash behind the stage: two slow pools of colour so
+   the black is never flat, plus the HUD's structural texture — a
+   faint blueprint grid and scanlines. All static gradients on one
+   pseudo-element: zero animation cost, pure compositor. */
+.arc-command-bg::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(60% 55% at 18% 22%, rgb(249 115 22 / 0.1), transparent 70%),
+    radial-gradient(55% 50% at 82% 78%, rgb(20 184 166 / 0.06), transparent 72%),
+    repeating-linear-gradient(
+      0deg,
+      rgb(249 115 22 / 0.028) 0 1px,
+      transparent 1px 44px
+    ),
+    repeating-linear-gradient(
+      90deg,
+      rgb(249 115 22 / 0.028) 0 1px,
+      transparent 1px 44px
+    ),
+    repeating-linear-gradient(
+      0deg,
+      rgb(255 255 255 / 0.012) 0 1px,
+      transparent 1px 3px
+    );
+}
+
+/* ---- HUD panel chrome ----------------------------------------
+   The Stark language: a thin luminous border, chamfered corners,
+   a hairline inner frame, and a soft outer glow. The chamfer is a
+   clip-path, so it costs nothing and clips children correctly. */
+.hud-panel {
+  /* No `position` here on purpose: this class coexists with Tailwind's
+     `absolute` on overlays, and a later-in-the-stylesheet `relative` would
+     win the cascade and drop the overlay into normal flow (it did — the
+     chat sheet squeezed the system log out of the rail). Panels that anchor
+     the corner ticks add `relative` themselves. */
+  border: 1px solid rgb(249 115 22 / 0.35);
+  background:
+    linear-gradient(180deg, rgb(249 115 22 / 0.05), rgb(249 115 22 / 0.015)),
+    rgb(10 8 6 / 0.72);
+  box-shadow:
+    0 0 14px rgb(249 115 22 / 0.12),
+    inset 0 0 22px rgb(249 115 22 / 0.05);
+  clip-path: polygon(
+    12px 0,
+    100% 0,
+    100% calc(100% - 12px),
+    calc(100% - 12px) 100%,
+    0 100%,
+    0 12px
+  );
+}
+
+.hud-panel--tight {
+  clip-path: polygon(
+    8px 0,
+    100% 0,
+    100% calc(100% - 8px),
+    calc(100% - 8px) 100%,
+    0 100%,
+    0 8px
+  );
+}
+
+/* Corner tick marks — the little right-angle brackets on HUD frames. */
+.hud-ticks::after {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  pointer-events: none;
+  background:
+    linear-gradient(90deg, rgb(251 146 60 / 0.9) 0 10px, transparent 10px) top left /
+      100% 1px no-repeat,
+    linear-gradient(0deg, rgb(251 146 60 / 0.9) 0 10px, transparent 10px) top left /
+      1px 100% no-repeat,
+    linear-gradient(270deg, rgb(251 146 60 / 0.9) 0 10px, transparent 10px)
+      bottom right / 100% 1px no-repeat,
+    linear-gradient(180deg, rgb(251 146 60 / 0.9) 0 10px, transparent 10px)
+      bottom right / 1px 100% no-repeat;
+  opacity: 0.55;
+}
+
+/* Section titles: monospace, spaced, with the angular slash accent. */
+.hud-title {
+  font-family: var(--font-geist-mono, ui-monospace, monospace);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: rgb(251 146 60 / 0.95);
+  text-shadow: 0 0 8px rgb(249 115 22 / 0.5);
+}
+
+.hud-mono {
+  font-family: var(--font-geist-mono, ui-monospace, monospace);
+}
+
+/* The system heartbeat — a tiny EKG trace drawn with a dashed line
+   and animated by dashoffset. Decorative "system pulse", not voice
+   (the voice has the real analyser); CSS-only so it never touches
+   the main thread. */
+@keyframes hud-ekg {
+  to {
+    stroke-dashoffset: -220;
+  }
+}
+.hud-ekg path {
+  stroke-dasharray: 90 130;
+  animation: hud-ekg 2.6s linear infinite;
+}
+
+/* Slow radar sweep for the reactor's outer ring. */
+@keyframes hud-sweep {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.hud-sweep {
+  animation: hud-sweep 14s linear infinite;
+}
+.hud-sweep--reverse {
+  animation: hud-sweep 22s linear infinite reverse;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hud-ekg path,
+  .hud-sweep,
+  .hud-sweep--reverse {
+    animation: none;
+  }
+}
+
+/* Slow breath for the core when it is idle. Transform-only, so it
+   stays on the compositor and never triggers layout. */
+@keyframes arc-core-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.85;
+  }
+  50% {
+    transform: scale(1.045);
+    opacity: 1;
+  }
+}
+
+.arc-core-breathe {
+  animation: arc-core-breathe 5.5s ease-in-out infinite;
+}
+
+/* A single sweep, used when the core is thinking. */
+@keyframes arc-core-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.arc-core-spin {
+  animation: arc-core-spin 8s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .arc-core-breathe,
+  .arc-core-spin {
+    animation: none;
+  }
+}
+

@@ -38,8 +38,16 @@ import "server-only";
  * leaves this file at all.
  */
 
+import { after } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { saveWebsiteProject } from "@/app/(app)/website-progress/actions";
+import { generateWeeklyDigest, scanChurn } from "@/lib/intelligence";
+import { eligibleLeads } from "@/lib/outreach-campaign";
+import {
+  drainProspectScan,
+  isProspectingConfigured,
+} from "@/lib/prospecting";
 import type { ToolSchema } from "@/lib/ai/openai";
 import type { ToolContext, ToolResult } from "@/lib/ai/tools";
 import type {
@@ -57,11 +65,13 @@ import {
   metricsArtifact,
   recordArtifact,
   rowsToTable,
+  scanArtifact,
   tableArtifact,
   textArtifact,
   timelineArtifact,
 } from "@/lib/assistant-artifacts";
 import { STEP_META, TRIGGER_META } from "@/lib/automation-meta";
+import { AUTOMATION_RECIPES } from "@/lib/automation-recipes";
 import type {
   AutomationStepKind,
   AutomationTrigger,
@@ -84,6 +94,16 @@ type DB = SupabaseClient<Database>;
 // ---- Tool schemas advertised to the model --------------------------------
 
 /** Tool schemas advertised to the model for this area. */
+/**
+ * How many business kinds ONE spoken request may sweep for.
+ *
+ * The page allows twelve. Each kind costs up to three Places calls at a
+ * twelve-second timeout, so twelve is over half a minute of network before
+ * anything is qualified — fine behind a form with a visible cost, not fine
+ * behind a sentence someone said out loud.
+ */
+const ASSISTANT_CATEGORY_CAP = 3;
+
 export const GROWTH_TOOLS: ToolSchema[] = [
   {
     type: "function",
@@ -114,7 +134,7 @@ export const GROWTH_TOOLS: ToolSchema[] = [
     function: {
       name: "crm_query",
       description:
-        "List any CRM record set as a table: pick the `dataset`. leads = filter the pipeline by stage, owner, score, source or keyword (deeper than list_leads, and it excludes trashed leads). stale_leads = open deals nobody has touched. activities = the event log of what happened to leads. tasks = CRM follow-up tasks. companies = accounts with their deal count and open value. research = the prospect briefings on /crm/research. outreach_drafts = cold emails written and waiting for approval. campaigns = bulk cold-email runs with live progress. suppressions = addresses that bounced, complained or unsubscribed. prospect_scans / prospect_candidates = the Find Leads area scans and the businesses they turned up. Use for 'which leads are going cold', 'what's my hot list', 'what happened on that lead', 'how many drafts are waiting for me', 'is the Kandy campaign still running', 'did anyone unsubscribe' and 'did that scan find anything'.",
+        "List any CRM record set as a table: pick the `dataset`. leads = filter the pipeline by stage, owner, score, source or keyword (deeper than list_leads, and it excludes trashed leads). stale_leads = open deals nobody has touched. activities = the event log of what happened to leads. tasks = CRM follow-up tasks. companies = accounts with their deal count and open value. research = the prospect briefings on /crm/research. outreach_drafts = cold emails written and waiting for approval. campaigns = bulk cold-email runs with live progress. suppressions = addresses that bounced, complained or unsubscribed. prospect_scans / prospect_candidates = the Find Leads area scans and the businesses they turned up. segments = the board's saved filter views. fields = the custom CRM field definitions. scan_schedules = recurring Find Leads scans and when each next runs. Use for 'which leads are going cold', 'what's my hot list', 'what happened on that lead', 'how many drafts are waiting for me', 'is the Kandy campaign still running', 'did anyone unsubscribe', 'did that scan find anything' and 'what saved views does the board have'.",
       parameters: {
         type: "object",
         properties: {
@@ -132,6 +152,9 @@ export const GROWTH_TOOLS: ToolSchema[] = [
               "suppressions",
               "prospect_scans",
               "prospect_candidates",
+              "segments",
+              "fields",
+              "scan_schedules",
             ],
           },
           status: {
@@ -234,7 +257,7 @@ export const GROWTH_TOOLS: ToolSchema[] = [
     function: {
       name: "growth_query",
       description:
-        "List any automation, intelligence, content or SMS record set as a table: pick the `dataset`. automations = the rules and whether they are firing. automation_runs = individual runs, including failures. sms = the text-message send log with segment counts. sms_workflows = multi-step text sequences. digests = the weekly AI business digest, in full. churn_alerts = clients going quiet. content = generated Content Studio images. carousels = scheduled Instagram carousel posts. competitors = the competitor watch list. ads = ad spend with ROAS. visitors = website traffic and form funnel. Use for 'did any automation fail', 'what SMS went out yesterday', 'what does the latest digest say', 'what content is scheduled this week', 'which clients are going cold', 'how are the ads performing' and 'how much traffic did the site get'.",
+        "List any automation, intelligence, content or SMS record set as a table: pick the `dataset`. automations = the rules and whether they are firing. automation_runs = individual runs, including failures. recipes = the ready-made automation gallery and which are installed. sms = the text-message send log with segment counts. sms_workflows = multi-step text sequences. digests = the weekly AI business digest, in full. churn_alerts = clients going quiet. content = generated Content Studio images. content_library = the Content Studio reference library the AI designs from. carousels = scheduled Instagram carousel posts. competitors = the competitor watch list. ads = ad spend with ROAS. visitors = website traffic and form funnel. notifications = the signed-in user's own notification bell. wa_inbox = every WhatsApp thread with unread and needs-attention flags. wa_agent = how the WhatsApp sales agent is configured and what it has learned (admins only). Use for 'did any automation fail', 'what recipes could I install', 'what SMS went out yesterday', 'what does the latest digest say', 'which clients are going cold', 'show me the WhatsApp inbox', 'what did I miss' and 'how is the WhatsApp agent set up'.",
       parameters: {
         type: "object",
         properties: {
@@ -243,21 +266,26 @@ export const GROWTH_TOOLS: ToolSchema[] = [
             enum: [
               "automations",
               "automation_runs",
+              "recipes",
               "sms",
               "sms_workflows",
               "digests",
               "churn_alerts",
               "content",
+              "content_library",
               "carousels",
               "competitors",
               "ads",
               "visitors",
+              "notifications",
+              "wa_inbox",
+              "wa_agent",
             ],
           },
           status: {
             type: "string",
             description:
-              "Dataset-specific filter. automations: active|inactive. automation_runs: running|completed|failed|cancelled. sms: sent|failed, or an SMS kind (custom, payment_reminder, automation, promotion, todo_reminder, meeting_reminder, prospecting, team_alert). churn_alerts: open|actioned|dismissed. carousels: planned|copywriting|rendering|ready|approved|error. ads: meta|google|tiktok|other.",
+              "Dataset-specific filter. automations: active|inactive. automation_runs: running|completed|failed|cancelled. recipes: installed|available. sms: sent|failed, or an SMS kind (custom, payment_reminder, automation, promotion, todo_reminder, meeting_reminder, prospecting, team_alert). churn_alerts: open|actioned|dismissed. carousels: planned|copywriting|rendering|ready|approved|error. ads: meta|google|tiktok|other. notifications: unread|read. wa_inbox: attention|unread|agent_off.",
           },
           query: {
             type: "string",
@@ -299,6 +327,208 @@ export const GROWTH_TOOLS: ToolSchema[] = [
             description: "Activity window in days. Default 30, max 90.",
           },
         },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "create_crm_task",
+      description:
+        "Add a follow-up task on the CRM board, optionally pinned to a lead — 'remind the team to call Nimal Thursday', 'task: send the audit to Cafe Aroma'. Assignee is a workspace member by name. This is a CRM task beside the lead; for a personal to-do use create_todo instead.",
+      parameters: {
+        type: "object",
+        properties: {
+          title: { type: "string", description: "What needs doing." },
+          lead_query: {
+            type: "string",
+            description: "The lead it belongs to — title, company or contact name. Omit for a loose task.",
+          },
+          due_at: {
+            type: "string",
+            description: "When it is due, as an ISO datetime or date. Convert relative dates first.",
+          },
+          assignee_name: {
+            type: "string",
+            description: "Workspace member by name; 'me' for the speaker.",
+          },
+          notes: { type: "string", description: "Any detail worth keeping with it." },
+        },
+        required: ["title"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "log_lead_activity",
+      description:
+        "Write one entry into a lead's activity timeline — a call that happened, a note worth keeping, a meeting held. Use for 'log that I called Silva and they want a demo', 'note on the bakery lead: budget approved'. It records history; it does not message anyone.",
+      parameters: {
+        type: "object",
+        properties: {
+          lead_query: {
+            type: "string",
+            description: "Which lead — title, company or contact name.",
+          },
+          kind: {
+            type: "string",
+            enum: ["note", "call", "email", "sms", "meeting"],
+            description: "What kind of entry this is. Default note.",
+          },
+          summary: { type: "string", description: "One line saying what happened." },
+          detail: { type: "string", description: "The longer story, if the user gave one." },
+        },
+        required: ["lead_query", "summary"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "pause_automation",
+      description:
+        "Switch one automation OFF by name — 'pause the stalled-project chaser'. Runs already in flight finish their current step but nothing new enrolls. If several automations match it lists them and changes nothing.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "The automation's name, matched loosely." },
+        },
+        required: ["query"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "resume_automation",
+      description:
+        "Switch one automation back ON by name — 'turn the welcome flow back on'. If several automations match it lists them and changes nothing.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "The automation's name, matched loosely." },
+        },
+        required: ["query"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "preview_campaign",
+      description:
+        "Dry-run an email campaign: WHO would it reach, and who is excluded and why (already queued, no address, unsubscribed). Pure read — nothing is drafted, queued or sent. 'Who would a campaign to the salon leads hit?'",
+      parameters: {
+        type: "object",
+        properties: {
+          tag: {
+            type: "string",
+            description: "Restrict to leads carrying this tag. Omit for all.",
+          },
+          include_findable: {
+            type: "boolean",
+            description:
+              "Also count leads with a website but no email on file, whose address the pipeline would try to find. Default false.",
+          },
+        },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "run_weekly_digest",
+      description:
+        "Write this week's business digest now — the same numbers-first summary the Intelligence page produces (sales, money, delivery, one AI narrative). Costs one model call and saves the digest; it notifies nobody. Use when they ask 'how did the business do this week?' and want the full picture rather than one figure.",
+      parameters: { type: "object", properties: {}, additionalProperties: false },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "run_churn_scan",
+      description:
+        "Scan every client for churn risk NOW — gone-quiet payment patterns, stalled projects — and file alerts on the Intelligence page. Writes internal alerts only; no client is contacted. Answer with how many alerts came back and where they live.",
+      parameters: { type: "object", properties: {}, additionalProperties: false },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "save_website_project",
+      description:
+        "Add or update a site on the Website Progress board — 'track silvamotors.lk, in progress, 40%'. Links to a client when one matches the name given.",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "The site's display name." },
+          url: { type: "string", description: "The site's URL." },
+          client_name: {
+            type: "string",
+            description: "Client to link, matched loosely. Omit for none.",
+          },
+          status: {
+            type: "string",
+            enum: ["in_progress", "waiting_client", "launched"],
+            description: "Defaults to in_progress.",
+          },
+          progress: {
+            type: "integer",
+            description: "0-100. Launched is always 100.",
+          },
+          notes: { type: "string" },
+        },
+        required: ["name", "url"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "find_leads_nearby",
+      description:
+        "Sweep a real place for businesses and import the ones worth pitching as CRM leads — 'find me 10 salons in Kandy', 'scan Colombo for gyms with no website'. It searches Google Places, checks each website, drafts cold outreach and files the winners. " +
+        "THE SCAN TAKES MINUTES, far longer than this conversation waits: this tool only STARTS it and shows a live panel that fills in by itself. So never state how many were found, qualified or imported — you have not seen them. Say it is running and that the panel is updating. " +
+        "'Near me' means nothing to you: you have no location. Use a city you genuinely remember them working in, otherwise ask which city in one short question. " +
+        "Nothing is sent to anyone: the cold drafts are written and parked for a person to send from Find Leads.",
+      parameters: {
+        type: "object",
+        properties: {
+          city: {
+            type: "string",
+            description:
+              "The city or area to sweep, e.g. 'Kandy' or 'Colombo 7'. Required — ask rather than guess.",
+          },
+          country: {
+            type: "string",
+            description: "Country. Defaults to Sri Lanka when omitted.",
+          },
+          categories: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "The kinds of business to look for, e.g. ['salon'] or ['gym','fitness studio']. Keep it to one or two — each extra kind multiplies the search time.",
+          },
+          count: {
+            type: "integer",
+            description:
+              "How many businesses to examine, 5-120. Default 40. 'find me 10 salons' means 10.",
+          },
+          min_score: {
+            type: "integer",
+            description:
+              "Qualification threshold, 20-90. Default 60. Lower finds more but weaker prospects.",
+          },
+        },
+        required: ["city", "categories"],
         additionalProperties: false,
       },
     },
@@ -1845,6 +2075,9 @@ async function crmQuery(args: Record<string, unknown>, ctx: ToolContext): Promis
     case "suppressions": built = await datasetSuppressions(supabase, f); break;
     case "prospect_scans": built = await datasetProspectScans(supabase, f); break;
     case "prospect_candidates": built = await datasetProspectCandidates(supabase, f); break;
+    case "segments": built = await datasetSegments(supabase, f); break;
+    case "fields": built = await datasetCrmFields(supabase, f); break;
+    case "scan_schedules": built = await datasetScanSchedules(supabase, f); break;
     default:
       return { content: { ok: false, error: `"${dataset}" is not a CRM dataset.` } };
   }
@@ -3512,6 +3745,431 @@ async function digestsResult(supabase: DB, f: Filters): Promise<ToolResult> {
   };
 }
 
+// ---- Total-visibility datasets (Phase 0) ---------------------------------
+// The user's rule is simple: if the workspace holds it, Arcus can see it.
+// Everything below is read-only; the secrets that stay dark (api_keys,
+// client_login_codes, push_subscriptions) are excluded on purpose.
+
+async function datasetSegments(supabase: DB, f: Filters): Promise<Dataset | string> {
+  const { data, error } = await supabase
+    .from("crm_segments")
+    .select("id, name, filters, position, created_at")
+    .order("position", { ascending: true });
+  if (error) return error.message;
+
+  let rows = data ?? [];
+  if (f.query) rows = rows.filter((r) => contains(r.name, f.query));
+
+  const columns: ArtifactColumn[] = [
+    { key: "name", label: "Segment" },
+    { key: "filters", label: "What it filters" },
+    { key: "when", label: "Created", format: "datetime" },
+  ];
+  return {
+    title: "Saved CRM segments",
+    subtitle: `${rows.length} saved view${rows.length === 1 ? "" : "s"}`,
+    href: "/crm",
+    area: "crm",
+    columns,
+    rows: rowsToTable(rows, columns, (r) => ({
+      id: r.id,
+      cells: {
+        name: r.name,
+        filters: Object.entries(r.filters ?? {})
+          .map(([k, v]) => `${k}: ${String(v)}`)
+          .join(", ") || "everything",
+        when: fmtDateTime(r.created_at),
+      },
+    })),
+    empty_reason: "No saved segments — the CRM board is showing everything.",
+  };
+}
+
+async function datasetCrmFields(supabase: DB, f: Filters): Promise<Dataset | string> {
+  const { data, error } = await supabase
+    .from("crm_fields")
+    .select("id, key, label, kind, options, required, position")
+    .order("position", { ascending: true });
+  if (error) return error.message;
+
+  let rows = data ?? [];
+  if (f.query) rows = rows.filter((r) => contains(`${r.label} ${r.key}`, f.query));
+
+  const columns: ArtifactColumn[] = [
+    { key: "label", label: "Field" },
+    { key: "kind", label: "Type", format: "status" },
+    { key: "options", label: "Options", secondary: true },
+    { key: "required", label: "Required", format: "status" },
+  ];
+  return {
+    title: "Custom CRM fields",
+    subtitle: `${rows.length} defined`,
+    href: "/crm",
+    area: "crm",
+    columns,
+    rows: rowsToTable(rows, columns, (r) => ({
+      id: r.id,
+      cells: {
+        label: r.label,
+        kind: r.kind,
+        options: (r.options ?? []).join(", "),
+        required: r.required ? "required" : "optional",
+      },
+    })),
+    empty_reason: "No custom fields — leads carry only the built-in ones.",
+  };
+}
+
+async function datasetScanSchedules(supabase: DB, f: Filters): Promise<Dataset | string> {
+  const { data, error } = await supabase
+    .from("prospect_scan_schedules")
+    .select(
+      "id, label, area, category, cadence_days, next_run_at, auto_outreach, is_active, created_at",
+    )
+    .order("next_run_at", { ascending: true });
+  if (error) return error.message;
+
+  let rows = data ?? [];
+  if (f.status === "active") rows = rows.filter((r) => r.is_active);
+  if (f.status === "inactive") rows = rows.filter((r) => !r.is_active);
+  if (f.query) rows = rows.filter((r) => contains(`${r.label} ${r.area} ${r.category}`, f.query));
+
+  const columns: ArtifactColumn[] = [
+    { key: "label", label: "Schedule" },
+    { key: "where", label: "Area / category", secondary: true },
+    { key: "cadence", label: "Every" },
+    { key: "next", label: "Next run", format: "datetime" },
+    { key: "state", label: "State", format: "status" },
+  ];
+  return {
+    title: "Recurring prospect scans",
+    subtitle: `${rows.filter((r) => r.is_active).length} active`,
+    href: "/crm/find-leads",
+    area: "crm",
+    columns,
+    rows: rowsToTable(rows, columns, (r) => ({
+      id: r.id,
+      tone: (r.is_active ? "info" : "neutral") as ArtifactTone,
+      cells: {
+        label: r.label,
+        where: `${r.area} — ${r.category}`,
+        cadence: `${r.cadence_days} day${r.cadence_days === 1 ? "" : "s"}`,
+        next: fmtDateTime(r.next_run_at),
+        state: r.is_active ? (r.auto_outreach ? "active + auto-outreach" : "active") : "paused",
+      },
+    })),
+    empty_reason: "No recurring scans are set up on Find Leads.",
+  };
+}
+
+async function datasetRecipes(supabase: DB, f: Filters): Promise<Dataset | string> {
+  // The gallery itself is static TS; "installed" is read off the automations
+  // table — installRecipe copies the recipe's name onto the automation it
+  // creates, so a name match is how the recipes tab itself shows the tick.
+  const { data: automations, error } = await supabase
+    .from("automations")
+    .select("name, is_active");
+  if (error) return error.message;
+  const installed = new Map(
+    (automations ?? []).map((a) => [a.name.toLowerCase(), a.is_active] as const),
+  );
+
+  let rows = AUTOMATION_RECIPES.map((r) => {
+    const state = installed.get(r.name.toLowerCase());
+    return {
+      id: r.id,
+      name: r.name,
+      description: r.description,
+      category: r.category ?? "sales",
+      steps: r.steps.length,
+      installed: state !== undefined,
+      active: state === true,
+    };
+  });
+  if (f.status === "installed") rows = rows.filter((r) => r.installed);
+  if (f.status === "available") rows = rows.filter((r) => !r.installed);
+  if (f.query) rows = rows.filter((r) => contains(`${r.name} ${r.description}`, f.query));
+
+  const columns: ArtifactColumn[] = [
+    { key: "name", label: "Recipe" },
+    { key: "about", label: "What it does", secondary: true },
+    { key: "category", label: "Gallery", format: "status" },
+    { key: "steps", label: "Steps", format: "number", align: "right" },
+    { key: "state", label: "State", format: "status" },
+  ];
+  return {
+    title: "Automation recipes",
+    subtitle: `${rows.filter((r) => r.installed).length} of ${rows.length} installed`,
+    summary:
+      "Ready-made automations. Installing one copies its trigger and steps into a real, editable automation.",
+    href: "/automation?tab=recipes",
+    area: "automation",
+    columns,
+    rows: rowsToTable(rows, columns, (r) => ({
+      id: r.id,
+      tone: (r.installed ? (r.active ? "positive" : "warning") : "neutral") as ArtifactTone,
+      cells: {
+        name: r.name,
+        about: r.description,
+        category: r.category,
+        steps: r.steps,
+        state: r.installed ? (r.active ? "installed, on" : "installed, off") : "available",
+      },
+    })),
+    footnote:
+      "Sales recipes install from /automation → Recipes; delivery ones from /delivery → Automations. Installed-or-not is matched by name, so a renamed automation reads as available again.",
+    empty_reason: "Nothing in the gallery matches that.",
+  };
+}
+
+async function datasetContentLibrary(supabase: DB, f: Filters): Promise<Dataset | string> {
+  const [refs, options] = await Promise.all([
+    supabase
+      .from("content_references")
+      .select("id, name, description, created_at")
+      .order("created_at", { ascending: false })
+      .limit(300),
+    supabase.from("carousel_options").select("*", { count: "exact", head: true }),
+  ]);
+  if (refs.error) return refs.error.message;
+
+  let rows = refs.data ?? [];
+  if (f.query) rows = rows.filter((r) => contains(`${r.name} ${r.description}`, f.query));
+
+  const columns: ArtifactColumn[] = [
+    { key: "name", label: "Reference" },
+    { key: "about", label: "Why it's here", secondary: true },
+    { key: "when", label: "Added", format: "datetime" },
+  ];
+  return {
+    title: "Content reference library",
+    subtitle: `${rows.length} reference${rows.length === 1 ? "" : "s"}`,
+    summary:
+      "The images the Content Studio AI designs from — style references, past work, brand material.",
+    href: "/content",
+    area: "content",
+    columns,
+    rows: rowsToTable(rows, columns, (r) => ({
+      id: r.id,
+      cells: {
+        name: r.name,
+        about: r.description,
+        when: fmtDateTime(r.created_at),
+      },
+    })),
+    facts: { carousel_design_options_stored: options.count ?? 0 },
+    empty_reason: "The reference library is empty — nothing has been uploaded to design from.",
+  };
+}
+
+async function datasetNotifications(
+  supabase: DB,
+  f: Filters,
+  userId: string,
+): Promise<Dataset | string> {
+  let q = supabase
+    .from("notifications")
+    .select("id, type, title, body, link, read, created_at")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(300);
+  if (f.since) q = q.gte("created_at", f.since);
+  if (f.until) q = q.lt("created_at", f.until);
+  const { data, error } = await q;
+  if (error) return error.message;
+
+  let rows = data ?? [];
+  if (f.status === "unread") rows = rows.filter((r) => !r.read);
+  if (f.status === "read") rows = rows.filter((r) => r.read);
+  if (f.query) rows = rows.filter((r) => contains(`${r.title} ${r.body ?? ""}`, f.query));
+
+  const columns: ArtifactColumn[] = [
+    { key: "title", label: "Notification" },
+    { key: "body", label: "Detail", secondary: true },
+    { key: "type", label: "Kind", format: "status" },
+    { key: "state", label: "State", format: "status" },
+    { key: "when", label: "When", format: "datetime" },
+  ];
+  return {
+    title: "Your notifications",
+    subtitle: `${rows.filter((r) => !r.read).length} unread`,
+    href: "/dashboard",
+    area: "dashboard",
+    columns,
+    rows: rowsToTable(rows, columns, (r) => ({
+      id: r.id,
+      href: r.link ?? undefined,
+      tone: (r.read ? "neutral" : "info") as ArtifactTone,
+      cells: {
+        title: r.title,
+        body: clip(r.body, 120),
+        type: r.type,
+        state: r.read ? "read" : "unread",
+        when: fmtDateTime(r.created_at),
+      },
+    })),
+    total_label: "Unread",
+    total_value: rows.filter((r) => !r.read).length,
+    total_format: "number",
+    footnote: "Only the signed-in member's own bell — nobody else's notifications are visible.",
+    empty_reason: "The bell is clear — no notifications in this window.",
+  };
+}
+
+async function datasetWaInbox(supabase: DB, f: Filters): Promise<Dataset | string> {
+  let q = supabase
+    .from("wa_contacts")
+    .select(
+      "id, wa_id, profile_name, display_name, mode, unread, needs_attention, agent_enabled, last_message_preview, last_message_at, last_direction",
+    )
+    .order("last_message_at", { ascending: false, nullsFirst: false })
+    .limit(300);
+  if (f.since) q = q.gte("last_message_at", f.since);
+  if (f.until) q = q.lt("last_message_at", f.until);
+  const { data, error } = await q;
+  if (error) return error.message;
+
+  let rows = data ?? [];
+  if (f.status === "attention") rows = rows.filter((r) => r.needs_attention);
+  if (f.status === "unread") rows = rows.filter((r) => (r.unread ?? 0) > 0);
+  if (f.status === "agent_off") rows = rows.filter((r) => !r.agent_enabled);
+  if (f.query) {
+    rows = rows.filter((r) =>
+      contains(`${r.display_name ?? ""} ${r.profile_name ?? ""} ${r.wa_id}`, f.query),
+    );
+  }
+
+  const columns: ArtifactColumn[] = [
+    { key: "who", label: "Contact" },
+    { key: "last", label: "Last message", secondary: true },
+    { key: "when", label: "When", format: "datetime" },
+    { key: "unread", label: "Unread", format: "number", align: "right" },
+    { key: "state", label: "State", format: "status" },
+  ];
+  return {
+    title: "WhatsApp inbox",
+    subtitle: `${rows.filter((r) => r.needs_attention).length} need attention`,
+    href: "/whatsapp",
+    area: "whatsapp",
+    columns,
+    rows: rowsToTable(rows, columns, (r) => ({
+      id: r.id,
+      href: "/whatsapp",
+      tone: (r.needs_attention
+        ? "danger"
+        : (r.unread ?? 0) > 0
+          ? "warning"
+          : "neutral") as ArtifactTone,
+      cells: {
+        who: r.display_name || r.profile_name || r.wa_id,
+        last: clip(r.last_message_preview, 90),
+        when: fmtDateTime(r.last_message_at),
+        unread: r.unread ?? 0,
+        state: r.needs_attention
+          ? "needs attention"
+          : r.agent_enabled
+            ? r.mode === "onboarding"
+              ? "agent on (onboarding)"
+              : "agent on"
+            : "agent off",
+      },
+    })),
+    total_label: "Threads",
+    total_value: rows.length,
+    total_format: "number",
+    footnote:
+      "Read-only: replying stays in the WhatsApp inbox, where the agent and the team share one thread. Use conversation_history for the full transcript of one contact.",
+    empty_reason: "No WhatsApp threads match that.",
+  };
+}
+
+async function datasetWaAgent(supabase: DB, f: Filters): Promise<Dataset | string> {
+  // Admin-gated by the caller (growthQuery) before this runs.
+  const [config, lessons, coaching, keywordRules] = await Promise.all([
+    supabase
+      .from("wa_agent_config")
+      .select(
+        "enabled, agent_name, greeting, persona, allowed_tools, voice_replies, followups_enabled, quiet_hours_enabled, quiet_hours_start, quiet_hours_end, timezone",
+      )
+      .limit(1)
+      .maybeSingle(),
+    supabase
+      .from("wa_lessons")
+      .select("id, kind, title, body, status, created_at")
+      .in("status", ["approved", "pending"])
+      .order("created_at", { ascending: false })
+      .limit(100),
+    supabase
+      .from("wa_coaching")
+      .select("week_start, notes, is_active")
+      .order("week_start", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    supabase
+      .from("wa_keyword_rules")
+      .select("*", { count: "exact", head: true })
+      .eq("is_active", true),
+  ]);
+  if (lessons.error) return lessons.error.message;
+
+  let rows = lessons.data ?? [];
+  if (f.status === "pending") rows = rows.filter((r) => r.status === "pending");
+  if (f.status === "approved") rows = rows.filter((r) => r.status === "approved");
+  if (f.query) rows = rows.filter((r) => contains(`${r.title} ${r.body}`, f.query));
+
+  const cfg = config.data;
+  const columns: ArtifactColumn[] = [
+    { key: "title", label: "Lesson" },
+    { key: "body", label: "What it learned", secondary: true },
+    { key: "kind", label: "Kind", format: "status" },
+    { key: "state", label: "State", format: "status" },
+    { key: "when", label: "Mined", format: "datetime" },
+  ];
+  return {
+    title: "WhatsApp agent — setup & learning",
+    subtitle: cfg
+      ? `${cfg.agent_name} — ${cfg.enabled ? "on" : "off"}`
+      : "Not configured yet",
+    summary:
+      "The sales agent's live configuration plus every lesson it has mined from real conversations. Pending lessons wait for a human's approval before the agent applies them.",
+    href: "/whatsapp?tab=agent",
+    area: "whatsapp",
+    columns,
+    rows: rowsToTable(rows, columns, (r) => ({
+      id: r.id,
+      tone: (r.status === "pending" ? "warning" : "positive") as ArtifactTone,
+      cells: {
+        title: r.title,
+        body: clip(r.body, 140),
+        kind: r.kind,
+        state: r.status,
+        when: fmtDateTime(r.created_at),
+      },
+    })),
+    facts: {
+      agent: cfg
+        ? {
+            enabled: cfg.enabled,
+            name: cfg.agent_name,
+            allowed_tools: cfg.allowed_tools,
+            voice_replies: cfg.voice_replies,
+            followups_enabled: cfg.followups_enabled,
+            quiet_hours: cfg.quiet_hours_enabled
+              ? `${cfg.quiet_hours_start}:00–${cfg.quiet_hours_end}:00 ${cfg.timezone}`
+              : "off",
+          }
+        : null,
+      active_keyword_rules: keywordRules.count ?? 0,
+      latest_coaching: coaching.data
+        ? { week: coaching.data.week_start, notes: clip(coaching.data.notes, 400) }
+        : null,
+    },
+    footnote:
+      "Configuration changes stay on the WhatsApp agent tab — Arcus reads this, it does not rewrite the agent.",
+    empty_reason: "The agent has no lessons yet — they are mined from ended conversations.",
+  };
+}
+
 async function growthQuery(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
   const dataset = str(args.dataset).toLowerCase();
   const f = readFilters(args, ctx);
@@ -3519,18 +4177,41 @@ async function growthQuery(args: Record<string, unknown>, ctx: ToolContext): Pro
 
   if (dataset === "digests") return digestsResult(supabase, f);
 
+  // The agent's own configuration and learning are the most sensitive reads
+  // in this module — gate them exactly like the private money datasets.
+  if (dataset === "wa_agent") {
+    const { data: caller } = await supabase
+      .from("profiles")
+      .select("role")
+      .eq("id", ctx.userId)
+      .maybeSingle();
+    if (caller?.role !== "admin") {
+      return {
+        content: {
+          ok: false,
+          reason: "The WhatsApp agent's setup is admin-only, and this account is a member.",
+        },
+      };
+    }
+  }
+
   let built: Dataset | string;
   switch (dataset) {
     case "automations": built = await datasetAutomations(supabase, f); break;
     case "automation_runs": built = await datasetAutomationRuns(supabase, f); break;
+    case "recipes": built = await datasetRecipes(supabase, f); break;
     case "sms": built = await datasetSms(supabase, f); break;
     case "sms_workflows": built = await datasetSmsWorkflows(supabase, f); break;
     case "churn_alerts": built = await datasetChurnAlerts(supabase, f); break;
     case "content": built = await datasetContent(supabase, f); break;
+    case "content_library": built = await datasetContentLibrary(supabase, f); break;
     case "carousels": built = await datasetCarousels(supabase, f); break;
     case "competitors": built = await datasetCompetitors(supabase, f); break;
     case "ads": built = await datasetAds(supabase, f); break;
     case "visitors": built = await datasetVisitors(supabase, f); break;
+    case "notifications": built = await datasetNotifications(supabase, f, ctx.userId); break;
+    case "wa_inbox": built = await datasetWaInbox(supabase, f); break;
+    case "wa_agent": built = await datasetWaAgent(supabase, f); break;
     default:
       return { content: { ok: false, error: `"${dataset}" is not a growth dataset.` } };
   }
@@ -3792,6 +4473,19 @@ async function teamReport(args: Record<string, unknown>, ctx: ToolContext): Prom
       ],
     });
 
+    // Trusted devices — the same surface the Team page's Activity modal
+    // shows, so "which devices is Kasun signed in on" has an answer here too.
+    const { data: deviceRows } = await supabase
+      .from("trusted_devices")
+      .select("id, label, user_agent, created_at, last_used_at")
+      .eq("user_id", member.id)
+      .order("last_used_at", { ascending: false, nullsFirst: false });
+    const devices = (deviceRows ?? []).map((d) => ({
+      label: d.label,
+      trusted_since: fmtDateTime(d.created_at),
+      last_used: d.last_used_at ? fmtDateTime(d.last_used_at) : "never",
+    }));
+
     moneySummary = {
       currency: "LKR",
       commission_earned: money(summary.commissionEarned),
@@ -3811,8 +4505,9 @@ async function teamReport(args: Record<string, unknown>, ctx: ToolContext): Prom
       active_days: activeDays,
       records_changed: changes.length,
       by_area: areaCounts,
+      trusted_devices: devices,
       caveat:
-        "The activity heartbeat only runs for members, so an admin's sessions look about a minute long however long they were really working. Automations and the WhatsApp agent have no signed-in user and are never recorded here.",
+        "The activity heartbeat only runs for members, so an admin's sessions look about a minute long however long they were really working. Automations and the WhatsApp agent have no signed-in user and are never recorded here. Members are locked to their trusted devices; admins are exempt from the lock.",
     };
 
     if (loans.length) {
@@ -3971,12 +4666,32 @@ async function teamReport(args: Record<string, unknown>, ctx: ToolContext): Prom
     );
   }
 
+  // Pending team invites — workspace-level, so only an admin sees them.
+  let pendingInvitations: { email: string; role: string; expires: string | null }[] | null =
+    null;
+  if (isAdmin) {
+    const { data: invites } = await supabase
+      .from("invitations")
+      .select("email, role, status, expires_at")
+      .eq("status", "pending")
+      .order("created_at", { ascending: false })
+      .limit(50);
+    pendingInvitations = (invites ?? []).map((i) => ({
+      email: i.email,
+      role: i.role,
+      expires: fmtDateTime(i.expires_at),
+    }));
+  }
+
   return {
     content: {
       ok: true,
       member: name,
       is_self: isSelf,
       role: profile.role,
+      ...(pendingInvitations !== null
+        ? { pending_team_invitations: pendingInvitations }
+        : {}),
       workload: {
         open_deals: leads.length,
         open_deal_value: money(openValue),
@@ -4014,12 +4729,558 @@ async function teamReport(args: Record<string, unknown>, ctx: ToolContext): Prom
  * Run one of this module's tools. Returns null when `name` belongs to a
  * different module, so the registry can try the next one.
  */
+// ---- Phase-0 write tools -------------------------------------------------
+
+/** Find one lead by name; two hits = ambiguity, and ambiguity changes nothing. */
+async function resolveLead(
+  supabase: DB,
+  query: string,
+): Promise<
+  | { ok: true; lead: { id: string; title: string; company: string | null } }
+  | { ok: false; error: string; candidates?: string[] }
+> {
+  const term = `%${query}%`;
+  const { data, error } = await supabase
+    .from("leads")
+    .select("id, title, company, contact_name")
+    .or(`title.ilike.${term},company.ilike.${term},contact_name.ilike.${term}`)
+    .is("deleted_at", null)
+    .order("updated_at", { ascending: false })
+    .limit(3);
+  if (error) return { ok: false, error: error.message };
+  const rows = data ?? [];
+  if (!rows.length) return { ok: false, error: `No lead matches "${query}".` };
+  if (rows.length > 1) {
+    return {
+      ok: false,
+      error: `More than one lead matches "${query}". Ask which.`,
+      candidates: rows.map((r) => `${r.title}${r.company ? ` (${r.company})` : ""}`),
+    };
+  }
+  return { ok: true, lead: rows[0] };
+}
+
+async function createCrmTask(
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+): Promise<ToolResult> {
+  const supabase = ctx.supabase;
+  const title = str(args.title);
+  if (!title) return { content: { ok: false, error: "Give the task a title." } };
+
+  let leadId: string | null = null;
+  let leadLabel: string | null = null;
+  const leadQuery = str(args.lead_query);
+  if (leadQuery) {
+    const found = await resolveLead(supabase, leadQuery);
+    if (!found.ok)
+      return {
+        content: {
+          ok: false,
+          error: found.error,
+          ...(found.candidates ? { candidates: found.candidates } : {}),
+        },
+      };
+    leadId = found.lead.id;
+    leadLabel = found.lead.title;
+  }
+
+  let assignee: string | null = null;
+  const assigneeName = str(args.assignee_name);
+  if (assigneeName) {
+    const member = await resolveMember(supabase, ctx.userId, assigneeName);
+    if (!member)
+      return {
+        content: { ok: false, error: `No team member matching "${assigneeName}".` },
+      };
+    assignee = member.id;
+  }
+
+  const { error } = await supabase.from("crm_tasks").insert({
+    title,
+    lead_id: leadId,
+    notes: str(args.notes) || null,
+    due_at: str(args.due_at) || null,
+    assigned_to: assignee,
+    created_by: ctx.userId,
+  });
+  if (error) return { content: { ok: false, error: error.message } };
+
+  return {
+    content: {
+      ok: true,
+      title,
+      ...(leadLabel ? { lead: leadLabel } : {}),
+      due: str(args.due_at) || null,
+      note: "On the CRM task list. Nothing was sent to the lead.",
+    },
+    event: {
+      kind: "created",
+      label: `CRM task: ${title}`,
+      href: leadId ? `/crm/lead/${leadId}` : "/crm",
+    },
+  };
+}
+
+async function logLeadActivity(
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+): Promise<ToolResult> {
+  const supabase = ctx.supabase;
+  const summary = str(args.summary);
+  const leadQuery = str(args.lead_query);
+  if (!summary) return { content: { ok: false, error: "Say what happened." } };
+  if (!leadQuery) return { content: { ok: false, error: "Say which lead." } };
+
+  const found = await resolveLead(supabase, leadQuery);
+  if (!found.ok)
+    return {
+      content: {
+        ok: false,
+        error: found.error,
+        ...(found.candidates ? { candidates: found.candidates } : {}),
+      },
+    };
+
+  const allowed = new Set(["note", "call", "email", "sms", "meeting"]);
+  const kind = allowed.has(str(args.kind)) ? str(args.kind) : "note";
+
+  const { error } = await supabase.from("lead_activities").insert({
+    lead_id: found.lead.id,
+    kind: kind as LeadActivityKind,
+    title: summary,
+    body: str(args.detail) || null,
+    actor_id: ctx.userId,
+  });
+  if (error) return { content: { ok: false, error: error.message } };
+
+  return {
+    content: {
+      ok: true,
+      lead: found.lead.title,
+      kind,
+      logged: summary,
+      note: "On the lead's timeline. Nothing was sent to anyone.",
+    },
+    event: {
+      kind: "created",
+      label: `Logged ${kind} — ${found.lead.title}`,
+      href: `/crm/lead/${found.lead.id}`,
+    },
+  };
+}
+
+async function toggleAutomation(
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+  turnOn: boolean,
+): Promise<ToolResult> {
+  const supabase = ctx.supabase;
+  const query = str(args.query);
+  if (!query) return { content: { ok: false, error: "Say which automation." } };
+
+  const { data, error } = await supabase
+    .from("automations")
+    .select("id, name, is_active")
+    .ilike("name", `%${query}%`)
+    .limit(3);
+  if (error) return { content: { ok: false, error: error.message } };
+  const rows = data ?? [];
+  if (!rows.length)
+    return { content: { ok: false, error: `No automation matches "${query}".` } };
+  if (rows.length > 1)
+    return {
+      content: {
+        ok: false,
+        error: `More than one automation matches "${query}". Ask which.`,
+        candidates: rows.map((r) => `${r.name} (${r.is_active ? "on" : "off"})`),
+      },
+    };
+
+  const target = rows[0];
+  if (target.is_active === turnOn)
+    return {
+      content: {
+        ok: true,
+        automation: target.name,
+        already: turnOn ? "on" : "off",
+        note: `"${target.name}" was already ${turnOn ? "on" : "off"} — nothing changed.`,
+      },
+    };
+
+  const { error: updateError } = await supabase
+    .from("automations")
+    .update({ is_active: turnOn })
+    .eq("id", target.id);
+  if (updateError) return { content: { ok: false, error: updateError.message } };
+
+  return {
+    content: {
+      ok: true,
+      automation: target.name,
+      now: turnOn ? "on" : "off",
+      note: turnOn
+        ? "Live again — its trigger enrolls new runs from now."
+        : "Paused — runs already mid-flight finish their current step, nothing new starts.",
+    },
+    event: {
+      kind: "updated",
+      label: `${turnOn ? "Resumed" : "Paused"}: ${target.name}`,
+      href: "/automation",
+    },
+  };
+}
+
+/**
+ * Start a Find Leads area scan and hand back a live panel.
+ *
+ * Two decisions here are load-bearing and both come from the engine's own
+ * shape rather than from taste:
+ *
+ * **It does not advance the scan inline.** The first step is `runSearch`,
+ * which calls Places once per category and pages up to three times at a
+ * twelve-second timeout each. The scan's row lease is exactly forty-five
+ * seconds and every commit is fenced on it, so a search that runs long
+ * finishes its work and then silently throws it away when the fenced update
+ * matches nothing. Handing off to `after()` — precisely what the Find Leads
+ * page does — avoids that entirely, and the panel's own six-second drive
+ * shows progress within seconds anyway.
+ *
+ * **It caps categories at three.** The schema allows more for the page's
+ * sake; a spoken request that quietly turned into thirty-six Places calls
+ * would be a bill the user never agreed to.
+ *
+ * `fire_automations` is pinned off: a sentence must never arm a live sender.
+ */
+async function findLeadsNearby(
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+): Promise<ToolResult> {
+  if (!isProspectingConfigured()) {
+    return {
+      content: {
+        ok: false,
+        error:
+          "Find Leads isn't configured on this workspace — it needs GOOGLE_PLACES_API_KEY (and ideally FIRECRAWL_API_KEY) in the hosting environment.",
+      },
+    };
+  }
+
+  const city = String(args.city ?? "").trim();
+  if (!city) {
+    return {
+      content: { ok: false, error: "Which city should I sweep?" },
+    };
+  }
+
+  const categories = Array.isArray(args.categories)
+    ? args.categories
+        .map((c) => String(c ?? "").trim())
+        .filter(Boolean)
+        .slice(0, ASSISTANT_CATEGORY_CAP)
+    : [];
+  if (!categories.length) {
+    return {
+      content: {
+        ok: false,
+        error: "What kind of business should I look for — salons, gyms, cafés?",
+      },
+    };
+  }
+
+  const country = String(args.country ?? "").trim() || "Sri Lanka";
+  const maxResults = clampInt(args.count, 5, 120, 40);
+  const minScore = clampInt(args.min_score, 20, 90, 60);
+
+  const { data: scan, error } = await ctx.supabase
+    .from("prospect_scans")
+    .insert({
+      country,
+      city,
+      categories,
+      max_results: maxResults,
+      min_score: minScore,
+      // Never from a sentence. Importing leads is enough; enrolling them in
+      // live automations is a decision a person makes on the page.
+      fire_automations: false,
+      pipeline_id: null,
+      stage_id: null,
+      analysis: { runStartedAt: Date.now(), launchedBy: "arcus" },
+      created_by: ctx.userId,
+    })
+    .select(
+      "id, status, city, country, categories, max_results, min_score, found, qualified, skipped, imported, error",
+    )
+    .single();
+
+  if (error || !scan) {
+    return {
+      content: {
+        ok: false,
+        error: error?.message ?? "Could not start the scan.",
+      },
+    };
+  }
+
+  // Fire and forget. `after()` needs a request context, which the cron tick
+  // does not always provide, so a plain call is the fallback — either way the
+  // minute cron and the panel's own poll finish the job.
+  try {
+    after(() => drainProspectScan(ctx.supabase, scan.id));
+  } catch {
+    void drainProspectScan(ctx.supabase, scan.id);
+  }
+
+  const href = `/crm/prospecting?scan=${scan.id}`;
+  return {
+    content: {
+      ok: true,
+      scan_id: scan.id,
+      city,
+      country,
+      categories,
+      examining: maxResults,
+      status: scan.status,
+      note: "The scan has started and will run for a few minutes. The live panel beside this conversation is already showing its progress. Tell them it is running and what it is sweeping for — do NOT state how many were found, qualified or imported, because none of that has happened yet.",
+    },
+    event: {
+      kind: "created",
+      label: `Sweeping ${city} for ${categories.join(", ")}`,
+      href,
+    },
+    artifacts: [
+      scanArtifact({
+        scanId: scan.id,
+        title: `Find Leads — ${city}`,
+        subtitle: categories.join(", "),
+        area: "crm",
+        href,
+        summary: `Examining up to ${maxResults} businesses in ${city}, ${country}.`,
+        snapshot: {
+          status: scan.status,
+          city: scan.city,
+          country: scan.country,
+          categories: scan.categories,
+          max_results: scan.max_results,
+          min_score: scan.min_score,
+          found: scan.found,
+          qualified: scan.qualified,
+          skipped: scan.skipped,
+          imported: scan.imported,
+          error: scan.error,
+        },
+      }),
+    ],
+  };
+}
+
+/** Read an integer argument the model may have sent as a string or nonsense. */
+function clampInt(
+  value: unknown,
+  min: number,
+  max: number,
+  fallback: number,
+): number {
+  const n = Math.round(Number(value));
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(Math.max(n, min), max);
+}
+
+/**
+ * The safe half of campaigns (0104): who WOULD be reached. Pure read —
+ * `eligibleLeads` is the launch dialog's own maths, so the numbers here and
+ * the numbers on /crm/outreach can never disagree. Launching stays a human
+ * act on that page.
+ */
+async function previewCampaignTool(
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+): Promise<ToolResult> {
+  const tag = String(args.tag ?? "").trim();
+  const result = await eligibleLeads(ctx.supabase, {
+    includeFindable: Boolean(args.include_findable),
+    ...(tag ? { tag } : {}),
+  });
+
+  const rows = result.leads.slice(0, 40).map((lead) => ({
+    id: lead.id,
+    href: `/crm/lead/${lead.id}`,
+    cells: {
+      company: lead.company,
+      email: lead.emails[0] ?? (lead.findable ? "(findable)" : "—"),
+      website: lead.website || "—",
+    },
+  }));
+
+  return {
+    content: {
+      ok: true,
+      eligible: result.leads.length,
+      excluded: result.excluded,
+      truncated: result.truncated,
+      note: "Nothing was queued or sent. Launching a campaign happens at /crm/outreach.",
+    },
+    event: { kind: "read", label: "Previewing the campaign", href: "/crm/outreach" },
+    artifacts: [
+      tableArtifact({
+        id: "campaign-preview",
+        title: tag ? `Campaign preview — “${tag}”` : "Campaign preview",
+        subtitle: `${result.leads.length} would be reached`,
+        area: "crm",
+        href: "/crm/outreach",
+        summary: `Excluded: ${result.excluded.alreadyQueued} already queued, ${result.excluded.noContact} without contact, ${result.excluded.suppressed} unsubscribed.`,
+        columns: [
+          { key: "company", label: "Company" },
+          { key: "email", label: "Email" },
+          { key: "website", label: "Website", secondary: true },
+        ],
+        rows,
+        truncated: Math.max(result.leads.length - rows.length, 0),
+      }),
+    ],
+  };
+}
+
+/**
+ * The weekly digest, on demand (0104). The LIB function, deliberately never
+ * the cron route — that route push-notifies every member, and "how did we
+ * do this week" must not buzz the whole team's phones.
+ */
+async function runWeeklyDigestTool(ctx: ToolContext): Promise<ToolResult> {
+  try {
+    const { content, stats } = await generateWeeklyDigest(ctx.supabase);
+    return {
+      content: {
+        ok: true,
+        digest: content.slice(0, 2000),
+        note: "The full digest is saved on the Intelligence page.",
+      },
+      event: { kind: "created", label: "Wrote the weekly digest", href: "/intelligence" },
+      artifacts: [
+        textArtifact({
+          id: "weekly-digest",
+          title: "This week's digest",
+          subtitle: `Week of ${stats.week_start}`,
+          area: "intelligence",
+          href: "/intelligence",
+          body: content,
+        }),
+      ],
+    };
+  } catch (error) {
+    return {
+      content: {
+        ok: false,
+        error:
+          error instanceof Error ? error.message : "Could not write the digest.",
+      },
+    };
+  }
+}
+
+/** Churn scan on demand (0104). Internal alerts only; nobody is contacted. */
+async function runChurnScanTool(ctx: ToolContext): Promise<ToolResult> {
+  try {
+    const filed = await scanChurn(ctx.supabase);
+    return {
+      content: {
+        ok: true,
+        alerts_filed: filed,
+        note:
+          filed > 0
+            ? "The alerts are on the Intelligence page, each with a suggested win-back."
+            : "No client currently looks at risk.",
+      },
+      event: { kind: "created", label: "Scanned for churn risk", href: "/intelligence" },
+    };
+  } catch (error) {
+    return {
+      content: {
+        ok: false,
+        error: error instanceof Error ? error.message : "The scan failed.",
+      },
+    };
+  }
+}
+
+/**
+ * Website Progress writes (0104) — the area had exactly one read tool. The
+ * server action does the real validation and URL normalisation; this only
+ * resolves the client name first.
+ */
+async function saveWebsiteProjectTool(
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+): Promise<ToolResult> {
+  const name = String(args.name ?? "").trim();
+  const url = String(args.url ?? "").trim();
+  if (!name || !url) {
+    return { content: { ok: false, error: "A site needs a name and a URL." } };
+  }
+
+  let clientId: string | null = null;
+  const clientName = String(args.client_name ?? "").trim();
+  if (clientName) {
+    const { data } = await ctx.supabase
+      .from("clients")
+      .select("id, name")
+      .ilike("name", `%${clientName}%`)
+      .limit(2);
+    if (data?.length === 1) clientId = data[0].id;
+    else if ((data?.length ?? 0) > 1) {
+      return {
+        content: {
+          ok: false,
+          ambiguous: data!.map((c) => c.name),
+          error: "Several clients match — ask which one.",
+        },
+      };
+    }
+  }
+
+  const status = ["in_progress", "waiting_client", "launched"].includes(
+    String(args.status),
+  )
+    ? (String(args.status) as "in_progress" | "waiting_client" | "launched")
+    : undefined;
+
+  const result = await saveWebsiteProject({
+    name,
+    url,
+    client_id: clientId,
+    ...(status ? { status } : {}),
+    ...(typeof args.progress === "number"
+      ? { progress: Math.min(Math.max(Math.round(args.progress), 0), 100) }
+      : {}),
+    ...(typeof args.notes === "string" ? { notes: args.notes } : {}),
+  });
+  if (!result.ok) return { content: result };
+  return {
+    content: { ok: true, name, url },
+    event: {
+      kind: "created",
+      label: `Tracking ${name} on Website Progress`,
+      href: "/website-progress",
+    },
+  };
+}
+
 export async function executeGrowthTool(
   name: string,
   args: Record<string, unknown>,
   ctx: ToolContext,
 ): Promise<ToolResult | null> {
   switch (name) {
+    case "find_leads_nearby":
+      return findLeadsNearby(args, ctx);
+    case "preview_campaign":
+      return previewCampaignTool(args, ctx);
+    case "run_weekly_digest":
+      return runWeeklyDigestTool(ctx);
+    case "run_churn_scan":
+      return runChurnScanTool(ctx);
+    case "save_website_project":
+      return saveWebsiteProjectTool(args, ctx);
     case "pipeline_report":
       return pipelineReport(args, ctx);
     case "crm_query":
@@ -4032,6 +5293,14 @@ export async function executeGrowthTool(
       return growthQuery(args, ctx);
     case "team_report":
       return teamReport(args, ctx);
+    case "create_crm_task":
+      return createCrmTask(args, ctx);
+    case "log_lead_activity":
+      return logLeadActivity(args, ctx);
+    case "pause_automation":
+      return toggleAutomation(args, ctx, false);
+    case "resume_automation":
+      return toggleAutomation(args, ctx, true);
     default:
       return null;
   }

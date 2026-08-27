@@ -63,7 +63,7 @@ export function PageArtifact({
             This page can&apos;t be previewed here
           </p>
           <p className="mt-1 text-[13px] text-slate-500">
-            Sign-in and external pages are never rendered inside Arc. Open it in
+            Sign-in and external pages are never rendered inside Arcus. Open it in
             a tab of its own instead.
           </p>
           <a

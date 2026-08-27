@@ -14,13 +14,19 @@
 
 import { NextResponse } from "next/server";
 
+import { loadPersona } from "@/lib/ai/assistant-persona";
 import { assistantSystemPrompt } from "@/lib/ai/assistant-prompt";
-import { isOpenAIConfigured, openaiChat, type ChatMessage } from "@/lib/ai/openai";
+import {
+  isOpenAIConfigured,
+  openaiChat,
+  OpenAIRateLimitError,
+  type ChatMessage,
+} from "@/lib/ai/openai";
 import { ALL_ASSISTANT_TOOLS, executeAssistantTool } from "@/lib/ai/tool-registry";
 import type { ToolContext, ToolEvent, ToolResult } from "@/lib/ai/tools";
 import type { Artifact } from "@/lib/assistant-artifacts";
 import type { AssistantCard } from "@/lib/assistant-cards";
-import { getProfile } from "@/lib/auth";
+import { getAssistantProfile } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
@@ -30,8 +36,19 @@ export const runtime = "nodejs";
 // before those writes — so there's a little more headroom here.
 const MAX_TOOL_TURNS = 10;
 
+// Same wall-clock discipline as the streaming route: without a ceiling, ten
+// 45-second turns can outlive the serverless platform's patience and die as
+// a 502 with no body — the "no response" failure. When the budget runs low
+// the loop stops offering tools and asks for a closing sentence instead.
+const TURN_BUDGET_MS = 60_000;
+const WRAP_UP_RESERVE_MS = 12_000;
+const PER_CALL_FLOOR_MS = 8_000;
+
+/** The one brain, thinking lightly — matches the streaming route. */
+const REASONING_EFFORT = "low";
+
 export async function POST(request: Request) {
-  const profile = await getProfile();
+  const profile = await getAssistantProfile();
   if (!profile) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -49,6 +66,16 @@ export async function POST(request: Request) {
     )
       ? body.messages
       : [];
+    // Situational awareness (0104) — same capped shape as the stream route.
+    const pageContext =
+      typeof body?.context?.pathname === "string"
+        ? {
+            pathname: String(body.context.pathname).slice(0, 200),
+            ...(typeof body.context.title === "string"
+              ? { title: String(body.context.title).slice(0, 160) }
+              : {}),
+          }
+        : undefined;
 
     const supabase = await createClient();
     const today = new Intl.DateTimeFormat("en-CA", {
@@ -56,6 +83,8 @@ export async function POST(request: Request) {
     }).format(new Date());
 
     const ctx: ToolContext = { supabase, userId: profile.id, today };
+
+    const persona = await loadPersona(supabase, profile.id);
 
     const messages: ChatMessage[] = [
       {
@@ -66,6 +95,8 @@ export async function POST(request: Request) {
           name: profile.full_name,
           today,
           mode: "voice",
+          context: pageContext,
+          ...persona,
         }),
       },
       ...history
@@ -83,8 +114,32 @@ export async function POST(request: Request) {
     // answers with a table one time and with nothing the next.
     const artifacts: Artifact[] = [];
 
+    const startedAt = Date.now();
+    const remaining = () => TURN_BUDGET_MS - (Date.now() - startedAt);
+    const callOpts = () => ({
+      reasoningEffort: REASONING_EFFORT,
+      timeoutMs: Math.min(45_000, Math.max(PER_CALL_FLOOR_MS, remaining())),
+    });
+
+    // One-shot means nothing has rendered client-side yet, so a retry after
+    // a rate limit is always invisible — take it once, budget permitting.
+    const ask = async (tools?: typeof ALL_ASSISTANT_TOOLS) => {
+      try {
+        return await openaiChat(messages, tools, callOpts());
+      } catch (err) {
+        if (!(err instanceof OpenAIRateLimitError)) throw err;
+        const wait = Math.min(err.retryAfterMs ?? 2_000, 8_000);
+        if (remaining() < wait + WRAP_UP_RESERVE_MS) throw err;
+        await new Promise((resolve) => setTimeout(resolve, wait));
+        return await openaiChat(messages, tools, callOpts());
+      }
+    };
+
     for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
-      const assistant = await openaiChat(messages, ALL_ASSISTANT_TOOLS);
+      // Out of clock? Fall through to the no-tools closing pass below.
+      if (turn > 0 && remaining() < WRAP_UP_RESERVE_MS) break;
+
+      const assistant = await ask(ALL_ASSISTANT_TOOLS);
       messages.push(assistant);
 
       const toolCalls = assistant.tool_calls ?? [];
@@ -128,8 +183,8 @@ export async function POST(request: Request) {
       }
     }
 
-    // Ran out of tool turns — ask the model for a final word without tools.
-    const wrap = await openaiChat(messages);
+    // Ran out of tool turns or budget — ask for a final word without tools.
+    const wrap = await ask();
     return NextResponse.json({
       reply: wrap.content ?? "",
       events,

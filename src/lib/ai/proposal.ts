@@ -83,25 +83,25 @@ export type GeneratedNarrative = Pick<
 
 /**
  * Proposal writing is the highest-stakes text this app produces — it is the
- * document a client says yes or no to — so it does NOT ride on the cheap
- * conversational default (gpt-4o-mini). It defaults to the sharpest model the
- * codebase uses and, since it now composes a whole document rather than
- * filling six slots, it gets a real timeout instead of the framework default.
+ * document a client says yes or no to — and it now rides on the SAME brain as
+ * the rest of the assistant: `AI_MODELS.chat` (the one `OPENAI_CHAT_MODEL`
+ * knob). One model everywhere means the agent that discussed the deal and the
+ * writer that documents it can never disagree about capability, and there is
+ * exactly one env var to upgrade. What still differs per surface is only the
+ * thinking depth (`reasoning_effort`), configured just below.
  *
- * Override any of the three via env without touching code:
- *   OPENAI_PROPOSAL_MODEL             any chat model this key can use
+ * Overrides via env, none required:
+ *   OPENAI_PROPOSAL_MODEL             ONLY for emergencies — normally unset,
+ *                                     so the single chat model is used
  *   OPENAI_PROPOSAL_REASONING_EFFORT  minimal|low|medium|high|xhigh
  *   OPENAI_PROPOSAL_TIMEOUT_MS
- *
- * The default is deliberately a model we KNOW every key with GPT-4 access can
- * call. Defaulting to a newer name would cost a failed round-trip on every
- * proposal and then silently drop to the cheap chat default via the fallback
- * in `ask()` — the exact weak output this upgrade exists to prevent, visible
- * only in a server log. Point this at a stronger model when you have one.
  */
-const MODEL = process.env.OPENAI_PROPOSAL_MODEL?.trim() || "gpt-4o";
+const MODEL = process.env.OPENAI_PROPOSAL_MODEL?.trim() || AI_MODELS.chat;
+// Medium, not high: the writer composes prose once per proposal, and on the
+// shared model "medium" is the depth that keeps a create-proposal turn inside
+// the stream route's budget instead of timing the whole conversation out.
 const REASONING_EFFORT =
-  process.env.OPENAI_PROPOSAL_REASONING_EFFORT?.trim() || "high";
+  process.env.OPENAI_PROPOSAL_REASONING_EFFORT?.trim() || "medium";
 const TIMEOUT_MS = Number(process.env.OPENAI_PROPOSAL_TIMEOUT_MS) || 180_000;
 /** Composition wants room to think; a mechanical repair does not. */
 const REPAIR_EFFORT = "medium";

@@ -93,7 +93,15 @@ const CHAT_TIMEOUT_MS = 45_000;
 export async function openaiChat(
   messages: ChatMessage[],
   tools?: ToolSchema[],
-  opts?: { model?: string; timeoutMs?: number; temperature?: number },
+  opts?: {
+    model?: string;
+    timeoutMs?: number;
+    temperature?: number;
+    /** Only used by reasoning models: minimal | low | medium | high | xhigh.
+     * Without it a gpt-5/o-series model runs at the provider's own default
+     * effort — noticeably slower than the caller usually wants. */
+    reasoningEffort?: string;
+  },
 ): Promise<ChatMessage> {
   const model = opts?.model?.trim() || AI_MODELS.chat;
   const res = await fetch(`${BASE_URL}/chat/completions`, {
@@ -108,8 +116,12 @@ export async function openaiChat(
       // Factual/deterministic by default — this assistant must not improvise
       // data. Conversational callers (the WhatsApp sales agent) pass their own
       // temperature so every lead doesn't get a byte-identical reply.
-      // (Reasoning models reject temperature — omit it for them.)
-      ...(isReasoningModel(model) ? {} : { temperature: opts?.temperature ?? 0 }),
+      // (Reasoning models reject temperature — they take reasoning_effort.)
+      ...(isReasoningModel(model)
+        ? opts?.reasoningEffort
+          ? { reasoning_effort: opts.reasoningEffort }
+          : {}
+        : { temperature: opts?.temperature ?? 0 }),
       ...(tools && tools.length ? { tools, tool_choice: "auto" } : {}),
     }),
     signal: AbortSignal.timeout(
@@ -160,9 +172,11 @@ export async function openaiChatJSON(
       "Content-Type": "application/json",
       Authorization: `Bearer ${apiKey()}`,
     },
-    ...(opts?.timeoutMs
-      ? { signal: AbortSignal.timeout(opts.timeoutMs) }
-      : {}),
+    // Finite by default: a caller that forgets a timeout used to be able to
+    // hang a serverless invocation forever on one stuck request. 60s covers
+    // the JSON-writing calls this helper serves; heavier callers (the
+    // proposal writer) pass their own, larger ceiling.
+    signal: AbortSignal.timeout(Math.max(1_000, opts?.timeoutMs ?? 60_000)),
     body: JSON.stringify({
       model,
       messages,

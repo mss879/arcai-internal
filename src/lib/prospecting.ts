@@ -404,6 +404,9 @@ async function runSearch(supabase: DB, scan: ScanRow): Promise<void> {
           ratingCount: 0,
           types: [],
           businessStatus: "",
+          // A web result is a domain, not a place — there is nothing to pin.
+          lat: null,
+          lng: null,
           category,
         });
         if (businesses.length >= scan.max_results) break;
@@ -467,6 +470,10 @@ async function runSearch(supabase: DB, scan: ScanRow): Promise<void> {
       address: b.address,
       phone: b.phone,
       website: b.website,
+      // Kept so a finished scan can be seen on a map, not only read as a
+      // list (0104). Null whenever Google returned no location.
+      lat: b.lat,
+      lng: b.lng,
       rating: b.rating,
       rating_count: b.ratingCount,
       website_verdict: verdict,
@@ -518,11 +525,21 @@ async function runSearch(supabase: DB, scan: ScanRow): Promise<void> {
     ...(placesError ? { searchError: placesError.slice(0, 300) } : {}),
   };
 
+  // A centre to open the map on. The first business with coordinates is good
+  // enough — they are all in the same town by construction, and averaging
+  // them would only drag the pin towards whichever suburb had most results.
+  const anchor = rows.find((r) => r.lat != null && r.lng != null);
+  const centre = anchor ? { lat: anchor.lat, lng: anchor.lng } : null;
+
   await supabase
     .from("prospect_scans")
     .update({
       found: count ?? 0,
-      analysis: { ...((scan.analysis ?? {}) as object), funnel },
+      analysis: {
+        ...((scan.analysis ?? {}) as object),
+        funnel,
+        ...(centre ? { centre } : {}),
+      },
     })
     .eq("id", scan.id);
 }

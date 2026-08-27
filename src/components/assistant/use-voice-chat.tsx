@@ -34,6 +34,15 @@ import {
   type AssistantThread,
   type ThreadSummary,
 } from "@/lib/assistant-threads";
+import {
+  deleteThreadRemote,
+  fetchRemoteThread,
+  fetchThreadsIndex,
+  mergeThreads,
+  pushThread,
+  type RemoteThread,
+} from "@/lib/assistant-thread-sync";
+import { useArcusRealtime } from "@/components/assistant/use-arcus-realtime";
 
 /**
  * The voice engine shared by both Arc surfaces — the desktop Studio (bubble,
@@ -74,6 +83,11 @@ const VOICE_FRAMES = 5; // need this many consecutive voiced frames to "arm"
 /** How long after the last thread mutation the history is written to storage. */
 const PERSIST_DEBOUNCE_MS = 600;
 
+/** How many of the newest server threads are pulled in full on hydration.
+ * The rest arrive when the user opens them — a cold start should not fetch a
+ * hundred transcripts to paint a rail that shows titles. */
+const REMOTE_HYDRATE_THREADS = 15;
+
 // Phrases Whisper commonly invents from silence / room noise. If a whole
 // transcript is just one of these, treat it as "nothing was said".
 const HALLUCINATIONS = new Set([
@@ -103,6 +117,23 @@ function isFramed(): boolean {
   } catch {
     // A cross-origin parent throws on access — which itself means framed.
     return true;
+  }
+}
+
+/**
+ * What the user is looking at, for the prompt's situational line (0104).
+ * Read at SEND time, not mount time — they navigate mid-conversation. The
+ * title strips the app suffix so the model sees "Silva Motors", not
+ * "Silva Motors · ARC AI".
+ */
+function pageContext(): { pathname: string; title?: string } | undefined {
+  if (typeof window === "undefined") return undefined;
+  try {
+    const pathname = window.location.pathname;
+    const title = document.title.replace(/\s*[·|–-]\s*ARC AI.*$/i, "").trim();
+    return { pathname, ...(title ? { title } : {}) };
+  } catch {
+    return undefined;
   }
 }
 
@@ -270,6 +301,28 @@ export type VoiceChat = {
   ) => Promise<SendInvoiceResult>;
   /** Actually send a prepared SMS — fired only by the user's Send tap. */
   sendSms: (sms: SmsCardData) => Promise<SendInvoiceResult>;
+  /** Start a mission the user approved (0103). */
+  approveMission: (missionId: string) => Promise<SendInvoiceResult>;
+  /** True while the mic re-opens itself after every reply (0104). */
+  handsFree: boolean;
+  setHandsFree: (value: boolean) => void;
+  /**
+   * Say something out loud, unprompted (0104 — the terminal's wake ack and
+   * ambient alerts). Owns the shared player, the autoplay unlock and the
+   * status transition, so the wake word suspends itself while this talks.
+   */
+  speak: (reply: string) => Promise<void>;
+  /** Play a precached clip instantly — greeting / wake ack (0104). */
+  playClip: (url: string) => Promise<void>;
+  /** Surface artifacts from a live-voice tool call (0104). */
+  ingestArtifacts: (artifacts: Artifact[]) => void;
+  /** Commit a finished live-voice exchange into the thread (0104). */
+  ingestTurn: (turn: {
+    user: string;
+    assistant: string;
+    artifacts: Artifact[];
+    cards: AssistantCard[];
+  }) => void;
   stopListening: () => void;
   /** Stop capture + playback without wiping the transcript. */
   stop: () => void;
@@ -322,6 +375,8 @@ export function useVoiceChat(): VoiceChat {
     () => threads[0].id,
   );
   const [hydrated, setHydrated] = React.useState(false);
+  /** Keep listening after each reply — set from Studio settings (0104). */
+  const [handsFree, setHandsFreeState] = React.useState(false);
 
   const [steps, setSteps] = React.useState<ToolStep[]>(EMPTY_STEPS);
   const [streamingText, setStreamingText] = React.useState("");
@@ -383,6 +438,13 @@ export function useVoiceChat(): VoiceChat {
   // Set just before an automatic re-arm; consumed by startListening so that
   // one capture session uses the fast confirm timings instead of dictation's.
   const autoListenRef = React.useRef(false);
+  /**
+   * Hands-free: keep the conversation open after each reply (0104).
+   *
+   * A ref as well as state because `maybeAutoListen` is called from audio
+   * callbacks that captured their closure long before the user toggled it.
+   */
+  const handsFreeRef = React.useRef(false);
   /** Pending re-arm timer, so unmount can cancel it. */
   const autoListenTimerRef = React.useRef<number | null>(null);
   const startListeningRef = React.useRef<() => void>(() => {});
@@ -394,8 +456,25 @@ export function useVoiceChat(): VoiceChat {
 
   // ---- history persistence -----------------------------------------------
 
+  /**
+   * Threads changed locally since the last successful push (0101).
+   *
+   * Only these are sent to the server, and — just as importantly — only these
+   * are protected from being overwritten by an incoming realtime refetch: a
+   * thread the user is typing into right now must not be replaced by the
+   * server's older copy of it.
+   */
+  const dirtyThreadsRef = React.useRef<Set<string>>(new Set());
+  const markDirty = React.useCallback((id: string) => {
+    dirtyThreadsRef.current.add(id);
+  }, []);
+
   // Restore after mount. Reading storage during render would be a hydration
   // mismatch, so the first paint is always the empty "New chat".
+  //
+  // Local first, then the server: the cache paints instantly and the network
+  // reconciles a moment later. A signed-out or offline browser simply keeps
+  // the cache — every sync helper fails silently by design.
   React.useEffect(() => {
     const stored = loadThreads();
     if (stored.length > 0) {
@@ -406,15 +485,90 @@ export function useVoiceChat(): VoiceChat {
       setActiveThreadId(exists ? (savedId as string) : ordered[0].id);
     }
     setHydrated(true);
+
+    // A framed copy of the app reads history but never writes it, remotely or
+    // locally — otherwise a preview-canvas iframe would push its stale
+    // snapshot over the live conversation.
+    if (isFramed()) return;
+
+    let cancelled = false;
+    void (async () => {
+      const index = await fetchThreadsIndex();
+      if (!index || cancelled) return;
+
+      // Bodies for the newest handful only. The rest arrive when selected,
+      // and the merge leaves what it doesn't know about untouched.
+      const wanted = index.threads.slice(0, REMOTE_HYDRATE_THREADS);
+      const bodies = await Promise.all(
+        wanted.map((meta) => fetchRemoteThread(meta.id)),
+      );
+      if (cancelled) return;
+
+      const remote = bodies.filter((t): t is RemoteThread => t !== null);
+      if (!remote.length && !index.deleted.length) return;
+
+      let survivors: AssistantThread[] = [];
+      setThreads((prev) => {
+        const merged = mergeThreads(prev, remote, index.deleted);
+        survivors = merged.length ? merged : prev;
+        return survivors;
+      });
+      // A conversation deleted on another device must not stay selected here;
+      // fall back to the newest one that survived the merge.
+      setActiveThreadId((current) =>
+        index.deleted.includes(current) && survivors.length
+          ? survivors[0].id
+          : current,
+      );
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Debounced write. Never persists a turn in flight — `steps` still running
   // and `streamingText` are deliberately excluded from the message record.
   React.useEffect(() => {
     if (!hydrated || isFramed()) return;
-    const t = window.setTimeout(() => saveThreads(threads), PERSIST_DEBOUNCE_MS);
+    const t = window.setTimeout(() => {
+      saveThreads(threads);
+      // Same debounce carries the threads to the server. Clearing the id
+      // before awaiting keeps a push that is still in flight from blocking
+      // the next edit's push.
+      const dirty = [...dirtyThreadsRef.current];
+      if (!dirty.length) return;
+      dirtyThreadsRef.current.clear();
+      for (const id of dirty) {
+        const thread = threads.find((t) => t.id === id);
+        // Nothing to say yet: an empty "New chat" is not worth a row.
+        if (!thread || thread.messages.length === 0) continue;
+        void pushThread(thread).then((ok) => {
+          // Failed pushes stay dirty so the next debounce retries them.
+          if (!ok) dirtyThreadsRef.current.add(id);
+        });
+      }
+    }, PERSIST_DEBOUNCE_MS);
     return () => window.clearTimeout(t);
   }, [threads, hydrated]);
+
+  // Live updates from elsewhere: another device continuing a conversation, or
+  // the tick dropping in a briefing thread. Locally-dirty threads are skipped
+  // — the copy being typed into wins until its own push lands.
+  useArcusRealtime(
+    "assistant_threads",
+    React.useCallback((payload) => {
+      const row = (payload.new ?? payload.old) as { id?: string } | null;
+      const id = row?.id;
+      if (!id || dirtyThreadsRef.current.has(id)) return;
+      void (async () => {
+        const remote = await fetchRemoteThread(id);
+        if (!remote) return;
+        setThreads((prev) => mergeThreads(prev, [remote], []));
+      })();
+    }, []),
+    hydrated && !isFramed(),
+  );
 
   React.useEffect(() => {
     if (!hydrated || !activeThreadId || isFramed()) return;
@@ -424,6 +578,7 @@ export function useVoiceChat(): VoiceChat {
   /** Replace one thread's messages, bumping `updatedAt` and the auto-title. */
   const setThreadMessages = React.useCallback(
     (threadId: string, next: AssistantMessage[]) => {
+      markDirty(threadId);
       setThreads((prev) =>
         prev.map((thread) => {
           if (thread.id !== threadId) return thread;
@@ -437,7 +592,7 @@ export function useVoiceChat(): VoiceChat {
         }),
       );
     },
-    [],
+    [markDirty],
   );
 
   /**
@@ -453,6 +608,7 @@ export function useVoiceChat(): VoiceChat {
   const appendThreadMessages = React.useCallback(
     (threadId: string, ...toAppend: AssistantMessage[]) => {
       if (toAppend.length === 0) return;
+      markDirty(threadId);
       setThreads((prev) =>
         prev.map((thread) => {
           if (thread.id !== threadId) return thread;
@@ -466,7 +622,7 @@ export function useVoiceChat(): VoiceChat {
         }),
       );
     },
-    [],
+    [markDirty],
   );
 
   // ---- audio --------------------------------------------------------------
@@ -480,6 +636,86 @@ export function useVoiceChat(): VoiceChat {
     }
     return playerRef.current;
   }, []);
+
+  /**
+   * Meter Arcus's OWN voice (0104).
+   *
+   * `level` has always been the microphone: real RMS while you talk, nothing
+   * while Arcus talks. The visualizer papered over that with a synthetic sine
+   * envelope during `speaking` — which is exactly the "the animation doesn't
+   * match the voice" complaint, because it pulsed on a timer, not the audio.
+   *
+   * This routes the reply player through an AnalyserNode so `level` carries
+   * the real waveform in both directions. Two Web Audio rules shape the code:
+   * `createMediaElementSource` may be called ONCE per element ever (so the
+   * source node is cached for the player's lifetime), and once an element is
+   * routed through a context it is silent unless the graph reaches
+   * `ctx.destination` (so the chain connects through, not just to the
+   * analyser). If any of it throws, playback continues unmetered — a silent
+   * assistant would be a far worse bug than a still orb.
+   */
+  const speechMeterRef = React.useRef<{
+    ctx: AudioContext;
+    analyser: AnalyserNode;
+    buf: Uint8Array<ArrayBuffer>;
+  } | null>(null);
+  const speechRafRef = React.useRef<number | null>(null);
+
+  const stopSpeechMeter = React.useCallback(() => {
+    if (speechRafRef.current) cancelAnimationFrame(speechRafRef.current);
+    speechRafRef.current = null;
+    setLevel(0);
+  }, []);
+
+  const startSpeechMeter = React.useCallback(() => {
+    const el = playerRef.current;
+    if (!el) return;
+    try {
+      if (!speechMeterRef.current) {
+        const ctx = new AudioContext();
+        const source = ctx.createMediaElementSource(el);
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 512;
+        source.connect(analyser);
+        analyser.connect(ctx.destination);
+        speechMeterRef.current = {
+          ctx,
+          analyser,
+          buf: new Uint8Array(analyser.fftSize),
+        };
+      }
+      const meter = speechMeterRef.current;
+      void meter.ctx.resume();
+
+      let frame = 0;
+      const tick = () => {
+        // The player owns the loop's lifetime: metering past `ended` would
+        // hold `level` at the last frame's value instead of falling to rest.
+        if (el.paused || el.ended) {
+          stopSpeechMeter();
+          return;
+        }
+        // Every OTHER frame. 30 updates a second is indistinguishable on a
+        // glow ring, and each update is a React render of the shell — this
+        // halves the render pressure for the whole time Arcus is talking.
+        frame++;
+        if (frame % 2 === 0) {
+          meter.analyser.getByteTimeDomainData(meter.buf);
+          let sum = 0;
+          for (let i = 0; i < meter.buf.length; i++) {
+            const v = (meter.buf[i] - 128) / 128;
+            sum += v * v;
+          }
+          setLevel(Math.sqrt(sum / meter.buf.length));
+        }
+        speechRafRef.current = requestAnimationFrame(tick);
+      };
+      if (speechRafRef.current) cancelAnimationFrame(speechRafRef.current);
+      speechRafRef.current = requestAnimationFrame(tick);
+    } catch {
+      // Metering is a nicety. The reply still plays.
+    }
+  }, [stopSpeechMeter]);
 
   // Must run inside a user gesture (tap). Plays a silent clip so the browser
   // marks the element as user-initiated; later replies can then auto-play —
@@ -605,18 +841,35 @@ export function useVoiceChat(): VoiceChat {
     [],
   );
 
-  // If a confirm card is waiting and the user was speaking (not typing),
-  // re-open the mic once the reply finishes so they can just say "yes, send".
+  /**
+   * Re-open the microphone after a reply, when it makes sense to.
+   *
+   * Two cases, both of which mean the user is mid-conversation with their
+   * hands elsewhere:
+   *
+   *   - a confirm card is waiting and they were speaking, so a spoken "yes"
+   *     should resolve it without a tap (the original behaviour); or
+   *   - HANDS-FREE is on and the last thing they did was speak — the
+   *     conversation simply continues, which is what makes "Hey Arcus" worth
+   *     having: wake it once, then talk.
+   */
   const maybeAutoListen = React.useCallback(() => {
-    if (!pendingConfirmRef.current || !lastInputVoiceRef.current) return;
+    const wantsConfirm = Boolean(pendingConfirmRef.current);
+    const wantsHandsFree = handsFreeRef.current && lastInputVoiceRef.current;
+    if (!wantsHandsFree && !(wantsConfirm && lastInputVoiceRef.current)) return;
     // Tracked so unmounting during the delay can cancel it — otherwise the
     // microphone opens after the surface is gone, with nothing left alive to
     // stop the recorder or release the track.
     window.clearTimeout(autoListenTimerRef.current ?? undefined);
     autoListenTimerRef.current = window.setTimeout(() => {
       autoListenTimerRef.current = null;
-      if (pendingConfirmRef.current && statusRef.current === "idle") {
+      if (statusRef.current !== "idle") return;
+      // The fast confirm timings are only right when a yes/no is expected;
+      // an open-ended hands-free turn needs room to think mid-sentence.
+      if (pendingConfirmRef.current) {
         autoListenRef.current = true;
+        startListeningRef.current();
+      } else if (handsFreeRef.current && lastInputVoiceRef.current) {
         startListeningRef.current();
       }
     }, 350);
@@ -654,21 +907,114 @@ export function useVoiceChat(): VoiceChat {
         el.muted = false;
         el.src = url;
         el.onended = () => {
+          stopSpeechMeter();
           setStatus("idle");
           maybeAutoListen();
         };
         el.onerror = () => {
+          stopSpeechMeter();
           setStatus("idle");
           maybeAutoListen();
         };
         await el.play();
+        // After play() resolves, so the AudioContext resume isn't racing the
+        // browser's own autoplay decision.
+        startSpeechMeter();
       } catch {
         // Autoplay can still be refused; the reply is already shown as text.
+        stopSpeechMeter();
         setStatus("idle");
         maybeAutoListen();
       }
     },
-    [getPlayer, maybeAutoListen],
+    [getPlayer, maybeAutoListen, startSpeechMeter, stopSpeechMeter],
+  );
+
+  /**
+   * Play an ALREADY-SYNTHESISED clip — the greeting and the wake ack (0104).
+   *
+   * `speak()` costs a TTS round trip, which is fine for replies but wrong for
+   * the two lines that must land the instant something happens. Those are
+   * fetched once and cached as object URLs (`useVoiceClip`); this plays one
+   * through the same shared player, so the meter, the status transition and
+   * the wake word's self-suspension all behave exactly as for a real reply.
+   */
+  const playClip = React.useCallback(
+    async (url: string) => {
+      if (mutedRef.current || !url) return;
+      const el = getPlayer();
+      if (!el) return;
+      // Resolves when PLAYBACK ENDS, not when it starts — the wake flow
+      // chains "open the microphone" on it, and a fixed timer would either
+      // clip a long ack phrase or leave dead air after a short one.
+      await new Promise<void>((resolve) => {
+        const finish = () => {
+          stopSpeechMeter();
+          setStatus("idle");
+          maybeAutoListen();
+          resolve();
+        };
+        try {
+          setStatus("speaking");
+          el.muted = false;
+          el.src = url;
+          el.onended = finish;
+          el.onerror = finish;
+          el.play()
+            .then(() => startSpeechMeter())
+            .catch(finish);
+        } catch {
+          finish();
+        }
+      });
+    },
+    [getPlayer, maybeAutoListen, startSpeechMeter, stopSpeechMeter],
+  );
+
+  /**
+   * Land a live-voice exchange in the SAME thread store the classic pipeline
+   * writes (0104). The Realtime session produces its own transcripts and its
+   * tools return artifacts through the relay route; this commits them so the
+   * conversation history and the stage cannot tell which engine served a
+   * turn — one history, whatever the transport.
+   */
+  const ingestArtifacts = React.useCallback((incoming: Artifact[]) => {
+    if (!incoming.length) return;
+    setLiveArtifacts((prev) => {
+      const next = [...prev];
+      for (const artifact of incoming) {
+        const i = next.findIndex((a) => a.id === artifact.id);
+        if (i >= 0) next[i] = artifact;
+        else next.push(artifact);
+      }
+      return next;
+    });
+    setLatestArtifactId(incoming[incoming.length - 1].id);
+  }, []);
+
+  const ingestTurn = React.useCallback(
+    (turn: {
+      user: string;
+      assistant: string;
+      artifacts: Artifact[];
+      cards: AssistantCard[];
+    }) => {
+      const threadId = activeThreadIdRef.current;
+      const toAppend: AssistantMessage[] = [];
+      if (turn.user.trim()) toAppend.push(userMessage(turn.user.trim()));
+      toAppend.push(
+        assistantMessage(turn.assistant.trim() || "(spoken reply)", {
+          ...(turn.artifacts.length ? { artifacts: turn.artifacts } : {}),
+          ...(turn.cards.length ? { cards: turn.cards } : {}),
+        }),
+      );
+      appendThreadMessages(threadId, ...toAppend);
+      // The committed message now carries the artifacts; clearing the live
+      // copies stops the merge memo counting them twice — the same handoff
+      // the stream commit performs.
+      setLiveArtifacts([]);
+    },
+    [appendThreadMessages],
   );
 
   const sendInvoice = React.useCallback(
@@ -688,6 +1034,39 @@ export function useVoiceChat(): VoiceChat {
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data?.ok) {
           return { ok: false, error: data?.error || "Could not send the invoice." };
+        }
+        return { ok: true };
+      } catch {
+        return { ok: false, error: "Could not reach the server." };
+      }
+    },
+    [],
+  );
+
+  /**
+   * Start a mission the user just approved (0103).
+   *
+   * Deliberately shaped like `sendInvoice`: a plain fetch from the browser,
+   * carrying the user's own session. There is no tool that can call this
+   * route, which is what makes "approve" a human act rather than something
+   * the model can decide for itself.
+   */
+  /** Toggle hands-free, keeping the ref the audio callbacks read in sync. */
+  const setHandsFree = React.useCallback((value: boolean) => {
+    handsFreeRef.current = value;
+    setHandsFreeState(value);
+  }, []);
+
+  const approveMission = React.useCallback(
+    async (missionId: string): Promise<SendInvoiceResult> => {
+      try {
+        const res = await fetch(
+          `/api/assistant/missions/${encodeURIComponent(missionId)}/approve`,
+          { method: "POST" },
+        );
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data?.ok) {
+          return { ok: false, error: data?.error || "Could not start the mission." };
         }
         return { ok: true };
       } catch {
@@ -864,6 +1243,7 @@ export function useVoiceChat(): VoiceChat {
           signal,
           body: JSON.stringify({
             messages: next.map((m) => ({ role: m.role, content: m.content })),
+            context: pageContext(),
           }),
         });
         const data = await res.json();
@@ -919,6 +1299,12 @@ export function useVoiceChat(): VoiceChat {
       let assembled = "";
       let terminal: "done" | "error" | null = null;
       let sawDelta = false;
+      // Tools that ran are work already done. A dead stream after tool
+      // activity must NEVER auto-fall-back to the one-shot route — that
+      // re-runs the whole turn, writes included (a duplicate invoice, a
+      // second project). Track it separately from text.
+      let sawToolStart = false;
+      let streamError: string | null = null;
       const turnSteps: ToolStep[] = [];
       const events: AssistantEvent[] = [];
       const cards: AssistantCard[] = [];
@@ -933,6 +1319,7 @@ export function useVoiceChat(): VoiceChat {
           body: JSON.stringify({
             messages: next.map((m) => ({ role: m.role, content: m.content })),
             mode,
+            context: pageContext(),
           }),
         });
         if (
@@ -960,6 +1347,7 @@ export function useVoiceChat(): VoiceChat {
               case "status":
                 break;
               case "tool_start": {
+                sawToolStart = true;
                 const step: ToolStep = {
                   id: frame.id,
                   name: frame.name,
@@ -1017,6 +1405,7 @@ export function useVoiceChat(): VoiceChat {
                 break;
               case "error":
                 terminal = "error";
+                streamError = frame.error;
                 setError(frame.error);
                 break;
             }
@@ -1027,16 +1416,23 @@ export function useVoiceChat(): VoiceChat {
           setStreaming(false);
           return;
         }
-        if (!sawDelta && !terminal) {
-          // Nothing was rendered: the stream route is missing or refused.
-          // Safe to ask once, the ordinary way.
+        if (!sawDelta && !sawToolStart && !terminal) {
+          // Nothing at all was rendered or executed: the stream route is
+          // missing or refused. Safe to ask once, the ordinary way.
           setStreaming(false);
           setSteps(EMPTY_STEPS);
           await runChatFallback(next, threadId, ctrl.signal);
           return;
         }
-        // Partial stream with text already on screen — soft-complete.
+        // The stream died mid-work. Soft-complete with whatever arrived —
+        // and if tools had already run, say so, because retrying blind could
+        // do the same work twice.
         terminal = terminal ?? "done";
+        if (!sawDelta && sawToolStart && !streamError) {
+          streamError =
+            "The connection dropped mid-task. Check what was already done before asking again.";
+          setError(streamError);
+        }
       }
 
       setStreaming(false);
@@ -1045,29 +1441,60 @@ export function useVoiceChat(): VoiceChat {
 
       if (ctrl.signal.aborted) return;
 
-      if (terminal === "error") {
+      if (!terminal && !sawDelta) {
+        if (sawToolStart) {
+          // Body ended silently AFTER tools ran (the platform killed the
+          // function). Falling back would re-run those tools — commit the
+          // partial work with a warning instead.
+          streamError =
+            streamError ??
+            "The connection dropped mid-task. Check what was already done before asking again.";
+          setError(streamError);
+        } else {
+          // The body ended without a terminal frame, without text and without
+          // any tool activity — nothing happened, so the one-shot route can
+          // safely take the turn.
+          setSteps(EMPTY_STEPS);
+          await runChatFallback(next, threadId, ctrl.signal);
+          return;
+        }
+      }
+
+      const failed = terminal === "error" || Boolean(streamError);
+      const hasAnything =
+        assembled.trim().length > 0 ||
+        cards.length > 0 ||
+        artifacts.length > 0 ||
+        turnSteps.length > 0;
+
+      if (failed && !hasAnything) {
+        // A failure before anything at all arrived: there is no partial work
+        // to keep, so just surface the error banner.
         setSteps(EMPTY_STEPS);
         setLiveArtifacts([]);
         setStatus("idle");
         return;
       }
 
-      if (!terminal && !sawDelta) {
-        // The body ended without a terminal frame and without text.
-        setSteps(EMPTY_STEPS);
-        await runChatFallback(next, threadId, ctrl.signal);
-        return;
-      }
-
       setTransport("stream");
       setSteps(EMPTY_STEPS);
       setLiveArtifacts([]);
+      // On failure the turn is committed WITH its partial work and the error
+      // pinned to the message (rendered in rose) — streamed text, documents
+      // and the tool trail are never vaporized by a late error frame.
       commitTurn(threadId, next, assembled, {
         events,
         cards,
         artifacts,
         steps: turnSteps,
+        ...(failed
+          ? { error: streamError ?? "The assistant ran into a problem." }
+          : {}),
       });
+      if (failed) {
+        setStatus("idle");
+        return;
+      }
       await speak(assembled);
     },
     [cancelDeltaFlush, commitTurn, pushDelta, runChatFallback, speak],
@@ -1288,8 +1715,9 @@ export function useVoiceChat(): VoiceChat {
     pendingConfirmRef.current = null; // don't re-arm the mic after a manual stop
     stopListening();
     playerRef.current?.pause();
+    stopSpeechMeter();
     setStatus("idle");
-  }, [stopListening]);
+  }, [stopListening, stopSpeechMeter]);
 
   const reset = React.useCallback(() => {
     stop();
@@ -1324,13 +1752,17 @@ export function useVoiceChat(): VoiceChat {
     [cancel, stopListening],
   );
 
-  const renameThread = React.useCallback((id: string, title: string) => {
-    const clean = title.trim().slice(0, 80);
-    if (!clean) return;
-    setThreads((prev) =>
-      prev.map((t) => (t.id === id ? { ...t, title: clean } : t)),
-    );
-  }, []);
+  const renameThread = React.useCallback(
+    (id: string, title: string) => {
+      const clean = title.trim().slice(0, 80);
+      if (!clean) return;
+      markDirty(id);
+      setThreads((prev) =>
+        prev.map((t) => (t.id === id ? { ...t, title: clean } : t)),
+      );
+    },
+    [markDirty],
+  );
 
   const deleteThread = React.useCallback(
     (id: string) => {
@@ -1338,6 +1770,12 @@ export function useVoiceChat(): VoiceChat {
       // updater runs twice under StrictMode and would create a stray thread.
       const remaining = threadsRef.current.filter((t) => t.id !== id);
       const wasActive = activeThreadIdRef.current === id;
+
+      // Tombstone it server-side too, so the other devices learn it is gone
+      // instead of pushing their cached copy back. A pending push for this
+      // thread is dropped — it would recreate what we are deleting.
+      dirtyThreadsRef.current.delete(id);
+      if (!isFramed()) void deleteThreadRemote(id);
 
       if (remaining.length === 0) {
         const fresh = makeThread();
@@ -1400,6 +1838,13 @@ export function useVoiceChat(): VoiceChat {
     sendText,
     sendInvoice,
     sendSms,
+    approveMission,
+    handsFree,
+    setHandsFree,
+    speak,
+    playClip,
+    ingestArtifacts,
+    ingestTurn,
     stopListening,
     stop,
     reset,

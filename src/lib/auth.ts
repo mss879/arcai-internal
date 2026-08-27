@@ -118,6 +118,22 @@ export async function requireProfile(): Promise<Profile> {
 }
 
 /** Redirects non-admins back to the dashboard. */
+/**
+ * The profile, for Arcus surfaces and routes — ADMINS ONLY (0104).
+ *
+ * The command agent reads and writes across every area of the workspace,
+ * which is an admin's reach, not a member's: members work inside their
+ * restricted nav, and an assistant that answered them would answer with
+ * rooms they cannot enter. One helper rather than a per-route check, so a
+ * future assistant route cannot forget the rule — it either uses this or it
+ * reviews why not.
+ */
+export async function getAssistantProfile(): Promise<Profile | null> {
+  const profile = await getProfile();
+  if (!profile || profile.role === "member") return null;
+  return profile;
+}
+
 export async function requireAdmin(): Promise<Profile> {
   const profile = await requireProfile();
   if (profile.role !== "admin") redirect("/dashboard");

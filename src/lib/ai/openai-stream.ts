@@ -57,6 +57,10 @@ export type ChatStreamOptions = {
   model?: string;
   timeoutMs?: number;
   temperature?: number;
+  /** Only used by reasoning models: minimal | low | medium | high | xhigh.
+   * Without it a gpt-5/o-series model runs at the provider's own default
+   * effort — slower than an interactive chat turn can afford. */
+  reasoningEffort?: string;
 };
 
 /**
@@ -91,8 +95,12 @@ export async function openaiChatStream(
       messages,
       stream: true,
       // Same default as `openaiChat`: this assistant must not improvise data.
-      // (Reasoning models reject temperature — omit it for them.)
-      ...(isReasoningModel(model) ? {} : { temperature: opts?.temperature ?? 0 }),
+      // (Reasoning models reject temperature — they take reasoning_effort.)
+      ...(isReasoningModel(model)
+        ? opts?.reasoningEffort
+          ? { reasoning_effort: opts.reasoningEffort }
+          : {}
+        : { temperature: opts?.temperature ?? 0 }),
       ...(tools && tools.length ? { tools, tool_choice: "auto" } : {}),
     }),
     signal: AbortSignal.timeout(

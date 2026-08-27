@@ -30,6 +30,7 @@ import {
   Maximize2,
   Mic,
   Send,
+  Settings2,
   Sparkles,
   Square,
   Volume2,
@@ -41,6 +42,20 @@ import { cn } from "@/lib/utils";
 import { EventChip, useVoiceChat } from "@/components/assistant/use-voice-chat";
 import { AssistantCardView } from "@/components/assistant/assistant-card";
 import { AssistantWorkspace } from "@/components/assistant/assistant-workspace";
+import { StudioSettings } from "@/components/assistant/studio-settings";
+import { useAssistantInbox } from "@/components/assistant/use-assistant-inbox";
+import { useArcusConfig } from "@/components/assistant/use-arcus-config";
+import { useAmbientVoice } from "@/components/assistant/use-ambient-voice";
+import { useRealtimeVoice } from "@/components/assistant/use-realtime-voice";
+import { useTerminal } from "@/components/assistant/use-terminal";
+import { toast } from "sonner";
+
+import { useVoiceClip } from "@/components/assistant/use-voice-clips";
+import {
+  requestMicrophone,
+  useWakeWord,
+  type WakeWordState,
+} from "@/components/assistant/use-wake-word";
 import { artifactIcon } from "@/components/assistant/preview/artifact-format";
 import {
   DESKTOP_QUERY,
@@ -67,13 +82,43 @@ import {
  */
 const STUDIO_HOTKEY = "k";
 
-export function VoiceAssistant({ firstName }: { firstName: string }) {
+export function VoiceAssistant({
+  firstName,
+  isTerminal = false,
+}: {
+  firstName: string;
+  /** This browser is the registered Arcus terminal (0104). */
+  isTerminal?: boolean;
+}) {
   const chat = useVoiceChat();
   const desktop = useMediaQuery(DESKTOP_QUERY);
   const embedded = useIsEmbedded();
+  // Never inside the preview canvas: a framed copy of the app would raise a
+  // second badge for the same events behind the one already on screen.
+  const inbox = useAssistantInbox(desktop && !embedded);
+  const arcus = useArcusConfig(desktop && !embedded);
+
+  // The two lines that must be INSTANT, synthesised ahead of time (0104).
+  // The greeting is composed once per session from the hour and the persona's
+  // honorific — "Good evening, sir. How may I assist you today?" — which is
+  // the whole JARVIS handshake: it speaks first, and it speaks immediately.
+  const greetingText = React.useMemo(() => {
+    if (!arcus.loaded || !desktop || embedded) return null;
+    const who = arcus.honorific || firstName;
+    // The exact line that was asked for — a greeting is a signature, not a
+    // place for the model of the day to improvise.
+    return `Hi ${who}, how may I help you today?`;
+  }, [arcus.loaded, arcus.honorific, desktop, embedded, firstName]);
+  const greetingUrl = useVoiceClip(greetingText);
+  const wakeAckUrl = useVoiceClip(
+    arcus.loaded && (arcus.wakeWord || isTerminal) && desktop && !embedded
+      ? arcus.wakeAck
+      : null,
+  );
 
   const [mode, setMode] = React.useState<StudioMode>("bubble");
   const [mounted, setMounted] = React.useState(false);
+  const [settingsOpen, setSettingsOpen] = React.useState(false);
   const [dock, setDock] = React.useState({ w: 400, h: 640 });
   const [promoteArtifactId, setPromoteArtifactId] = React.useState<
     string | null
@@ -86,6 +131,13 @@ export function VoiceAssistant({ firstName }: { firstName: string }) {
   const lastOpenModeRef = React.useRef<StudioMode>("full");
 
   const { setMuted, stop } = chat;
+
+  // The engine's idleness, as a ref: `open` fires inside a click and needs
+  // the CURRENT status without rebuilding itself on every status change.
+  const chatIdleRef = React.useRef(true);
+  React.useEffect(() => {
+    chatIdleRef.current = chat.status === "idle";
+  }, [chat.status]);
 
   // Restore preferences after mount (never during render — the app is
   // server-rendered and reading storage in render is a hydration mismatch).
@@ -104,14 +156,127 @@ export function VoiceAssistant({ firstName }: { firstName: string }) {
     writePref(STUDIO_KEYS.muted, chat.muted);
   }, [chat.muted, mounted]);
 
+  const { playClip, speak } = chat;
   const open = React.useCallback(
     (next: "dock" | "full") => {
       lastOpenModeRef.current = next;
       writePref(STUDIO_KEYS.mode, next);
-      setMode(next);
+      setMode((prev) => {
+        // Greet on a FRESH open (bubble -> anything), inside the click's own
+        // user gesture so autoplay never objects. Mode hops (dock <-> full)
+        // stay silent — a butler greets you at the door, not in every room.
+        if (prev === "bubble" && chatIdleRef.current) {
+          if (greetingUrl) void playClip(greetingUrl);
+          else if (greetingText) void speak(greetingText);
+        }
+        return next;
+      });
     },
-    [],
+    [greetingUrl, greetingText, playClip, speak],
   );
+
+  /**
+   * "Hey Arcus" (0104).
+   *
+   * Waking opens the full workspace and immediately starts listening, so the
+   * whole interaction from across the room is: say its name, then say what
+   * you want. Suspended while Arcus is busy — see `use-wake-word` for why
+   * hearing itself would otherwise loop.
+   */
+  const { setHandsFree, toggleMic } = chat;
+  // The live voice session (0104): opt-in via settings, browser↔OpenAI
+  // WebRTC, tools relayed home under the user's own session. Its turns land
+  // in the SAME thread store — the stage cannot tell which engine served it.
+  const realtime = useRealtimeVoice({
+    enabled:
+      arcus.loaded && arcus.voiceEngine === "realtime" && desktop && !embedded,
+    onArtifacts: chat.ingestArtifacts,
+    onTurn: chat.ingestTurn,
+  });
+
+  const busy = chat.status !== "idle" || realtime.live || realtime.connecting;
+  const {
+    listening: wakeListening,
+    state: wakeState,
+    retry: retryWake,
+  } = useWakeWord(
+    // The terminal listens BY DEFINITION — that is what registering the
+    // machine means. Everywhere else the per-user toggle decides.
+    (arcus.wakeWord || isTerminal) && desktop && !embedded,
+    busy,
+    React.useCallback(() => {
+      lastOpenModeRef.current = "full";
+      writePref(STUDIO_KEYS.mode, "full");
+      setMode("full");
+      // Hands-free from a wake word is implied: someone who called across the
+      // room is not about to reach for the mic button for their next turn.
+      setHandsFree(true);
+      // "Yes, sir?" first — precached, so it lands the instant the name does.
+      // `playClip` resolves when the CLIP ENDS, so the mic opens the moment
+      // Arcus stops talking — never over it, never a beat late.
+      const engageMic =
+        arcus.voiceEngine === "realtime"
+          ? () => void realtime.start()
+          : () => toggleMic();
+      if (wakeAckUrl) {
+        void playClip(wakeAckUrl).then(() =>
+          window.setTimeout(engageMic, 120),
+        );
+      } else {
+        window.setTimeout(engageMic, 300);
+      }
+    }, [setHandsFree, toggleMic, wakeAckUrl, playClip, arcus.voiceEngine, realtime]),
+  );
+
+  // "MIC BLOCKED — fix": SpeechRecognition cannot re-prompt after a refusal,
+  // but getUserMedia can; a grant is followed by reviving the recogniser.
+  const onWakeFix = React.useCallback(async () => {
+    const res = await requestMicrophone();
+    if (res.ok) {
+      toast.success("Microphone ready — listening for \u201cHey Arcus\u201d.");
+      retryWake();
+    } else {
+      toast.error(res.error);
+    }
+  }, [retryWake]);
+
+  // Hold the screen awake while this machine's job is to listen.
+  useTerminal(isTerminal && wakeListening);
+
+  // While a live call is up, every surface reads the CALL's state: the core
+  // pulses with Arcus's actual voice, and the universal gestures — tap the
+  // core, stop, cancel — end the call instead of poking the idle classic
+  // engine underneath it. One object swap; no surface knows the difference.
+  const chatForUi = React.useMemo(() => {
+    if (!realtime.live && !realtime.connecting) return chat;
+    return {
+      ...chat,
+      status: (realtime.speaking ? "speaking" : "listening") as typeof chat.status,
+      level: realtime.level,
+      busy: true,
+      stop: realtime.stop,
+      cancel: realtime.stop,
+      toggleMic: realtime.stop,
+    };
+  }, [chat, realtime.live, realtime.connecting, realtime.speaking, realtime.level, realtime.stop]);
+
+  // Spoken alerts — terminal only, opt-in, heavily braked (see the hook).
+  useAmbientVoice({
+    enabled:
+      isTerminal && arcus.loaded && arcus.ambientVoice && desktop && !embedded,
+    status: chat.status,
+    speak,
+    timezone: arcus.timezone,
+    quietStart: arcus.quietStart,
+    quietEnd: arcus.quietEnd,
+    honorific: arcus.honorific,
+  });
+
+  // The saved preference is the starting point; the wake word can raise it
+  // for a session without writing anything back.
+  React.useEffect(() => {
+    if (arcus.loaded) setHandsFree(arcus.handsFree);
+  }, [arcus.loaded, arcus.handsFree, setHandsFree]);
 
   const toBubble = React.useCallback(() => {
     // `stop()` and not `reset()`: with saved conversations, wiping the
@@ -142,6 +307,36 @@ export function VoiceAssistant({ firstName }: { firstName: string }) {
   React.useEffect(() => {
     if (!desktop && mode !== "bubble") setMode("bubble");
   }, [desktop, mode]);
+
+  /**
+   * `?arc=thread:<id>` opens Studio on that conversation (0102).
+   *
+   * This is how the morning briefing's notification lands somewhere useful:
+   * tapping it opens the app on the dashboard AND opens the briefing thread,
+   * so the first thing on screen is what Arcus wanted to say. The param is
+   * stripped afterwards so a reload doesn't reopen it forever.
+   */
+  const { selectThread } = chat;
+  React.useEffect(() => {
+    if (!mounted || !desktop || embedded) return;
+    const params = new URLSearchParams(window.location.search);
+    const target = params.get("arc");
+    if (!target?.startsWith("thread:")) return;
+    const threadId = target.slice("thread:".length);
+    if (!threadId) return;
+
+    open("full");
+    // One beat, so the hydrated thread list already contains it.
+    const timer = window.setTimeout(() => selectThread(threadId), 400);
+    params.delete("arc");
+    const query = params.toString();
+    window.history.replaceState(
+      null,
+      "",
+      `${window.location.pathname}${query ? `?${query}` : ""}`,
+    );
+    return () => window.clearTimeout(timer);
+  }, [mounted, desktop, embedded, open, selectThread]);
 
   // Stepping out of the full-screen dialog has to put focus somewhere real:
   // the browser drops it on <body> when the panel unmounts, which restarts
@@ -356,7 +551,7 @@ export function VoiceAssistant({ firstName }: { firstName: string }) {
   // assistant inside the assistant's own preview.
   if (!mounted || !desktop || embedded) return null;
 
-  const greeting = `Hi ${firstName}, I'm Arc. Ask me anything about your workspace — or open the full studio for previews.`;
+  const greeting = `Hi ${firstName}, I'm Arcus. Ask me anything about your workspace — or open the full studio for previews.`;
 
   return (
     <>
@@ -389,12 +584,69 @@ export function VoiceAssistant({ firstName }: { firstName: string }) {
               if (Date.now() - draggedAtRef.current < 200) return;
               open(lastOpenModeRef.current === "dock" ? "dock" : "full");
             }}
-            aria-label="Open Arc Studio — drag to reposition, or press Command K"
+            aria-label="Open Arcus Studio — drag to reposition, or press Command K"
             className="fixed bottom-6 right-6 z-50 grid h-14 w-14 cursor-grab touch-none place-items-center rounded-full bg-gradient-to-br from-primary-500 to-primary-700 text-white shadow-lift ring-1 ring-white/30 active:cursor-grabbing"
           >
             <span className="pointer-events-none absolute inset-0 -z-10 animate-ping rounded-full bg-primary-500/40" />
             <Sparkles className="h-6 w-6" />
+            {/* Listening for its name (0104) — visible, always, while on. */}
+            {wakeListening && (
+              <span
+                aria-hidden
+                title="Listening for “Hey Arcus”"
+                className="pointer-events-none absolute -bottom-0.5 -left-0.5 h-3 w-3 animate-pulse rounded-full bg-emerald-400 ring-2 ring-white"
+              />
+            )}
+            {/* Something is waiting to be said (0102). */}
+            {inbox.count > 0 && (
+              <span className="pointer-events-none absolute -right-0.5 -top-0.5 grid h-5 min-w-5 place-items-center rounded-full bg-rose-500 px-1 text-[11px] font-bold text-white ring-2 ring-white">
+                {inbox.count > 9 ? "9+" : inbox.count}
+              </span>
+            )}
           </motion.button>
+        )}
+      </AnimatePresence>
+
+      {/* The chip: Arcus reaching out first. It sits above the bubble, says
+          the one thing worth interrupting for, and opens straight into a
+          conversation about it. Dismissing is one tap and never asks twice. */}
+      <AnimatePresence>
+        {mode === "bubble" && inbox.top && (
+          <motion.div
+            key="arcus-chip"
+            initial={{ opacity: 0, y: 8, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 8, scale: 0.96 }}
+            transition={{ type: "spring", duration: 0.35, bounce: 0.2 }}
+            className="glass fixed bottom-24 right-6 z-50 flex max-w-xs items-start gap-2 rounded-2xl border border-white/50 px-3 py-2.5 shadow-lift"
+          >
+            <button
+              type="button"
+              onClick={() => {
+                const event = inbox.top;
+                if (!event) return;
+                inbox.dismiss(event.id);
+                open("full");
+                chat.sendText(`Tell me about this: ${event.title}`);
+              }}
+              className="min-w-0 flex-1 text-left"
+            >
+              <p className="truncate text-sm font-semibold text-slate-900">
+                {inbox.top.title}
+              </p>
+              {inbox.top.body && (
+                <p className="truncate text-xs text-slate-500">{inbox.top.body}</p>
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={() => inbox.top && inbox.dismiss(inbox.top.id)}
+              aria-label="Dismiss"
+              className="mt-0.5 shrink-0 rounded-lg p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </motion.div>
         )}
       </AnimatePresence>
 
@@ -433,7 +685,7 @@ export function VoiceAssistant({ firstName }: { firstName: string }) {
                 </div>
                 <div className="leading-tight">
                   <p className="text-sm font-semibold text-slate-900">
-                    Arc Assistant
+                    Arcus
                   </p>
                   <p className="text-[11px] font-medium text-slate-500">
                     {chat.status === "listening"
@@ -447,6 +699,13 @@ export function VoiceAssistant({ firstName }: { firstName: string }) {
                 </div>
               </div>
               <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setSettingsOpen(true)}
+                  aria-label="Arcus settings"
+                  className="grid h-8 w-8 place-items-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-300"
+                >
+                  <Settings2 className="h-4 w-4" />
+                </button>
                 <button
                   onClick={() => open("full")}
                   aria-label="Open the full studio"
@@ -542,6 +801,7 @@ export function VoiceAssistant({ firstName }: { firstName: string }) {
                           card={card}
                           onSend={chat.sendInvoice}
                           onSendSms={chat.sendSms}
+                          onApproveMission={chat.approveMission}
                           // The dock has nowhere to render a PDF, so Open
                           // takes the same route a chip does: promote to the
                           // workspace with this document already selected.
@@ -632,7 +892,7 @@ export function VoiceAssistant({ firstName }: { firstName: string }) {
                         : "Or type a message…"
                     }
                     disabled={chat.status === "listening"}
-                    aria-label="Message Arc"
+                    aria-label="Message Arcus"
                     className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-primary-300 focus:ring-2 focus:ring-primary-100 disabled:bg-slate-50"
                   />
                   <button
@@ -666,6 +926,15 @@ export function VoiceAssistant({ firstName }: { firstName: string }) {
           )}
         </AnimatePresence>,
         document.body,
+      )}
+
+      {/* The dock's own settings sheet. The full workspace renders its own,
+          and the two never coexist — only one mode is mounted at a time. */}
+      {mode === "dock" && (
+        <StudioSettings
+          open={settingsOpen}
+          onClose={() => setSettingsOpen(false)}
+        />
       )}
     </>
   );

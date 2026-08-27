@@ -31,10 +31,13 @@ const MobileVoiceScreen = dynamic(
 export function AppShell({
   profile,
   notifications,
+  isTerminal = false,
   children,
 }: {
   profile: Profile;
   notifications: NotificationLite[];
+  /** This browser is the Arcus terminal (0104): always signed in, always listening. */
+  isTerminal?: boolean;
   children: React.ReactNode;
 }) {
   useRealtimeSync("notifications");
@@ -86,7 +89,10 @@ export function AppShell({
   return (
     <div className="app-bg flex min-h-screen lg:h-screen lg:overflow-hidden">
       {/* Auto sign-out after inactivity */}
-      <IdleTimeout />
+      {/* The terminal NEVER idles out — that is the entire point of it: the
+          cookies already live 400 days, and this component was the only thing
+          signing the machine off. Every other browser keeps the 30-minute rule. */}
+      {!isTerminal && <IdleTimeout />}
 
       {/* Desktop sidebar */}
       <aside
@@ -137,15 +143,22 @@ export function AppShell({
         </div>
       </div>
 
-      {/* Voice + workspace AI assistant.
+      {/* Voice + workspace AI assistant — ADMINS ONLY (0104). The agent
+          reads and acts across every area of the workspace, which is an
+          admin's reach, not a member's; the assistant API routes enforce the
+          same rule server-side, so this hide is presentation, not security.
           Desktop: floating panel. Mobile: full-screen voice-first experience
           that auto-opens after login. */}
+      {profile.role !== "member" && (
       <div className="hidden lg:block">
-        <VoiceAssistant firstName={firstName} />
+        <VoiceAssistant firstName={firstName} isTerminal={isTerminal} />
       </div>
+      )}
+      {profile.role !== "member" && (
       <div className="lg:hidden">
         <MobileVoiceScreen />
       </div>
+      )}
     </div>
   );
 }

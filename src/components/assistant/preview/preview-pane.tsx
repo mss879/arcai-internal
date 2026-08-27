@@ -205,6 +205,7 @@ function PreviewPaneImpl({
               active
               onNavigate={onNavigate}
               reloadKey={reloadKeys[active.id] ?? 0}
+              onPrompt={onPrompt}
             />
           </div>
         </>
@@ -217,7 +218,7 @@ function PreviewPaneImpl({
             Nothing to preview yet
           </p>
           <p className="mt-1 max-w-xs text-sm text-slate-500">
-            Ask Arc for a proposal, an invoice, your client list or this
+            Ask Arcus for a proposal, an invoice, your client list or this
             month&apos;s numbers — it&apos;ll open right here.
           </p>
           <div className="mt-5 flex flex-wrap justify-center gap-2">

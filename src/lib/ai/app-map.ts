@@ -562,6 +562,24 @@ export const CAPABILITY_CATALOG: Record<AppArea, Capability[]> = {
       tools: ["get_workspace_overview"],
     },
     {
+      label: "Read your own notification bell — what you missed, unread first",
+      example: "What did I miss?",
+      kind: "read",
+      tools: ["growth_query"],
+    },
+    {
+      label: "Take on a whole multi-step errand — you approve the plan, then it works",
+      example: "Chase every overdue invoice",
+      kind: "confirm",
+      tools: ["propose_mission", "mission_status", "control_mission"],
+    },
+    {
+      label: "Remember how you work, and tell you what it remembers",
+      example: "Remember I always give Silva 10% off",
+      kind: "write",
+      tools: ["remember", "forget", "list_memories"],
+    },
+    {
       label: "Find anything by name across clients, tasks, projects, leads and meetings",
       example: "Find everything about Silverline",
       kind: "read",
@@ -627,6 +645,12 @@ export const CAPABILITY_CATALOG: Record<AppArea, Capability[]> = {
     },
   ],
   projects: [
+    {
+      label: "Seed a project from a saved template — tasks, milestones, checks in one go",
+      example: "Set up the Silva project from the website template",
+      kind: "write",
+      tools: ["apply_project_template"],
+    },
     {
       label: "Everything about one project in a single read",
       example: "How is Ceylon Spice going?",
@@ -719,8 +743,20 @@ export const CAPABILITY_CATALOG: Record<AppArea, Capability[]> = {
       kind: "write",
       tools: ["set_project_blocked"],
     },
+    {
+      label: "Tick a milestone or launch check off — its automations fire on their own",
+      example: "Mark the design phase done on the Silva site",
+      kind: "write",
+      tools: ["complete_milestone"],
+    },
   ],
   website: [
+    {
+      label: "Add or update a site on the progress board",
+      example: "Track silvamotors.lk, in progress, 40%",
+      kind: "write",
+      tools: ["save_website_project"],
+    },
     {
       label: "See which websites are in progress and which are waiting on the client",
       example: "Which websites are waiting on the client?",
@@ -730,10 +766,23 @@ export const CAPABILITY_CATALOG: Record<AppArea, Capability[]> = {
   ],
   crm: [
     {
+      label:
+        "Sweep a town for businesses that need a website and file them as leads (runs for minutes; drafts are parked, never sent)",
+      example: "Find me 10 salons in Kandy",
+      kind: "write",
+      tools: ["find_leads_nearby"],
+    },
+    {
       label: "How the pipeline is doing — open value, win rate, what moved, the forecast",
       example: "How's the pipeline looking this month?",
       kind: "read",
       tools: ["pipeline_report"],
+    },
+    {
+      label: "Preview who an email campaign would reach (nothing is sent)",
+      example: "Who would a campaign to the salon leads hit?",
+      kind: "read",
+      tools: ["preview_campaign"],
     },
     {
       label: "Filter leads by stage, owner, score, source or keyword",
@@ -778,6 +827,24 @@ export const CAPABILITY_CATALOG: Record<AppArea, Capability[]> = {
       tools: ["crm_query"],
     },
     {
+      label: "Read the board's saved segments, custom fields and recurring scan schedules",
+      example: "What saved views does the CRM have?",
+      kind: "read",
+      tools: ["crm_query"],
+    },
+    {
+      label: "Add a follow-up task on a lead",
+      example: "Task: call Nimal Thursday about the demo",
+      kind: "write",
+      tools: ["create_crm_task"],
+    },
+    {
+      label: "Log a call, note or meeting on a lead's timeline",
+      example: "Log that I called Silva — they want a demo Friday",
+      kind: "write",
+      tools: ["log_lead_activity"],
+    },
+    {
       label: "Open one lead's card",
       example: "Pull up Sunrise Bakery",
       kind: "read",
@@ -790,6 +857,18 @@ export const CAPABILITY_CATALOG: Record<AppArea, Capability[]> = {
       example: "Did any automation fail yesterday?",
       kind: "read",
       tools: ["growth_query"],
+    },
+    {
+      label: "Browse the recipe gallery and which recipes are installed",
+      example: "What automation recipes could I install?",
+      kind: "read",
+      tools: ["growth_query"],
+    },
+    {
+      label: "Pause or resume a flow by name",
+      example: "Pause the stalled-project chaser",
+      kind: "write",
+      tools: ["pause_automation", "resume_automation"],
     },
     {
       label: "Open the flows, their runs and the recipe shelf",
@@ -863,6 +942,12 @@ export const CAPABILITY_CATALOG: Record<AppArea, Capability[]> = {
       kind: "confirm",
       tools: ["prepare_invoice_email"],
     },
+    {
+      label: "Create a numbered quote with line items — saved, never sent",
+      example: "Quote Nimal 250,000 for the website and 45,000 for hosting",
+      kind: "write",
+      tools: ["create_quote"],
+    },
   ],
   meetings: [
     {
@@ -872,10 +957,16 @@ export const CAPABILITY_CATALOG: Record<AppArea, Capability[]> = {
       tools: ["meetings_agenda", "list_meetings"],
     },
     {
+      label: "Schedule a meeting on the board — online or in person, reminder armed",
+      example: "Set a kickoff call with Sunrise Bakery tomorrow at 2, link meet.google.com/abc",
+      kind: "write",
+      tools: ["create_meeting"],
+    },
+    {
       label: "Reschedule or cancel a meeting",
       example: "Push the Ceylon Spice call to Thursday at 3",
       kind: "write",
-      tools: ["reschedule_meeting"],
+      tools: ["reschedule_meeting", "cancel_meeting"],
     },
     {
       label: "Open one meeting",
@@ -891,8 +982,26 @@ export const CAPABILITY_CATALOG: Record<AppArea, Capability[]> = {
       kind: "read",
       tools: ["get_finance_document", "finance_query"],
     },
+    {
+      label: "Write and file a formal notice from your rough words — saved, never sent",
+      example: "Write a notice to Silva about the late payment",
+      kind: "write",
+      tools: ["create_notice"],
+    },
   ],
   proposals: [
+    {
+      label: "List every saved proposal — who for, what's on it, the totals",
+      example: "Show me all proposals from this month",
+      kind: "read",
+      tools: ["list_proposals"],
+    },
+    {
+      label: "Open one proposal in full, line by line",
+      example: "What did we quote Ceylon Spice?",
+      kind: "read",
+      tools: ["get_proposal", "open_record"],
+    },
     {
       label: "Write and save a full proposal — AI narrative, priced from the live price list",
       example: "Write a proposal for Ceylon Spice for a smart business site",
@@ -904,6 +1013,12 @@ export const CAPABILITY_CATALOG: Record<AppArea, Capability[]> = {
       example: "Make that proposal 400,000 and add SEO setup",
       kind: "write",
       tools: ["update_proposal"],
+    },
+    {
+      label: "Delete a proposal — after you confirm it",
+      example: "Delete the old Silva proposal",
+      kind: "write",
+      tools: ["delete_proposal"],
     },
   ],
   pricing: [
@@ -936,6 +1051,12 @@ export const CAPABILITY_CATALOG: Record<AppArea, Capability[]> = {
   ],
   whatsapp: [
     {
+      label: "List the whole inbox — every thread, unread counts, who needs a human",
+      example: "Show me the WhatsApp inbox",
+      kind: "read",
+      tools: ["growth_query"],
+    },
+    {
       label: "Read the real thread with one person, the AI agent's replies included",
       example: "What did the agent say to Dilan?",
       kind: "read",
@@ -948,6 +1069,12 @@ export const CAPABILITY_CATALOG: Record<AppArea, Capability[]> = {
       tools: ["whatsapp_report"],
     },
     {
+      label: "How the agent is set up and what it has learned (admins)",
+      example: "How is the WhatsApp agent configured?",
+      kind: "read",
+      tools: ["growth_query"],
+    },
+    {
       label: "Open the inbox, the agent's settings and its analytics",
       example: "Open WhatsApp",
       kind: "read",
@@ -958,6 +1085,12 @@ export const CAPABILITY_CATALOG: Record<AppArea, Capability[]> = {
     {
       label: "See what content was generated and which carousels are scheduled",
       example: "What content is scheduled this week?",
+      kind: "read",
+      tools: ["growth_query"],
+    },
+    {
+      label: "Read the reference library the AI designs from",
+      example: "What's in the content reference library?",
       kind: "read",
       tools: ["growth_query"],
     },
@@ -977,6 +1110,18 @@ export const CAPABILITY_CATALOG: Record<AppArea, Capability[]> = {
     },
   ],
   intelligence: [
+    {
+      label: "Write this week's digest on demand (saved, notifies nobody)",
+      example: "How did the business do this week?",
+      kind: "write",
+      tools: ["run_weekly_digest"],
+    },
+    {
+      label: "Scan every client for churn risk and file alerts",
+      example: "Which clients look like they're drifting?",
+      kind: "write",
+      tools: ["run_churn_scan"],
+    },
     {
       label: "Read the weekly digest, churn alerts, competitors, ad ROAS and site traffic",
       example: "What does the latest digest say?",
@@ -1008,6 +1153,12 @@ export const CAPABILITY_CATALOG: Record<AppArea, Capability[]> = {
       example: "What does Kamal still owe on his loan?",
       kind: "read",
       tools: ["member_money"],
+    },
+    {
+      label: "Pending team invites and each member's trusted devices (admins)",
+      example: "Which devices is Kasun signed in on?",
+      kind: "read",
+      tools: ["team_report"],
     },
     {
       label: "Open one member's page",

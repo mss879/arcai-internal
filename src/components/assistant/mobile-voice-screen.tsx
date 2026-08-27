@@ -49,6 +49,7 @@ export function MobileVoiceScreen() {
     sendText,
     sendInvoice,
     sendSms,
+    approveMission,
     stop,
     artifacts,
   } = useVoiceChat();
@@ -140,7 +141,7 @@ export function MobileVoiceScreen() {
             exit={{ scale: 0, opacity: 0 }}
             transition={{ type: "spring", stiffness: 400, damping: 25 }}
             onClick={() => setOpen(true)}
-            aria-label="Open Arc voice assistant"
+            aria-label="Open Arcus voice assistant"
             className="fixed bottom-6 right-6 z-50 grid h-16 w-16 place-items-center rounded-full bg-gradient-to-br from-primary-500 to-primary-700 text-white shadow-lift ring-1 ring-white/30 active:scale-95"
           >
             <span className="absolute inset-0 -z-10 animate-ping rounded-full bg-primary-500/40" />
@@ -171,7 +172,7 @@ export function MobileVoiceScreen() {
                   <Sparkles className="h-4.5 w-4.5" />
                 </div>
                 <div className="leading-tight">
-                  <p className="text-sm font-semibold">Arc</p>
+                  <p className="text-sm font-semibold">Arcus</p>
                   <p className="text-[11px] font-medium text-white/55">
                     Voice assistant
                   </p>
@@ -328,6 +329,7 @@ export function MobileVoiceScreen() {
                             card={card}
                             onSend={sendInvoice}
                             onSendSms={sendSms}
+                            onApproveMission={approveMission}
                             // On a phone the sheet IS the preview canvas.
                             onOpenPreview={setSheetId}
                           />

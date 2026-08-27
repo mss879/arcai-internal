@@ -230,7 +230,8 @@ export function appendMessage(
 
 // ---- budget --------------------------------------------------------------
 
-function sanitiseMessage(message: AssistantMessage): AssistantMessage {
+/** Exported for the server-sync layer, which persists the same shape. */
+export function sanitiseMessage(message: AssistantMessage): AssistantMessage {
   // A step still "running" belongs to a turn in flight; persisting it would
   // restore a conversation that looks permanently stuck mid-tool.
   const steps = (message.steps ?? []).filter((s) => s.state !== "running");

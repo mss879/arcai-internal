@@ -4,18 +4,27 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { formatDistanceToNow } from "date-fns";
-import { AtSign, Bell, CheckCheck, DollarSign, UserPlus } from "lucide-react";
+import {
+  AtSign,
+  Bell,
+  CheckCheck,
+  DollarSign,
+  Sparkles,
+  UserPlus,
+} from "lucide-react";
 
 import { Dropdown } from "@/components/ui/dropdown";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 import type { NotificationLite } from "@/lib/types";
 
-const ICONS = {
+const ICONS: Record<string, React.ElementType> = {
   mention: AtSign,
   assignment: UserPlus,
   commission: DollarSign,
   system: Bell,
+  // 0102 — a briefing or a nudge from Arcus.
+  assistant: Sparkles,
 };
 
 export function NotificationsBell({

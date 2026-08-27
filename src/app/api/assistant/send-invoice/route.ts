@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { getProfile } from "@/lib/auth";
+import { getAssistantProfile } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { sendInvoiceEmail } from "@/lib/email";
 
@@ -17,7 +17,7 @@ function isEmail(value: string): boolean {
  * reaches this route, so nothing is emailed without an explicit human action.
  */
 export async function POST(request: Request) {
-  const profile = await getProfile();
+  const profile = await getAssistantProfile();
   if (!profile) {
     return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
   }

@@ -19,6 +19,7 @@
     "date-fns": "^4.4.0",
     "jszip": "^3.10.1",
     "lucide-react": "^1.18.0",
+    "maplibre-gl": "^6.6.0",
     "motion": "^12.40.0",
     "nanoid": "^5.1.11",
     "next": "16.2.9",

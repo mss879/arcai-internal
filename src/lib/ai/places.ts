@@ -29,6 +29,13 @@ export type PlaceBusiness = {
   /** Google place types, e.g. ["restaurant", "food"] — drives the deny-list. */
   types: string[];
   businessStatus: string;
+  /**
+   * Where it is. Part of Text Search's basic response, so asking for it costs
+   * nothing extra — it simply was never requested until the map panel needed
+   * it (0104). Null when Google returns no location for a place.
+   */
+  lat: number | null;
+  lng: number | null;
 };
 
 type RawPlace = {
@@ -42,6 +49,7 @@ type RawPlace = {
   userRatingCount?: number;
   types?: string[];
   businessStatus?: string;
+  location?: { latitude?: number; longitude?: number };
 };
 
 function toBusiness(p: RawPlace): PlaceBusiness | null {
@@ -57,6 +65,8 @@ function toBusiness(p: RawPlace): PlaceBusiness | null {
     ratingCount: typeof p.userRatingCount === "number" ? p.userRatingCount : 0,
     types: Array.isArray(p.types) ? p.types : [],
     businessStatus: p.businessStatus ?? "",
+    lat: typeof p.location?.latitude === "number" ? p.location.latitude : null,
+    lng: typeof p.location?.longitude === "number" ? p.location.longitude : null,
   };
 }
 
@@ -113,6 +123,7 @@ export async function placesSearchText(
           "places.userRatingCount",
           "places.types",
           "places.businessStatus",
+          "places.location",
           "nextPageToken",
         ].join(","),
       },

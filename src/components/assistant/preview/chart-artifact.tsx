@@ -62,6 +62,46 @@ function toneFor(point: Point, index: number, cycle: boolean): ArtifactTone {
   return cycle ? CYCLE[index % CYCLE.length] : "info";
 }
 
+/**
+ * The two palettes this chart can wear.
+ *
+ * Collected here rather than as a ternary at each of the dozen call sites:
+ * the marks themselves already carry their own tone colours and work on
+ * either ground, so all that actually changes is the text, the rules and the
+ * card the fallback list sits on. One object, one place to keep them honest.
+ */
+type ChartSkin = {
+  label: string;
+  value: string;
+  faint: string;
+  rule: string;
+  track: string;
+  card: string;
+  divide: string;
+};
+
+const LIGHT_SKIN: ChartSkin = {
+  label: "text-slate-700",
+  value: "text-slate-900",
+  faint: "text-slate-400",
+  rule: "stroke-slate-200",
+  track: "bg-slate-100",
+  card: "rounded-2xl border border-slate-200/80 bg-white",
+  divide: "divide-slate-100",
+};
+
+const STAGE_SKIN: ChartSkin = {
+  label: "text-[var(--stage-text)]",
+  value: "text-[var(--stage-text)]",
+  faint: "text-[var(--stage-faint)]",
+  rule: "stroke-white/10",
+  track: "bg-white/10",
+  card: "rounded-2xl border border-[var(--stage-border)] bg-[var(--stage-panel)]",
+  divide: "divide-white/5",
+};
+
+const skinFor = (stage?: boolean): ChartSkin => (stage ? STAGE_SKIN : LIGHT_SKIN);
+
 /** Screen-reader table of the same numbers, always rendered alongside. */
 function ChartReadout({
   points,
@@ -86,28 +126,40 @@ function PointList({
   points,
   format,
   showBars,
+  skin,
 }: {
   points: Point[];
   format?: ArtifactFormat;
   showBars: boolean;
+  skin: ChartSkin;
 }): React.ReactElement {
   const max = Math.max(...points.map((p) => Math.abs(p.value)), 0);
   return (
-    <ul className="divide-y divide-slate-100 rounded-2xl border border-slate-200/80 bg-white">
+    <ul className={cn("divide-y", skin.divide, skin.card)}>
       {points.map((point, i) => {
         const share = max > 0 ? Math.abs(point.value) / max : 0;
         return (
           <li key={`${point.label}-${i}`} className="px-3.5 py-2.5">
             <div className="flex items-baseline justify-between gap-3">
-              <span className="truncate text-[13px] text-slate-700">
+              <span className={cn("truncate text-[13px]", skin.label)}>
                 {point.label}
               </span>
-              <span className="shrink-0 text-[13px] font-medium tabular-nums text-slate-900">
+              <span
+                className={cn(
+                  "shrink-0 text-[13px] font-medium tabular-nums",
+                  skin.value,
+                )}
+              >
                 {formatCell(point.value, format)}
               </span>
             </div>
             {showBars && (
-              <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-slate-100">
+              <div
+                className={cn(
+                  "mt-1.5 h-1 w-full overflow-hidden rounded-full",
+                  skin.track,
+                )}
+              >
                 <div
                   className={cn(
                     "h-full rounded-full bg-current",
@@ -127,6 +179,7 @@ function PointList({
 function BarChart({
   points,
   format,
+  skin,
   width,
   reduced,
 }: {
@@ -134,6 +187,7 @@ function BarChart({
   format?: ArtifactFormat;
   width: number;
   reduced: boolean;
+  skin: ChartSkin;
 }): React.ReactElement {
   const values = points.map((p) => p.value);
   const top = Math.max(0, ...values);
@@ -161,7 +215,7 @@ function BarChart({
             x2={width}
             y1={zeroY}
             y2={zeroY}
-            className="stroke-slate-200"
+            className={skin.rule}
             strokeWidth={1}
           />
         )}
@@ -207,10 +261,10 @@ function BarChart({
             className="min-w-0 flex-1 text-center"
             style={{ flexBasis: barWidth }}
           >
-            <p className="truncate text-[11px] font-medium tabular-nums text-slate-700">
+            <p className={cn("truncate text-[11px] font-medium tabular-nums", skin.label)}>
               {formatCell(point.value, format)}
             </p>
-            <p className="truncate text-[10px] text-slate-400" title={point.label}>
+            <p className={cn("truncate text-[10px]", skin.faint)} title={point.label}>
               {point.label}
             </p>
           </div>
@@ -223,6 +277,7 @@ function BarChart({
 function LineChart({
   points,
   format,
+  skin,
   width,
   reduced,
 }: {
@@ -230,6 +285,7 @@ function LineChart({
   format?: ArtifactFormat;
   width: number;
   reduced: boolean;
+  skin: ChartSkin;
 }): React.ReactElement {
   const values = points.map((p) => p.value);
   const top = Math.max(...values);
@@ -297,10 +353,10 @@ function LineChart({
             key={`${c.point.label}-${i}`}
             className="min-w-0 flex-1 text-center first:text-left last:text-right"
           >
-            <p className="truncate text-[11px] font-medium tabular-nums text-slate-700">
+            <p className={cn("truncate text-[11px] font-medium tabular-nums", skin.label)}>
               {formatCell(c.point.value, format)}
             </p>
-            <p className="truncate text-[10px] text-slate-400" title={c.point.label}>
+            <p className={cn("truncate text-[10px]", skin.faint)} title={c.point.label}>
               {c.point.label}
             </p>
           </div>
@@ -313,11 +369,13 @@ function LineChart({
 function DonutChart({
   points,
   format,
+  skin,
   reduced,
 }: {
   points: Point[];
   format?: ArtifactFormat;
   reduced: boolean;
+  skin: ChartSkin;
 }): React.ReactElement {
   // Negative slices have no meaning in a donut; clamp rather than draw nonsense.
   const slices = points.map((p) => ({ ...p, value: Math.max(p.value, 0) }));
@@ -370,7 +428,7 @@ function DonutChart({
             r={radius}
             fill="none"
             strokeWidth={18}
-            className="stroke-slate-100"
+            className={skin.rule}
           />
           <g transform="rotate(-90 60 60)">
             {arcs.map((arc, i) => (
@@ -394,10 +452,10 @@ function DonutChart({
         </svg>
         <div className="pointer-events-none absolute inset-0 grid place-items-center text-center">
           <div>
-            <p className="text-[15px] font-semibold tabular-nums leading-tight text-slate-900">
+            <p className={cn("text-[15px] font-semibold tabular-nums leading-tight", skin.value)}>
               {formatCell(total, format)}
             </p>
-            <p className="text-[10px] uppercase tracking-wide text-slate-400">
+            <p className={cn("text-[10px] uppercase tracking-wide", skin.faint)}>
               Total
             </p>
           </div>
@@ -414,13 +472,13 @@ function DonutChart({
                 TONE_TEXT[arc.tone],
               )}
             />
-            <span className="min-w-0 flex-1 truncate text-slate-600">
+            <span className={cn("min-w-0 flex-1 truncate", skin.label)}>
               {arc.point.label}
             </span>
-            <span className="shrink-0 font-medium tabular-nums text-slate-900">
+            <span className={cn("shrink-0 font-medium tabular-nums", skin.value)}>
               {formatCell(arc.point.value, format)}
             </span>
-            <span className="w-10 shrink-0 text-right tabular-nums text-slate-400">
+            <span className={cn("w-10 shrink-0 text-right tabular-nums", skin.faint)}>
               {(arc.share * 100).toFixed(0)}%
             </span>
           </li>
@@ -434,13 +492,17 @@ export type ChartArtifactProps = {
   artifact: ArtifactOf<"chart">;
   /** True when the pane is narrow. */
   dense: boolean;
+  /** Paint for the dark command stage (0104). */
+  stage?: boolean;
 };
 
 /** Render a `chart` artifact as inline SVG, or as a list when that reads better. */
 export function ChartArtifact({
   artifact,
   dense,
+  stage,
 }: ChartArtifactProps): React.ReactElement {
+  const skin = skinFor(stage);
   const reducedMotion = useReducedMotion();
   const reduced = reducedMotion === true;
   const [ref, width] = useElementWidth<HTMLDivElement>();
@@ -457,13 +519,13 @@ export function ChartArtifact({
         aria-label={`${artifact.title}${artifact.summary ? `. ${artifact.summary}` : ""}`}
       >
         {points.length === 0 ? (
-          <p className="py-10 text-center text-[13px] text-slate-400">
+          <p className={cn("py-10 text-center text-[13px]", skin.faint)}>
             There is nothing to chart for this period.
           </p>
         ) : degrade ? (
           <>
             {tooMany && (
-              <p className="mb-2 text-[11px] text-slate-400">
+              <p className={cn("mb-2 text-[11px]", skin.faint)}>
                 {points.length} values — shown as a list so every label stays
                 readable.
               </p>
@@ -472,6 +534,7 @@ export function ChartArtifact({
               points={points}
               format={artifact.format}
               showBars={!allZero}
+              skin={skin}
             />
           </>
         ) : artifact.chart === "donut" ? (
@@ -479,6 +542,7 @@ export function ChartArtifact({
             points={points}
             format={artifact.format}
             reduced={reduced}
+            skin={skin}
           />
         ) : width > 0 ? (
           artifact.chart === "line" ? (
@@ -487,6 +551,7 @@ export function ChartArtifact({
               format={artifact.format}
               width={width}
               reduced={reduced}
+              skin={skin}
             />
           ) : (
             <BarChart
@@ -494,6 +559,7 @@ export function ChartArtifact({
               format={artifact.format}
               width={width}
               reduced={reduced}
+              skin={skin}
             />
           )
         ) : (
@@ -502,14 +568,14 @@ export function ChartArtifact({
           <div
             aria-hidden
             style={{ height: PLOT_HEIGHT }}
-            className="rounded-2xl bg-slate-50"
+            className={cn("rounded-2xl", skin.track)}
           />
         )}
         <ChartReadout points={points} format={artifact.format} />
       </div>
 
       {dense && points.length > 8 && !degrade ? (
-        <p className="mt-3 text-[11px] text-slate-400">
+        <p className={cn("mt-3 text-[11px]", skin.faint)}>
           Widen the preview for roomier labels.
         </p>
       ) : null}

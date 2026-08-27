@@ -47,10 +47,13 @@ export function Modal({
     xl: "max-w-4xl",
   };
 
+  // z-[80]: a modal must clear EVERY overlay, including Arc Studio's
+  // full-screen workspace at z-[70] — settings opened from inside the
+  // workspace used to land behind it.
   return createPortal(
     <AnimatePresence>
       {open && (
-        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 sm:p-6">
+        <div className="fixed inset-0 z-[80] flex items-start justify-center overflow-y-auto p-4 sm:p-6">
           <motion.div
             className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm"
             initial={{ opacity: 0 }}

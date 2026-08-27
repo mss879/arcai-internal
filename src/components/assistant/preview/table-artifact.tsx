@@ -65,6 +65,8 @@ export type TableArtifactProps = {
   dense: boolean;
   /** Open an in-app route (the workspace pushes it and steps down to dock). */
   onNavigate: (href: string) => void;
+  /** Paint for the dark command stage (0104). */
+  stage?: boolean;
 };
 
 /**
@@ -75,6 +77,7 @@ export function TableArtifact({
   artifact,
   dense,
   onNavigate,
+  stage,
 }: TableArtifactProps): React.ReactElement {
   const [query, setQuery] = React.useState("");
   const [sort, setSort] = React.useState<SortState>(null);
@@ -136,11 +139,19 @@ export function TableArtifact({
   return (
     <div className="flex h-full min-h-0 flex-col">
       {showFilter && (
-        <div className="flex shrink-0 items-center gap-2 border-b border-slate-200/70 px-4 py-2.5">
+        <div
+          className={cn(
+            "flex shrink-0 items-center gap-2 border-b px-4 py-2.5",
+            stage ? "border-[var(--stage-border)]" : "border-slate-200/70",
+          )}
+        >
           <div className="relative min-w-0 flex-1">
             <Search
               aria-hidden
-              className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400"
+              className={cn(
+                "pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2",
+                stage ? "text-[var(--stage-faint)]" : "text-slate-400",
+              )}
             />
             <input
               type="search"
@@ -148,11 +159,21 @@ export function TableArtifact({
               onChange={(e) => setQuery(e.target.value)}
               placeholder={`Filter ${artifact.rows.length} rows`}
               aria-label={`Filter ${artifact.title}`}
-              className="h-8 w-full rounded-xl border border-slate-200 bg-white pl-8 pr-2.5 text-[13px] text-slate-700 outline-none transition placeholder:text-slate-400 focus:border-primary-300 focus:ring-4 focus:ring-primary-100"
+              className={cn(
+                "h-8 w-full rounded-xl border pl-8 pr-2.5 text-[13px] outline-none transition focus:border-primary-300 focus:ring-4 focus:ring-primary-100",
+                stage
+                  ? "border-[var(--stage-border)] bg-[var(--stage-panel)] text-[var(--stage-text)] placeholder:text-[var(--stage-faint)]"
+                  : "border-slate-200 bg-white text-slate-700 placeholder:text-slate-400",
+              )}
             />
           </div>
           {filtering && (
-            <span className="shrink-0 text-[11px] tabular-nums text-slate-400">
+            <span
+              className={cn(
+                "shrink-0 text-[11px] tabular-nums",
+                stage ? "text-[var(--stage-faint)]" : "text-slate-400",
+              )}
+            >
               {rows.length} / {artifact.rows.length}
             </span>
           )}
@@ -166,7 +187,12 @@ export function TableArtifact({
             {artifact.summary ? ` — ${artifact.summary}` : ""}
           </caption>
           <thead>
-            <tr className="sticky top-0 z-10 bg-white/95 backdrop-blur">
+            <tr
+              className={cn(
+                "sticky top-0 z-10 backdrop-blur",
+                stage ? "bg-[#0d0c15]/95" : "bg-white/95",
+              )}
+            >
               {columns.map((column) => {
                 const active = sort?.key === column.key;
                 const SortIcon = !active
@@ -186,7 +212,10 @@ export function TableArtifact({
                         : "none"
                     }
                     className={cn(
-                      "border-b border-slate-200 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400",
+                      "border-b px-3 py-2 text-[11px] font-semibold uppercase tracking-wide",
+                      stage
+                        ? "border-[var(--stage-border)] text-[var(--stage-faint)]"
+                        : "border-slate-200 text-slate-400",
                       alignClass(column),
                     )}
                   >
@@ -251,10 +280,16 @@ export function TableArtifact({
                       }
                     : {})}
                   className={cn(
-                    "border-b border-slate-100 text-[13px] text-slate-700 transition",
-                    index % 2 === 1 && "bg-slate-50/50",
+                    "border-b text-[13px] transition",
+                    stage
+                      ? "border-white/5 text-[var(--stage-text)]"
+                      : "border-slate-100 text-slate-700",
+                    index % 2 === 1 &&
+                      (stage ? "bg-white/[0.025]" : "bg-slate-50/50"),
                     href &&
-                      "cursor-pointer hover:bg-primary-50/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-300",
+                      "cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-300",
+                    href &&
+                      (stage ? "hover:bg-primary-500/10" : "hover:bg-primary-50/40"),
                   )}
                 >
                   {columns.map((column) => {
@@ -309,15 +344,32 @@ export function TableArtifact({
 
           {artifact.total_label != null && (
             <tfoot>
-              <tr className="sticky bottom-0 z-10 bg-white/95 backdrop-blur">
+              <tr
+                className={cn(
+                  "sticky bottom-0 z-10 backdrop-blur",
+                  stage ? "bg-[#0d0c15]/95" : "bg-white/95",
+                )}
+              >
                 <th
                   scope="row"
                   colSpan={Math.max(columns.length - 1, 1)}
-                  className="border-t border-slate-200 px-3 py-2.5 text-left text-[13px] font-semibold text-slate-500"
+                  className={cn(
+                    "border-t px-3 py-2.5 text-left text-[13px] font-semibold",
+                    stage
+                      ? "border-[var(--stage-border)] text-[var(--stage-dim)]"
+                      : "border-slate-200 text-slate-500",
+                  )}
                 >
                   {artifact.total_label}
                 </th>
-                <td className="border-t border-slate-200 px-3 py-2.5 text-right text-[13px] font-semibold tabular-nums text-slate-900">
+                <td
+                  className={cn(
+                    "border-t px-3 py-2.5 text-right text-[13px] font-semibold tabular-nums",
+                    stage
+                      ? "border-[var(--stage-border)] text-[var(--stage-text)]"
+                      : "border-slate-200 text-slate-900",
+                  )}
+                >
                   {formatCell(
                     artifact.total_value ?? null,
                     artifact.total_format ?? "money",

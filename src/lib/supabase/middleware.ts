@@ -19,6 +19,9 @@ const PUBLIC_PREFIXES = [
   "/api/sms/automation/tick",
   // Live WhatsApp replies, promise touches and the follow-up cadence.
   "/api/whatsapp/agent-tick",
+  // Arcus's own heartbeat (0103): the memory miner, the pulse, nudges, the
+  // morning briefing, missions and the janitor.
+  "/api/assistant/tick",
   "/api/intelligence/digest",
   // Meta's WhatsApp Cloud API webhook — must be reachable by Meta's servers.
   // The route guards itself: GET needs the verify token, POST needs a valid

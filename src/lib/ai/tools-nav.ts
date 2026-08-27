@@ -104,19 +104,29 @@ export const NAV_TOOLS: ToolSchema[] = [
     function: {
       name: "open_record",
       description:
-        "Find one specific project, lead, client, meeting, team member or invoice by name and open its own page in the preview pane. Use for 'pull up the Ceylon Spice project', 'show me Sunrise Bakery', 'open Kamal's page', 'show me invoice 00214'. This is the 'show me X' tool; open_app_page is the 'show me the X page' tool. It returns ok:false when the name matches nothing — say so plainly instead of guessing at which record was meant.",
+        "Find one specific project, lead, client, meeting, team member, invoice, proposal, quote or notice by name and open its own page in the preview pane. Use for 'pull up the Ceylon Spice project', 'show me Sunrise Bakery', 'open Kamal's page', 'show me invoice 00214', 'open the Silva proposal'. This is the 'show me X' tool; open_app_page is the 'show me the X page' tool. It returns ok:false when the name matches nothing — say so plainly instead of guessing at which record was meant.",
       parameters: {
         type: "object",
         properties: {
           type: {
             type: "string",
-            enum: ["project", "lead", "client", "meeting", "member", "invoice"],
+            enum: [
+              "project",
+              "lead",
+              "client",
+              "meeting",
+              "member",
+              "invoice",
+              "proposal",
+              "quote",
+              "notice",
+            ],
             description: "What kind of record to find.",
           },
           query: {
             type: "string",
             description:
-              "Part of its name — a project or meeting title, a lead or client name or company, a member's name, or an invoice number.",
+              "Part of its name — a project or meeting title, a lead or client name or company, a member's name, or an invoice, quote, notice number, or a proposal's client.",
           },
         },
         required: ["type", "query"],
@@ -610,6 +620,103 @@ async function findInvoice(supabase: DB, q: string): Promise<FoundRecord | null>
   };
 }
 
+async function findProposal(supabase: DB, q: string): Promise<FoundRecord | null> {
+  const { data, error } = await supabase
+    .from("proposals")
+    .select("id, client_name, project_name, proposal_date, grand_total")
+    .or(`client_name.ilike.${like(q)},project_name.ilike.${like(q)}`)
+    .order("created_at", { ascending: false })
+    .limit(CANDIDATES);
+  if (error) return null;
+  const best = pickBest(data ?? [], q, (r) => r.client_name);
+  if (!best) return null;
+  const row = best.row;
+  return {
+    // Proposals have no page of their own; the Proposals list is where they live.
+    href: "/proposals",
+    area: "proposals",
+    title: `Proposal — ${row.client_name}`,
+    subtitle: row.project_name,
+    facts: {
+      proposal_id: row.id,
+      date: row.proposal_date,
+      one_time_total: row.grand_total,
+      currency: "LKR",
+    },
+    others: best.others,
+  };
+}
+
+async function findQuote(supabase: DB, q: string): Promise<FoundRecord | null> {
+  // "Q-014", "014" and "quote 14" all mean the same quote.
+  const digits = q.replace(/\D/g, "");
+  const term = like(digits || q);
+  const { data, error } = await supabase
+    .from("quotes")
+    .select("id, quote_number, title, customer_name, grand_total, status")
+    .or(
+      `quote_number.ilike.${term},title.ilike.${like(q)},customer_name.ilike.${like(q)}`,
+    )
+    .order("created_at", { ascending: false })
+    .limit(CANDIDATES);
+  if (error) return null;
+  const rows = data ?? [];
+  const numbered = digits
+    ? rows.find((r) => r.quote_number.replace(/\D/g, "") === digits)
+    : null;
+  const best = numbered
+    ? { row: numbered, others: rows.filter((r) => r !== numbered).map((r) => r.quote_number) }
+    : pickBest(rows, q, (r) => r.customer_name);
+  if (!best) return null;
+  const row = best.row;
+  return {
+    href: "/quotes",
+    area: "invoices",
+    title: `Quote ${row.quote_number}`,
+    subtitle: row.customer_name,
+    facts: {
+      title: row.title,
+      grand_total: row.grand_total,
+      status: row.status,
+      currency: "LKR",
+    },
+    others: best.others,
+  };
+}
+
+async function findNotice(supabase: DB, q: string): Promise<FoundRecord | null> {
+  const digits = q.replace(/\D/g, "");
+  const term = like(digits || q);
+  const { data, error } = await supabase
+    .from("notices")
+    .select("id, notice_number, notice_date, to_name, subject, sent_at")
+    .or(`notice_number.ilike.${term},to_name.ilike.${like(q)},subject.ilike.${like(q)}`)
+    .order("created_at", { ascending: false })
+    .limit(CANDIDATES);
+  if (error) return null;
+  const rows = data ?? [];
+  const numbered = digits
+    ? rows.find((r) => r.notice_number.replace(/\D/g, "") === digits)
+    : null;
+  const best = numbered
+    ? { row: numbered, others: rows.filter((r) => r !== numbered).map((r) => r.notice_number) }
+    : pickBest(rows, q, (r) => r.to_name);
+  if (!best) return null;
+  const row = best.row;
+  return {
+    href: "/notices",
+    area: "notices",
+    title: `Notice ${row.notice_number}`,
+    subtitle: row.to_name,
+    facts: {
+      subject: row.subject,
+      date: row.notice_date,
+      sent: Boolean(row.sent_at),
+    },
+    others: best.others,
+  };
+}
+
 async function openRecord(
   args: Record<string, unknown>,
   ctx: ToolContext,
@@ -650,11 +757,20 @@ async function openRecord(
     case "invoice":
       found = await findInvoice(supabase, query);
       break;
+    case "proposal":
+      found = await findProposal(supabase, query);
+      break;
+    case "quote":
+      found = await findQuote(supabase, query);
+      break;
+    case "notice":
+      found = await findNotice(supabase, query);
+      break;
     default:
       return {
         content: {
           ok: false,
-          reason: `"${kind}" is not a kind of record. Use project, lead, client, meeting, member or invoice.`,
+          reason: `"${kind}" is not a kind of record. Use project, lead, client, meeting, member, invoice, proposal, quote or notice.`,
         },
       };
   }

@@ -34,6 +34,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { ToolSchema } from "@/lib/ai/openai";
 import type { ToolContext, ToolResult } from "@/lib/ai/tools";
+import { applyProjectTemplate } from "@/lib/project-templates";
 import type {
   AppArea,
   Artifact,
@@ -114,7 +115,7 @@ export const DELIVERY_TOOLS: ToolSchema[] = [
     function: {
       name: "delivery_query",
       description:
-        "List any delivery or project record set as a table: pick the `dataset`. projects = the delivery view of every project (stage, balance, days idle, what is blocking it). milestones = client-facing phases and internal launch checks. assets = the client asset checklist. tasks / time / expenses = the work, the hours and the extra costs raised on projects. approvals = sign-offs asked of the client. change_requests = what the client asked for after the quote. comments / pulses / reviews = what the client has said. activity = the delivery event feed. websites = the Website Progress board. resources = the shared files and links. templates = project plan templates. lessons / anomalies = the AI layer's findings. Use this for 'what milestones are due in October', 'which websites are waiting on the client', 'which projects have work nobody approved', 'what did we agree in the last change request', 'what's missing from Nimal's checklist' or 'what happened on delivery this week'.",
+        "List any delivery or project record set as a table: pick the `dataset`. projects = the delivery view of every project (stage, balance, days idle, what is blocking it). milestones = client-facing phases and internal launch checks. assets = the client asset checklist. tasks / time / expenses = the work, the hours and the extra costs raised on projects. approvals = sign-offs asked of the client. change_requests = what the client asked for after the quote. comments / pulses / reviews = what the client has said. activity = the delivery event feed. websites = the Website Progress board. resources = the shared files and links. templates = project plan templates. lessons / anomalies = the AI layer's findings. views = the board's saved filter views. Use this for 'what milestones are due in October', 'which websites are waiting on the client', 'which projects have work nobody approved', 'what did we agree in the last change request', 'what's missing from Nimal's checklist' or 'what happened on delivery this week'.",
       parameters: {
         type: "object",
         properties: {
@@ -138,6 +139,7 @@ export const DELIVERY_TOOLS: ToolSchema[] = [
               "templates",
               "lessons",
               "anomalies",
+              "views",
             ],
           },
           project: {
@@ -282,6 +284,43 @@ export const DELIVERY_TOOLS: ToolSchema[] = [
           },
         },
         required: ["project", "blocked"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "complete_milestone",
+      description:
+        "Tick off one project milestone or launch check as done — 'mark the design phase done on the Silva site'. Finds the milestone by name within the named project; if several match it lists them and changes nothing, so ask which. Completing a milestone can fire the project's own automations (that is the point), but no message goes to the client from here.",
+      parameters: {
+        type: "object",
+        properties: {
+          project: { type: "string", description: "Project name, matched loosely." },
+          milestone: { type: "string", description: "The milestone's title, matched loosely." },
+        },
+        required: ["project", "milestone"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "apply_project_template",
+      description:
+        "Seed a project from one of the saved project templates — tasks, milestones, launch checks and asset requests land on the project in one go. 'Set up the Silva project from the website template.' Fills an EMPTY or new project; it adds, never deletes. If the template or project name is ambiguous it changes nothing and asks.",
+      parameters: {
+        type: "object",
+        properties: {
+          project: { type: "string", description: "Project name, matched loosely." },
+          template: {
+            type: "string",
+            description: "Template name, matched loosely — e.g. 'website build'.",
+          },
+        },
+        required: ["project", "template"],
         additionalProperties: false,
       },
     },
@@ -2466,8 +2505,54 @@ async function datasetAnomalies(supabase: DB, scope: Scope, f: Filters): Promise
 
 // -- the tool ---------------------------------------------------------------
 
+async function datasetViews(supabase: DB, f: Filters): Promise<Dataset | string> {
+  const { data, error } = await supabase
+    .from("project_views")
+    .select("id, name, filters, shared, owner_id, updated_at")
+    .order("position", { ascending: true });
+  if (error) return error.message;
+
+  let rows = data ?? [];
+  if (f.query) rows = rows.filter((r) => contains(r.name, f.query));
+
+  const ownerIds = [...new Set(rows.map((r) => r.owner_id).filter(Boolean))] as string[];
+  const owners = new Map<string, string>();
+  if (ownerIds.length) {
+    const { data: profiles } = await supabase
+      .from("profiles")
+      .select("id, full_name")
+      .in("id", ownerIds);
+    for (const p of profiles ?? []) owners.set(p.id, p.full_name);
+  }
+  const columns: ArtifactColumn[] = [
+    { key: "name", label: "View" },
+    { key: "filters", label: "What it shows", secondary: true },
+    { key: "owner", label: "Owner" },
+    { key: "shared", label: "Visibility", format: "status" },
+  ];
+  return {
+    title: "Saved project views",
+    subtitle: `${rows.length} saved`,
+    href: "/projects",
+    area: "projects",
+    columns,
+    rows: rowsToTable(rows, columns, (r) => ({
+      id: r.id,
+      cells: {
+        name: r.name,
+        filters:
+          Object.entries(r.filters ?? {})
+            .map(([k, v]) => `${k}: ${String(v)}`)
+            .join(", ") || "everything",
+        owner: r.owner_id ? owners.get(r.owner_id) ?? "—" : "—",
+        shared: r.shared ? "shared" : "private",
+      },
+    })),
+  };
+}
+
 /** Datasets with no project column — a project filter cannot narrow them. */
-const WORKSPACE_WIDE = new Set(["resources", "templates"]);
+const WORKSPACE_WIDE = new Set(["resources", "templates", "views"]);
 
 async function deliveryQuery(
   args: Record<string, unknown>,
@@ -2532,6 +2617,7 @@ async function deliveryQuery(
     case "templates": built = await datasetTemplates(supabase, f); break;
     case "lessons": built = await datasetLessons(supabase, scope, f); break;
     case "anomalies": built = await datasetAnomalies(supabase, scope, f); break;
+    case "views": built = await datasetViews(supabase, f); break;
     default:
       return { content: { ok: false, error: `"${dataset}" is not a delivery dataset.` } };
   }
@@ -3796,7 +3882,149 @@ export async function executeDeliveryTool(
       return logProjectTime(args, ctx);
     case "set_project_blocked":
       return setBlocked(args, ctx);
+    case "complete_milestone":
+      return completeMilestone(args, ctx);
+    case "apply_project_template":
+      return applyTemplate(args, ctx);
     default:
       return null;
   }
+}
+
+/**
+ * Seed a project from a saved template (0104 — the engine gap): the existing
+ * `applyProjectTemplate` does all the real work, exactly as the Templates
+ * page button does. This exists because `create_project` has always landed an
+ * EMPTY project, and "set it up like we always do" was the half the assistant
+ * couldn't reach.
+ */
+async function applyTemplate(
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+): Promise<ToolResult> {
+  const project = await findProjectRow(ctx.supabase, args.project);
+  if (!project) {
+    return {
+      content: { ok: false, error: `No project matches "${str(args.project)}".` },
+    };
+  }
+
+  const q = str(args.template);
+  const { data: templates } = await ctx.supabase
+    .from("project_templates")
+    .select("id, name")
+    .ilike("name", `%${q}%`)
+    .limit(5);
+  if (!templates?.length) {
+    return {
+      content: {
+        ok: false,
+        error: `No template matches "${q}". They live at /projects/templates.`,
+      },
+    };
+  }
+  if (templates.length > 1) {
+    return {
+      content: {
+        ok: false,
+        ambiguous: templates.map((t) => t.name),
+        error: "Several templates match — ask which one.",
+      },
+    };
+  }
+
+  const result = await applyProjectTemplate(
+    ctx.supabase,
+    project.id,
+    templates[0].id,
+  );
+  if (!result.ok) return { content: result };
+  return {
+    content: {
+      ok: true,
+      project: project.name,
+      template: templates[0].name,
+      seeded: result,
+      note: "Confirm briefly what landed (tasks, milestones, checks) and offer to open the project.",
+    },
+    event: {
+      kind: "created",
+      label: `Seeded ${project.name} from “${templates[0].name}”`,
+      href: `/projects/${project.id}`,
+    },
+  };
+}
+
+/**
+ * Tick one milestone done, exactly as the project page would: status,
+ * completed stamp, and the milestone_completed trigger so the project's own
+ * automations fire. Ambiguity changes nothing — the caller is told to ask.
+ */
+async function completeMilestone(
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+): Promise<ToolResult> {
+  const project = await findProjectRow(ctx.supabase, args.project);
+  if (!project) {
+    return { content: { ok: false, reason: `No live project matching "${str(args.project)}".` } };
+  }
+  const wanted = str(args.milestone);
+  if (!wanted) return { content: { ok: false, error: "Say which milestone." } };
+
+  const { data: milestones } = await ctx.supabase
+    .from("project_milestones")
+    .select("id, title, kind, status")
+    .eq("project_id", project.id)
+    .neq("status", "done");
+  const open = (milestones ?? []).filter((m) => contains(m.title, wanted));
+  if (!open.length) {
+    return {
+      content: {
+        ok: false,
+        reason: `No open milestone on ${project.name} matches "${wanted}".`,
+        still_open: (milestones ?? []).map((m) => m.title),
+      },
+    };
+  }
+  if (open.length > 1) {
+    return {
+      content: {
+        ok: false,
+        reason: `More than one open milestone on ${project.name} matches "${wanted}". Ask which.`,
+        candidates: open.map((m) => m.title),
+      },
+    };
+  }
+
+  const target = open[0];
+  const { error } = await ctx.supabase
+    .from("project_milestones")
+    .update({
+      status: "done",
+      completed_at: new Date().toISOString(),
+      completed_by: ctx.userId,
+    })
+    .eq("id", target.id);
+  if (error) return { content: { ok: false, error: error.message } };
+
+  const { fireMilestoneCompleted } = await import("@/lib/project-events");
+  await fireMilestoneCompleted(ctx.supabase, project.id, {
+    id: target.id,
+    title: target.title,
+    kind: target.kind,
+  });
+
+  return {
+    content: {
+      ok: true,
+      project: project.name,
+      milestone: target.title,
+      note: "Marked done. Any automation listening for this milestone fires on its own — nothing goes to the client from here.",
+    },
+    event: {
+      kind: "updated",
+      label: `Milestone done — ${target.title}`,
+      href: `/projects/${project.id}`,
+    },
+  };
 }

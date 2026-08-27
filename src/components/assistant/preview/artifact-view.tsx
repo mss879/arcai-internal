@@ -13,6 +13,7 @@
 import * as React from "react";
 
 import type { Artifact } from "@/lib/assistant-artifacts";
+import { BriefingArtifact } from "./briefing-artifact";
 import { ChartArtifact } from "./chart-artifact";
 import { MetricsArtifact } from "./metrics-artifact";
 import { PageArtifact } from "./page-artifact";
@@ -20,6 +21,7 @@ import { PdfArtifact } from "./pdf-artifact";
 import { RecordArtifact } from "./record-artifact";
 import { TableArtifact } from "./table-artifact";
 import { TextArtifact } from "./text-artifact";
+import { ScanArtifact } from "./scan-artifact";
 import { TimelineArtifact } from "./timeline-artifact";
 
 export type ArtifactViewProps = {
@@ -32,6 +34,17 @@ export type ArtifactViewProps = {
   onNavigate: (href: string) => void;
   /** Bumped by the toolbar's Reload button (page artifacts only). */
   reloadKey?: number;
+  /** Send text back as if the user typed it (briefing priority chips). */
+  onPrompt?: (text: string) => void;
+  /**
+   * Render for the dark command stage (0104).
+   *
+   * Only the kinds that carry the most traffic honour this — table, metrics
+   * and chart. Everything else ignores it and is placed on a white island by
+   * `StagePanel` instead, because a half-restyled component reads as a bug
+   * while a document on a dark desk reads as a document.
+   */
+  stage?: boolean;
 };
 
 /**
@@ -44,11 +57,18 @@ export function ArtifactView({
   active,
   onNavigate,
   reloadKey,
+  onPrompt,
+  stage,
 }: ArtifactViewProps): React.ReactElement | null {
   switch (artifact.kind) {
     case "table":
       return (
-        <TableArtifact artifact={artifact} dense={dense} onNavigate={onNavigate} />
+        <TableArtifact
+          artifact={artifact}
+          dense={dense}
+          onNavigate={onNavigate}
+          stage={stage}
+        />
       );
     case "record":
       return (
@@ -56,10 +76,15 @@ export function ArtifactView({
       );
     case "metrics":
       return (
-        <MetricsArtifact artifact={artifact} dense={dense} onNavigate={onNavigate} />
+        <MetricsArtifact
+          artifact={artifact}
+          dense={dense}
+          onNavigate={onNavigate}
+          stage={stage}
+        />
       );
     case "chart":
-      return <ChartArtifact artifact={artifact} dense={dense} />;
+      return <ChartArtifact artifact={artifact} dense={dense} stage={stage} />;
     case "timeline":
       return (
         <TimelineArtifact
@@ -70,6 +95,25 @@ export function ArtifactView({
       );
     case "text":
       return <TextArtifact artifact={artifact} dense={dense} />;
+    case "briefing":
+      return (
+        <BriefingArtifact
+          artifact={artifact}
+          dense={dense}
+          onPrompt={onPrompt}
+          onNavigate={onNavigate}
+        />
+      );
+    case "scan":
+      return (
+        <ScanArtifact
+          artifact={artifact}
+          active={active}
+          stage={stage}
+          onPrompt={onPrompt}
+          onNavigate={onNavigate}
+        />
+      );
     case "page":
       return (
         <PageArtifact artifact={artifact} active={active} reloadKey={reloadKey} />
@@ -94,6 +138,9 @@ export function isBleedArtifact(artifact: Artifact): boolean {
   return (
     artifact.kind === "page" ||
     artifact.kind === "invoice" ||
-    artifact.kind === "proposal"
+    artifact.kind === "proposal" ||
+    // The scan panel manages its own padding and wants the full width for
+    // the candidate list (and, later, the map).
+    artifact.kind === "scan"
   );
 }

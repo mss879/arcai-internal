@@ -522,6 +522,68 @@ export const ASSISTANT_TOOLS: ToolSchema[] = [
   {
     type: "function",
     function: {
+      name: "create_meeting",
+      description:
+        "Schedule a meeting on the Meetings board — the same board the dashboard '+' fills. Give it a title and an exact start (ISO datetime); online meetings need the join link, in-person ones a venue. Attendees are workspace members by name; the client it is with can be named too. The meeting appears on the board and its reminder fires automatically before the start. This does NOT text anyone — invites and reminders are the board's own flow, so say the meeting is scheduled, not that people were notified.",
+      parameters: {
+        type: "object",
+        properties: {
+          title: { type: "string", description: "What the meeting is, e.g. 'Kickoff — Sunrise Bakery'." },
+          meeting_at: {
+            type: "string",
+            description:
+              "Start as an ISO datetime in Sri Lanka time, e.g. 2026-08-27T14:30:00. Convert relative dates first.",
+          },
+          duration_minutes: { type: "number", description: "Length in minutes. Default 60." },
+          location_type: {
+            type: "string",
+            enum: ["online", "in_person"],
+            description: "Where it happens. Default online.",
+          },
+          meeting_url: { type: "string", description: "Join link — required for online meetings." },
+          location: { type: "string", description: "Venue or address — for in-person meetings." },
+          client_name: {
+            type: "string",
+            description: "The saved client this meeting is with, matched by name.",
+          },
+          attendee_names: {
+            type: "array",
+            items: { type: "string" },
+            description: "Workspace members to put on it, by name. 'me' works for the speaker.",
+          },
+          description: { type: "string", description: "Agenda or notes, if given." },
+          reminder_hours: {
+            type: "number",
+            description: "Hours before the start the reminder fires, 1-5. Default 3.",
+          },
+        },
+        required: ["title", "meeting_at"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "cancel_meeting",
+      description:
+        "Cancel (delete) a scheduled meeting from the Meetings board, found by its title or client name. Destructive — confirm with the user before calling it, and if more than one upcoming meeting matches, ask which. For booking-link bookings use reschedule_meeting with cancel:true instead.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description: "The meeting's title or the client it is with.",
+          },
+        },
+        required: ["query"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "list_payments",
       description:
         "What clients still owe us, from BOTH ledgers that hold it: every live project's own balance as the Projects board computes it (total value minus everything received), plus Payments-board rows that belong to no project. Defaults to money still outstanding. Every row is labelled with which ledger it came from, and board rows say whether the money is due now or only expected later. Call this before any payment reminder, invoice or SMS about an amount owed — `owed_by_name` gives a per-client total so you never have to add figures up yourself. Bill from `owed_now`; `not_due_yet` beside it is money only expected later and must never go on an invoice or a reminder. Cancelled and archived projects are excluded, and a board row already linked to a project is not listed twice.",
@@ -857,6 +919,79 @@ export const ASSISTANT_TOOLS: ToolSchema[] = [
               "Optional filter on the package or group name, e.g. 'smart business', 'e-commerce', 'whatsapp'. Omit to get the whole price list.",
           },
         },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "list_proposals",
+      description:
+        "List saved proposals from the Proposals page — who each one is for, what's on it, its date and its one-time total. Call this BEFORE creating a proposal for a client, to see whether one already exists, and whenever the user asks what proposals were made, for whom, or in a period.",
+      parameters: {
+        type: "object",
+        properties: {
+          client_query: {
+            type: "string",
+            description:
+              "Filter by client or project name, e.g. 'Silva' or 'bakery'. Omit for all.",
+          },
+          from: {
+            type: "string",
+            description: "Only proposals dated on or after this ISO date (YYYY-MM-DD).",
+          },
+          to: {
+            type: "string",
+            description: "Only proposals dated on or before this ISO date (YYYY-MM-DD).",
+          },
+          limit: {
+            type: "number",
+            description: "Max rows to return. Default 20, newest first.",
+          },
+        },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_proposal",
+      description:
+        "Read one saved proposal in full — every priced line, the one-time and monthly totals, its notes, and which quote or project it is linked to. Use it to answer anything about what was quoted to a client, and to check a proposal before revising it with update_proposal. Pass proposal_id when you have it (from list_proposals); otherwise client_query returns the newest match.",
+      parameters: {
+        type: "object",
+        properties: {
+          proposal_id: {
+            type: "string",
+            description: "The proposal's id, e.g. from list_proposals.",
+          },
+          client_query: {
+            type: "string",
+            description:
+              "The client or project name; the newest matching proposal is returned and any older matches are listed.",
+          },
+        },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "delete_proposal",
+      description:
+        "Permanently delete one saved proposal. Destructive — confirm with the user first, and pass the exact proposal_id (find it with list_proposals). Never delete on a name guess.",
+      parameters: {
+        type: "object",
+        properties: {
+          proposal_id: {
+            type: "string",
+            description: "The exact id of the proposal to delete.",
+          },
+        },
+        required: ["proposal_id"],
         additionalProperties: false,
       },
     },
@@ -1955,6 +2090,9 @@ export async function executeTool(
         clients,
         upcomingMeetings,
         outstandingPayments,
+        proposalsCount,
+        myUnreadNotifications,
+        waNeedsAttention,
       ] = await Promise.all([
         supabase.from("todos").select("*", { count: "exact", head: true }).neq("status", "done"),
         supabase
@@ -1985,6 +2123,16 @@ export async function executeTool(
           .eq("status", "confirmed")
           .gte("booking_date", today),
         supabase.from("payments").select("amount, currency").neq("status", "paid"),
+        supabase.from("proposals").select("*", { count: "exact", head: true }),
+        supabase
+          .from("notifications")
+          .select("*", { count: "exact", head: true })
+          .eq("user_id", ctx.userId)
+          .eq("read", false),
+        supabase
+          .from("wa_contacts")
+          .select("*", { count: "exact", head: true })
+          .eq("needs_attention", true),
       ]);
 
       const pipelineValue = (leads.data ?? []).reduce(
@@ -2008,6 +2156,9 @@ export async function executeTool(
           clients: clients.count ?? 0,
           upcoming_meetings: upcomingMeetings.count ?? 0,
           outstanding_payments_amount: outstanding,
+          saved_proposals: proposalsCount.count ?? 0,
+          my_unread_notifications: myUnreadNotifications.count ?? 0,
+          whatsapp_threads_needing_attention: waNeedsAttention.count ?? 0,
           currency: "LKR",
         },
       };
@@ -2017,40 +2168,88 @@ export async function executeTool(
       const q = String(args.query ?? "").trim();
       if (!q) return { content: { results: [] } };
       const term = `%${q}%`;
-      const [clients, todos, projects, leads, meetings, resources] =
-        await Promise.all([
-          supabase
-            .from("clients")
-            .select("id, name, company, email, status")
-            .or(`name.ilike.${term},company.ilike.${term},email.ilike.${term}`)
-            .limit(5),
-          supabase
-            .from("todos")
-            .select("id, title, status, priority, due_date")
-            .or(`title.ilike.${term},description.ilike.${term}`)
-            .limit(5),
-          supabase
-            .from("projects")
-            .select("id, name, status")
-            .or(`name.ilike.${term},description.ilike.${term}`)
-            .is("deleted_at", null)
-            .limit(5),
-          supabase
-            .from("leads")
-            .select("id, title, company, contact_name, value")
-            .or(`title.ilike.${term},company.ilike.${term},contact_name.ilike.${term}`)
-            .limit(5),
-          supabase
-            .from("meeting_bookings")
-            .select("id, client_name, booking_date, start_time")
-            .or(`client_name.ilike.${term},notes.ilike.${term}`)
-            .limit(5),
-          supabase
-            .from("resources")
-            .select("id, name, kind")
-            .or(`name.ilike.${term},description.ilike.${term}`)
-            .limit(5),
-        ]);
+      // Eleven surfaces, one search — a name should surface everything the
+      // workspace holds about it: the client, their proposal, their invoice,
+      // their WhatsApp thread. Anything less and the assistant "can't see"
+      // records the user knows are there.
+      const [
+        clients,
+        todos,
+        projects,
+        leads,
+        meetings,
+        resources,
+        proposals,
+        invoices,
+        quotes,
+        notices,
+        waContacts,
+      ] = await Promise.all([
+        supabase
+          .from("clients")
+          .select("id, name, company, email, status")
+          .or(`name.ilike.${term},company.ilike.${term},email.ilike.${term}`)
+          .limit(5),
+        supabase
+          .from("todos")
+          .select("id, title, status, priority, due_date")
+          .or(`title.ilike.${term},description.ilike.${term}`)
+          .limit(5),
+        supabase
+          .from("projects")
+          .select("id, name, status")
+          .or(`name.ilike.${term},description.ilike.${term}`)
+          .is("deleted_at", null)
+          .limit(5),
+        supabase
+          .from("leads")
+          .select("id, title, company, contact_name, value")
+          .or(`title.ilike.${term},company.ilike.${term},contact_name.ilike.${term}`)
+          .limit(5),
+        supabase
+          .from("meeting_bookings")
+          .select("id, client_name, booking_date, start_time")
+          .or(`client_name.ilike.${term},notes.ilike.${term}`)
+          .limit(5),
+        supabase
+          .from("resources")
+          .select("id, name, kind")
+          .or(`name.ilike.${term},description.ilike.${term}`)
+          .limit(5),
+        supabase
+          .from("proposals")
+          .select("id, client_name, project_name, proposal_date, grand_total")
+          .or(`client_name.ilike.${term},project_name.ilike.${term}`)
+          .order("created_at", { ascending: false })
+          .limit(5),
+        supabase
+          .from("invoices")
+          .select("id, invoice_number, bill_to_name, invoice_date, grand_total")
+          .or(`invoice_number.ilike.${term},bill_to_name.ilike.${term}`)
+          .order("created_at", { ascending: false })
+          .limit(5),
+        supabase
+          .from("quotes")
+          .select("id, quote_number, title, customer_name")
+          .or(
+            `quote_number.ilike.${term},title.ilike.${term},customer_name.ilike.${term}`,
+          )
+          .limit(5),
+        supabase
+          .from("notices")
+          .select("id, notice_number, to_name, subject, notice_date")
+          .or(`notice_number.ilike.${term},to_name.ilike.${term},subject.ilike.${term}`)
+          .limit(5),
+        supabase
+          .from("wa_contacts")
+          .select(
+            "id, profile_name, display_name, wa_id, unread, needs_attention, last_message_preview",
+          )
+          .or(
+            `profile_name.ilike.${term},display_name.ilike.${term},wa_id.ilike.${term}`,
+          )
+          .limit(5),
+      ]);
       return {
         content: {
           clients: clients.data ?? [],
@@ -2068,6 +2267,28 @@ export async function executeTool(
             start_time: fmtTime(m.start_time),
           })),
           resources: resources.data ?? [],
+          proposals: (proposals.data ?? []).map((p) => ({
+            proposal_id: p.id,
+            client_name: p.client_name,
+            project_name: p.project_name,
+            date: p.proposal_date,
+            one_time_total: p.grand_total,
+          })),
+          invoices: (invoices.data ?? []).map((i) => ({
+            invoice_id: i.id,
+            invoice_number: i.invoice_number,
+            bill_to: i.bill_to_name,
+            date: i.invoice_date,
+            grand_total: i.grand_total,
+          })),
+          quotes: quotes.data ?? [],
+          notices: notices.data ?? [],
+          whatsapp_contacts: (waContacts.data ?? []).map((c) => ({
+            name: c.display_name || c.profile_name || c.wa_id,
+            unread: c.unread,
+            needs_attention: c.needs_attention,
+            last_message: c.last_message_preview,
+          })),
         },
       };
     }
@@ -2091,15 +2312,40 @@ export async function executeTool(
 
       const { data } = await q;
       const names = await nameMap(ctx, (data ?? []).map((t) => t.assigned_to));
+
+      // Subtask progress per parent, one query for the whole page — a to-do
+      // that is "3 of 5 steps done" reads very differently from an untouched
+      // one, and the board shows exactly that.
+      const ids = (data ?? []).map((t) => t.id);
+      const subtaskProgress = new Map<string, { done: number; total: number }>();
+      if (ids.length) {
+        const { data: subs } = await supabase
+          .from("todo_subtasks")
+          .select("todo_id, is_done")
+          .in("todo_id", ids);
+        for (const s of subs ?? []) {
+          const p = subtaskProgress.get(s.todo_id) ?? { done: 0, total: 0 };
+          p.total += 1;
+          if (s.is_done) p.done += 1;
+          subtaskProgress.set(s.todo_id, p);
+        }
+      }
+
       return {
         content: {
-          todos: (data ?? []).map((t) => ({
-            title: t.title,
-            status: t.status,
-            priority: t.priority,
-            due: fmtDateTime(t.due_date),
-            assignee: t.assigned_to ? names.get(t.assigned_to) ?? null : null,
-          })),
+          todos: (data ?? []).map((t) => {
+            const progress = subtaskProgress.get(t.id);
+            return {
+              title: t.title,
+              status: t.status,
+              priority: t.priority,
+              due: fmtDateTime(t.due_date),
+              assignee: t.assigned_to ? names.get(t.assigned_to) ?? null : null,
+              ...(progress
+                ? { subtasks: `${progress.done} of ${progress.total} done` }
+                : {}),
+            };
+          }),
         },
         event: { kind: "read", label: "Looked up to-dos", href: "/todos" },
       };
@@ -2687,6 +2933,164 @@ export async function executeTool(
               : `Rescheduled: ${target.client_name}`,
           href: "/meetings",
         },
+      };
+    }
+
+    case "create_meeting": {
+      const title = String(args.title ?? "").trim();
+      const meetingAt = String(args.meeting_at ?? "").trim();
+      if (!title) return { content: { ok: false, error: "Give the meeting a title." } };
+      if (!meetingAt || Number.isNaN(new Date(meetingAt).getTime()))
+        return { content: { ok: false, error: "Say when — a real date and time." } };
+
+      const online = String(args.location_type ?? "online") !== "in_person";
+      const rawUrl = String(args.meeting_url ?? "").trim();
+      const meetingUrl = online
+        ? rawUrl
+          ? /^https?:\/\//i.test(rawUrl)
+            ? rawUrl
+            : `https://${rawUrl}`
+          : null
+        : null;
+      const location = !online ? String(args.location ?? "").trim() || null : null;
+      if (online && !meetingUrl)
+        return {
+          content: {
+            ok: false,
+            error: "An online meeting needs its join link — ask the user for it.",
+          },
+        };
+
+      // The client it is with, by name — optional, and a miss is reported
+      // rather than silently dropped.
+      let clientId: string | null = null;
+      const clientQuery = String(args.client_name ?? "").trim();
+      if (clientQuery) {
+        const { data: clients } = await supabase
+          .from("clients")
+          .select("id, name, company")
+          .or(`name.ilike.%${clientQuery}%,company.ilike.%${clientQuery}%`)
+          .limit(1);
+        clientId = clients?.[0]?.id ?? null;
+        if (!clientId)
+          return {
+            content: {
+              ok: false,
+              error: `No saved client matches "${clientQuery}". Create the client first or drop the client name.`,
+            },
+          };
+      }
+
+      const reminderHours = Math.min(5, Math.max(1, Math.round(Number(args.reminder_hours) || 3)));
+      const { data: created, error } = await supabase
+        .from("meetings")
+        .insert({
+          title,
+          description: String(args.description ?? "").trim() || null,
+          meeting_at: meetingAt,
+          duration_minutes: Math.max(15, Math.round(Number(args.duration_minutes) || 60)),
+          location_type: online ? "online" : "in_person",
+          location,
+          meeting_url: meetingUrl,
+          reminder_hours: reminderHours,
+          client_id: clientId,
+          created_by: ctx.userId,
+        })
+        .select("id")
+        .single();
+      if (error) return { content: { ok: false, error: error.message } };
+
+      // Attendees by name; unknown names are reported back, not guessed.
+      const attendeeNames = Array.isArray(args.attendee_names)
+        ? args.attendee_names.map((n) => String(n).trim()).filter(Boolean)
+        : [];
+      const unmatched: string[] = [];
+      const attendeeIds = new Set<string>();
+      for (const name of attendeeNames) {
+        const id = await resolveMemberId(ctx, name);
+        if (id) attendeeIds.add(id);
+        else unmatched.push(name);
+      }
+      if (attendeeIds.size) {
+        await supabase.from("meeting_attendees").insert(
+          [...attendeeIds].map((userId) => ({
+            meeting_id: created.id,
+            user_id: userId,
+          })),
+        );
+      }
+
+      return {
+        content: {
+          ok: true,
+          title,
+          when: fmtDateTime(meetingAt),
+          where: online ? meetingUrl : location,
+          attendees: attendeeIds.size,
+          ...(unmatched.length ? { unmatched_attendees: unmatched } : {}),
+          reminder: `${reminderHours}h before`,
+          note: "Scheduled on the Meetings board. Nobody has been texted — the board's reminder fires on its own before the start.",
+        },
+        event: { kind: "created", label: `Meeting: ${title}`, href: "/meetings" },
+      };
+    }
+
+    case "cancel_meeting": {
+      const query = String(args.query ?? "").trim();
+      if (!query)
+        return { content: { ok: false, error: "Say which meeting to cancel." } };
+      const term = `%${query}%`;
+      const nowIso = new Date().toISOString();
+      const { data: matches } = await supabase
+        .from("meetings")
+        .select("id, title, meeting_at, client_id")
+        .or(`title.ilike.${term},description.ilike.${term}`)
+        .gte("meeting_at", nowIso)
+        .order("meeting_at", { ascending: true })
+        .limit(3);
+      let rows = matches ?? [];
+      // A client's name usually isn't in the title — check the client too.
+      if (!rows.length) {
+        const { data: clients } = await supabase
+          .from("clients")
+          .select("id")
+          .or(`name.ilike.${term},company.ilike.${term}`)
+          .limit(5);
+        const clientIds = (clients ?? []).map((c) => c.id);
+        if (clientIds.length) {
+          const { data: byClient } = await supabase
+            .from("meetings")
+            .select("id, title, meeting_at, client_id")
+            .in("client_id", clientIds)
+            .gte("meeting_at", nowIso)
+            .order("meeting_at", { ascending: true })
+            .limit(3);
+          rows = byClient ?? [];
+        }
+      }
+      if (!rows.length)
+        return {
+          content: { ok: false, error: `No upcoming meeting matches "${query}".` },
+        };
+      if (rows.length > 1)
+        return {
+          content: {
+            ok: false,
+            error: `More than one upcoming meeting matches "${query}". Ask which one.`,
+            candidates: rows.map((m) => `${m.title} — ${fmtDateTime(m.meeting_at)}`),
+          },
+        };
+
+      const target = rows[0];
+      const { error } = await supabase.from("meetings").delete().eq("id", target.id);
+      if (error) return { content: { ok: false, error: error.message } };
+      return {
+        content: {
+          ok: true,
+          cancelled: target.title,
+          was_at: fmtDateTime(target.meeting_at),
+        },
+        event: { kind: "updated", label: `Cancelled: ${target.title}`, href: "/meetings" },
       };
     }
 
@@ -3565,6 +3969,231 @@ export async function executeTool(
       };
     }
 
+    case "list_proposals": {
+      const query = String(args.client_query ?? "").trim();
+      const from = String(args.from ?? "").trim();
+      const to = String(args.to ?? "").trim();
+      const limit = Math.min(Math.max(Number(args.limit) || 20, 1), 50);
+
+      let q = supabase
+        .from("proposals")
+        .select(
+          "id, client_name, project_name, proposal_date, selection, grand_total, quote_id, project_id, created_at",
+        )
+        .order("created_at", { ascending: false })
+        .limit(limit);
+      if (query) {
+        const term = `%${query}%`;
+        q = q.or(`client_name.ilike.${term},project_name.ilike.${term}`);
+      }
+      if (from) q = q.gte("proposal_date", from);
+      if (to) q = q.lte("proposal_date", to);
+
+      const { data, error } = await q;
+      if (error) return { content: { ok: false, error: error.message } };
+
+      const rows = (data ?? []).map((row) => {
+        // A stored selection predates some of today's fields; summarising it
+        // must never take the whole list down with it.
+        let packages = "—";
+        try {
+          packages = selectionSummary({
+            ...defaultSelection(),
+            ...(row.selection as unknown as ProposalSelection),
+          });
+        } catch {
+          // Leave the dash; the row still lists.
+        }
+        return {
+          id: row.id,
+          client_name: row.client_name,
+          project_name: row.project_name,
+          proposal_date: row.proposal_date,
+          packages,
+          grand_total: row.grand_total ?? 0,
+          linked_quote: Boolean(row.quote_id),
+          linked_project: Boolean(row.project_id),
+        };
+      });
+
+      const columns: ArtifactColumn[] = [
+        { key: "client", label: "Client" },
+        { key: "project", label: "Project", secondary: true },
+        { key: "date", label: "Date", format: "date" },
+        { key: "packages", label: "On it" },
+        { key: "total", label: "One-time total", format: "money", align: "right" },
+      ];
+      const artifact = tableArtifact({
+        title: query ? `Proposals — ${query}` : "Saved proposals",
+        subtitle:
+          from || to
+            ? [from ? `from ${from}` : "", to ? `to ${to}` : ""].filter(Boolean).join(" ")
+            : "Newest first",
+        summary: `${rows.length} proposal${rows.length === 1 ? "" : "s"}`,
+        href: "/proposals",
+        area: "proposals",
+        columns,
+        rows: rowsToTable(rows, columns, (r) => ({
+          id: r.id,
+          cells: {
+            client: r.client_name,
+            project: r.project_name,
+            date: r.proposal_date,
+            packages: r.packages,
+            total: r.grand_total,
+          },
+        })),
+        total_label: "One-time totals combined",
+        total_value: rows.reduce((sum, r) => sum + (r.grand_total || 0), 0),
+        total_format: "money",
+        footnote:
+          "One-time totals only — monthly retainers on a proposal are not in these figures.",
+      });
+
+      return {
+        content: {
+          ok: true,
+          count: rows.length,
+          proposals: rows,
+          note: rows.length
+            ? "grand_total is each proposal's ONE-TIME total; monthly retainers are separate. Use get_proposal with an id for the full breakdown."
+            : query
+              ? `No saved proposals match "${query}".`
+              : "No proposals saved yet.",
+        },
+        event: { kind: "read", label: "Read the proposals", href: "/proposals" },
+        artifacts: [artifact],
+      };
+    }
+
+    case "get_proposal": {
+      const id = String(args.proposal_id ?? "").trim();
+      const query = String(args.client_query ?? "").trim();
+      if (!id && !query)
+        return {
+          content: {
+            ok: false,
+            error: "Pass proposal_id or client_query — there is nothing to look up.",
+          },
+        };
+
+      const base = supabase
+        .from("proposals")
+        .select(
+          "id, client_name, project_name, proposal_date, selection, content, grand_total, quote_id, project_id, created_at",
+        );
+      const term = `%${query}%`;
+      const { data, error } = await (id
+        ? base.eq("id", id)
+        : base.or(`client_name.ilike.${term},project_name.ilike.${term}`)
+      )
+        .order("created_at", { ascending: false })
+        .limit(5);
+      if (error) return { content: { ok: false, error: error.message } };
+      const row = data?.[0];
+      if (!row)
+        return {
+          content: {
+            ok: false,
+            error: id
+              ? "No proposal with that id."
+              : `No saved proposal found for "${query}".`,
+          },
+        };
+
+      const selection: ProposalSelection = {
+        ...defaultSelection(),
+        ...(row.selection as unknown as ProposalSelection),
+      };
+      const content: ProposalContent = {
+        ...defaultContent(),
+        ...(row.content as unknown as ProposalContent),
+      };
+      const pricing = buildPricing(selection);
+      const card = proposalCard({
+        id: row.id,
+        client_name: row.client_name,
+        project_name: row.project_name,
+        proposal_date: row.proposal_date,
+        selection,
+        content,
+      });
+
+      // Older matches the query also hit — named so the model can ask "the
+      // March one or the June one?" instead of silently reading the newest.
+      const candidates = (data ?? []).slice(1).map((r) => ({
+        proposal_id: r.id,
+        client_name: r.client_name,
+        project_name: r.project_name,
+        proposal_date: r.proposal_date,
+      }));
+
+      return {
+        content: {
+          ok: true,
+          proposal_id: row.id,
+          client: row.client_name,
+          project: row.project_name,
+          proposal_date: row.proposal_date,
+          package_summary: card.package_summary,
+          line_items: card.line_items,
+          one_time_total: pricing.oneTimeTotal,
+          monthly_total: pricing.monthlyTotal ?? 0,
+          yearly_total: pricing.yearlyTotal ?? 0,
+          recurring_notes: card.recurring_notes,
+          notes: selection.notes ?? [],
+          written_sections: (content.sections ?? []).map((s) => s.heading),
+          linked_quote_id: row.quote_id,
+          linked_project_id: row.project_id,
+          currency: "LKR",
+          ...(candidates.length ? { other_matches: candidates } : {}),
+          note: "The user sees this proposal as a card with its PDF download. one_time_total and monthly_total are separate figures — never add them together.",
+        },
+        event: {
+          kind: "read",
+          label: `Proposal — ${row.client_name}`,
+          href: "/proposals",
+        },
+        card: { type: "proposal", proposal: card },
+      };
+    }
+
+    case "delete_proposal": {
+      const id = String(args.proposal_id ?? "").trim();
+      if (!id)
+        return {
+          content: {
+            ok: false,
+            error: "Pass the exact proposal_id — find it with list_proposals first.",
+          },
+        };
+      const { data: row } = await supabase
+        .from("proposals")
+        .select("id, client_name, project_name")
+        .eq("id", id)
+        .maybeSingle();
+      if (!row)
+        return { content: { ok: false, error: "No proposal with that id." } };
+      const { error } = await supabase.from("proposals").delete().eq("id", id);
+      if (error) return { content: { ok: false, error: error.message } };
+      return {
+        content: {
+          ok: true,
+          deleted: {
+            proposal_id: row.id,
+            client: row.client_name,
+            project: row.project_name,
+          },
+          note: "Gone for good — confirm to the user which proposal was deleted.",
+        },
+        event: {
+          kind: "updated",
+          label: `Deleted proposal — ${row.client_name}`,
+          href: "/proposals",
+        },
+      };
+    }
+
     case "create_proposal": {
       const clientName = String(args.client_name ?? "").trim();
       const type = String(args.project_type ?? "").trim();
@@ -4222,6 +4851,9 @@ export async function executeTool(
         content: {
           ok: true,
           proposal_id: row.id,
+          // What the query actually matched, so a revision aimed at the wrong
+          // client is visible to the model instead of silent.
+          matched: { client: row.client_name, project: row.project_name },
           client: clientName,
           project: projectName,
           package: card.package_summary,

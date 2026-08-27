@@ -43,7 +43,9 @@ export type CommandViewProps = {
   initialArtifactId?: string | null;
   wakeListening?: boolean;
   wakeState?: WakeWordState;
+  wakePaused?: boolean;
   onWakeFix?: () => void;
+  onWakeToggle?: () => void;
   isTerminal?: boolean;
   /** Show the business dashboard on the idle stage. Off = a clean greeting. */
   ambientStage?: boolean;
@@ -59,7 +61,9 @@ export function CommandView({
   initialArtifactId,
   wakeListening,
   wakeState,
+  wakePaused,
   onWakeFix,
+  onWakeToggle,
   isTerminal,
   ambientStage,
 }: CommandViewProps): React.ReactElement {
@@ -192,7 +196,9 @@ export function CommandView({
               personaName={personaName}
               wakeListening={wakeListening}
               wakeState={wakeState}
+              wakePaused={wakePaused}
               onWakeFix={onWakeFix}
+              onWakeToggle={onWakeToggle}
               isTerminal={isTerminal}
               orbRef={orbRef}
               onCoreTap={onCoreTap}

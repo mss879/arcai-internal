@@ -183,7 +183,16 @@ export function VoiceAssistant({
    * you want. Suspended while Arcus is busy — see `use-wake-word` for why
    * hearing itself would otherwise loop.
    */
-  const { setHandsFree, toggleMic } = chat;
+  const { setHandsFree, listenWhenQuiet } = chat;
+  // Session-local mute for the wake microphone (0104-fix): one click in the
+  // rail, no settings write, back the moment it is clicked again. This is
+  // the honest answer to "the OS says my mic is always on" — while the wake
+  // word is armed it IS on, so pausing it has to be one visible tap away.
+  const [wakePaused, setWakePaused] = React.useState(false);
+  const toggleWakePaused = React.useCallback(
+    () => setWakePaused((p) => !p),
+    [],
+  );
   // The live voice session (0104): opt-in via settings, browser↔OpenAI
   // WebRTC, tools relayed home under the user's own session. Its turns land
   // in the SAME thread store — the stage cannot tell which engine served it.
@@ -201,8 +210,9 @@ export function VoiceAssistant({
     retry: retryWake,
   } = useWakeWord(
     // The terminal listens BY DEFINITION — that is what registering the
-    // machine means. Everywhere else the per-user toggle decides.
-    (arcus.wakeWord || isTerminal) && desktop && !embedded,
+    // machine means. Everywhere else the per-user toggle decides. The rail's
+    // pause light silences either for the session, without touching settings.
+    (arcus.wakeWord || isTerminal) && desktop && !embedded && !wakePaused,
     busy,
     React.useCallback(() => {
       lastOpenModeRef.current = "full";
@@ -211,21 +221,17 @@ export function VoiceAssistant({
       // Hands-free from a wake word is implied: someone who called across the
       // room is not about to reach for the mic button for their next turn.
       setHandsFree(true);
-      // "Yes, sir?" first — precached, so it lands the instant the name does.
-      // `playClip` resolves when the CLIP ENDS, so the mic opens the moment
-      // Arcus stops talking — never over it, never a beat late.
+      // "Yes, sir?" queues BEHIND anything already being said (the greeting),
+      // and `listenWhenQuiet` opens the mic only once Arcus has gone silent —
+      // never over its own voice, and only ever OPENS: the old toggle could
+      // race the hands-free auto-arm and flip the mic straight back off.
       const engageMic =
         arcus.voiceEngine === "realtime"
           ? () => void realtime.start()
-          : () => toggleMic();
-      if (wakeAckUrl) {
-        void playClip(wakeAckUrl).then(() =>
-          window.setTimeout(engageMic, 120),
-        );
-      } else {
-        window.setTimeout(engageMic, 300);
-      }
-    }, [setHandsFree, toggleMic, wakeAckUrl, playClip, arcus.voiceEngine, realtime]),
+          : () => void listenWhenQuiet();
+      if (wakeAckUrl) void playClip(wakeAckUrl).then(engageMic);
+      else engageMic();
+    }, [setHandsFree, listenWhenQuiet, wakeAckUrl, playClip, arcus.voiceEngine, realtime]),
   );
 
   // "MIC BLOCKED — fix": SpeechRecognition cannot re-prompt after a refusal,
@@ -917,11 +923,19 @@ export function VoiceAssistant({
           {mode === "full" && (
             <AssistantWorkspace
               key="studio"
-              chat={chat}
+              chat={chatForUi}
               firstName={firstName}
               onDock={stepDown}
               onClose={toBubble}
               initialArtifactId={promoteArtifactId}
+              personaName={arcus.personaName}
+              wakeListening={wakeListening}
+              wakeState={wakeState}
+              wakePaused={wakePaused}
+              onWakeFix={onWakeFix}
+              onWakeToggle={toggleWakePaused}
+              isTerminal={isTerminal}
+              ambientStage={arcus.ambientStage}
             />
           )}
         </AnimatePresence>,

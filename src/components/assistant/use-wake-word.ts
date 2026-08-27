@@ -41,17 +41,28 @@ import * as React from "react";
 /**
  * Tolerant on purpose. "Arcus" is not in any recogniser's dictionary, so it
  * comes back as "arc us", "argus", "marcus" — matching only the exact
- * spelling would make the feature look broken. The leading greeting is
- * optional so a bare "Arcus?" works too.
+ * spelling would make the feature look broken.
+ *
+ * Two tiers, because tolerance has a cost in false wakes: spellings that are
+ * not everyday words are accepted BARE (a plain "Arcus?" works), while
+ * mishears that collide with real words — "Marcus", "circus", plain "arc" —
+ * need the greeting in front, which is how the phrase is actually said.
  */
-const WAKE_RE =
-  /\b(?:hey|hi|hello|ok|okay)?[,\s]*(arcus|arc us|arkus|argus|arcas|marcus)\b/i;
+const BARE_RE =
+  /\b(?:hey|hi|hello|ok|okay|yo)?[,.!?\s]*(?:arcus+|arkus|arckus|archus|argus|arcas|arkas|arcos|orcus|arc\s?us|arc\s?as)\b/i;
+const PREFIXED_RE =
+  /\b(?:hey|hi|hello|ok|okay|yo)[,.!?\s]+(?:marcus|markus|circus|orcas?|argos|arches|arc(?:\s?is)?)\b/i;
+
+function matchesWake(transcript: string): boolean {
+  return BARE_RE.test(transcript) || PREFIXED_RE.test(transcript);
+}
 
 /** Ignore a second match this soon — one utterance, one wake. */
 const DEBOUNCE_MS = 3_000;
 
-/** Restart delay after a HEALTHY session ends (Chrome's silence timeout). */
-const RESTART_MS = 400;
+/** Restart delay after a HEALTHY session ends (Chrome's silence timeout).
+ *  Every restart is a window where the name goes unheard, so it is short. */
+const RESTART_MS = 200;
 
 /** A session that survives this long counts as healthy. */
 const HEALTHY_MS = 3_000;
@@ -79,6 +90,7 @@ export type WakeWordState =
 type SpeechRecognitionLike = {
   continuous: boolean;
   interimResults: boolean;
+  maxAlternatives: number;
   lang: string;
   start: () => void;
   stop: () => void;
@@ -177,6 +189,7 @@ export function useWakeWord(
     let quickFailures = 0;
     let startedAt = 0;
     let lastWake = 0;
+    let lastError = "";
     let timer: number | null = null;
 
     const schedule = (delay: number) => {
@@ -191,17 +204,38 @@ export function useWakeWord(
         recognition = new Ctor();
         recognition.continuous = true;
         recognition.interimResults = true;
-        recognition.lang = "en-US";
+        // The recogniser's SECOND guess is very often the right one for a
+        // made-up name — scanning the runners-up is the single biggest
+        // pickup improvement available.
+        recognition.maxAlternatives = 3;
+        // Match the user's own English variant when the browser declares one
+        // ("en-GB", "en-IN", …) — accent mismatch is a real miss factory.
+        recognition.lang = /^en\b/i.test(navigator.language)
+          ? navigator.language
+          : "en-US";
 
         recognition.onresult = (event) => {
           // A result at all means the engine is genuinely working.
           quickFailures = 0;
+          lastError = "";
           // Only the newest result matters; older ones were already scanned
           // and re-matching them would re-fire on every interim update.
           const results = event.results;
           const latest = results[results.length - 1];
-          const transcript = latest?.[0]?.transcript ?? "";
-          if (!WAKE_RE.test(transcript)) return;
+          if (!latest) return;
+          // Every alternative of the newest result, not just the favourite.
+          let heard = "";
+          for (let i = 0; i < latest.length; i++) {
+            heard += ` ${latest[i]?.transcript ?? ""}`;
+          }
+          // "Hey" and "Arcus" can straddle a result boundary; stitch the
+          // tail of the previous result onto the newest before matching.
+          const previous =
+            results.length > 1 ? results[results.length - 2] : null;
+          const stitched = `${previous?.[0]?.transcript?.slice(-24) ?? ""} ${
+            latest[0]?.transcript ?? ""
+          }`;
+          if (!matchesWake(heard) && !matchesWake(stitched)) return;
           const now = Date.now();
           if (now - lastWake < DEBOUNCE_MS) return;
           lastWake = now;
@@ -216,6 +250,7 @@ export function useWakeWord(
         };
 
         recognition.onerror = (event) => {
+          lastError = event?.error ?? "";
           // A permission refusal is terminal for THIS effect run — but it is
           // reported, and `retry()` can lift it once the user grants the mic.
           if (
@@ -233,9 +268,16 @@ export function useWakeWord(
           if (disposed || denied) return;
           // Died young = the engine is broken (offline speech service, mic
           // wrestling); lived a while = Chrome's normal silence timeout.
+          // "no-speech" is the engine working PERFECTLY in a quiet room —
+          // counting it as a failure used to trip the 20s backoff and leave
+          // the wake word deaf exactly when someone finally spoke.
           const lived = Date.now() - startedAt;
-          if (lived < HEALTHY_MS) quickFailures += 1;
-          else quickFailures = 0;
+          if (lastError === "no-speech" || lived >= HEALTHY_MS) {
+            quickFailures = 0;
+          } else {
+            quickFailures += 1;
+          }
+          lastError = "";
 
           if (quickFailures >= MAX_QUICK_FAILURES) {
             // The slow lane — keep trying forever, visibly, without hammering.

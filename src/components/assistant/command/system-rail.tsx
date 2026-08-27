@@ -158,13 +158,45 @@ function RailComposer(props: {
 function WakeIndicator({
   listening,
   state,
+  paused,
   onFix,
+  onToggle,
 }: {
   listening?: boolean;
   state?: WakeWordState;
+  /** Muted for the session via this very light. */
+  paused?: boolean;
   onFix?: () => void;
+  /** Pause/resume listening for the session — no settings write. */
+  onToggle?: () => void;
 }) {
+  // The session mute outranks everything: while paused the recogniser is
+  // disabled, so `state` would otherwise read "off" and hide the way back.
+  if (paused && onToggle) {
+    return (
+      <button
+        type="button"
+        onClick={onToggle}
+        className="pointer-events-auto text-amber-400 underline decoration-dotted underline-offset-2 hover:text-amber-300"
+        title="Wake word paused on this device — click to start listening again."
+      >
+        WAKE MUTED · ARM
+      </button>
+    );
+  }
   if (listening) {
+    if (onToggle) {
+      return (
+        <button
+          type="button"
+          onClick={onToggle}
+          className="pointer-events-auto text-[var(--stage-accent)] underline decoration-dotted underline-offset-2 hover:brightness-125"
+          title="Listening for the wake word — click to pause the microphone for this session."
+        >
+          WAKE ARMED
+        </button>
+      );
+    }
     return <span className="text-[var(--stage-accent)]">WAKE ARMED</span>;
   }
   if (state === "denied" && onFix) {
@@ -240,7 +272,9 @@ export type SystemRailProps = {
   personaName: string;
   wakeListening?: boolean;
   wakeState?: WakeWordState;
+  wakePaused?: boolean;
   onWakeFix?: () => void;
+  onWakeToggle?: () => void;
   isTerminal?: boolean;
   orbRef: React.RefObject<HTMLDivElement | null>;
   onCoreTap: () => void;
@@ -271,7 +305,9 @@ function SystemRailImpl({
   personaName,
   wakeListening,
   wakeState,
+  wakePaused,
   onWakeFix,
+  onWakeToggle,
   isTerminal,
   orbRef,
   onCoreTap,
@@ -348,7 +384,9 @@ function SystemRailImpl({
           <WakeIndicator
             listening={wakeListening}
             state={wakeState}
+            paused={wakePaused}
             onFix={onWakeFix}
+            onToggle={onWakeToggle}
           />
         </div>
       </section>

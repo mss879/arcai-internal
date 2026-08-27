@@ -314,6 +314,8 @@ export type VoiceChat = {
   speak: (reply: string) => Promise<void>;
   /** Play a precached clip instantly — greeting / wake ack (0104). */
   playClip: (url: string) => Promise<void>;
+  /** Open the mic once nothing is being spoken — the wake flow's handoff. */
+  listenWhenQuiet: () => Promise<void>;
   /** Surface artifacts from a live-voice tool call (0104). */
   ingestArtifacts: (artifacts: Artifact[]) => void;
   /** Commit a finished live-voice exchange into the thread (0104). */
@@ -447,6 +449,8 @@ export function useVoiceChat(): VoiceChat {
   const handsFreeRef = React.useRef(false);
   /** Pending re-arm timer, so unmount can cancel it. */
   const autoListenTimerRef = React.useRef<number | null>(null);
+  /** A capture is being opened RIGHT NOW — guards overlapping getUserMedia. */
+  const micOpeningRef = React.useRef(false);
   const startListeningRef = React.useRef<() => void>(() => {});
 
   // The turn in flight.
@@ -931,6 +935,26 @@ export function useVoiceChat(): VoiceChat {
   );
 
   /**
+   * One clip AFTER another, never over it (0104-fix).
+   *
+   * The greeting and the wake ack share the single reply player, and the two
+   * genuinely collide — say "hey Arcus" while the greeting is mid-sentence
+   * and the ack used to preempt it mid-word, which read as Arcus cutting
+   * itself off. Queuing on a promise chain means whatever is being said
+   * finishes first; the chain also gives the wake flow one true answer to
+   * "is anything still talking?" before it opens the microphone.
+   */
+  const playbackChainRef = React.useRef<Promise<void>>(Promise.resolve());
+  const enqueuePlayback = React.useCallback((run: () => Promise<void>) => {
+    const chained = playbackChainRef.current.then(run, run);
+    playbackChainRef.current = chained.then(
+      () => undefined,
+      () => undefined,
+    );
+    return chained;
+  }, []);
+
+  /**
    * Play an ALREADY-SYNTHESISED clip — the greeting and the wake ack (0104).
    *
    * `speak()` costs a TTS round trip, which is fine for replies but wrong for
@@ -940,35 +964,60 @@ export function useVoiceChat(): VoiceChat {
    * the wake word's self-suspension all behave exactly as for a real reply.
    */
   const playClip = React.useCallback(
-    async (url: string) => {
-      if (mutedRef.current || !url) return;
-      const el = getPlayer();
-      if (!el) return;
-      // Resolves when PLAYBACK ENDS, not when it starts — the wake flow
-      // chains "open the microphone" on it, and a fixed timer would either
-      // clip a long ack phrase or leave dead air after a short one.
-      await new Promise<void>((resolve) => {
-        const finish = () => {
-          stopSpeechMeter();
-          setStatus("idle");
-          maybeAutoListen();
-          resolve();
-        };
-        try {
-          setStatus("speaking");
-          el.muted = false;
-          el.src = url;
-          el.onended = finish;
-          el.onerror = finish;
-          el.play()
-            .then(() => startSpeechMeter())
-            .catch(finish);
-        } catch {
-          finish();
-        }
-      });
-    },
-    [getPlayer, maybeAutoListen, startSpeechMeter, stopSpeechMeter],
+    (url: string) =>
+      enqueuePlayback(async () => {
+        if (mutedRef.current || !url) return;
+        const el = getPlayer();
+        if (!el) return;
+        // Resolves when PLAYBACK ENDS, not when it starts — the wake flow
+        // chains "open the microphone" on it, and a fixed timer would either
+        // clip a long ack phrase or leave dead air after a short one.
+        await new Promise<void>((resolve) => {
+          let done = false;
+          const finish = (mode: "natural" | "stopped" | "preempted") => {
+            if (done) return;
+            done = true;
+            el.onended = null;
+            el.onerror = null;
+            el.onpause = null;
+            el.onemptied = null;
+            stopSpeechMeter();
+            // "preempted" means another speaker (a reply via speak()) now
+            // owns the player AND the status — stomping it to idle here
+            // would un-suspend the wake word while Arcus is mid-sentence.
+            if (mode !== "preempted") setStatus("idle");
+            // Only a clip that PLAYED OUT re-arms the mic; a pause means
+            // someone intervened (stop, cancel) and silence is the answer.
+            if (mode === "natural") maybeAutoListen();
+            resolve();
+          };
+          try {
+            setStatus("speaking");
+            el.muted = false;
+            el.src = url;
+            el.onended = () => finish("natural");
+            el.onerror = () => finish("stopped");
+            // stop()/cancel() PAUSE the player rather than ending it; without
+            // this the promise never settles and everything queued behind it
+            // — including the wake flow's "open the mic now" — waits forever.
+            // (`el.ended` distinguishes a browser that pauses on natural end.)
+            el.onpause = () => finish(el.ended ? "natural" : "stopped");
+            el.play()
+              .then(() => {
+                startSpeechMeter();
+                // If anything else claims the player by swapping `src`,
+                // settle rather than wedge the queue. Assigned only now:
+                // our OWN src swap above queues an 'emptied' task that
+                // would otherwise kill this very clip.
+                el.onemptied = () => finish("preempted");
+              })
+              .catch(() => finish("stopped"));
+          } catch {
+            finish("stopped");
+          }
+        });
+      }),
+    [enqueuePlayback, getPlayer, maybeAutoListen, startSpeechMeter, stopSpeechMeter],
   );
 
   /**
@@ -1568,7 +1617,7 @@ export function useVoiceChat(): VoiceChat {
     if (rec && rec.state !== "inactive") rec.stop();
   }, []);
 
-  const startListening = React.useCallback(async () => {
+  const openMicrophone = React.useCallback(async () => {
     // Consume the auto-arm flag: this one session answers a confirm card, so
     // it stops fast after a short reply instead of waiting out dictation.
     const confirmMode = autoListenRef.current;
@@ -1596,6 +1645,9 @@ export function useVoiceChat(): VoiceChat {
       setError("Microphone access was blocked. Allow mic access for this site.");
       return;
     }
+    // Belt-and-braces: never orphan a previous capture stream — an orphaned
+    // stream is a microphone nothing can release until the tab closes.
+    streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = stream;
 
     const { mime, ext } = pickMimeType();
@@ -1684,6 +1736,53 @@ export function useVoiceChat(): VoiceChat {
     recorder.start();
     setStatus("listening");
   }, [stopListening, teardownCapture, transcribeAndSend, unlockAudio]);
+
+  /**
+   * One capture at a time (0104-fix). Overlapping opens — the wake flow and
+   * the hands-free auto-arm firing within the same few hundred ms — used to
+   * run getUserMedia twice; the second overwrote the refs and ORPHANED the
+   * first stream, a held microphone nothing could ever release. That is why
+   * the OS mic indicator would stay lit long after Arcus went quiet.
+   */
+  const startListening = React.useCallback(async () => {
+    if (micOpeningRef.current || statusRef.current === "listening") return;
+    micOpeningRef.current = true;
+    try {
+      await openMicrophone();
+    } finally {
+      micOpeningRef.current = false;
+    }
+  }, [openMicrophone]);
+
+  /**
+   * Open the microphone once Arcus has finished talking (0104-fix).
+   *
+   * The wake flow used to fire `toggleMic` on a timer, which raced the
+   * hands-free auto-arm — whichever fired second flipped the mic straight
+   * back OFF, so "hey Arcus" said "Yes, sir?" and then went deaf. This waits
+   * out the playback chain (greeting, then ack, in order), leaves a short
+   * beat so the mic never records the tail of Arcus's own voice, and only
+   * ever OPENS — an already-listening mic is left alone.
+   */
+  const listenWhenQuiet = React.useCallback(async () => {
+    await playbackChainRef.current;
+    // A reply spoken via speak() is not on the chain; wait for the player.
+    const el = playerRef.current;
+    if (el && !el.paused && !el.ended) {
+      await new Promise<void>((resolve) => {
+        const done = () => {
+          el.removeEventListener("ended", done);
+          el.removeEventListener("pause", done);
+          resolve();
+        };
+        el.addEventListener("ended", done);
+        el.addEventListener("pause", done);
+      });
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 180));
+    if (statusRef.current !== "idle") return;
+    await startListening();
+  }, [startListening]);
 
   // Let earlier callbacks (speak → maybeAutoListen) re-arm the mic without a
   // circular dependency on startListening.
@@ -1843,6 +1942,7 @@ export function useVoiceChat(): VoiceChat {
     setHandsFree,
     speak,
     playClip,
+    listenWhenQuiet,
     ingestArtifacts,
     ingestTurn,
     stopListening,

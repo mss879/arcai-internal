@@ -376,8 +376,12 @@ export type AssistantWorkspaceProps = {
   wakeListening?: boolean;
   /** WHY it is or isn't — drives the rail's wake indicator. */
   wakeState?: WakeWordState;
+  /** Muted for this session via the rail's wake light. */
+  wakePaused?: boolean;
   /** Prompt for the microphone and revive the recogniser. */
   onWakeFix?: () => void;
+  /** Pause/resume wake listening for the session — the rail's wake light. */
+  onWakeToggle?: () => void;
   isTerminal?: boolean;
   ambientStage?: boolean;
 };
@@ -395,7 +399,9 @@ export function AssistantWorkspace({
   personaName,
   wakeListening,
   wakeState,
+  wakePaused,
   onWakeFix,
+  onWakeToggle,
   isTerminal,
   ambientStage,
 }: AssistantWorkspaceProps): React.ReactElement {
@@ -995,7 +1001,9 @@ export function AssistantWorkspace({
             initialArtifactId={initialArtifactId}
             wakeListening={wakeListening}
             wakeState={wakeState}
+            wakePaused={wakePaused}
             onWakeFix={onWakeFix}
+            onWakeToggle={onWakeToggle}
             isTerminal={isTerminal}
             ambientStage={ambientStage}
           />

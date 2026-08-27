@@ -167,6 +167,8 @@ export function PreviewClient() {
   // really navigates (to the login-gated page), and prompts echo what WOULD
   // have been sent.
   const [echo, setEcho] = React.useState<string | null>(null);
+  // Exercises the rail's session wake mute without a real recogniser.
+  const [wakePaused, setWakePaused] = React.useState(false);
   const say = React.useCallback((text: string) => {
     setEcho(text);
     window.setTimeout(() => setEcho((cur) => (cur === text ? null : cur)), 4000);
@@ -203,6 +205,7 @@ export function PreviewClient() {
       setHandsFree: noop,
       speak: async () => {},
       playClip: async () => {},
+      listenWhenQuiet: async () => {},
       ingestArtifacts: noop,
       ingestTurn: noop,
       stopListening: noop,
@@ -237,7 +240,9 @@ export function PreviewClient() {
         onNavigate={previewNavigate}
         onPrompt={previewPrompt}
         composerRef={composerRef}
-        wakeListening
+        wakeListening={!wakePaused}
+        wakePaused={wakePaused}
+        onWakeToggle={() => setWakePaused((p) => !p)}
         isTerminal
       />
 

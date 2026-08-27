@@ -44,6 +44,7 @@ export type CommandViewProps = {
   wakeListening?: boolean;
   wakeState?: WakeWordState;
   wakePaused?: boolean;
+  wakeAsleep?: boolean;
   wakeHeard?: string;
   onWakeFix?: () => void;
   onWakeToggle?: () => void;
@@ -63,6 +64,7 @@ export function CommandView({
   wakeListening,
   wakeState,
   wakePaused,
+  wakeAsleep,
   wakeHeard,
   onWakeFix,
   onWakeToggle,
@@ -200,6 +202,7 @@ export function CommandView({
               wakeListening={wakeListening}
               wakeState={wakeState}
               wakePaused={wakePaused}
+              wakeAsleep={wakeAsleep}
               wakeHeard={wakeHeard}
               onWakeFix={onWakeFix}
               onWakeToggle={onWakeToggle}

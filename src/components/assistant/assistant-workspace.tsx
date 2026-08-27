@@ -378,6 +378,8 @@ export type AssistantWorkspaceProps = {
   wakeState?: WakeWordState;
   /** Muted for this session via the rail's wake light. */
   wakePaused?: boolean;
+  /** Asleep for the night — quiet hours on the terminal. */
+  wakeAsleep?: boolean;
   /** Newest snippet the wake recogniser heard — live proof it's alive. */
   wakeHeard?: string;
   /** Prompt for the microphone and revive the recogniser. */
@@ -402,6 +404,7 @@ export function AssistantWorkspace({
   wakeListening,
   wakeState,
   wakePaused,
+  wakeAsleep,
   wakeHeard,
   onWakeFix,
   onWakeToggle,
@@ -1005,6 +1008,7 @@ export function AssistantWorkspace({
             wakeListening={wakeListening}
             wakeState={wakeState}
             wakePaused={wakePaused}
+            wakeAsleep={wakeAsleep}
             wakeHeard={wakeHeard}
             onWakeFix={onWakeFix}
             onWakeToggle={onWakeToggle}

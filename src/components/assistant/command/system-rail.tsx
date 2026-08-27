@@ -159,6 +159,7 @@ function WakeIndicator({
   listening,
   state,
   paused,
+  asleep,
   onFix,
   onToggle,
 }: {
@@ -166,10 +167,22 @@ function WakeIndicator({
   state?: WakeWordState;
   /** Muted for the session via this very light. */
   paused?: boolean;
+  /** Asleep through quiet hours — the terminal's night mode. */
+  asleep?: boolean;
   onFix?: () => void;
   /** Pause/resume listening for the session — no settings write. */
   onToggle?: () => void;
 }) {
+  if (asleep && !paused) {
+    return (
+      <span
+        className="text-indigo-300"
+        title="Quiet hours — the wake microphone sleeps until morning (schedule in settings, Voice tab)."
+      >
+        WAKE ASLEEP · QUIET HRS
+      </span>
+    );
+  }
   // The session mute outranks everything: while paused the recogniser is
   // disabled, so `state` would otherwise read "off" and hide the way back.
   if (paused && onToggle) {
@@ -275,6 +288,7 @@ export type SystemRailProps = {
   wakeListening?: boolean;
   wakeState?: WakeWordState;
   wakePaused?: boolean;
+  wakeAsleep?: boolean;
   /** Newest snippet the wake recogniser heard — shown as live proof. */
   wakeHeard?: string;
   onWakeFix?: () => void;
@@ -311,6 +325,7 @@ function SystemRailImpl({
   wakeListening,
   wakeState,
   wakePaused,
+  wakeAsleep,
   wakeHeard,
   onWakeFix,
   onWakeToggle,
@@ -391,6 +406,7 @@ function SystemRailImpl({
             listening={wakeListening}
             state={wakeState}
             paused={wakePaused}
+            asleep={wakeAsleep}
             onFix={onWakeFix}
             onToggle={onWakeToggle}
           />

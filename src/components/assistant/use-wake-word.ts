@@ -53,9 +53,23 @@ const BARE_RE =
   /\b(?:hey|hi|hello|ok|okay|yo)?[,.!?\s]*(?:arcus+|arkus|arckus|archus|argus|arcas|arkas|arcos|orcus|arc\s?us|arc\s?as)\b/i;
 const PREFIXED_RE =
   /\b(?:hey|hi|hello|ok|okay|yo)[,.!?\s]+(?:marcus|markus|circus|orcas?|argos|arches|arc(?:\s?is)?)\b/i;
+/**
+ * The recall net: a greeting followed by ANY short ar-/or- word with a k/c
+ * in it — "hey arkis", "hey orcus", "hey article". No list of mishears will
+ * ever be complete, and the user always says the greeting first, so with
+ * that anchor present the name-shaped word after it is almost certainly the
+ * name. Costs the odd false wake on "hey,архив"-class oddities; a missed
+ * real wake costs the whole feature.
+ */
+const FUZZY_RE =
+  /\b(?:hey|hi|hello|ok|okay|yo)[,.!?\s]+[ao]r[a-z]{0,2}[ck][a-z]{0,4}\b/i;
 
 function matchesWake(transcript: string): boolean {
-  return BARE_RE.test(transcript) || PREFIXED_RE.test(transcript);
+  return (
+    BARE_RE.test(transcript) ||
+    PREFIXED_RE.test(transcript) ||
+    FUZZY_RE.test(transcript)
+  );
 }
 
 /** Ignore a second match this soon — one utterance, one wake. */
@@ -71,8 +85,10 @@ const HEALTHY_MS = 3_000;
 /** Consecutive short-lived sessions before backing off. */
 const MAX_QUICK_FAILURES = 4;
 
-/** The slow lane: retry cadence while the engine keeps failing. */
-const BACKOFF_MS = 20_000;
+/** The slow lane: retry cadence while the engine keeps failing. Ten seconds,
+ *  not twenty — every backoff window is a stretch where the name is ignored,
+ *  and a flaky speech service recovering deserves a prompt second chance. */
+const BACKOFF_MS = 10_000;
 
 export type WakeWordState =
   /** The recogniser is running and the phrase will be heard. */

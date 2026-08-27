@@ -55,6 +55,7 @@ import {
   requestMicrophone,
   useWakeWord,
 } from "@/components/assistant/use-wake-word";
+import { inQuietHours } from "@/lib/assistant/quiet-hours";
 import { artifactIcon } from "@/components/assistant/preview/artifact-format";
 import {
   DESKTOP_QUERY,
@@ -204,6 +205,25 @@ export function VoiceAssistant({
       return !p;
     });
   }, []);
+  // The terminal sleeps through the user's own quiet hours (0104-fix): the
+  // same window that already silences spoken alerts releases the microphone
+  // entirely, so "the mic is on all the time" is at least never true at
+  // night. Re-checked once a minute; a minute of drift at the boundary is
+  // invisible, a re-render per second is not.
+  const [minuteTick, setMinuteTick] = React.useState(0);
+  React.useEffect(() => {
+    if (!isTerminal || !arcus.loaded) return;
+    const timer = window.setInterval(
+      () => setMinuteTick((n) => n + 1),
+      60_000,
+    );
+    return () => window.clearInterval(timer);
+  }, [isTerminal, arcus.loaded]);
+  const wakeAsleep = React.useMemo(() => {
+    void minuteTick; // recompute each minute
+    if (!isTerminal || !arcus.loaded) return false;
+    return inQuietHours(arcus.timezone, arcus.quietStart, arcus.quietEnd);
+  }, [isTerminal, arcus.loaded, arcus.timezone, arcus.quietStart, arcus.quietEnd, minuteTick]);
   // The live voice session (0104): opt-in via settings, browser↔OpenAI
   // WebRTC, tools relayed home under the user's own session. Its turns land
   // in the SAME thread store — the stage cannot tell which engine served it.
@@ -223,8 +243,13 @@ export function VoiceAssistant({
   } = useWakeWord(
     // The terminal listens BY DEFINITION — that is what registering the
     // machine means. Everywhere else the per-user toggle decides. The rail's
-    // pause light silences either for the session, without touching settings.
-    (arcus.wakeWord || isTerminal) && desktop && !embedded && !wakePaused,
+    // pause light silences either without touching settings, and quiet hours
+    // put the terminal's microphone to sleep for the night.
+    (arcus.wakeWord || isTerminal) &&
+      desktop &&
+      !embedded &&
+      !wakePaused &&
+      !wakeAsleep,
     busy,
     React.useCallback(() => {
       // A FRESH wake — Arcus was closed — gets the full greeting ("Hi sir,
@@ -617,14 +642,38 @@ export function VoiceAssistant({
           >
             <span className="pointer-events-none absolute inset-0 -z-10 animate-ping rounded-full bg-primary-500/40" />
             <Sparkles className="h-6 w-6" />
-            {/* Listening for its name (0104) — visible, always, while on. */}
-            {wakeListening && (
+            {/* The wake dot (0104) — and when it is NOT green, it says WHY:
+                "I keep saying hey Arcus and nothing happens" is unanswerable
+                when the only signal is a dot that quietly isn't there. */}
+            {wakeListening ? (
               <span
                 aria-hidden
                 title="Listening for “Hey Arcus”"
                 className="pointer-events-none absolute -bottom-0.5 -left-0.5 h-3 w-3 animate-pulse rounded-full bg-emerald-400 ring-2 ring-white"
               />
-            )}
+            ) : (arcus.wakeWord || isTerminal) && wakeState === "denied" ? (
+              <span
+                aria-hidden
+                title="Wake word can't hear — the microphone is blocked for this site. Open Arcus and click MIC BLOCKED · FIX."
+                className="pointer-events-none absolute -bottom-0.5 -left-0.5 h-3 w-3 rounded-full bg-rose-500 ring-2 ring-white"
+              />
+            ) : (arcus.wakeWord || isTerminal) && wakeState === "failing" ? (
+              <span
+                aria-hidden
+                title="Wake word is retrying — the browser's speech service isn't responding (it needs Chrome and internet)."
+                className="pointer-events-none absolute -bottom-0.5 -left-0.5 h-3 w-3 animate-pulse rounded-full bg-amber-400 ring-2 ring-white"
+              />
+            ) : (arcus.wakeWord || isTerminal) && (wakePaused || wakeAsleep) ? (
+              <span
+                aria-hidden
+                title={
+                  wakePaused
+                    ? "Wake word muted on this device — open Arcus and click WAKE MUTED · ARM to resume."
+                    : "Quiet hours — the wake microphone sleeps until morning."
+                }
+                className="pointer-events-none absolute -bottom-0.5 -left-0.5 h-3 w-3 rounded-full bg-slate-400 ring-2 ring-white"
+              />
+            ) : null}
             {/* Something is waiting to be said (0102). */}
             {inbox.count > 0 && (
               <span className="pointer-events-none absolute -right-0.5 -top-0.5 grid h-5 min-w-5 place-items-center rounded-full bg-rose-500 px-1 text-[11px] font-bold text-white ring-2 ring-white">
@@ -956,6 +1005,7 @@ export function VoiceAssistant({
               wakeListening={wakeListening}
               wakeState={wakeState}
               wakePaused={wakePaused}
+              wakeAsleep={wakeAsleep}
               wakeHeard={wakeHeard}
               onWakeFix={onWakeFix}
               onWakeToggle={toggleWakePaused}

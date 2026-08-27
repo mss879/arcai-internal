@@ -270,9 +270,13 @@ export type SystemRailProps = {
   status: Status;
   steps: ToolStep[];
   personaName: string;
+  /** Speech detected in the current capture — the "I hear you" light. */
+  heard?: boolean;
   wakeListening?: boolean;
   wakeState?: WakeWordState;
   wakePaused?: boolean;
+  /** Newest snippet the wake recogniser heard — shown as live proof. */
+  wakeHeard?: string;
   onWakeFix?: () => void;
   onWakeToggle?: () => void;
   isTerminal?: boolean;
@@ -303,9 +307,11 @@ function SystemRailImpl({
   status,
   steps,
   personaName,
+  heard,
   wakeListening,
   wakeState,
   wakePaused,
+  wakeHeard,
   onWakeFix,
   onWakeToggle,
   isTerminal,
@@ -456,7 +462,13 @@ function SystemRailImpl({
           </button>
           <div className="hud-mono min-w-0 flex-1 text-[10px] leading-4 tracking-wider text-[var(--stage-faint)]">
             {status === "listening" ? (
-              <p className="text-[var(--stage-accent)]">LISTENING…</p>
+              heard ? (
+                <p className="text-emerald-400">GOT IT — GO ON…</p>
+              ) : (
+                <p className="text-[var(--stage-accent)]">LISTENING…</p>
+              )
+            ) : status === "thinking" ? (
+              <p className="text-amber-300">ON IT — CHECKING THE SYSTEM…</p>
             ) : status === "speaking" ? (
               <p className="text-sky-300">RESPONDING…</p>
             ) : (
@@ -467,7 +479,9 @@ function SystemRailImpl({
               </p>
             )}
             <p className="truncate text-[var(--stage-faint)]/70">
-              TALK TO ME{isTerminal ? ", SIR" : ""}.
+              {status === "idle" && wakeListening && wakeHeard
+                ? `HEARD: “${wakeHeard.toUpperCase()}”`
+                : `TALK TO ME${isTerminal ? ", SIR" : ""}.`}
             </p>
           </div>
           <button

@@ -70,8 +70,17 @@ export type Status = "idle" | "listening" | "thinking" | "speaking";
 /** Which route served the last completed turn. Diagnostics only. */
 export type Transport = "stream" | "fallback" | null;
 
-const SILENCE_MS = 15000; // auto-stop this long after you STOP talking — long
-// enough to ride out mid-sentence breaths/pauses (tap the mic to stop sooner).
+const SILENCE_MS = 8000; // manual dictation: auto-stop this long after you
+// STOP talking — enough to ride out breaths and mid-sentence pauses (tap the
+// mic to stop sooner).
+// HANDS-FREE is a conversation, not dictation: waiting 15s after every
+// sentence is what made Arcus feel like it "takes forever to respond" — the
+// reply cannot even begin until the mic closes. Stop fast instead.
+const CONVERSATION_SILENCE_MS = 2500;
+// A mic that heard NOTHING at all closes on its own. Without this, a wake
+// that went unanswered left the recorder (and the OS mic light) on forever —
+// with the wake word suspended the whole time it sat open.
+const LISTEN_MAX_QUIET_MS = 10000;
 // When the mic re-armed itself for a send-confirmation, the expected answer is
 // a short "yes" / "no" — stop fast so the send feels instant, and give up
 // quietly if the user says nothing at all (the card's buttons still work).
@@ -285,6 +294,8 @@ export type VoiceChat = {
   /** Messages of the ACTIVE thread. */
   messages: AssistantMessage[];
   level: number;
+  /** Speech detected in the current capture — drives "I hear you" copy. */
+  heard: boolean;
   error: string | null;
   text: string;
   muted: boolean;
@@ -366,6 +377,8 @@ export function useVoiceChat(): VoiceChat {
   const [text, setText] = React.useState("");
   const [level, setLevel] = React.useState(0);
   const [error, setError] = React.useState<string | null>(null);
+  /** Speech was detected in the CURRENT capture — the "I hear you" light. */
+  const [heard, setHeard] = React.useState(false);
 
   // History. `threads` is the whole store; the UI reads the active thread's
   // messages. One source of truth means a rename or a delete can never leave
@@ -749,6 +762,37 @@ export function useVoiceChat(): VoiceChat {
     }
   }, [getPlayer]);
 
+  /**
+   * A short two-note blip meaning "captured — working on it" (0104-fix).
+   *
+   * Synthesised on the spot so there is no asset to load. The chief doubt in
+   * a voice UI is whether it heard anything at all, and a visual state alone
+   * is invisible from across the room — which is where a wake word puts you.
+   */
+  const cueCtxRef = React.useRef<AudioContext | null>(null);
+  const playCaptureCue = React.useCallback(() => {
+    if (mutedRef.current) return;
+    try {
+      const ctx = (cueCtxRef.current ??= new AudioContext());
+      void ctx.resume();
+      const at = ctx.currentTime;
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0.0001, at);
+      gain.gain.exponentialRampToValueAtTime(0.1, at + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.22);
+      gain.connect(ctx.destination);
+      const osc = ctx.createOscillator();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(660, at);
+      osc.frequency.setValueAtTime(880, at + 0.1);
+      osc.connect(gain);
+      osc.start(at);
+      osc.stop(at + 0.24);
+    } catch {
+      // A missing chirp is not a problem worth surfacing.
+    }
+  }, []);
+
   const teardownCapture = React.useCallback(() => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
     rafRef.current = null;
@@ -813,6 +857,8 @@ export function useVoiceChat(): VoiceChat {
       recorderRef.current = null;
       teardownCapture();
       playerRef.current?.pause();
+      cueCtxRef.current?.close().catch(() => {});
+      cueCtxRef.current = null;
       if (currentUrlRef.current) URL.revokeObjectURL(currentUrlRef.current);
     };
   }, [teardownCapture]);
@@ -1622,7 +1668,12 @@ export function useVoiceChat(): VoiceChat {
     // it stops fast after a short reply instead of waiting out dictation.
     const confirmMode = autoListenRef.current;
     autoListenRef.current = false;
-    const silenceMs = confirmMode ? CONFIRM_SILENCE_MS : SILENCE_MS;
+    // Hands-free = conversational timings on EVERY capture, tap or auto.
+    const silenceMs = confirmMode
+      ? CONFIRM_SILENCE_MS
+      : handsFreeRef.current
+        ? CONVERSATION_SILENCE_MS
+        : SILENCE_MS;
 
     setError(null);
     unlockAudio(); // we're in the tap gesture — prime voice output for mobile
@@ -1669,13 +1720,20 @@ export function useVoiceChat(): VoiceChat {
       });
       // Only transcribe if we actually detected speech — shipping silence is
       // exactly what makes Whisper invent text.
-      if (spoke && blob.size > 0) void transcribeAndSend(blob, ext);
-      else setStatus("idle");
+      if (spoke && blob.size > 0) {
+        // The audible "got it" — the mic has closed and the words are on
+        // their way, which is the moment the user most doubts being heard.
+        playCaptureCue();
+        void transcribeAndSend(blob, ext);
+      } else {
+        setStatus("idle");
+      }
     };
 
     // Level metering + silence auto-stop. If this fails, recording still
     // works — you just stop it yourself with the button.
     hasSpokenRef.current = false;
+    setHeard(false);
     try {
       const ctx = new AudioContext();
       audioCtxRef.current = ctx;
@@ -1704,7 +1762,12 @@ export function useVoiceChat(): VoiceChat {
           // Sustained voice (not a one-frame clatter) counts as speech.
           voicedFrames++;
           lastLoudRef.current = now;
-          if (voicedFrames >= VOICE_FRAMES) hasSpokenRef.current = true;
+          if (voicedFrames >= VOICE_FRAMES && !hasSpokenRef.current) {
+            hasSpokenRef.current = true;
+            // The visible "I hear you" — the one signal that tells the user
+            // their words registered before any reply exists.
+            setHeard(true);
+          }
         } else {
           voicedFrames = 0;
         }
@@ -1715,13 +1778,11 @@ export function useVoiceChat(): VoiceChat {
           stopListening();
           return;
         }
-        // Auto-armed confirm mic with no answer at all: close quietly rather
-        // than sitting open — the card's Send/Cancel buttons still work.
-        if (
-          confirmMode &&
-          !hasSpokenRef.current &&
-          now - startedAt > CONFIRM_MAX_WAIT_MS
-        ) {
+        // A mic with nothing said at all closes quietly rather than sitting
+        // open — an open recorder suspends the wake word and keeps the OS
+        // mic light on, so "forever" is never an acceptable wait.
+        const maxQuiet = confirmMode ? CONFIRM_MAX_WAIT_MS : LISTEN_MAX_QUIET_MS;
+        if (!hasSpokenRef.current && now - startedAt > maxQuiet) {
           stopListening();
           return;
         }
@@ -1735,7 +1796,7 @@ export function useVoiceChat(): VoiceChat {
 
     recorder.start();
     setStatus("listening");
-  }, [stopListening, teardownCapture, transcribeAndSend, unlockAudio]);
+  }, [playCaptureCue, stopListening, teardownCapture, transcribeAndSend, unlockAudio]);
 
   /**
    * One capture at a time (0104-fix). Overlapping opens — the wake flow and
@@ -1927,6 +1988,7 @@ export function useVoiceChat(): VoiceChat {
     status,
     messages,
     level,
+    heard,
     error,
     text,
     muted,

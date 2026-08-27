@@ -189,6 +189,7 @@ export function PreviewClient() {
       status,
       messages: MESSAGES,
       level,
+      heard: status === "listening",
       error: null,
       text,
       muted: false,
@@ -242,6 +243,7 @@ export function PreviewClient() {
         composerRef={composerRef}
         wakeListening={!wakePaused}
         wakePaused={wakePaused}
+        wakeHeard="hey arcus what's my revenue"
         onWakeToggle={() => setWakePaused((p) => !p)}
         isTerminal
       />

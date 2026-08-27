@@ -44,6 +44,7 @@ export type CommandViewProps = {
   wakeListening?: boolean;
   wakeState?: WakeWordState;
   wakePaused?: boolean;
+  wakeHeard?: string;
   onWakeFix?: () => void;
   onWakeToggle?: () => void;
   isTerminal?: boolean;
@@ -62,6 +63,7 @@ export function CommandView({
   wakeListening,
   wakeState,
   wakePaused,
+  wakeHeard,
   onWakeFix,
   onWakeToggle,
   isTerminal,
@@ -193,10 +195,12 @@ export function CommandView({
             <SystemRail
               status={chat.status}
               steps={chat.steps}
+              heard={chat.heard}
               personaName={personaName}
               wakeListening={wakeListening}
               wakeState={wakeState}
               wakePaused={wakePaused}
+              wakeHeard={wakeHeard}
               onWakeFix={onWakeFix}
               onWakeToggle={onWakeToggle}
               isTerminal={isTerminal}

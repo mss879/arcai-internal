@@ -62,6 +62,8 @@ export const STUDIO_KEYS = {
   canvasOpen: "arc-studio-canvas-open",
   muted: "arc-studio-muted",
   view: "arc-studio-view",
+  /** Wake-word mic muted on THIS device — survives reloads (0104-fix). */
+  wakePaused: "arc-studio-wake-paused",
 } as const;
 
 /** The stage, unless this browser has been told otherwise. */

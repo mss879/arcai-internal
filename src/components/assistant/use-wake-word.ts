@@ -31,9 +31,10 @@
  *     is the classic) back off to a slow retry loop instead of either dying
  *     or hammering: quick restarts while healthy, 20s cycles while broken.
  *
- * Three behavioural rules are unchanged: it never listens while Arcus talks
- * (it would hear its own name), it only runs on a visible top-level tab, and
- * it restarts itself after Chrome's routine silence timeouts.
+ * Three behavioural rules: it never listens while Arcus talks (it would hear
+ * its own name), it only runs on a visible top-level tab — except on the
+ * registered terminal, which listens across window switches by definition —
+ * and it restarts itself after Chrome's routine silence timeouts.
  */
 
 import * as React from "react";
@@ -124,22 +125,35 @@ export function wakeWordSupported(): boolean {
  * @param busy True while Arcus is recording, thinking or speaking; listening
  *   is suspended for the duration so it cannot hear itself.
  * @param onWake Fired once per utterance, debounced.
+ * @param persistent TERMINAL mode: keep listening while the tab is hidden.
+ *   A registered terminal's whole job is hearing its name from across the
+ *   room WHILE the user works in other windows — suspending on every window
+ *   switch made the wake word deaf most of the day, and each release/
+ *   re-acquire of the microphone made Bluetooth headsets chirp. Persistent
+ *   mode also holds one silent keep-alive stream, so the mic channel stays
+ *   open across the recogniser's own restarts instead of toggling audibly.
  */
 export function useWakeWord(
   enabled: boolean,
   busy: boolean,
   onWake: () => void,
+  persistent = false,
 ): {
   /** Running right now — the rail's ARMED light. */
   listening: boolean;
   supported: boolean;
   /** WHY it is or isn't running — so a dead badge can explain itself. */
   state: WakeWordState;
+  /** The newest transcript snippet the recogniser produced — LIVE PROOF the
+   *  wake mic hears something, which is the question every "it hardly works"
+   *  report actually asks. Empty until someone speaks. */
+  lastHeard: string;
   /** Clear a `denied`/`failing` verdict and try again (e.g. after the user
    *  grants the microphone). Safe to call in any state. */
   retry: () => void;
 } {
   const [state, setState] = React.useState<WakeWordState>("off");
+  const [lastHeard, setLastHeard] = React.useState("");
   // Bumping this remounts the whole effect — the one clean way to revive a
   // recogniser whose permission verdict changed underneath it.
   const [attempt, setAttempt] = React.useState(0);
@@ -155,6 +169,35 @@ export function useWakeWord(
   const supported = React.useMemo(() => wakeWordSupported(), []);
 
   const retry = React.useCallback(() => setAttempt((n) => n + 1), []);
+
+  // Terminal mode: pin the microphone channel open for the WHOLE armed
+  // stretch — its own effect, deliberately free of `busy`, because the whole
+  // point is that it survives the recogniser's restarts and the assistant's
+  // own turns. Without it every release/re-acquire of the hardware is a
+  // moment Bluetooth headsets answer with an audible chirp.
+  React.useEffect(() => {
+    if (!persistent || !enabled || !supported) return;
+    if (!navigator.mediaDevices?.getUserMedia) return;
+    let stopped = false;
+    let keepAlive: MediaStream | null = null;
+    navigator.mediaDevices
+      .getUserMedia({ audio: true })
+      .then((stream) => {
+        if (stopped) {
+          for (const track of stream.getTracks()) track.stop();
+          return;
+        }
+        keepAlive = stream;
+      })
+      .catch(() => {
+        // The recogniser's own permission error will surface it.
+      });
+    return () => {
+      stopped = true;
+      if (keepAlive) for (const track of keepAlive.getTracks()) track.stop();
+      keepAlive = null;
+    };
+  }, [persistent, enabled, supported, attempt]);
 
   React.useEffect(() => {
     if (!supported) {
@@ -190,6 +233,7 @@ export function useWakeWord(
     let startedAt = 0;
     let lastWake = 0;
     let lastError = "";
+    let lastHeardAt = 0;
     let timer: number | null = null;
 
     const schedule = (delay: number) => {
@@ -199,7 +243,7 @@ export function useWakeWord(
     };
 
     const start = () => {
-      if (disposed || denied || document.hidden) return;
+      if (disposed || denied || (document.hidden && !persistent)) return;
       try {
         recognition = new Ctor();
         recognition.continuous = true;
@@ -227,6 +271,13 @@ export function useWakeWord(
           let heard = "";
           for (let i = 0; i < latest.length; i++) {
             heard += ` ${latest[i]?.transcript ?? ""}`;
+          }
+          // Surface WHAT was heard (throttled) — live proof for the rail.
+          const heardNow = Date.now();
+          if (heardNow - lastHeardAt > 500) {
+            lastHeardAt = heardNow;
+            const snippet = (latest[0]?.transcript ?? "").trim().slice(-48);
+            if (snippet) setLastHeard(snippet);
           }
           // "Hey" and "Arcus" can straddle a result boundary; stitch the
           // tail of the previous result onto the newest before matching.
@@ -301,9 +352,12 @@ export function useWakeWord(
       }
     };
 
-    // Only while the tab is visible: a background tab holding the microphone
-    // open is exactly the behaviour that makes people distrust a feature.
+    // Only while the tab is visible — EXCEPT on the terminal, whose entire
+    // job is hearing its name while the user works in other windows. For
+    // everyone else, a background tab holding the microphone open is exactly
+    // the behaviour that makes people distrust a feature.
     const onVisibility = () => {
+      if (persistent) return;
       if (document.hidden) {
         setState("suspended");
         try {
@@ -316,7 +370,7 @@ export function useWakeWord(
       }
     };
 
-    if (document.hidden) setState("suspended");
+    if (document.hidden && !persistent) setState("suspended");
     else start();
     document.addEventListener("visibilitychange", onVisibility);
 
@@ -330,9 +384,9 @@ export function useWakeWord(
         // Already gone.
       }
     };
-  }, [enabled, supported, busy, attempt]);
+  }, [enabled, supported, busy, attempt, persistent]);
 
-  return { listening: state === "listening", supported, state, retry };
+  return { listening: state === "listening", supported, state, lastHeard, retry };
 }
 
 /**

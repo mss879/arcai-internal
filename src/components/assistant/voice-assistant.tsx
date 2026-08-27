@@ -54,7 +54,6 @@ import { useVoiceClip } from "@/components/assistant/use-voice-clips";
 import {
   requestMicrophone,
   useWakeWord,
-  type WakeWordState,
 } from "@/components/assistant/use-wake-word";
 import { artifactIcon } from "@/components/assistant/preview/artifact-format";
 import {
@@ -129,6 +128,11 @@ export function VoiceAssistant({
   const dockInputRef = React.useRef<HTMLInputElement | null>(null);
   /** Which mode the bubble reopens into. */
   const lastOpenModeRef = React.useRef<StudioMode>("full");
+  /** The CURRENT mode, for callbacks that must not rebuild per mode change. */
+  const modeRef = React.useRef<StudioMode>("bubble");
+  React.useEffect(() => {
+    modeRef.current = mode;
+  }, [mode]);
 
   const { setMuted, stop } = chat;
 
@@ -184,15 +188,22 @@ export function VoiceAssistant({
    * hearing itself would otherwise loop.
    */
   const { setHandsFree, listenWhenQuiet } = chat;
-  // Session-local mute for the wake microphone (0104-fix): one click in the
-  // rail, no settings write, back the moment it is clicked again. This is
-  // the honest answer to "the OS says my mic is always on" — while the wake
-  // word is armed it IS on, so pausing it has to be one visible tap away.
+  // Per-DEVICE mute for the wake microphone (0104-fix): one click in the
+  // rail, no settings write — and it SURVIVES reloads, because "the mic
+  // grabs my system every time I open the app" is only solved if muting it
+  // once actually sticks. While the wake word is armed the mic IS held —
+  // that is what always-listening means — so the off switch stays one
+  // visible tap away and stays off until the user arms it again.
   const [wakePaused, setWakePaused] = React.useState(false);
-  const toggleWakePaused = React.useCallback(
-    () => setWakePaused((p) => !p),
-    [],
-  );
+  React.useEffect(() => {
+    if (readPref<boolean>(STUDIO_KEYS.wakePaused, false)) setWakePaused(true);
+  }, []);
+  const toggleWakePaused = React.useCallback(() => {
+    setWakePaused((p) => {
+      writePref(STUDIO_KEYS.wakePaused, !p);
+      return !p;
+    });
+  }, []);
   // The live voice session (0104): opt-in via settings, browser↔OpenAI
   // WebRTC, tools relayed home under the user's own session. Its turns land
   // in the SAME thread store — the stage cannot tell which engine served it.
@@ -207,6 +218,7 @@ export function VoiceAssistant({
   const {
     listening: wakeListening,
     state: wakeState,
+    lastHeard: wakeHeard,
     retry: retryWake,
   } = useWakeWord(
     // The terminal listens BY DEFINITION — that is what registering the
@@ -215,23 +227,33 @@ export function VoiceAssistant({
     (arcus.wakeWord || isTerminal) && desktop && !embedded && !wakePaused,
     busy,
     React.useCallback(() => {
+      // A FRESH wake — Arcus was closed — gets the full greeting ("Hi sir,
+      // how may I help you today?"), the same handshake a click gets: being
+      // called by name across the room IS the front door. Waking it while
+      // it is already open gets the short configurable ack instead.
+      const fresh = modeRef.current === "bubble";
       lastOpenModeRef.current = "full";
       writePref(STUDIO_KEYS.mode, "full");
       setMode("full");
       // Hands-free from a wake word is implied: someone who called across the
       // room is not about to reach for the mic button for their next turn.
       setHandsFree(true);
-      // "Yes, sir?" queues BEHIND anything already being said (the greeting),
-      // and `listenWhenQuiet` opens the mic only once Arcus has gone silent —
+      // The spoken line queues BEHIND anything already being said, and
+      // `listenWhenQuiet` opens the mic only once Arcus has gone silent —
       // never over its own voice, and only ever OPENS: the old toggle could
       // race the hands-free auto-arm and flip the mic straight back off.
       const engageMic =
         arcus.voiceEngine === "realtime"
           ? () => void realtime.start()
           : () => void listenWhenQuiet();
-      if (wakeAckUrl) void playClip(wakeAckUrl).then(engageMic);
+      const clipUrl = (fresh && greetingUrl) || wakeAckUrl;
+      if (clipUrl) void playClip(clipUrl).then(engageMic);
       else engageMic();
-    }, [setHandsFree, listenWhenQuiet, wakeAckUrl, playClip, arcus.voiceEngine, realtime]),
+    }, [setHandsFree, listenWhenQuiet, greetingUrl, wakeAckUrl, playClip, arcus.voiceEngine, realtime]),
+    // The terminal keeps listening across window switches — that is what
+    // registering the machine MEANS — and pins the mic channel open so it
+    // stops chirping headsets on every recogniser restart.
+    isTerminal,
   );
 
   // "MIC BLOCKED — fix": SpeechRecognition cannot re-prompt after a refusal,
@@ -695,9 +717,11 @@ export function VoiceAssistant({
                   </p>
                   <p className="text-[11px] font-medium text-slate-500">
                     {chat.status === "listening"
-                      ? "Listening…"
+                      ? chat.heard
+                        ? "Heard you — go on…"
+                        : "Listening…"
                       : chat.status === "thinking"
-                        ? "Thinking…"
+                        ? "Got it — working…"
                         : chat.status === "speaking"
                           ? "Speaking…"
                           : "Voice + workspace AI"}
@@ -932,6 +956,7 @@ export function VoiceAssistant({
               wakeListening={wakeListening}
               wakeState={wakeState}
               wakePaused={wakePaused}
+              wakeHeard={wakeHeard}
               onWakeFix={onWakeFix}
               onWakeToggle={toggleWakePaused}
               isTerminal={isTerminal}

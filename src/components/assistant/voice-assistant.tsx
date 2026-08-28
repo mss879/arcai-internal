@@ -36,6 +36,7 @@ import {
   Loader2,
   Maximize2,
   Mic,
+  MicOff,
   Send,
   Settings2,
   Sparkles,
@@ -88,6 +89,53 @@ import {
  * handed back to search in one edit if that is ever the preference.
  */
 const STUDIO_HOTKEY = "k";
+
+/**
+ * The launcher's wake light, now a SWITCH rather than just a lamp. "Is
+ * there no way to turn off the mic that's on all the time" is answered by
+ * putting the off control on the one element that is on every screen:
+ * green = listening, click mutes this device; slash = muted, click arms;
+ * rose = blocked, click re-prompts; amber = failing, click retries. A span
+ * with a button role rather than a real <button>, because it lives inside
+ * the launcher button and buttons cannot nest; pointer-down is stopped so
+ * grabbing the dot never starts a bubble drag.
+ */
+function WakeDot({
+  className,
+  title,
+  onAct,
+  children,
+}: {
+  className: string;
+  title: string;
+  onAct?: () => void;
+  children?: React.ReactNode;
+}) {
+  return (
+    <span
+      role={onAct ? "button" : undefined}
+      aria-label={onAct ? title : undefined}
+      aria-hidden={onAct ? undefined : true}
+      title={title}
+      onPointerDown={onAct ? (e) => e.stopPropagation() : undefined}
+      onClick={
+        onAct
+          ? (e) => {
+              e.stopPropagation();
+              onAct();
+            }
+          : undefined
+      }
+      className={cn(
+        "absolute -bottom-1 -left-1 grid h-4 w-4 place-items-center rounded-full ring-2 ring-white",
+        onAct ? "cursor-pointer" : "pointer-events-none",
+        className,
+      )}
+    >
+      {children}
+    </span>
+  );
+}
 
 export function VoiceAssistant({
   firstName,
@@ -674,36 +722,40 @@ export function VoiceAssistant({
           >
             <span className="pointer-events-none absolute inset-0 -z-10 animate-ping rounded-full bg-primary-500/40" />
             <Sparkles className="h-6 w-6" />
-            {/* The wake dot (0104) — and when it is NOT green, it says WHY:
-                "I keep saying hey Arcus and nothing happens" is unanswerable
-                when the only signal is a dot that quietly isn't there. */}
+            {/* The wake dot (0104) — a lamp AND the off switch. When it is
+                not green it says WHY, and one click acts on it: mute or arm
+                the mic on this device, fix a blocked permission, retry a
+                failing engine — without opening the studio first. */}
             {wakeListening ? (
-              <span
-                aria-hidden
-                title="Listening for “Hey Arcus”"
-                className="pointer-events-none absolute -bottom-0.5 -left-0.5 h-3 w-3 animate-pulse rounded-full bg-emerald-400 ring-2 ring-white"
+              <WakeDot
+                title="Listening for “Hey Arcus” — click to turn this device's wake mic off."
+                onAct={toggleWakePaused}
+                className="animate-pulse bg-emerald-400"
               />
             ) : (arcus.wakeWord || isTerminal) && wakeState === "denied" ? (
-              <span
-                aria-hidden
-                title="Wake word can't hear — the microphone is blocked for this site. Open Arcus and click MIC BLOCKED · FIX."
-                className="pointer-events-none absolute -bottom-0.5 -left-0.5 h-3 w-3 rounded-full bg-rose-500 ring-2 ring-white"
+              <WakeDot
+                title="Wake word can't hear — the microphone is blocked for this site. Click to allow it."
+                onAct={() => void onWakeFix()}
+                className="bg-rose-500"
               />
             ) : (arcus.wakeWord || isTerminal) && wakeState === "failing" ? (
-              <span
-                aria-hidden
-                title="Wake word is retrying — the browser's speech service isn't responding (it needs Chrome and internet)."
-                className="pointer-events-none absolute -bottom-0.5 -left-0.5 h-3 w-3 animate-pulse rounded-full bg-amber-400 ring-2 ring-white"
+              <WakeDot
+                title="Wake word is retrying — the browser's speech service isn't responding (it needs Chrome and internet). Click to retry now."
+                onAct={retryWake}
+                className="animate-pulse bg-amber-400"
               />
-            ) : (arcus.wakeWord || isTerminal) && (wakePaused || wakeAsleep) ? (
-              <span
-                aria-hidden
-                title={
-                  wakePaused
-                    ? "Wake word muted on this device — open Arcus and click WAKE MUTED · ARM to resume."
-                    : "Quiet hours — the wake microphone sleeps until morning."
-                }
-                className="pointer-events-none absolute -bottom-0.5 -left-0.5 h-3 w-3 rounded-full bg-slate-400 ring-2 ring-white"
+            ) : (arcus.wakeWord || isTerminal) && wakePaused ? (
+              <WakeDot
+                title="Wake mic is off on this device — click to start listening again."
+                onAct={toggleWakePaused}
+                className="bg-slate-400"
+              >
+                <MicOff className="h-2.5 w-2.5 text-white" />
+              </WakeDot>
+            ) : (arcus.wakeWord || isTerminal) && wakeAsleep ? (
+              <WakeDot
+                title="Quiet hours — the wake microphone sleeps until morning."
+                className="bg-slate-400"
               />
             ) : null}
             {/* Something is waiting to be said (0102). */}

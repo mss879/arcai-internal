@@ -4,10 +4,11 @@
  * "Hey Arcus" — waking the assistant without touching anything (0104).
  *
  * Built on the browser's own Web Speech API rather than a wake-word library,
- * for three reasons: it ships with Chrome and Safari so there is nothing to
+ * for three reasons: it ships with the browser so there is nothing to
  * install or download at runtime, it costs nothing per utterance (the audio
  * never reaches our API), and it keeps the no-new-dependencies rule the rest
- * of this codebase follows.
+ * of this codebase follows. Chromium only in practice — see `isWebKitSpeech`
+ * for why Safari and iOS are deliberately turned away.
  *
  * THIS IS OFF BY DEFAULT, and the reason is honest rather than technical:
  * browser speech recognition may stream audio to the browser vendor's own
@@ -90,6 +91,13 @@ const MAX_QUICK_FAILURES = 4;
  *  and a flaky speech service recovering deserves a prompt second chance. */
 const BACKOFF_MS = 10_000;
 
+/** How long a hidden tab keeps holding the mic channel before letting go.
+ *  Flipping to another window and back is the commonest gesture of a working
+ *  day, and releasing the hardware for every flip is what made headsets beep
+ *  on each screen change. Half a minute rides the flip out; a tab genuinely
+ *  left behind still releases the microphone like it always did. */
+const KEEPALIVE_HIDE_GRACE_MS = 30_000;
+
 export type WakeWordState =
   /** The recogniser is running and the phrase will be heard. */
   | "listening"
@@ -128,9 +136,42 @@ function getRecognitionCtor(): SpeechRecognitionCtor | null {
   return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
 }
 
+/**
+ * WebKit — desktop Safari and EVERY iOS browser, since they all wrap the
+ * same engine — routes SpeechRecognition through the OS dictation service,
+ * which plays the system listening tone on every `start()`. This hook
+ * restarts the recogniser every few seconds by design, so on these browsers
+ * the wake word IS a beep machine — and Safari re-asks for the microphone
+ * each visit on top, because it never persists the grant without a manual
+ * per-site setting. Neither is suppressible from a page, so the honest move
+ * is to not offer the feature there at all rather than ship the beeping.
+ */
+function isWebKitSpeech(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent;
+  const iOS =
+    /iP(hone|ad|od)/i.test(ua) ||
+    // iPadOS 13+ masquerades as macOS; the touch points give it away.
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const desktopSafari =
+    /AppleWebKit/i.test(ua) &&
+    /Safari/i.test(ua) &&
+    !/Chrom(e|ium)|Edg\/|OPR\/|Android/i.test(ua);
+  return iOS || desktopSafari;
+}
+
+export type WakeWordBlockReason = "ok" | "no-api" | "safari";
+
+/** WHY the wake word can't run here, so settings can say so in words. */
+export function wakeWordBlockReason(): WakeWordBlockReason {
+  if (getRecognitionCtor() === null) return "no-api";
+  if (isWebKitSpeech()) return "safari";
+  return "ok";
+}
+
 /** True when this browser can do wake-word listening at all. */
 export function wakeWordSupported(): boolean {
-  return getRecognitionCtor() !== null;
+  return wakeWordBlockReason() === "ok";
 }
 
 /**
@@ -144,10 +185,10 @@ export function wakeWordSupported(): boolean {
  * @param persistent TERMINAL mode: keep listening while the tab is hidden.
  *   A registered terminal's whole job is hearing its name from across the
  *   room WHILE the user works in other windows — suspending on every window
- *   switch made the wake word deaf most of the day, and each release/
- *   re-acquire of the microphone made Bluetooth headsets chirp. Persistent
- *   mode also holds one silent keep-alive stream, so the mic channel stays
- *   open across the recogniser's own restarts instead of toggling audibly.
+ *   switch made the wake word deaf most of the day. Every armed session now
+ *   holds one silent keep-alive stream so the mic channel stays open across
+ *   the recogniser's own restarts instead of toggling audibly; persistent
+ *   mode additionally never releases it while the tab is hidden.
  */
 export function useWakeWord(
   enabled: boolean,
@@ -186,32 +227,89 @@ export function useWakeWord(
 
   const retry = React.useCallback(() => setAttempt((n) => n + 1), []);
 
-  // Terminal mode: pin the microphone channel open for the WHOLE armed
-  // stretch — its own effect, deliberately free of `busy`, because the whole
-  // point is that it survives the recogniser's restarts and the assistant's
-  // own turns. Without it every release/re-acquire of the hardware is a
-  // moment Bluetooth headsets answer with an audible chirp.
+  // Pin the microphone channel open for the WHOLE armed stretch — its own
+  // effect, deliberately free of `busy`, because the whole point is that it
+  // survives the recogniser's restarts and the assistant's own turns. The
+  // engine tears its session down every few seconds of silence, and without
+  // this every restart released and re-acquired the hardware — the "it beeps
+  // every time I change screens" complaint is a Bluetooth headset chirping
+  // along to exactly that churn. Once terminal-only; now every armed wake
+  // word holds the channel, because the beeping was never a terminal-only
+  // problem.
+  //
+  // A NON-terminal tab still lets the microphone go when hidden — a
+  // background tab holding the mic indefinitely is the behaviour that makes
+  // people distrust the feature — but only after a grace period, so the
+  // constant window-flipping of a working day stops toggling the hardware.
+  // The terminal never releases: hearing its name while the user works in
+  // other windows is its whole job.
   React.useEffect(() => {
-    if (!persistent || !enabled || !supported) return;
+    if (!enabled || !supported) return;
     if (!navigator.mediaDevices?.getUserMedia) return;
     let stopped = false;
+    let acquiring = false;
     let keepAlive: MediaStream | null = null;
-    navigator.mediaDevices
-      .getUserMedia({ audio: true })
-      .then((stream) => {
-        if (stopped) {
-          for (const track of stream.getTracks()) track.stop();
-          return;
+    let graceTimer: number | null = null;
+
+    const release = () => {
+      if (graceTimer !== null) {
+        window.clearTimeout(graceTimer);
+        graceTimer = null;
+      }
+      if (keepAlive) {
+        for (const track of keepAlive.getTracks()) track.stop();
+        keepAlive = null;
+      }
+    };
+
+    const scheduleRelease = () => {
+      if (graceTimer !== null) return;
+      graceTimer = window.setTimeout(() => {
+        graceTimer = null;
+        release();
+      }, KEEPALIVE_HIDE_GRACE_MS);
+    };
+
+    const acquire = () => {
+      if (stopped || acquiring || keepAlive) return;
+      acquiring = true;
+      navigator.mediaDevices
+        .getUserMedia({ audio: true })
+        .then((stream) => {
+          acquiring = false;
+          if (stopped) {
+            for (const track of stream.getTracks()) track.stop();
+            return;
+          }
+          keepAlive = stream;
+          // Granted while already hidden: start the countdown right away.
+          if (!persistent && document.hidden) scheduleRelease();
+        })
+        .catch(() => {
+          acquiring = false;
+          // The recogniser's own permission error will surface it.
+        });
+    };
+
+    const onVisibility = () => {
+      if (persistent) return;
+      if (document.hidden) {
+        scheduleRelease();
+      } else {
+        if (graceTimer !== null) {
+          window.clearTimeout(graceTimer);
+          graceTimer = null;
         }
-        keepAlive = stream;
-      })
-      .catch(() => {
-        // The recogniser's own permission error will surface it.
-      });
+        acquire();
+      }
+    };
+
+    if (persistent || !document.hidden) acquire();
+    document.addEventListener("visibilitychange", onVisibility);
     return () => {
       stopped = true;
-      if (keepAlive) for (const track of keepAlive.getTracks()) track.stop();
-      keepAlive = null;
+      document.removeEventListener("visibilitychange", onVisibility);
+      release();
     };
   }, [persistent, enabled, supported, attempt]);
 

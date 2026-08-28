@@ -45,7 +45,7 @@ import {
 } from "@/app/(app)/profile/terminal-actions";
 import {
   requestMicrophone,
-  wakeWordSupported,
+  wakeWordBlockReason,
 } from "@/components/assistant/use-wake-word";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
@@ -798,7 +798,8 @@ function WakeDoctor({ wakeOn }: { wakeOn: boolean }) {
     "unknown",
   );
   const [testing, setTesting] = React.useState(false);
-  const supported = React.useMemo(() => wakeWordSupported(), []);
+  const reason = React.useMemo(() => wakeWordBlockReason(), []);
+  const supported = reason === "ok";
 
   const readMic = React.useCallback(async () => {
     try {
@@ -835,7 +836,9 @@ function WakeDoctor({ wakeOn }: { wakeOn: boolean }) {
         detail={
           supported
             ? "speech recognition available."
-            : "no speech recognition — use Chrome for the wake word."
+            : reason === "safari"
+              ? "Safari plays the system listening tone every time the recogniser restarts, and re-asks for the microphone each visit — use Chrome or Edge for the wake word."
+              : "no speech recognition — use Chrome for the wake word."
         }
       />
       <DoctorRow
@@ -850,6 +853,13 @@ function WakeDoctor({ wakeOn }: { wakeOn: boolean }) {
               : "not granted yet — press Test below and allow it."
         }
       />
+      <p className="pl-6 text-[11px] leading-relaxed text-slate-400">
+        Asked to allow the mic on every login? Make the grant permanent: in
+        Chrome pick &ldquo;Allow while visiting the site&rdquo; on the prompt
+        (or click the lock / mic icon in the address bar → Microphone →
+        Allow); in Safari use the Safari menu → Settings for this website… →
+        Microphone → Allow.
+      </p>
       <DoctorRow
         ok={wakeOn}
         warn={!wakeOn}

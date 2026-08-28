@@ -238,7 +238,7 @@ function WakeIndicator({
   }
   if (state === "unsupported") {
     return (
-      <span title="This browser has no speech recognition — use Chrome for the wake word.">
+      <span title="This browser can't run the wake word — Safari plays a system tone on every listen and forgets the mic permission, and some browsers have no speech recognition at all. Use Chrome or Edge.">
         WAKE UNSUPPORTED
       </span>
     );

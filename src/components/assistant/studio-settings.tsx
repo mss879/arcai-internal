@@ -48,6 +48,12 @@ import {
   wakeWordBlockReason,
 } from "@/components/assistant/use-wake-word";
 import { createClient } from "@/lib/supabase/client";
+import {
+  useHandPrefs,
+  writeHandPrefs,
+  type HandChoice,
+  type HandSmoothing,
+} from "@/components/assistant/interactivity/hand-prefs";
 import { cn } from "@/lib/utils";
 
 type Tab = "personality" | "voice" | "briefing" | "memory";
@@ -433,6 +439,7 @@ export function StudioSettings({
                 checked={config.ambient_voice}
                 onChange={(v) => void save({ ambient_voice: v })}
               />
+              <HandsSection />
               <TerminalCard />
             </>
           )}
@@ -569,6 +576,104 @@ export function StudioSettings({
         </div>
       )}
     </Modal>
+  );
+}
+
+/**
+ * Interactivity-mode tuning. DEVICE-local like every layout preference —
+ * camera comfort is per-machine, so nothing here touches the database.
+ * Writes broadcast a window event, so a running command view re-tunes the
+ * cursor the moment a choice is made.
+ */
+function HandsSection() {
+  const prefs = useHandPrefs();
+  return (
+    <div className="space-y-4 rounded-2xl border border-slate-200/70 bg-slate-50/60 p-4">
+      <p className="text-[13px] font-semibold text-slate-900">
+        Hand control
+        <span className="ml-2 text-[11px] font-normal text-slate-500">
+          this device only
+        </span>
+      </p>
+      <Field
+        label="Tracked hand"
+        hint="With one hand chosen, the other is ignored entirely — rest it, gesture with it, nothing happens. It still counts as the second hand of a two-hand resize."
+      >
+        <div className="flex gap-2">
+          {(
+            [
+              ["any", "Both"],
+              ["right", "Right only"],
+              ["left", "Left only"],
+            ] as const satisfies ReadonlyArray<readonly [HandChoice, string]>
+          ).map(([hand, label]) => (
+            <Choice
+              key={hand}
+              active={prefs.hand === hand}
+              onClick={() => writeHandPrefs({ hand })}
+            >
+              {label}
+            </Choice>
+          ))}
+        </div>
+      </Field>
+      <Field
+        label="Reach"
+        hint="How much hand travel covers the screen. Small moves suits sitting close; full arm suits standing back from the terminal."
+      >
+        <div className="flex gap-2">
+          {(
+            [
+              [0.45, "Small moves"],
+              [0.6, "Balanced"],
+              [0.8, "Full arm"],
+            ] as const
+          ).map(([reach, label]) => (
+            <Choice
+              key={label}
+              active={Math.abs(prefs.reach - reach) < 0.01}
+              onClick={() => writeHandPrefs({ reach })}
+            >
+              {label}
+            </Choice>
+          ))}
+        </div>
+      </Field>
+      <Field
+        label="Cursor feel"
+        hint="Fastest follows the hand instantly but shows more shake; steadiest is glass-smooth with a touch more lag."
+      >
+        <div className="flex gap-2">
+          {(
+            [
+              ["fast", "Fastest"],
+              ["balanced", "Balanced"],
+              ["steady", "Steadiest"],
+            ] as const satisfies ReadonlyArray<readonly [HandSmoothing, string]>
+          ).map(([smoothing, label]) => (
+            <Choice
+              key={smoothing}
+              active={prefs.smoothing === smoothing}
+              onClick={() => writeHandPrefs({ smoothing })}
+            >
+              {label}
+            </Choice>
+          ))}
+        </div>
+      </Field>
+      <Toggle
+        label="Gesture sounds"
+        hint="Tiny synthesised ticks on hover, click and grab — texture, not notifications."
+        checked={prefs.sounds}
+        onChange={(v) => writeHandPrefs({ sounds: v })}
+      />
+      <Toggle
+        label="Tracking wireframe"
+        hint="The small skeletal hand in the corner that proves the camera sees you. The camera feed itself is never displayed either way."
+        checked={prefs.skeleton}
+        onChange={(v) => writeHandPrefs({ skeleton: v })}
+      />
+    </div>
   );
 }
 

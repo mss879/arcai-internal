@@ -36,6 +36,7 @@ import type {
   SendInvoiceResult,
   Status,
 } from "@/components/assistant/use-voice-chat";
+import type { HandTrackingState } from "@/components/assistant/interactivity/use-hand-tracking";
 import type { WakeWordState } from "@/components/assistant/use-wake-word";
 import type { SmsCardData } from "@/lib/assistant-cards";
 import type { AssistantMessage } from "@/lib/assistant-threads";
@@ -253,6 +254,64 @@ function WakeIndicator({
   );
 }
 
+/**
+ * The hand light — same honesty contract as the wake light above: every
+ * state the camera pipeline can end in is NAMED, and the one the user can
+ * fix (a blocked camera) is clickable.
+ */
+function HandIndicator({
+  state,
+  onFix,
+}: {
+  state?: HandTrackingState;
+  onFix?: () => void;
+}) {
+  if (!state || state === "off") return null;
+  switch (state) {
+    case "tracking":
+      return <span className="text-emerald-400">HANDS TRACKING</span>;
+    case "no-hand":
+      return (
+        <span
+          className="text-[var(--stage-accent)]"
+          title="Interactivity mode is armed — show a hand to the camera."
+        >
+          SHOW A HAND
+        </span>
+      );
+    case "starting":
+      return <span className="text-[var(--stage-faint)]">HANDS STARTING…</span>;
+    case "denied":
+      return (
+        <button
+          type="button"
+          onClick={onFix}
+          className="pointer-events-auto text-rose-400 underline decoration-dotted underline-offset-2 hover:text-rose-300"
+          title="The camera is blocked for this site — click to allow it. The feed is never displayed; only hand motion is read."
+        >
+          CAMERA BLOCKED · FIX
+        </button>
+      );
+    case "unsupported":
+      return (
+        <span title="This browser can't run hand tracking — use Chrome or Edge.">
+          HANDS UNSUPPORTED
+        </span>
+      );
+    default:
+      return (
+        <button
+          type="button"
+          onClick={onFix}
+          className="pointer-events-auto text-amber-400 underline decoration-dotted underline-offset-2 hover:text-amber-300"
+          title="Hand tracking hit an error — click to restart the camera."
+        >
+          HANDS ERROR · RETRY
+        </button>
+      );
+  }
+}
+
 function LogLine({ step }: { step: ToolStep }) {
   const running = step.state === "running";
   const failed = step.state === "error";
@@ -293,6 +352,9 @@ export type SystemRailProps = {
   wakeHeard?: string;
   onWakeFix?: () => void;
   onWakeToggle?: () => void;
+  /** Interactivity mode's camera state; absent while the mode is off. */
+  handState?: HandTrackingState;
+  onHandFix?: () => void;
   isTerminal?: boolean;
   orbRef: React.RefObject<HTMLDivElement | null>;
   onCoreTap: () => void;
@@ -329,6 +391,8 @@ function SystemRailImpl({
   wakeHeard,
   onWakeFix,
   onWakeToggle,
+  handState,
+  onHandFix,
   isTerminal,
   orbRef,
   onCoreTap,
@@ -411,6 +475,12 @@ function SystemRailImpl({
             onToggle={onWakeToggle}
           />
         </div>
+        {handState && handState !== "off" && (
+          <div className="hud-mono flex items-center justify-between px-3 pt-0.5 text-[9px] tracking-[0.18em] text-[var(--stage-faint)]">
+            <span>HAND CONTROL</span>
+            <HandIndicator state={handState} onFix={onHandFix} />
+          </div>
+        )}
       </section>
 
       {/* CORE STATUS */}

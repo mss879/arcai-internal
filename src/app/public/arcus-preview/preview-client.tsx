@@ -150,6 +150,9 @@ export function PreviewClient() {
   const [status, setStatus] = React.useState<Status>("idle");
   const [text, setText] = React.useState("");
   const [showArtifacts, setShowArtifacts] = React.useState(true);
+  // Interactivity mode, two flavours: "sim" drives the pipeline from the
+  // mouse (Space = pinch, no camera needed); "camera" runs the real thing.
+  const [hands, setHands] = React.useState<"off" | "sim" | "camera">("off");
   const [streamingText, setStreamingText] = React.useState("");
   const level = useFakeVoice(status === "listening" || status === "speaking");
 
@@ -247,6 +250,7 @@ export function PreviewClient() {
         wakeHeard="hey arcus what's my revenue"
         onWakeToggle={() => setWakePaused((p) => !p)}
         isTerminal
+        hands={hands !== "off"}
       />
 
       {/* Unmissable: this is the design preview, not the app. */}
@@ -297,6 +301,53 @@ export function PreviewClient() {
           className="rounded-lg px-2.5 py-1 text-[11px] font-medium text-slate-300 hover:bg-white/10"
         >
           stream
+        </button>
+        <span className="mx-1 h-4 w-px bg-white/15" />
+        {/* Toggling flips the localStorage flag BEFORE arming, because the
+            hook reads it once per arm. Sim: mouse moves the hand, hold
+            Space to pinch. Camera: the real pipeline, permission and all. */}
+        <button
+          type="button"
+          onClick={() => {
+            setHands((v) => {
+              const next = v === "sim" ? "off" : "sim";
+              try {
+                window.localStorage.setItem(
+                  "arc-hand-sim",
+                  next === "sim" ? "1" : "0",
+                );
+              } catch {}
+              return next;
+            });
+          }}
+          className={
+            "rounded-lg px-2.5 py-1 text-[11px] font-medium " +
+            (hands === "sim"
+              ? "bg-emerald-500 text-white"
+              : "text-slate-300 hover:bg-white/10")
+          }
+        >
+          hands·sim
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setHands((v) => {
+              const next = v === "camera" ? "off" : "camera";
+              try {
+                window.localStorage.setItem("arc-hand-sim", "0");
+              } catch {}
+              return next;
+            });
+          }}
+          className={
+            "rounded-lg px-2.5 py-1 text-[11px] font-medium " +
+            (hands === "camera"
+              ? "bg-emerald-500 text-white"
+              : "text-slate-300 hover:bg-white/10")
+          }
+        >
+          hands·cam
         </button>
       </div>
     </div>

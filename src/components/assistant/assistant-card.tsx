@@ -321,6 +321,9 @@ function MissionPlanBody({
           <button
             onClick={approve}
             disabled={state === "sending"}
+            // The hand's thumbs-up gesture presses the first visible one.
+            data-hand-approve
+
             className={cn(
               "mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white transition",
               "hover:bg-primary-700 active:scale-[0.98] disabled:opacity-60",

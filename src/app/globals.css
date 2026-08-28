@@ -493,3 +493,83 @@ body {
   }
 }
 
+
+/* ---- Interactivity mode: the hand reticle --------------------
+   Moved by translate3d from a rAF loop reading refs; the LOOK per
+   gesture switches on a data attribute set imperatively, so React
+   renders nothing per frame. Colors mirror the HUD's states:
+   orange at rest, brighter on a target, emerald while pinching. */
+.hand-reticle {
+  will-change: transform;
+  transition: opacity 160ms ease;
+}
+.hand-reticle-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  border: 1.5px solid rgb(251 146 60 / 0.75);
+  box-shadow: 0 0 12px rgb(249 115 22 / 0.35);
+  transition:
+    transform 120ms ease,
+    border-color 120ms ease,
+    box-shadow 120ms ease;
+}
+.hand-reticle-dot {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  height: 5px;
+  width: 5px;
+  margin: -2.5px 0 0 -2.5px;
+  border-radius: 9999px;
+  background: rgb(251 146 60);
+  transition: background 120ms ease;
+}
+.hand-reticle[data-mode="hover"] .hand-reticle-ring {
+  border-color: rgb(251 146 60);
+  box-shadow: 0 0 18px rgb(249 115 22 / 0.6);
+}
+.hand-reticle[data-mode="pinch"] .hand-reticle-ring,
+.hand-reticle[data-mode="drag"] .hand-reticle-ring {
+  transform: scale(0.62);
+  border-color: rgb(52 211 153);
+  box-shadow: 0 0 18px rgb(52 211 153 / 0.55);
+}
+.hand-reticle[data-mode="pinch"] .hand-reticle-dot,
+.hand-reticle[data-mode="drag"] .hand-reticle-dot {
+  background: rgb(52 211 153);
+}
+.hand-reticle[data-mode="pose"] .hand-reticle-ring,
+.hand-reticle[data-mode="scroll"] .hand-reticle-ring {
+  border-color: rgb(96 165 250);
+  box-shadow: 0 0 18px rgb(96 165 250 / 0.5);
+}
+.hand-reticle[data-mode="pose"] .hand-reticle-dot,
+.hand-reticle[data-mode="scroll"] .hand-reticle-dot {
+  background: rgb(96 165 250);
+}
+/* One word under the reticle naming the recognised gesture. */
+.hand-reticle-label {
+  position: absolute;
+  left: 50%;
+  top: calc(100% + 8px);
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-family: var(--font-geist-mono, ui-monospace, monospace);
+  font-size: 9px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: rgb(251 146 60 / 0.9);
+  text-shadow: 0 0 8px rgb(0 0 0 / 0.8);
+}
+.hand-reticle[data-mode="pose"] .hand-reticle-label,
+.hand-reticle[data-mode="scroll"] .hand-reticle-label {
+  color: rgb(96 165 250 / 0.95);
+}
+
+/* While a hand or mouse drag is live, iframes must not eat the pointer —
+   a live page panel would otherwise freeze the drag the moment the cursor
+   crosses it. Toggled by the interaction layer for the drag's duration. */
+body.arc-hand-dragging iframe {
+  pointer-events: none !important;
+}

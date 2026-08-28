@@ -64,6 +64,12 @@ export const STUDIO_KEYS = {
   view: "arc-studio-view",
   /** Wake-word mic muted on THIS device — survives reloads (0104-fix). */
   wakePaused: "arc-studio-wake-paused",
+  /** Interactivity mode (hand tracking) armed on this device. */
+  hands: "arc-studio-hands",
+  /** Where the free stage's floating panels were left. */
+  handLayout: "arc-studio-hand-layout",
+  /** Hands sensitivity/sound preferences for this device. */
+  handPrefs: "arc-studio-hand-prefs",
 } as const;
 
 /** The stage, unless this browser has been told otherwise. */

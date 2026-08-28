@@ -11,7 +11,7 @@
  */
 
 import * as React from "react";
-import { MonitorCog } from "lucide-react";
+import { Hand, MonitorCog } from "lucide-react";
 
 import type { Status } from "@/components/assistant/use-voice-chat";
 import { useReducedMotionSafe } from "@/components/assistant/studio-store";
@@ -56,10 +56,13 @@ function CommandHudImpl({
   status,
   personaName,
   isTerminal,
+  interactive,
 }: {
   status: Status;
   personaName: string;
   isTerminal?: boolean;
+  /** Interactivity mode armed — the hand is an input device right now. */
+  interactive?: boolean;
 }) {
   const reduced = useReducedMotionSafe();
   // A.R.C.U.S — the reference's letter-spaced nameplate.
@@ -98,6 +101,15 @@ function CommandHudImpl({
         }}
       />
 
+      {interactive && (
+        <span
+          title="Interactivity mode — camera tracks your hand; the feed is never displayed"
+          className="hud-mono flex items-center gap-1.5 text-[9px] uppercase tracking-[0.2em] text-emerald-300"
+        >
+          <Hand className="h-3 w-3" />
+          Interactive
+        </span>
+      )}
       {isTerminal && (
         <span
           title="This machine is the Arcus terminal"

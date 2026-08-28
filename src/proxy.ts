@@ -15,8 +15,10 @@ export const config = {
      * - _next/image (image optimization files)
      * - favicon.ico, sitemap.xml, robots.txt
      * - sw.js (service worker) + manifest.webmanifest (PWA) — must be public
+     * - arcus/hand (hand-tracking wasm + model — static, nothing sensitive,
+     *   and the worker that fetches them cannot follow a login redirect)
      * - image/font assets
      */
-    "/((?!_next/static|_next/image|favicon.ico|sitemap.xml|robots.txt|sw.js|manifest.webmanifest|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|woff2?)$).*)",
+    "/((?!_next/static|_next/image|favicon.ico|sitemap.xml|robots.txt|sw.js|manifest.webmanifest|arcus/hand/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|woff2?)$).*)",
   ],
 };

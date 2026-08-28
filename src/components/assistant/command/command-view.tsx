@@ -25,6 +25,13 @@ import { CommandHud } from "@/components/assistant/command/command-hud";
 import { CommandStage } from "@/components/assistant/command/command-stage";
 import { LevelProvider } from "@/components/assistant/command/level-context";
 import { SystemRail } from "@/components/assistant/command/system-rail";
+import {
+  HandInteractionLayer,
+  type HandActions,
+} from "@/components/assistant/interactivity/hand-interaction-layer";
+import { useHandPrefs } from "@/components/assistant/interactivity/hand-prefs";
+import { InteractiveStage } from "@/components/assistant/interactivity/interactive-stage";
+import { useHandTracking } from "@/components/assistant/interactivity/use-hand-tracking";
 import type { VoiceChat } from "@/components/assistant/use-voice-chat";
 import type { WakeWordState } from "@/components/assistant/use-wake-word";
 import { VoiceVisualizer } from "@/components/assistant/voice-visualizer";
@@ -51,6 +58,8 @@ export type CommandViewProps = {
   isTerminal?: boolean;
   /** Show the business dashboard on the idle stage. Off = a clean greeting. */
   ambientStage?: boolean;
+  /** Interactivity mode — camera-tracked hand control (header toggle). */
+  hands?: boolean;
 };
 
 export function CommandView({
@@ -70,8 +79,15 @@ export function CommandView({
   onWakeToggle,
   isTerminal,
   ambientStage,
+  hands,
 }: CommandViewProps): React.ReactElement {
   const orbRef = React.useRef<HTMLDivElement | null>(null);
+
+  // The camera+worker live and die with THIS mount: leaving the command
+  // view (or closing Studio) is a guaranteed teardown — light off.
+  const handSource = useHandTracking(Boolean(hands));
+  const handPrefs = useHandPrefs();
+  const [menuOpen, setMenuOpen] = React.useState(true);
 
   const [closedIds, setClosedIds] = React.useState<string[]>([]);
   const [heroId, setHeroId] = React.useState<string | null>(
@@ -110,6 +126,24 @@ export function CommandView({
     userPinnedRef.current = true;
     setHeroId(id);
   }, []);
+
+  // Gesture actions for the interaction layer: an open palm toggles the
+  // areas menu; a flat sweep cycles which artifact holds the hero frame.
+  const handActions = React.useMemo<HandActions>(
+    () => ({
+      palm: () => setMenuOpen((v) => !v),
+      flick: (dir) => {
+        if (artifacts.length < 2) return;
+        const current = artifacts.findIndex((a) => a.id === heroId);
+        const base = current === -1 ? artifacts.length - 1 : current;
+        const next =
+          artifacts[(base + dir + artifacts.length) % artifacts.length];
+        userPinnedRef.current = true;
+        setHeroId(next.id);
+      },
+    }),
+    [artifacts, heroId],
+  );
 
   const closePanel = React.useCallback(
     (id: string) => {
@@ -160,7 +194,7 @@ export function CommandView({
     toggleMic();
   }, [status, stop, toggleMic]);
 
-  return (
+  const body = (
     <LevelProvider value={chat.level}>
       <div className="arc-command arc-command-bg relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[var(--stage-bg)]">
         {/* The reactive field, anchored to the reactor in the rail. Already
@@ -176,22 +210,38 @@ export function CommandView({
             status={chat.status}
             personaName={personaName}
             isTerminal={isTerminal}
+            interactive={Boolean(hands)}
           />
 
           <div className="flex min-h-0 flex-1">
             <div className="flex min-h-0 min-w-0 flex-1 flex-col pl-3">
-              <CommandStage
-                artifacts={artifacts}
-                heroId={heroId}
-                onPromote={promote}
-                onClose={closePanel}
-                onPrompt={send}
-                onNavigate={onNavigate}
-                reloadKeys={reloadKeys}
-                expanded={expanded}
-                onToggleExpand={toggleExpand}
-                empty={standby}
-              />
+              {hands ? (
+                <InteractiveStage
+                  artifacts={artifacts}
+                  heroId={heroId}
+                  onPromote={promote}
+                  onClose={closePanel}
+                  onPrompt={send}
+                  onNavigate={onNavigate}
+                  reloadKeys={reloadKeys}
+                  empty={standby}
+                  menuOpen={menuOpen}
+                  onToggleMenu={() => setMenuOpen((v) => !v)}
+                />
+              ) : (
+                <CommandStage
+                  artifacts={artifacts}
+                  heroId={heroId}
+                  onPromote={promote}
+                  onClose={closePanel}
+                  onPrompt={send}
+                  onNavigate={onNavigate}
+                  reloadKeys={reloadKeys}
+                  expanded={expanded}
+                  onToggleExpand={toggleExpand}
+                  empty={standby}
+                />
+              )}
             </div>
 
             <SystemRail
@@ -206,6 +256,8 @@ export function CommandView({
               wakeHeard={wakeHeard}
               onWakeFix={onWakeFix}
               onWakeToggle={onWakeToggle}
+              handState={hands ? handSource.state : undefined}
+              onHandFix={handSource.fix}
               isTerminal={isTerminal}
               orbRef={orbRef}
               onCoreTap={onCoreTap}
@@ -228,5 +280,19 @@ export function CommandView({
         </div>
       </div>
     </LevelProvider>
+  );
+
+  // The layer provides the drag registry the free stage's panels register
+  // with, and draws the reticle. Off = the exact tree this file always was.
+  return hands ? (
+    <HandInteractionLayer
+      source={handSource}
+      prefs={handPrefs}
+      actions={handActions}
+    >
+      {body}
+    </HandInteractionLayer>
+  ) : (
+    body
   );
 }

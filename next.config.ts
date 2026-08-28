@@ -26,6 +26,18 @@ const nextConfig: NextConfig = {
   async headers() {
     return [
       {
+        // Hand-tracking assets (wasm + model) are versionless files that
+        // never change in place — cache them hard so arming interactivity
+        // mode is instant after the first visit.
+        source: "/arcus/hand/:path*",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "public, max-age=31536000, immutable",
+          },
+        ],
+      },
+      {
         // Always serve the freshest service worker.
         source: "/sw.js",
         headers: [

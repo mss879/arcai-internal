@@ -24,6 +24,7 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "motion/react";
 import {
+  Hand,
   Loader2,
   Minimize2,
   PanelLeftClose,
@@ -48,6 +49,7 @@ import { AssistantCardView } from "@/components/assistant/assistant-card";
 import { ActivityTrail } from "@/components/assistant/activity-trail";
 import { ApprovalsTray } from "@/components/assistant/approvals-tray";
 import { Composer } from "@/components/assistant/composer";
+import { ensureAudio } from "@/components/assistant/interactivity/hand-sounds";
 import { StudioSettings } from "@/components/assistant/studio-settings";
 import { ThreadRail } from "@/components/assistant/thread-rail";
 import { CommandView } from "@/components/assistant/command/command-view";
@@ -70,6 +72,7 @@ import {
   RAIL_INLINE_MIN_PX,
   RAIL_PX,
   readLayout,
+  readPref,
   readView,
   STUDIO_KEYS,
   STUDIO_SUGGESTIONS,
@@ -430,6 +433,11 @@ export function AssistantWorkspace({
   // here would flash the wrong layout for users who chose the other one.
   const [view, setView] = React.useState<StudioView>("classic");
 
+  // Interactivity mode — camera-tracked hand control. Like the wake word,
+  // arming a camera is a privacy decision, so it is opt-in per device and
+  // remembered; the camera itself only runs while the command view is up.
+  const [hands, setHands] = React.useState(false);
+
   const [railOpen, setRailOpen] = React.useState(true);
   const [canvasOpen, setCanvasOpen] = React.useState(true);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
@@ -446,6 +454,7 @@ export function AssistantWorkspace({
     setCanvasOpen(layout.canvasOpen);
     setRatio(layout.canvasRatio);
     setView(readView());
+    setHands(readPref<boolean>(STUDIO_KEYS.hands, false) === true);
   }, []);
 
   // The saved preference still stands on desktop; a phone simply cannot
@@ -473,6 +482,16 @@ export function AssistantWorkspace({
       const next: StudioView = prev === "command" ? "classic" : "command";
       writePref(STUDIO_KEYS.view, next);
       return next;
+    });
+  }, []);
+
+  const toggleHands = React.useCallback(() => {
+    // A REAL click — the one moment the browser lets us wake WebAudio, so
+    // the hand's sound cues are alive by the first gesture.
+    ensureAudio();
+    setHands((prev) => {
+      writePref(STUDIO_KEYS.hands, !prev);
+      return !prev;
     });
   }, []);
 
@@ -946,6 +965,26 @@ export function AssistantWorkspace({
               )}
             </button>
             )}
+            {/* Interactivity mode — only where the free stage exists. */}
+            {command && (
+              <button
+                type="button"
+                onClick={toggleHands}
+                aria-label={
+                  hands
+                    ? "Turn hand control off"
+                    : "Turn hand control on (camera tracks your hand; the feed is never shown)"
+                }
+                aria-pressed={hands}
+                title={hands ? "Hand control off" : "Hand control"}
+                className={cn(
+                  iconButton,
+                  hands && "bg-emerald-400/15 text-emerald-300 hover:bg-emerald-400/25",
+                )}
+              >
+                <Hand className="h-4 w-4" />
+              </button>
+            )}
             {!command && (
               <>
                 <button
@@ -1064,6 +1103,7 @@ export function AssistantWorkspace({
             onWakeToggle={onWakeToggle}
             isTerminal={isTerminal}
             ambientStage={ambientStage}
+            hands={hands}
           />
         ) : (
         /* Columns */

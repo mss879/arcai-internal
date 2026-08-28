@@ -198,10 +198,27 @@ export function useHandTracking(enabled: boolean): HandSource {
     }
     report("starting");
 
-    const worker = new Worker(
-      new URL("./hand-worker.ts", import.meta.url),
-    );
+    // Served from /public as a real module worker — NOT bundled. A
+    // `new URL("./worker.ts", import.meta.url)` worker compiles in dev and
+    // ships as raw TypeScript in a production build, where it fails to
+    // parse and takes the camera request down with it. See the header of
+    // public/arcus/hand/hand-worker.js.
+    let worker: Worker;
+    try {
+      // Classic, NOT a module worker — see the worker's own header: module
+      // scope has no `importScripts`, which MediaPipe needs internally.
+      worker = new Worker("/arcus/hand/hand-worker.js");
+    } catch {
+      report("error");
+      return;
+    }
     workerRef.current = worker;
+    // A worker that fails to LOAD (404, parse error, blocked MIME type)
+    // reports here and nowhere else — without this the mode would sit on
+    // "starting…" forever, which is the failure the wake word taught us to
+    // never ship.
+    worker.onerror = () => report("error");
+    worker.onmessageerror = () => report("error");
     worker.onmessage = (
       event: MessageEvent<
         | { type: "ready"; gpu: boolean }
@@ -225,6 +242,9 @@ export function useHandTracking(enabled: boolean): HandSource {
       type: "init",
       assetBase: `${window.location.origin}/arcus/hand`,
     });
+    // Deliberately after the worker is wired but independent of it: the
+    // permission prompt is the thing the user actually sees, so it must not
+    // be reachable only through a healthy worker.
     void acquire();
 
     // A hidden tab surrenders the camera — the hardware light must go off.

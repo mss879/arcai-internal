@@ -134,6 +134,11 @@ export type WebSyncRun = Tables["web_sync_runs"]["Row"];
 // 0106 — Careers: hiring for the agency's own site, run from the CRM.
 export type CareerVacancy = Tables["careers_vacancies"]["Row"];
 export type CareerApplication = Tables["careers_applications"]["Row"];
+
+/** 0107 — one AI read of the website's analytics. */
+export type WebInsight = Tables["web_insights"]["Row"];
+/** 0108 — one improvement the scan says to make. */
+export type WebInsightTask = Tables["web_insight_tasks"]["Row"];
 export type LeadResearch = Tables["lead_research"]["Row"];
 export type ProspectScan = Tables["prospect_scans"]["Row"];
 export type ProspectCandidate = Tables["prospect_candidates"]["Row"];
@@ -190,6 +195,9 @@ export type {
   WebReportKind,
   VacancyStatus,
   ApplicationStage,
+  InsightStatus,
+  TaskPriority,
+  TaskLevel,
   LeadResearchStatus,
   WaDirection,
   WaMessageStatus,

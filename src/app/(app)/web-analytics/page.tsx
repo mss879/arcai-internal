@@ -1,6 +1,7 @@
 import { requireAdmin } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { isOpenAIConfigured } from "@/lib/ai/openai";
+import type { WebInsight, WebInsightTask } from "@/lib/types";
 import { isWebsiteSourceConfigured, SITE, SITE_URL } from "@/lib/web-analytics/source";
 import {
   getChatSessions,
@@ -59,6 +60,8 @@ export default async function WebAnalyticsPage({
     chats,
     reports,
     syncStatus,
+    insightRes,
+    tasksRes,
   ] = await Promise.all([
     getDaily(supabase, range),
     getDaily(supabase, prior),
@@ -70,6 +73,25 @@ export default async function WebAnalyticsPage({
     getChatSessions(supabase, 60),
     getReports(supabase, 20),
     getSyncStatus(supabase),
+    // The newest scan, failed ones included — the panel needs to be able to
+    // say a scan broke rather than silently showing the one before it.
+    supabase
+      .from("web_insights")
+      .select("*")
+      .eq("site", SITE)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    // The checklist outlives any one scan, so it is read on its own — done
+    // items included, so progress is visible rather than vanishing.
+    supabase
+      .from("web_insight_tasks")
+      .select("*")
+      .eq("site", SITE)
+      .eq("dismissed", false)
+      .order("done", { ascending: true })
+      .order("sort_order", { ascending: true })
+      .limit(60),
   ]);
 
   return (
@@ -96,6 +118,8 @@ export default async function WebAnalyticsPage({
       chats={chats}
       reports={reports}
       syncStatus={syncStatus}
+      insight={(insightRes.data as WebInsight | null) ?? null}
+      insightTasks={(tasksRes.data ?? []) as WebInsightTask[]}
       sourceReady={isWebsiteSourceConfigured()}
       aiReady={isOpenAIConfigured()}
     />

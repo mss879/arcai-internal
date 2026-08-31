@@ -30,6 +30,8 @@ import type {
   WebChatSession,
   WebDaily,
   WebJourney,
+  WebInsight,
+  WebInsightTask,
   WebReport,
   WebSession,
 } from "@/lib/types";
@@ -38,7 +40,10 @@ import type { Range, Totals } from "@/lib/web-analytics/queries";
 import {
   analyseChats,
   deleteReport,
+  dismissInsightTask,
   generateReport,
+  scanInsights,
+  toggleInsightTask,
   syncNow,
   testConnection,
 } from "./actions";
@@ -46,6 +51,7 @@ import {
   BarList,
   ChatPanel,
   FunnelPanel,
+  InsightsPanel,
   JourneysPanel,
   PagesPanel,
   SessionsPanel,
@@ -101,6 +107,8 @@ export function WebAnalyticsView({
   chats,
   reports,
   syncStatus,
+  insight,
+  insightTasks,
   sourceReady,
   aiReady,
 }: {
@@ -132,6 +140,8 @@ export function WebAnalyticsView({
     rowsSynced: number;
     lastError: string | null;
   }[];
+  insight: WebInsight | null;
+  insightTasks: WebInsightTask[];
   sourceReady: boolean;
   aiReady: boolean;
 }) {
@@ -140,6 +150,34 @@ export function WebAnalyticsView({
   const [tab, setTab] = React.useState<Tab>("overview");
   const [busy, setBusy] = React.useState<string | null>(null);
   const [openReport, setOpenReport] = React.useState<string | null>(reports[0]?.id ?? null);
+  const [scanning, setScanning] = React.useState(false);
+
+  const onToggleTask = async (id: string, done: boolean) => {
+    const result = await toggleInsightTask(id, done);
+    if (!result.ok) toast.error(result.error);
+    else router.refresh();
+  };
+
+  const onDismissTask = async (id: string) => {
+    const result = await dismissInsightTask(id);
+    if (!result.ok) toast.error(result.error);
+    else router.refresh();
+  };
+
+  const runScan = async () => {
+    setScanning(true);
+    try {
+      const result = await scanInsights(days);
+      if (!result.ok) {
+        toast.error(result.error);
+        return;
+      }
+      toast.success("Scan complete.");
+      router.refresh();
+    } finally {
+      setScanning(false);
+    }
+  };
 
   const hasData = totals.sessions > 0 || totals.pageviews > 0;
 
@@ -286,6 +324,20 @@ export function WebAnalyticsView({
 
       {tab === "overview" && (
         <div className="space-y-6">
+          {/* Above the numbers on purpose: the cards say what happened, this
+              says what to do about it. */}
+          <InsightsPanel
+            insight={insight}
+            tasks={insightTasks}
+            onToggleTask={onToggleTask}
+            onDismissTask={onDismissTask}
+            scanning={scanning}
+            onScan={runScan}
+            aiReady={aiReady}
+            hasData={hasData}
+            days={days}
+          />
+
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <Stat
               label="Visits"

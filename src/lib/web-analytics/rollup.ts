@@ -156,6 +156,15 @@ export async function rollupDay(supabase: DB, day: string): Promise<void> {
   const bounces = sessions.filter((s) => s.is_bounce).length;
   const conversions = sessions.filter((s) => s.converted).length;
 
+  const { data: chatRows } = await supabase
+    .from("web_chat_sessions")
+    .select("message_count")
+    .eq("site", SITE)
+    .gte("started_at", start)
+    .lte("started_at", end);
+  const chatCount = chatRows?.length ?? 0;
+  const chatMessages = (chatRows ?? []).reduce((n, c) => n + (c.message_count ?? 0), 0);
+
   const vitals: Record<string, number[]> = {};
   for (const e of events) {
     if (e.kind !== "web_vital" || !e.element_text) continue;
@@ -165,6 +174,13 @@ export async function rollupDay(supabase: DB, day: string): Promise<void> {
   for (const [name, values] of Object.entries(vitals)) {
     webVitals[name] = { avg: avg(values), samples: values.length };
   }
+
+  // The old `page_visits` log recorded no device, browser or country, so its
+  // synthesised sessions would otherwise make "unknown" and "(none)" 99% of
+  // every one of those breakdowns and drown the real tracked traffic. They
+  // still count as traffic; they just cannot answer "on what" or "from where".
+  const measured = sessions.filter((s2) => !s2.session_id.startsWith("legacy:"));
+  const unmeasured = sessions.length - measured.length;
 
   const pageCounts = tally(pageViews.map((e) => e.path));
   const referrerCounts = tally(
@@ -190,15 +206,19 @@ export async function rollupDay(supabase: DB, day: string): Promise<void> {
       conversion_rate: pct(conversions, sessions.length),
       forms_started: sessions.reduce((n, s) => n + s.forms_started, 0),
       forms_abandoned: sessions.reduce((n, s) => n + s.forms_abandoned, 0),
-      chat_sessions: sessions.filter((s) => s.chat_engaged).length,
-      chat_messages: sessions.reduce((n, s) => n + s.chat_message_count, 0),
+      // Counted from the conversations themselves, not from the browsing
+      // session's `chat_engaged` flag. Only sessions recorded by the live
+      // tracker can carry that flag, so the old version reported zero chats
+      // on a day the agent had held a dozen.
+      chat_sessions: chatCount,
+      chat_messages: chatMessages,
       rage_clicks: sessions.reduce((n, s) => n + s.rage_clicks, 0),
       outbound_clicks: sessions.reduce((n, s) => n + s.outbound_clicks, 0),
       errors: events.filter((e) => e.kind === "error").length,
       by_channel: tally(sessions.map((s) => s.channel)),
-      by_device: tally(sessions.map((s) => s.device_type)),
-      by_country: tally(sessions.map((s) => s.country ?? s.country_code)),
-      by_browser: tally(sessions.map((s) => s.browser)),
+      by_device: tally(measured.map((s) => s.device_type)),
+      by_country: tally(measured.map((s) => s.country ?? s.country_code)),
+      by_browser: tally(measured.map((s) => s.browser)),
       by_source: tally(sessions.map((s) => s.utm_source ?? s.referrer_domain)),
       by_campaign: tally(
         sessions.filter((s) => s.utm_campaign).map((s) => s.utm_campaign),
@@ -207,7 +227,12 @@ export async function rollupDay(supabase: DB, day: string): Promise<void> {
       top_entry_pages: topN(tally(sessions.map((s) => s.entry_path)), 15),
       top_exit_pages: topN(tally(sessions.map((s) => s.exit_path)), 15),
       top_referrers: topN(referrerCounts, 15),
-      web_vitals: webVitals,
+      web_vitals: {
+        ...webVitals,
+        // Not a vital — carried here so the dashboard and the AI scan can
+        // both tell "nobody was on mobile" from "we did not measure it".
+        _unmeasured_sessions: { avg: unmeasured, samples: sessions.length },
+      },
       computed_at: new Date().toISOString(),
     },
     { onConflict: "site,day" },
@@ -423,9 +448,51 @@ export async function rollupJourneys(
  * catches up on subsequent ticks, newest days first — which is the order
  * that matters, because nobody is staring at last March.
  */
+/**
+ * Days that have events but no `web_daily` row yet.
+ *
+ * The first sync backfills two years of legacy history in one go, and a
+ * single run can only roll up so many days before its time budget is gone.
+ * Without this the remaining days keep their events but never get a daily
+ * row, so the totals (read from `web_daily`) and the funnel (read from raw
+ * sessions) disagree — which is exactly the "775 visited vs 673 sessions"
+ * contradiction that made every other number look untrustworthy.
+ *
+ * Newest first: a gap in last week matters, a gap in 2024 can wait.
+ */
+async function findUnrolledDays(supabase: DB, limit: number): Promise<string[]> {
+  const { data: rolled } = await supabase
+    .from("web_daily")
+    .select("day")
+    .eq("site", SITE);
+  const have = new Set((rolled ?? []).map((r) => r.day));
+
+  const { data: sessionDays } = await supabase
+    .from("web_sessions")
+    .select("first_seen_at")
+    .eq("site", SITE)
+    .order("first_seen_at", { ascending: false })
+    .limit(20_000);
+
+  const missing = new Set<string>();
+  for (const row of sessionDays ?? []) {
+    const day = row.first_seen_at.slice(0, 10);
+    if (!have.has(day)) missing.add(day);
+  }
+  return [...missing].sort().reverse().slice(0, limit);
+}
+
 export async function rollupTouchedDays(supabase: DB, days: string[]): Promise<number> {
   const ordered = [...new Set(days)].sort().reverse().slice(0, 60);
   for (const day of ordered) {
+    await rollupDay(supabase, day);
+  }
+
+  // Whatever the backfill left behind, a slice at a time, so the gap closes
+  // over a few runs instead of never.
+  const backlog = await findUnrolledDays(supabase, 40);
+  for (const day of backlog) {
+    if (ordered.includes(day)) continue;
     await rollupDay(supabase, day);
   }
 
@@ -437,5 +504,5 @@ export async function rollupTouchedDays(supabase: DB, days: string[]): Promise<n
     end.toISOString().slice(0, 10),
   );
 
-  return ordered.length;
+  return ordered.length + backlog.length;
 }

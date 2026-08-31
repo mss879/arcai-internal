@@ -7,6 +7,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import type { ActionResult } from "@/lib/types";
 import { generateWebReport, analyseChatSessions } from "@/lib/web-analytics/report";
+import { runInsightScan } from "@/lib/web-analytics/insights";
 import { runWebAnalyticsPipeline } from "@/lib/web-analytics/run";
 import { pingWebsiteSource } from "@/lib/web-analytics/source";
 
@@ -92,6 +93,74 @@ export async function deleteReport(id: string): Promise<ActionResult> {
   await requireAdmin();
   const supabase = await createClient();
   const { error } = await supabase.from("web_reports").delete().eq("id", id);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath("/web-analytics");
+  return { ok: true };
+}
+
+/**
+ * Read every metric available and have a reasoning model say what it means.
+ *
+ * Slow on purpose — it runs a high-effort model over the whole export, so
+ * the caller shows a working state rather than expecting this back quickly.
+ */
+export async function scanInsights(
+  days: number,
+): Promise<ActionResult<{ id: string }>> {
+  await requireAdmin();
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  const result = await runInsightScan(createAdminClient(), {
+    days,
+    createdBy: user?.id ?? null,
+  });
+  if (!result.ok) return { ok: false, error: result.error };
+
+  revalidatePath("/web-analytics");
+  return { ok: true, id: result.id };
+}
+
+/** Tick an improvement off — or untick it. */
+export async function toggleInsightTask(
+  id: string,
+  done: boolean,
+): Promise<ActionResult> {
+  await requireAdmin();
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  const { error } = await supabase
+    .from("web_insight_tasks")
+    .update({
+      done,
+      done_at: done ? new Date().toISOString() : null,
+      done_by: done ? (user?.id ?? null) : null,
+    })
+    .eq("id", id);
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath("/web-analytics");
+  return { ok: true };
+}
+
+/**
+ * Take an item off the list without marking it done.
+ *
+ * Kept rather than deleted so a re-scan does not put it straight back —
+ * "we are not doing this" is a decision, and it should stick.
+ */
+export async function dismissInsightTask(id: string): Promise<ActionResult> {
+  await requireAdmin();
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("web_insight_tasks")
+    .update({ dismissed: true })
+    .eq("id", id);
   if (error) return { ok: false, error: error.message };
   revalidatePath("/web-analytics");
   return { ok: true };

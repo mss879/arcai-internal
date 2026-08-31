@@ -144,6 +144,51 @@ const n = (v: unknown): number | null => {
 
 const i = (v: unknown): number => Math.round(n(v) ?? 0);
 
+
+const SEARCH_ENGINES =
+  /(google|bing|yahoo|duckduckgo|yandex|baidu|ecosia|brave|qwant|startpage|naver|seznam)\./i;
+const SOCIAL =
+  /(facebook|instagram|linkedin|twitter|x\.com|t\.co|tiktok|pinterest|reddit|youtube|threads|snapchat|whatsapp|telegram|quora|medium)\./i;
+const AI_ASSISTANTS =
+  /(chatgpt|chat\.openai|perplexity|claude\.ai|gemini\.google|copilot\.microsoft|you\.com|phind)\./i;
+
+/**
+ * Channel for a legacy row, from its referrer alone.
+ *
+ * The old `page_visits` log kept a referrer and nothing else, so this is the
+ * same classification the live tracker does minus the UTM and click-id legs.
+ * Without it every referred visit was filed as "referral" — which is how 174
+ * Google visits ended up not counted as organic search.
+ */
+function classifyLegacyChannel(referrer: string | null, host: string | null): string {
+  if (!referrer || !host) return "direct";
+  if (host.endsWith("arcai.agency")) return "internal";
+  if (AI_ASSISTANTS.test(`${host}.`)) return "ai_assistant";
+  if (SEARCH_ENGINES.test(`${host}.`)) return "organic";
+  if (SOCIAL.test(`${host}.`)) return "social";
+  return "referral";
+}
+
+/**
+ * A believable length for a day of legacy page views.
+ *
+ * The old log has no session boundary, so a visitor who read something at
+ * 09:00 and came back at 17:00 looks like one eight-hour visit. Summing the
+ * gaps and capping each at 30 minutes — the same idle window the live tracker
+ * uses — turns that back into two short reads. Without this the site-wide
+ * average duration read 443 seconds against an engaged time of 0.08s, which
+ * is the kind of contradiction that makes every other number suspect.
+ */
+function legacyDuration(timestamps: string[]): number {
+  const CAP_MS = 30 * 60 * 1000;
+  let total = 0;
+  for (let i = 1; i < timestamps.length; i++) {
+    const gap = new Date(timestamps[i]).getTime() - new Date(timestamps[i - 1]).getTime();
+    if (Number.isFinite(gap) && gap > 0) total += Math.min(gap, CAP_MS);
+  }
+  return Math.round(total / 1000);
+}
+
 // ── sessions ────────────────────────────────────────────────────────────────
 
 async function syncSessions(
@@ -414,6 +459,7 @@ async function syncPageVisits(
             }
           })()
         : null;
+      const timestamps = rows.map((r) => s(r.created_at, 40) ?? firstAt);
 
       synthetic.push({
         session_id: sessionId,
@@ -425,17 +471,17 @@ async function syncPageVisits(
         exit_path: s(rows[rows.length - 1].page_path, 500) ?? "/",
         page_count: rows.length,
         event_count: rows.length,
-        duration_seconds: Math.max(
-          0,
-          Math.round((new Date(lastAt).getTime() - new Date(firstAt).getTime()) / 1000),
-        ),
+        duration_seconds: legacyDuration(timestamps),
         // Never fabricated: the old log recorded no engagement at all, and a
         // guess here would flow straight into the bounce rate.
         engaged_seconds: 0,
         is_bounce: rows.length <= 1,
         landing_referrer: referrer,
         referrer_domain: referrerDomain,
-        channel: referrerDomain ? "referral" : "direct",
+        channel: classifyLegacyChannel(referrer, referrerDomain),
+        // Genuinely unknown — the old log never captured it. The rollup
+        // excludes these rows from the device/browser/country breakdowns
+        // rather than letting "unknown" swamp them.
         device_type: "unknown",
         source_updated_at: lastAt,
         synced_at: new Date().toISOString(),

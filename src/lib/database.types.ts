@@ -34,6 +34,14 @@ export type WebReportKind = "daily" | "weekly" | "monthly" | "quarterly" | "cust
 // 0106 — Careers. `VacancyStatus` is about PUBLICATION (is this role live on
 // the website), not about hiring progress; `ApplicationStage` is the hiring one.
 export type VacancyStatus = "draft" | "published" | "archived" | "failed";
+
+// 0107 — an AI insight scan either produced a read or it did not.
+export type InsightStatus = "complete" | "failed";
+
+// 0108 — checklist grading. Priority is how urgent; impact/effort are
+// whether it is the next thing to pick up.
+export type TaskPriority = "critical" | "high" | "medium" | "low";
+export type TaskLevel = "high" | "medium" | "low";
 export type ApplicationStage =
   | "new"
   | "screening"
@@ -3990,6 +3998,108 @@ export type Database = {
           updated_at?: Timestamp;
         };
         Update: Partial<Database["public"]["Tables"]["careers_applications"]["Insert"]>;
+        Relationships: [];
+      };
+
+      // ===== 0107 — AI Insights over Web Analytics ======================
+      web_insights: {
+        Row: {
+          id: UUID;
+          site: string;
+          period_start: string;
+          period_end: string;
+          range_days: number;
+          health_score: number | null;
+          headline: string;
+          summary: string;
+          findings: Record<string, unknown>[];
+          quick_wins: string[];
+          what_is_working: string[];
+          watch_list: string[];
+          metrics: Record<string, unknown>;
+          model: string;
+          status: InsightStatus;
+          error: string | null;
+          duration_ms: number | null;
+          created_by: UUID | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          site?: string;
+          period_start: string;
+          period_end: string;
+          range_days?: number;
+          health_score?: number | null;
+          headline?: string;
+          summary?: string;
+          findings?: Record<string, unknown>[];
+          quick_wins?: string[];
+          what_is_working?: string[];
+          watch_list?: string[];
+          metrics?: Record<string, unknown>;
+          model?: string;
+          status?: InsightStatus;
+          error?: string | null;
+          duration_ms?: number | null;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["web_insights"]["Insert"]>;
+        Relationships: [];
+      };
+
+      // ===== 0108 — the improvement checklist from an insight scan ======
+      web_insight_tasks: {
+        Row: {
+          id: UUID;
+          site: string;
+          insight_id: UUID | null;
+          title: string;
+          detail: string;
+          area: string;
+          priority: TaskPriority;
+          impact: TaskLevel;
+          effort: TaskLevel;
+          metric: string | null;
+          target: string | null;
+          fingerprint: string;
+          done: boolean;
+          done_at: Timestamp | null;
+          done_by: UUID | null;
+          dismissed: boolean;
+          sort_order: number;
+          first_seen_at: Timestamp;
+          last_seen_at: Timestamp;
+          seen_count: number;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          site?: string;
+          insight_id?: UUID | null;
+          title?: string;
+          detail?: string;
+          area?: string;
+          priority?: TaskPriority;
+          impact?: TaskLevel;
+          effort?: TaskLevel;
+          metric?: string | null;
+          target?: string | null;
+          fingerprint?: string;
+          done?: boolean;
+          done_at?: Timestamp | null;
+          done_by?: UUID | null;
+          dismissed?: boolean;
+          sort_order?: number;
+          first_seen_at?: Timestamp;
+          last_seen_at?: Timestamp;
+          seen_count?: number;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["web_insight_tasks"]["Insert"]>;
         Relationships: [];
       };
       lead_research: {

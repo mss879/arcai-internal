@@ -8,8 +8,12 @@ import {
   CheckCircle2,
   Globe,
   MessageSquare,
+  Check,
+  RefreshCw,
   Route,
   ScrollText,
+  Sparkles,
+  X,
   TrendingDown,
   TrendingUp,
   Users,
@@ -21,6 +25,8 @@ import { cn } from "@/lib/utils";
 import type {
   WebChatSession,
   WebDaily,
+  WebInsight,
+  WebInsightTask,
   WebJourney,
   WebSession,
 } from "@/lib/types";
@@ -852,3 +858,427 @@ export function SyncPanel({
   );
 }
 
+
+// -- AI insights ------------------------------------------------------------
+
+const SEVERITY_TONE: Record<string, string> = {
+  critical: "bg-rose-50 text-rose-700 ring-rose-200",
+  high: "bg-amber-50 text-amber-700 ring-amber-200",
+  medium: "bg-sky-50 text-sky-700 ring-sky-200",
+  low: "bg-slate-100 text-slate-600 ring-slate-200",
+};
+
+type Finding = {
+  title: string;
+  severity: string;
+  area: string;
+  evidence: string;
+  recommendation: string;
+  impact: string;
+  effort: string;
+};
+
+/**
+ * The health score, as a ring.
+ *
+ * A number on its own reads as neutral no matter what it says; the arc is
+ * what makes a 34 look like a 34 before anyone has read the digits.
+ */
+function ScoreRing({ score }: { score: number }) {
+  const radius = 34;
+  const circumference = 2 * Math.PI * radius;
+  const filled = (Math.min(100, Math.max(0, score)) / 100) * circumference;
+  const tone =
+    score >= 75
+      ? "stroke-emerald-500"
+      : score >= 50
+        ? "stroke-amber-500"
+        : "stroke-rose-500";
+
+  return (
+    <div className="relative grid h-24 w-24 shrink-0 place-items-center">
+      <svg viewBox="0 0 80 80" className="h-24 w-24 -rotate-90">
+        <circle cx="40" cy="40" r={radius} className="fill-none stroke-slate-200" strokeWidth={7} />
+        <circle
+          cx="40"
+          cy="40"
+          r={radius}
+          className={cn("fill-none transition-all duration-700", tone)}
+          strokeWidth={7}
+          strokeLinecap="round"
+          strokeDasharray={`${filled} ${circumference}`}
+        />
+      </svg>
+      <div className="absolute text-center">
+        <span className="block text-2xl font-semibold tabular-nums text-slate-900">
+          {score}
+        </span>
+        <span className="block text-[10px] uppercase tracking-wide text-slate-400">
+          health
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The AI read, full width above the numbers.
+ *
+ * It sits ABOVE the stat cards on purpose: the cards say what happened and
+ * this says what to do about it, which is the thing you actually came for.
+ */
+export function InsightsPanel({
+  insight,
+  tasks,
+  onToggleTask,
+  onDismissTask,
+  scanning,
+  onScan,
+  aiReady,
+  hasData,
+  days,
+}: {
+  insight: WebInsight | null;
+  tasks: WebInsightTask[];
+  onToggleTask: (id: string, done: boolean) => void;
+  onDismissTask: (id: string) => void;
+  scanning: boolean;
+  onScan: () => void;
+  aiReady: boolean;
+  hasData: boolean;
+  days: number;
+}) {
+  const findings = ((insight?.findings ?? []) as unknown as Finding[]).filter(
+    (f) => f && f.title,
+  );
+  const quickWins = (insight?.quick_wins ?? []) as string[];
+  const working = (insight?.what_is_working ?? []) as string[];
+  const watch = (insight?.watch_list ?? []) as string[];
+  const failed = insight?.status === "failed";
+
+  return (
+    <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 bg-gradient-to-r from-primary-50/70 to-white px-5 py-4">
+        <div className="flex items-center gap-2.5">
+          <span className="grid h-9 w-9 place-items-center rounded-xl bg-primary-500 text-white">
+            <Sparkles className="h-5 w-5" />
+          </span>
+          <div>
+            <h2 className="text-sm font-semibold text-slate-900">AI Insights</h2>
+            <p className="text-xs text-slate-500">
+              {insight && !failed
+                ? `Last scanned ${formatDistanceToNow(new Date(insight.created_at), {
+                    addSuffix: true,
+                  })} over ${insight.range_days} days${
+                    insight.model ? ` · ${insight.model}` : ""
+                  }`
+                : `Reads every metric available and tells you what to change`}
+            </p>
+          </div>
+        </div>
+
+        <button
+          type="button"
+          onClick={onScan}
+          disabled={scanning || !aiReady || !hasData}
+          className={cn(
+            "inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold transition",
+            "bg-primary-500 text-white shadow-sm hover:bg-primary-600",
+            "disabled:cursor-not-allowed disabled:opacity-50",
+          )}
+        >
+          {scanning ? (
+            <>
+              <RefreshCw className="h-4 w-4 animate-spin" />
+              Thinking…
+            </>
+          ) : (
+            <>
+              <Sparkles className="h-4 w-4" />
+              {insight ? `Re-scan ${days} days` : `Scan ${days} days`}
+            </>
+          )}
+        </button>
+      </header>
+
+      <div className="px-5 py-5">
+        {!aiReady ? (
+          <p className="text-sm text-slate-500">
+            Add <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">OPENAI_API_KEY</code>{" "}
+            to run a scan. Every number on this page is computed without it — the scan is
+            the part that needs a model to reason with.
+          </p>
+        ) : !hasData ? (
+          <p className="text-sm text-slate-500">
+            Nothing to analyse yet for this window. Sync first, or widen the window.
+          </p>
+        ) : scanning ? (
+          <div className="space-y-2">
+            <p className="text-sm font-medium text-slate-700">
+              Reading the traffic, the journeys, the funnel, field performance and the chat…
+            </p>
+            <p className="text-xs text-slate-400">
+              This runs a high-effort reasoning model over the whole export, so it takes a
+              minute or two. You can leave the page — the result is saved.
+            </p>
+          </div>
+        ) : failed ? (
+          <div className="space-y-1">
+            <p className="text-sm font-medium text-rose-700">The last scan did not finish.</p>
+            <p className="text-xs text-rose-600">{insight?.error}</p>
+          </div>
+        ) : !insight ? (
+          <p className="text-sm text-slate-500">
+            No scan yet. It reads traffic, sources, per-page behaviour, the routes people
+            take, where they drop off, Core Web Vitals, form abandonment, rage clicks and
+            the AI chat — then tells you what is costing you and what to fix first.
+          </p>
+        ) : (
+          <div className="space-y-6">
+            {/* Verdict */}
+            <div className="flex flex-wrap items-start gap-5">
+              {insight.health_score !== null && <ScoreRing score={insight.health_score} />}
+              <div className="min-w-[16rem] flex-1">
+                <p className="text-base font-semibold leading-snug text-slate-900">
+                  {insight.headline}
+                </p>
+                {insight.summary && (
+                  <p className="mt-1.5 text-sm leading-relaxed text-slate-600">
+                    {insight.summary}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {/* The checklist — the thing you actually work through, so it
+                sits above the findings that explain it. */}
+            <ChecklistBlock
+              tasks={tasks}
+              onToggle={onToggleTask}
+              onDismiss={onDismissTask}
+            />
+
+            {/* Findings */}
+            {findings.length > 0 && (
+              <div className="space-y-2.5">
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                  What to fix, in order
+                </p>
+                {findings.map((f, i) => (
+                  <div
+                    key={i}
+                    className="rounded-xl border border-slate-200 bg-slate-50/60 p-4"
+                  >
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge
+                        className={cn(
+                          "ring-1",
+                          SEVERITY_TONE[f.severity] ?? SEVERITY_TONE.medium,
+                        )}
+                      >
+                        {f.severity}
+                      </Badge>
+                      <Badge>{f.area}</Badge>
+                      <span className="text-sm font-semibold text-slate-900">{f.title}</span>
+                      <span className="ml-auto text-[11px] uppercase tracking-wide text-slate-400">
+                        impact {f.impact} · effort {f.effort}
+                      </span>
+                    </div>
+                    {f.evidence && (
+                      <p className="mt-2 text-sm text-slate-600">
+                        <span className="font-medium text-slate-500">Evidence: </span>
+                        {f.evidence}
+                      </p>
+                    )}
+                    {f.recommendation && (
+                      <p className="mt-1.5 text-sm text-slate-800">
+                        <span className="font-medium text-slate-500">Do: </span>
+                        {f.recommendation}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* The three lists */}
+            <div className="grid gap-4 md:grid-cols-3">
+              <InsightList
+                title="Quick wins"
+                items={quickWins}
+                tone="bg-emerald-50/70 border-emerald-100"
+              />
+              <InsightList
+                title="What's working"
+                items={working}
+                tone="bg-sky-50/70 border-sky-100"
+              />
+              <InsightList
+                title="Watch list"
+                items={watch}
+                tone="bg-amber-50/70 border-amber-100"
+              />
+            </div>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function InsightList({
+  title,
+  items,
+  tone,
+}: {
+  title: string;
+  items: string[];
+  tone: string;
+}) {
+  if (!items.length) return null;
+  return (
+    <div className={cn("rounded-xl border p-4", tone)}>
+      <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-600">
+        {title}
+      </p>
+      <ul className="space-y-1.5 text-sm text-slate-700">
+        {items.map((item, i) => (
+          <li key={i} className="flex gap-2">
+            <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-slate-400" />
+            <span>{item}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+const PRIORITY_TONE: Record<string, string> = {
+  critical: "bg-rose-500",
+  high: "bg-amber-500",
+  medium: "bg-sky-500",
+  low: "bg-slate-400",
+};
+
+/**
+ * The improvement checklist.
+ *
+ * Done items stay, greyed and struck through, rather than disappearing —
+ * seeing what you have already cleared is most of why a checklist works, and
+ * a list that empties itself gives no sense of progress.
+ */
+function ChecklistBlock({
+  tasks,
+  onToggle,
+  onDismiss,
+}: {
+  tasks: WebInsightTask[];
+  onToggle: (id: string, done: boolean) => void;
+  onDismiss: (id: string) => void;
+}) {
+  if (!tasks.length) return null;
+  const done = tasks.filter((t) => t.done).length;
+  const pct = Math.round((done / tasks.length) * 100);
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
+        <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+          Improvement checklist
+        </p>
+        <div className="flex items-center gap-3">
+          <div className="h-1.5 w-32 overflow-hidden rounded-full bg-slate-100">
+            <div
+              className="h-full rounded-full bg-emerald-500 transition-all duration-500"
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+          <span className="text-xs tabular-nums text-slate-500">
+            {done}/{tasks.length} done
+          </span>
+        </div>
+      </div>
+
+      <ul className="divide-y divide-slate-100">
+        {tasks.map((task) => (
+          <li
+            key={task.id}
+            className={cn("flex gap-3 px-4 py-3", task.done && "bg-slate-50/60")}
+          >
+            <button
+              type="button"
+              onClick={() => onToggle(task.id, !task.done)}
+              aria-label={task.done ? "Mark as not done" : "Mark as done"}
+              className={cn(
+                "mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-md border transition",
+                task.done
+                  ? "border-emerald-500 bg-emerald-500 text-white"
+                  : "border-slate-300 bg-white hover:border-emerald-400",
+              )}
+            >
+              {task.done && <Check className="h-3.5 w-3.5" />}
+            </button>
+
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <span
+                  className={cn(
+                    "h-1.5 w-1.5 shrink-0 rounded-full",
+                    PRIORITY_TONE[task.priority] ?? PRIORITY_TONE.medium,
+                  )}
+                  title={`${task.priority} priority`}
+                />
+                <span
+                  className={cn(
+                    "text-sm font-medium",
+                    task.done ? "text-slate-400 line-through" : "text-slate-900",
+                  )}
+                >
+                  {task.title}
+                </span>
+                <Badge>{task.area}</Badge>
+                {/* Raised by more than one scan and still not done — that is
+                    itself worth knowing. */}
+                {task.seen_count > 1 && !task.done && (
+                  <Badge className="bg-amber-50 text-amber-700 ring-amber-200">
+                    raised {task.seen_count}×
+                  </Badge>
+                )}
+              </div>
+
+              {!task.done && (
+                <>
+                  {task.detail && (
+                    <p className="mt-1 text-sm text-slate-600">{task.detail}</p>
+                  )}
+                  {(task.metric || task.target) && (
+                    <p className="mt-1 text-xs text-slate-500">
+                      {task.metric && <span>Now: {task.metric}</span>}
+                      {task.metric && task.target && <span> · </span>}
+                      {task.target && <span>Target: {task.target}</span>}
+                    </p>
+                  )}
+                  <p className="mt-1 text-[11px] uppercase tracking-wide text-slate-400">
+                    impact {task.impact} · effort {task.effort}
+                  </p>
+                </>
+              )}
+            </div>
+
+            {!task.done && (
+              <button
+                type="button"
+                onClick={() => onDismiss(task.id)}
+                aria-label="Not doing this"
+                title="Not doing this"
+                className="mt-0.5 h-5 w-5 shrink-0 rounded text-slate-300 transition hover:text-slate-500"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}

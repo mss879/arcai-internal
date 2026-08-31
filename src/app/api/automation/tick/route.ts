@@ -29,6 +29,7 @@ import { processWaCoaching } from "@/lib/wa-coaching";
 import { processAgentDigest, processWaInsights } from "@/lib/wa-insights";
 import { isSmsConfigured } from "@/lib/sms";
 import { processWebAnalytics } from "@/lib/web-analytics/run";
+import { processCareers } from "@/lib/careers/sync";
 
 /**
  * The one cron endpoint that keeps every timer in the app moving:
@@ -49,6 +50,8 @@ import { processWebAnalytics } from "@/lib/web-analytics/run";
  *     research first, ≤cap template sends per day, spread apart, one
  *     follow-up nudge for delivered-but-silent leads)
  *   - sends the once-a-day morning outreach digest to the team
+ *   - pulls job applications from the website's careers page into Careers
+ *     (every 15 minutes, self-gated)
  *   - pulls the agency website's analytics and AI-chat transcripts into
  *     Web Analytics (hourly, self-gated; no-op until the website source
  *     credentials are set)
@@ -141,6 +144,15 @@ export async function GET(request: Request) {
       errors: [e instanceof Error ? e.message : String(e)],
     }));
 
+    // 0106 — pull job applications and any website-side vacancy changes.
+    // Self-gated to every 15 minutes: an application is somebody waiting for
+    // a reply. Same guard as the analytics pull — a website that is down must
+    // not take the rest of the tick with it.
+    const careers = await processCareers(supabase).catch((e) => ({
+      ok: false,
+      errors: [e instanceof Error ? e.message : String(e)],
+    }));
+
     const sms = isSmsConfigured()
       ? await processDueSmsRuns(supabase)
       : { processed: 0, sent: 0, failed: 0 };
@@ -173,6 +185,7 @@ export async function GET(request: Request) {
       insights,
       agentDigest,
       webAnalytics,
+      careers,
     });
   } catch (e) {
     return NextResponse.json(

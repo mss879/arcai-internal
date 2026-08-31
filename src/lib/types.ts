@@ -130,6 +130,10 @@ export type WebChatMessage = Tables["web_chat_messages"]["Row"];
 export type WebReport = Tables["web_reports"]["Row"];
 export type WebSyncState = Tables["web_sync_state"]["Row"];
 export type WebSyncRun = Tables["web_sync_runs"]["Row"];
+
+// 0106 — Careers: hiring for the agency's own site, run from the CRM.
+export type CareerVacancy = Tables["careers_vacancies"]["Row"];
+export type CareerApplication = Tables["careers_applications"]["Row"];
 export type LeadResearch = Tables["lead_research"]["Row"];
 export type ProspectScan = Tables["prospect_scans"]["Row"];
 export type ProspectCandidate = Tables["prospect_candidates"]["Row"];
@@ -184,6 +188,8 @@ export type {
   WebDeviceType,
   WebJourneyKind,
   WebReportKind,
+  VacancyStatus,
+  ApplicationStage,
   LeadResearchStatus,
   WaDirection,
   WaMessageStatus,

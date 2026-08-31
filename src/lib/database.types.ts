@@ -30,6 +30,18 @@ export type WebChannel =
 export type WebDeviceType = "desktop" | "mobile" | "tablet" | "bot" | "unknown";
 export type WebJourneyKind = "transition" | "path";
 export type WebReportKind = "daily" | "weekly" | "monthly" | "quarterly" | "custom";
+
+// 0106 — Careers. `VacancyStatus` is about PUBLICATION (is this role live on
+// the website), not about hiring progress; `ApplicationStage` is the hiring one.
+export type VacancyStatus = "draft" | "published" | "archived" | "failed";
+export type ApplicationStage =
+  | "new"
+  | "screening"
+  | "interview"
+  | "offer"
+  | "hired"
+  | "rejected"
+  | "withdrawn";
 export type InviteStatus = "pending" | "accepted" | "revoked" | "expired";
 export type ClientStatus = "active" | "lead" | "inactive";
 export type TodoPriority = "low" | "medium" | "high" | "urgent";
@@ -3870,6 +3882,114 @@ export type Database = {
           duration_ms?: number | null;
         };
         Update: Partial<Database["public"]["Tables"]["web_sync_runs"]["Insert"]>;
+        Relationships: [];
+      };
+
+      // ===== 0106 — Careers (hiring for www.arcai.agency) ================
+      // Vacancies flow CRM -> website; applications flow website -> CRM.
+      // See @/lib/careers/sync.
+      careers_vacancies: {
+        Row: {
+          id: UUID;
+          source_id: UUID | null;
+          title: string;
+          department: string;
+          location: string;
+          employment_type: string;
+          description: string;
+          requirements: string;
+          salary_range: string | null;
+          headcount: number;
+          internal_notes: string | null;
+          closes_on: string | null;
+          hiring_manager: UUID | null;
+          status: VacancyStatus;
+          published_at: Timestamp | null;
+          unpublished_at: Timestamp | null;
+          sync_error: string | null;
+          synced_at: Timestamp | null;
+          created_by: UUID | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          source_id?: UUID | null;
+          title?: string;
+          department?: string;
+          location?: string;
+          employment_type?: string;
+          description?: string;
+          requirements?: string;
+          salary_range?: string | null;
+          headcount?: number;
+          internal_notes?: string | null;
+          closes_on?: string | null;
+          hiring_manager?: UUID | null;
+          status?: VacancyStatus;
+          published_at?: Timestamp | null;
+          unpublished_at?: Timestamp | null;
+          sync_error?: string | null;
+          synced_at?: Timestamp | null;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["careers_vacancies"]["Insert"]>;
+        Relationships: [];
+      };
+      careers_applications: {
+        Row: {
+          id: UUID;
+          source_id: UUID;
+          vacancy_source_id: UUID | null;
+          vacancy_id: UUID | null;
+          vacancy_title: string;
+          name: string;
+          email: string;
+          phone: string;
+          personal_statement: string;
+          earliest_start_date: string | null;
+          currently_employed: boolean;
+          cv_url: string;
+          applied_at: Timestamp;
+          stage: ApplicationStage;
+          rating: number | null;
+          notes: string | null;
+          assigned_to: UUID | null;
+          reviewed_at: Timestamp | null;
+          rejected_reason: string | null;
+          website_status: string;
+          synced_at: Timestamp;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          source_id: UUID;
+          vacancy_source_id?: UUID | null;
+          vacancy_id?: UUID | null;
+          vacancy_title?: string;
+          name?: string;
+          email?: string;
+          phone?: string;
+          personal_statement?: string;
+          earliest_start_date?: string | null;
+          currently_employed?: boolean;
+          cv_url?: string;
+          applied_at?: Timestamp;
+          stage?: ApplicationStage;
+          rating?: number | null;
+          notes?: string | null;
+          assigned_to?: UUID | null;
+          reviewed_at?: Timestamp | null;
+          rejected_reason?: string | null;
+          website_status?: string;
+          synced_at?: Timestamp;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["careers_applications"]["Insert"]>;
         Relationships: [];
       };
       lead_research: {

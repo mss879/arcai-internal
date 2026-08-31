@@ -29,6 +29,7 @@ import { FINANCE_TOOLS, executeFinanceTool } from "@/lib/ai/tools-finance";
 import { GROWTH_TOOLS, executeGrowthTool } from "@/lib/ai/tools-growth";
 import { MEMORY_TOOLS, executeMemoryTool } from "@/lib/ai/tools-memory";
 import { MISSION_TOOLS, executeMissionTool } from "@/lib/ai/tools-missions";
+import { CAREERS_TOOLS, executeCareersTool } from "@/lib/ai/tools-careers";
 import { NAV_TOOLS, executeNavTool } from "@/lib/ai/tools-nav";
 import {
   WEB_ANALYTICS_TOOLS,
@@ -52,6 +53,7 @@ const TOOL_MODULES: ToolModule[] = [
   { module: "delivery", tools: DELIVERY_TOOLS },
   { module: "growth", tools: GROWTH_TOOLS },
   { module: "web-analytics", tools: WEB_ANALYTICS_TOOLS },
+  { module: "careers", tools: CAREERS_TOOLS },
   { module: "core", tools: ASSISTANT_TOOLS },
 ];
 
@@ -95,6 +97,7 @@ const MODULE_EXECUTORS: ((
   executeDeliveryTool,
   executeGrowthTool,
   executeWebAnalyticsTool,
+  executeCareersTool,
 ];
 
 /**
@@ -225,6 +228,12 @@ const TOOL_LABELS: Record<string, string> = {
   website_chat_review: "Reading the website chats",
   website_generate_report: "Writing the website report",
   website_sync_now: "Pulling the latest website data",
+
+  // Careers — @/lib/ai/tools-careers
+  careers_overview: "Checking how hiring is going",
+  list_job_applications: "Reading the applications",
+  draft_job_vacancy: "Drafting the job ad",
+  careers_sync_now: "Pulling the latest applications",
 };
 
 /** The human label the streaming UI shows while `name` is running. */

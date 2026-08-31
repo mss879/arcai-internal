@@ -1,5 +1,6 @@
 import {
   BadgeDollarSign,
+  BriefcaseBusiness,
   BarChart3,
   BrainCircuit,
   CalendarClock,
@@ -55,6 +56,15 @@ export const NAV: NavItem[] = [
     label: "Web Analytics",
     href: "/web-analytics",
     icon: BarChart3,
+    adminOnly: true,
+  },
+  {
+    // Hiring for arcai.agency: roles are written here and published to the
+    // website, applications come back into a pipeline. Admin-only — every
+    // row is a named person's CV and contact details.
+    label: "Careers",
+    href: "/careers",
+    icon: BriefcaseBusiness,
     adminOnly: true,
   },
   { label: "Meetings", href: "/meetings", icon: CalendarClock },

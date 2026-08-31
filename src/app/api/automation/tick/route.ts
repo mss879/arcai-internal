@@ -28,6 +28,7 @@ import { processWaRevival } from "@/lib/wa-revival";
 import { processWaCoaching } from "@/lib/wa-coaching";
 import { processAgentDigest, processWaInsights } from "@/lib/wa-insights";
 import { isSmsConfigured } from "@/lib/sms";
+import { processWebAnalytics } from "@/lib/web-analytics/run";
 
 /**
  * The one cron endpoint that keeps every timer in the app moving:
@@ -48,6 +49,9 @@ import { isSmsConfigured } from "@/lib/sms";
  *     research first, ≤cap template sends per day, spread apart, one
  *     follow-up nudge for delivered-but-silent leads)
  *   - sends the once-a-day morning outreach digest to the team
+ *   - pulls the agency website's analytics and AI-chat transcripts into
+ *     Web Analytics (hourly, self-gated; no-op until the website source
+ *     credentials are set)
  *   - runs the project duplicate/anomaly guards (rule-based, every tick),
  *     the nightly project risk radar and the scope-creep reader (both
  *     self-gated to once a day)
@@ -126,6 +130,17 @@ export async function GET(request: Request) {
     // have their own scheduled function (/api/assistant/tick) for the same
     // reason the WhatsApp agent does: a mission step is a model call with
     // tools, and three of those would crowd the twenty timers in this one.
+    // 0105 — pull www.arcai.agency's analytics and AI-agent transcripts
+    // from the website's own Supabase project, roll the touched days up
+    // and label new conversations. Self-gated to once an hour and to a
+    // no-op when the source is unconfigured, so it is safe here in the
+    // every-minute tick. Never allowed to fail the tick: an unreachable
+    // website must not stop finance reminders going out.
+    const webAnalytics = await processWebAnalytics(supabase).catch((e) => ({
+      ok: false,
+      errors: [e instanceof Error ? e.message : String(e)],
+    }));
+
     const sms = isSmsConfigured()
       ? await processDueSmsRuns(supabase)
       : { processed: 0, sent: 0, failed: 0 };
@@ -157,6 +172,7 @@ export async function GET(request: Request) {
       coaching,
       insights,
       agentDigest,
+      webAnalytics,
     });
   } catch (e) {
     return NextResponse.json(

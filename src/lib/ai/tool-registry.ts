@@ -3,8 +3,9 @@ import "server-only";
 /**
  * One list, one executor, one label for every tool the assistant has.
  *
- * The assistant's tools grew into five modules — the original workspace set,
- * finance, delivery, growth, and navigation — and the chat route should not
+ * The assistant's tools grew into several modules — the original workspace
+ * set, finance, delivery, growth, web analytics, and navigation — and the
+ * chat route should not
  * have to know that. Worse, it should not have to know the order they must be
  * tried in: every module's executor returns `null` for a name it does not own
  * so the next one gets a turn, except `executeTool` in `@/lib/ai/tools`, which
@@ -29,6 +30,10 @@ import { GROWTH_TOOLS, executeGrowthTool } from "@/lib/ai/tools-growth";
 import { MEMORY_TOOLS, executeMemoryTool } from "@/lib/ai/tools-memory";
 import { MISSION_TOOLS, executeMissionTool } from "@/lib/ai/tools-missions";
 import { NAV_TOOLS, executeNavTool } from "@/lib/ai/tools-nav";
+import {
+  WEB_ANALYTICS_TOOLS,
+  executeWebAnalyticsTool,
+} from "@/lib/ai/tools-web-analytics";
 import { defaultToolLabel } from "@/lib/assistant-stream";
 
 /** A module's schemas, named so a clash can say where both sides came from. */
@@ -46,6 +51,7 @@ const TOOL_MODULES: ToolModule[] = [
   { module: "finance", tools: FINANCE_TOOLS },
   { module: "delivery", tools: DELIVERY_TOOLS },
   { module: "growth", tools: GROWTH_TOOLS },
+  { module: "web-analytics", tools: WEB_ANALYTICS_TOOLS },
   { module: "core", tools: ASSISTANT_TOOLS },
 ];
 
@@ -70,7 +76,7 @@ function assembleTools(modules: ToolModule[]): ToolSchema[] {
   return all;
 }
 
-/** Every tool schema advertised to the model, across all five modules. */
+/** Every tool schema advertised to the model, across every module. */
 export const ALL_ASSISTANT_TOOLS: ToolSchema[] = assembleTools(TOOL_MODULES);
 
 /**
@@ -88,6 +94,7 @@ const MODULE_EXECUTORS: ((
   executeFinanceTool,
   executeDeliveryTool,
   executeGrowthTool,
+  executeWebAnalyticsTool,
 ];
 
 /**
@@ -210,6 +217,14 @@ const TOOL_LABELS: Record<string, string> = {
   run_churn_scan: "Scanning for churn risk",
   save_website_project: "Updating Website Progress",
   apply_project_template: "Seeding from the template",
+
+  // Web Analytics — @/lib/ai/tools-web-analytics
+  website_traffic_report: "Reading the website's traffic",
+  website_page_performance: "Checking how the pages perform",
+  website_journeys: "Following the visitor journeys",
+  website_chat_review: "Reading the website chats",
+  website_generate_report: "Writing the website report",
+  website_sync_now: "Pulling the latest website data",
 };
 
 /** The human label the streaming UI shows while `name` is running. */

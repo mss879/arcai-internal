@@ -116,6 +116,20 @@ export type Competitor = Tables["competitors"]["Row"];
 export type CompetitorEntry = Tables["competitor_entries"]["Row"];
 export type AdEntry = Tables["ad_entries"]["Row"];
 export type VisitorEvent = Tables["visitor_events"]["Row"];
+
+// 0105 — Web Analytics: www.arcai.agency, mirrored from the website's own
+// Supabase project. Separate from VisitorEvent above, which is the in-app
+// snippet for client sites.
+export type WebSession = Tables["web_sessions"]["Row"];
+export type WebEvent = Tables["web_events"]["Row"];
+export type WebDaily = Tables["web_daily"]["Row"];
+export type WebPageDaily = Tables["web_page_daily"]["Row"];
+export type WebJourney = Tables["web_journeys"]["Row"];
+export type WebChatSession = Tables["web_chat_sessions"]["Row"];
+export type WebChatMessage = Tables["web_chat_messages"]["Row"];
+export type WebReport = Tables["web_reports"]["Row"];
+export type WebSyncState = Tables["web_sync_state"]["Row"];
+export type WebSyncRun = Tables["web_sync_runs"]["Row"];
 export type LeadResearch = Tables["lead_research"]["Row"];
 export type ProspectScan = Tables["prospect_scans"]["Row"];
 export type ProspectCandidate = Tables["prospect_candidates"]["Row"];
@@ -166,6 +180,10 @@ export type {
   CompetitorEntryKind,
   AdPlatform,
   VisitorEventKind,
+  WebChannel,
+  WebDeviceType,
+  WebJourneyKind,
+  WebReportKind,
   LeadResearchStatus,
   WaDirection,
   WaMessageStatus,

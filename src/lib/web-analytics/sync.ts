@@ -1,0 +1,798 @@
+import "server-only";
+
+import type { SupabaseClient } from "@supabase/supabase-js";
+
+import type { Database } from "@/lib/database.types";
+
+import { SITE, createWebsiteClient, isWebsiteSourceConfigured } from "./source";
+
+type DB = SupabaseClient<Database>;
+
+/**
+ * The pull.
+ *
+ * Every stream is incremental and idempotent. Incremental because a
+ * nightly job that re-reads a year of events would time out long before
+ * it finished; idempotent because a serverless run that dies halfway
+ * WILL be retried, and the retry must not double every number on the
+ * dashboard.
+ *
+ * Those two together dictate the shape of each stream:
+ *
+ *   • A watermark in `web_sync_state` says where the last run got to.
+ *     Timestamp watermarks are read with `>=` rather than `>`, because
+ *     two rows can share a millisecond and `>` would silently skip the
+ *     second one forever. Re-reading a handful of rows is the cheap
+ *     side of that trade.
+ *
+ *   • Every write is an upsert on a natural key from the source, so
+ *     re-reading those rows changes nothing. `analytics_sessions` in
+ *     particular MUST be re-read: a visit that was three pages deep
+ *     when it was first pulled may be nine pages and a conversion by
+ *     the time the visitor leaves, and only the source's `updated_at`
+ *     moving brings the finished version across.
+ *
+ * Each run is bounded by MAX_PAGES so one stream with a large backlog
+ * cannot starve the others or blow the function's time budget. Whatever
+ * is left is picked up on the next tick, and the backlog drains over a
+ * few runs rather than in one that never completes.
+ */
+
+const PAGE = 1000;
+const MAX_PAGES = 20;
+
+export type StreamName =
+  | "sessions"
+  | "events"
+  | "page_visits"
+  | "chat_messages"
+  | "chat_logs";
+
+export type StreamResult = {
+  stream: StreamName;
+  rows: number;
+  ok: boolean;
+  error?: string;
+  durationMs: number;
+};
+
+export type SyncResult = {
+  ok: boolean;
+  streams: StreamResult[];
+  totalRows: number;
+  /** Days touched by this pull — exactly the days the rollup must redo. */
+  daysTouched: string[];
+  skipped?: string;
+};
+
+// ── watermarks ──────────────────────────────────────────────────────────────
+
+type Cursor = { cursor_ts: string | null; cursor_id: number | null };
+
+async function readCursor(supabase: DB, stream: StreamName): Promise<Cursor> {
+  const { data } = await supabase
+    .from("web_sync_state")
+    .select("cursor_ts, cursor_id")
+    .eq("stream", stream)
+    .maybeSingle();
+  return {
+    cursor_ts: data?.cursor_ts ?? null,
+    cursor_id: data?.cursor_id ?? null,
+  };
+}
+
+async function writeCursor(
+  supabase: DB,
+  stream: StreamName,
+  patch: Partial<Cursor> & { rows: number; error?: string | null },
+): Promise<void> {
+  const now = new Date().toISOString();
+  const { data: existing } = await supabase
+    .from("web_sync_state")
+    .select("rows_synced")
+    .eq("stream", stream)
+    .maybeSingle();
+
+  await supabase.from("web_sync_state").upsert(
+    {
+      stream,
+      ...(patch.cursor_ts !== undefined ? { cursor_ts: patch.cursor_ts } : {}),
+      ...(patch.cursor_id !== undefined ? { cursor_id: patch.cursor_id } : {}),
+      last_run_at: now,
+      last_ok_at: patch.error ? undefined : now,
+      rows_synced: (existing?.rows_synced ?? 0) + patch.rows,
+      last_error: patch.error ?? null,
+      updated_at: now,
+    },
+    { onConflict: "stream" },
+  );
+}
+
+/** How far back a stream with no watermark starts. */
+function initialSince(days = 400): string {
+  return new Date(Date.now() - days * 86_400_000).toISOString();
+}
+
+/** True when PostgREST is telling us the table simply is not there. */
+function isMissingTable(message: string): boolean {
+  return /does not exist|schema cache|PGRST205/i.test(message);
+}
+
+/**
+ * The message the Setup tab shows when the site's analytics tables have not
+ * been created yet. A raw "could not find the table in the schema cache" is
+ * accurate and tells the reader nothing about what to do about it.
+ */
+const MIGRATION_HINT =
+  "The website's analytics tables do not exist yet. Run " +
+  "supabase_web_analytics_migration.sql in the WEBSITE project's SQL editor, " +
+  "then sync again.";
+
+const day = (iso: string | null | undefined): string | null =>
+  iso ? iso.slice(0, 10) : null;
+
+const s = (v: unknown, max: number): string | null => {
+  if (v === null || v === undefined) return null;
+  const str = String(v).trim();
+  return str ? str.slice(0, max) : null;
+};
+
+const n = (v: unknown): number | null => {
+  const x = Number(v);
+  return Number.isFinite(x) ? x : null;
+};
+
+const i = (v: unknown): number => Math.round(n(v) ?? 0);
+
+// ── sessions ────────────────────────────────────────────────────────────────
+
+async function syncSessions(
+  crm: DB,
+  site: SupabaseClient,
+  days: Set<string>,
+): Promise<{ rows: number }> {
+  const cursor = await readCursor(crm, "sessions");
+  let since = cursor.cursor_ts ?? initialSince();
+  let rows = 0;
+
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const { data, error } = await site
+      .from("analytics_sessions")
+      .select("*")
+      .gte("updated_at", since)
+      .order("updated_at", { ascending: true })
+      .limit(PAGE);
+    if (error) {
+      throw new Error(isMissingTable(error.message) ? MIGRATION_HINT : error.message);
+    }
+    if (!data?.length) break;
+
+    const mapped = data.map((r: Record<string, unknown>) => ({
+      session_id: s(r.session_id, 120)!,
+      visitor_id: s(r.visitor_id, 120) ?? "unknown",
+      site: s(r.site, 100) ?? SITE,
+      first_seen_at: s(r.first_seen_at, 40) ?? new Date().toISOString(),
+      last_seen_at: s(r.last_seen_at, 40) ?? new Date().toISOString(),
+      entry_path: s(r.entry_path, 500) ?? "/",
+      exit_path: s(r.exit_path, 500),
+      page_count: i(r.page_count),
+      event_count: i(r.event_count),
+      duration_seconds: i(r.duration_seconds),
+      engaged_seconds: i(r.engaged_seconds),
+      is_bounce: Boolean(r.is_bounce),
+      max_scroll_pct: i(r.max_scroll_pct),
+      landing_referrer: s(r.landing_referrer, 2000),
+      referrer_domain: s(r.referrer_domain, 255),
+      channel: s(r.channel, 40) ?? "direct",
+      utm_source: s(r.utm_source, 255),
+      utm_medium: s(r.utm_medium, 255),
+      utm_campaign: s(r.utm_campaign, 255),
+      utm_term: s(r.utm_term, 255),
+      utm_content: s(r.utm_content, 255),
+      gclid: s(r.gclid, 255),
+      fbclid: s(r.fbclid, 255),
+      msclkid: s(r.msclkid, 255),
+      first_touch_channel: s(r.first_touch_channel, 40),
+      first_touch_campaign: s(r.first_touch_campaign, 255),
+      landing_page_title: s(r.landing_page_title, 300),
+      device_type: s(r.device_type, 20) ?? "unknown",
+      browser: s(r.browser, 60),
+      browser_version: s(r.browser_version, 40),
+      os: s(r.os, 60),
+      os_version: s(r.os_version, 40),
+      screen_w: n(r.screen_w),
+      screen_h: n(r.screen_h),
+      viewport_w: n(r.viewport_w),
+      viewport_h: n(r.viewport_h),
+      device_pixel_ratio: n(r.device_pixel_ratio),
+      language: s(r.language, 20),
+      timezone: s(r.timezone, 80),
+      connection_type: s(r.connection_type, 20),
+      user_agent: s(r.user_agent, 500),
+      country: s(r.country, 100),
+      country_code: s(r.country_code, 10),
+      region: s(r.region, 100),
+      city: s(r.city, 100),
+      converted: Boolean(r.converted),
+      conversion_kind: s(r.conversion_kind, 60),
+      conversion_at: s(r.conversion_at, 40),
+      chat_engaged: Boolean(r.chat_engaged),
+      chat_message_count: i(r.chat_message_count),
+      identified_email: s(r.identified_email, 200)?.toLowerCase() ?? null,
+      forms_started: i(r.forms_started),
+      forms_abandoned: i(r.forms_abandoned),
+      outbound_clicks: i(r.outbound_clicks),
+      rage_clicks: i(r.rage_clicks),
+      is_bot: Boolean(r.is_bot),
+      source_updated_at: s(r.updated_at, 40) ?? new Date().toISOString(),
+      synced_at: new Date().toISOString(),
+    }));
+
+    const { error: upErr } = await crm
+      .from("web_sessions")
+      .upsert(mapped, { onConflict: "session_id" });
+    if (upErr) throw new Error(`sessions upsert: ${upErr.message}`);
+
+    for (const row of mapped) {
+      const d = day(row.first_seen_at);
+      if (d) days.add(d);
+    }
+
+    rows += mapped.length;
+    const last = mapped[mapped.length - 1].source_updated_at;
+    // A full page whose rows all share one timestamp would loop forever
+    // on `>=`. Nudging past it costs at most those tied rows, which the
+    // upsert would have made a no-op anyway.
+    since = last === since && data.length === PAGE
+      ? new Date(new Date(last).getTime() + 1).toISOString()
+      : last;
+    if (data.length < PAGE) break;
+  }
+
+  await writeCursor(crm, "sessions", { cursor_ts: since, rows });
+  return { rows };
+}
+
+// ── events ──────────────────────────────────────────────────────────────────
+
+async function syncEvents(
+  crm: DB,
+  site: SupabaseClient,
+  days: Set<string>,
+): Promise<{ rows: number }> {
+  const cursor = await readCursor(crm, "events");
+  let lastId = cursor.cursor_id ?? 0;
+  let rows = 0;
+
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const { data, error } = await site
+      .from("analytics_events")
+      .select("*")
+      .gt("id", lastId)
+      .order("id", { ascending: true })
+      .limit(PAGE);
+    if (error) {
+      throw new Error(isMissingTable(error.message) ? MIGRATION_HINT : error.message);
+    }
+    if (!data?.length) break;
+
+    const mapped = data.map((r: Record<string, unknown>) => ({
+      source: "analytics_events",
+      source_id: String(r.id),
+      session_id: s(r.session_id, 120) ?? "unknown",
+      visitor_id: s(r.visitor_id, 120) ?? "unknown",
+      site: s(r.site, 100) ?? SITE,
+      seq: i(r.seq),
+      occurred_at: s(r.occurred_at, 40) ?? new Date().toISOString(),
+      kind: s(r.kind, 40) ?? "page_view",
+      path: s(r.path, 500) ?? "/",
+      page_title: s(r.page_title, 300),
+      referrer: s(r.referrer, 2000),
+      element: s(r.element, 200),
+      element_text: s(r.element_text, 300),
+      href: s(r.href, 2000),
+      value: n(r.value),
+      meta: (r.meta && typeof r.meta === "object" ? r.meta : {}) as Record<string, unknown>,
+      synced_at: new Date().toISOString(),
+    }));
+
+    const { error: upErr } = await crm
+      .from("web_events")
+      .upsert(mapped, { onConflict: "source,source_id" });
+    if (upErr) throw new Error(`events upsert: ${upErr.message}`);
+
+    for (const row of mapped) {
+      const d = day(row.occurred_at);
+      if (d) days.add(d);
+    }
+
+    rows += mapped.length;
+    lastId = Number(data[data.length - 1].id);
+    if (data.length < PAGE) break;
+  }
+
+  await writeCursor(crm, "events", { cursor_id: lastId, rows });
+  return { rows };
+}
+
+// ── legacy page_visits ──────────────────────────────────────────────────────
+
+/**
+ * The site's original thin log, mirrored for its history.
+ *
+ * These rows pre-date the rich tracker and have no session of their own,
+ * so one is synthesised per visitor per day. That is not a real session
+ * — it cannot be, the data to build one was never captured — but it does
+ * make the archive queryable on the same axes as everything after it,
+ * which is better than a hole in the timeline before the cutover.
+ */
+async function syncPageVisits(
+  crm: DB,
+  site: SupabaseClient,
+  days: Set<string>,
+): Promise<{ rows: number }> {
+  const cursor = await readCursor(crm, "page_visits");
+  let since = cursor.cursor_ts ?? initialSince(730);
+  let rows = 0;
+
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const { data, error } = await site
+      .from("page_visits")
+      .select("id, visitor_id, page_path, referrer, created_at")
+      .gte("created_at", since)
+      .order("created_at", { ascending: true })
+      .limit(PAGE);
+    if (error) {
+      // The table may not exist on a fresh project — that is not a failure.
+      if (isMissingTable(error.message)) return { rows: 0 };
+      throw new Error(`page_visits: ${error.message}`);
+    }
+    if (!data?.length) break;
+
+    const mapped = data.map((r: Record<string, unknown>) => {
+      const created = s(r.created_at, 40) ?? new Date().toISOString();
+      const visitor = s(r.visitor_id, 120) ?? "unknown";
+      return {
+        source: "page_visits",
+        source_id: String(r.id),
+        session_id: `legacy:${visitor}:${created.slice(0, 10)}`,
+        visitor_id: visitor,
+        site: SITE,
+        seq: 0,
+        occurred_at: created,
+        kind: "page_view",
+        path: s(r.page_path, 500) ?? "/",
+        page_title: null,
+        referrer: s(r.referrer, 2000),
+        element: null,
+        element_text: null,
+        href: null,
+        value: null,
+        meta: { legacy: true },
+        synced_at: new Date().toISOString(),
+      };
+    });
+
+    const { error: upErr } = await crm
+      .from("web_events")
+      .upsert(mapped, { onConflict: "source,source_id" });
+    if (upErr) throw new Error(`page_visits upsert: ${upErr.message}`);
+
+    for (const row of mapped) {
+      const d = day(row.occurred_at);
+      if (d) days.add(d);
+    }
+
+    rows += mapped.length;
+    const last = mapped[mapped.length - 1].occurred_at;
+    since = last === since && data.length === PAGE
+      ? new Date(new Date(last).getTime() + 1).toISOString()
+      : last;
+    if (data.length < PAGE) break;
+  }
+
+  await writeCursor(crm, "page_visits", { cursor_ts: since, rows });
+  return { rows };
+}
+
+// ── the website's AI agent ──────────────────────────────────────────────────
+
+type ChatMsg = { role: string; content: string; created_at: string; id: string };
+
+function summariseTranscript(messages: ChatMsg[]): {
+  transcript: string;
+  first_user_message: string | null;
+  user_messages: number;
+  assistant_messages: number;
+  captured_email: string | null;
+  captured_phone: string | null;
+} {
+  const lines: string[] = [];
+  let firstUser: string | null = null;
+  let userCount = 0;
+  let assistantCount = 0;
+
+  for (const m of messages) {
+    const role = m.role === "assistant" ? "Assistant" : "Visitor";
+    if (m.role === "assistant") assistantCount++;
+    else {
+      userCount++;
+      if (!firstUser) firstUser = m.content.slice(0, 500);
+    }
+    lines.push(`${role}: ${m.content}`);
+  }
+
+  const joined = lines.join("\n");
+  // What the visitor volunteered in the conversation is often the only
+  // contact detail there is — they chatted instead of filling the form.
+  const email = joined.match(/[\w.+-]+@[\w-]+\.[\w.]{2,}/)?.[0] ?? null;
+  const phone = joined.match(/(?:\+|00)[\d][\d\s().-]{7,}\d/)?.[0] ?? null;
+
+  return {
+    // Long conversations are truncated: the tail is what the AI pass and
+    // a person both actually read, and the raw messages are all still in
+    // web_chat_messages if the whole thing is ever needed.
+    transcript: joined.length > 40_000 ? `${joined.slice(0, 40_000)}\n…[truncated]` : joined,
+    first_user_message: firstUser,
+    user_messages: userCount,
+    assistant_messages: assistantCount,
+    captured_email: email?.toLowerCase().slice(0, 200) ?? null,
+    captured_phone: phone?.trim().slice(0, 40) ?? null,
+  };
+}
+
+async function syncChatMessages(crm: DB, site: SupabaseClient): Promise<{ rows: number }> {
+  const cursor = await readCursor(crm, "chat_messages");
+  let since = cursor.cursor_ts ?? initialSince(730);
+  let rows = 0;
+  const touchedSessions = new Set<string>();
+
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const { data, error } = await site
+      .from("chat_messages")
+      .select("id, session_id, role, content, created_at")
+      .gte("created_at", since)
+      .order("created_at", { ascending: true })
+      .limit(PAGE);
+    if (error) {
+      if (isMissingTable(error.message)) return { rows: 0 };
+      throw new Error(`chat_messages: ${error.message}`);
+    }
+    if (!data?.length) break;
+
+    for (const r of data as Record<string, unknown>[]) {
+      const sid = s(r.session_id, 120);
+      if (sid) touchedSessions.add(sid);
+    }
+
+    rows += data.length;
+    const last = s(data[data.length - 1].created_at, 40)!;
+    since = last === since && data.length === PAGE
+      ? new Date(new Date(last).getTime() + 1).toISOString()
+      : last;
+    if (data.length < PAGE) break;
+  }
+
+  // Rebuild each touched conversation whole rather than appending
+  // message by message. A conversation is only meaningful as a unit —
+  // its counts, its transcript and the email buried in message six all
+  // change when a seventh arrives.
+  for (const sessionId of touchedSessions) {
+    const { data: msgs } = await site
+      .from("chat_messages")
+      .select("id, session_id, role, content, created_at")
+      .eq("session_id", sessionId)
+      .order("created_at", { ascending: true })
+      .limit(500);
+    if (!msgs?.length) continue;
+
+    const typed: ChatMsg[] = msgs.map((m: Record<string, unknown>) => ({
+      id: String(m.id),
+      role: String(m.role ?? "user"),
+      content: String(m.content ?? ""),
+      created_at: s(m.created_at, 40) ?? new Date().toISOString(),
+    }));
+    const summary = summariseTranscript(typed);
+
+    const { data: chatRow } = await crm
+      .from("web_chat_sessions")
+      .upsert(
+        {
+          source_id: `chat_messages:${sessionId}`,
+          site: SITE,
+          source_table: "chat_messages",
+          started_at: typed[0].created_at,
+          last_message_at: typed[typed.length - 1].created_at,
+          message_count: typed.length,
+          user_messages: summary.user_messages,
+          assistant_messages: summary.assistant_messages,
+          first_user_message: summary.first_user_message,
+          transcript: summary.transcript,
+          captured_email: summary.captured_email,
+          captured_phone: summary.captured_phone,
+          web_session_id: sessionId,
+          synced_at: new Date().toISOString(),
+        },
+        { onConflict: "source_id" },
+      )
+      .select("id")
+      .maybeSingle();
+
+    if (chatRow?.id) {
+      await crm.from("web_chat_messages").upsert(
+        typed.map((m) => ({
+          source_id: `chat_messages:${m.id}`,
+          chat_id: chatRow.id,
+          session_id: sessionId,
+          role: m.role,
+          content: m.content.slice(0, 20_000),
+          char_count: m.content.length,
+          created_at: m.created_at,
+          synced_at: new Date().toISOString(),
+        })),
+        { onConflict: "source_id" },
+      );
+    }
+  }
+
+  await writeCursor(crm, "chat_messages", { cursor_ts: since, rows });
+  return { rows };
+}
+
+/** The older one-blob-per-conversation format, kept for its history. */
+async function syncChatLogs(crm: DB, site: SupabaseClient): Promise<{ rows: number }> {
+  const cursor = await readCursor(crm, "chat_logs");
+  let since = cursor.cursor_ts ?? initialSince(730);
+  let rows = 0;
+
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const { data, error } = await site
+      .from("chat_logs")
+      .select("id, created_at, ip_address, user_location, messages, metadata")
+      .gte("created_at", since)
+      .order("created_at", { ascending: true })
+      .limit(200);
+    if (error) {
+      if (isMissingTable(error.message)) return { rows: 0 };
+      throw new Error(`chat_logs: ${error.message}`);
+    }
+    if (!data?.length) break;
+
+    for (const r of data as Record<string, unknown>[]) {
+      const created = s(r.created_at, 40) ?? new Date().toISOString();
+      const raw = Array.isArray(r.messages) ? r.messages : [];
+      const typed: ChatMsg[] = raw.map((m, idx) => {
+        const msg = (m ?? {}) as Record<string, unknown>;
+        return {
+          id: `${r.id}-${idx}`,
+          role: String(msg.role ?? "user"),
+          content: String(msg.content ?? msg.text ?? ""),
+          created_at: s(msg.created_at, 40) ?? created,
+        };
+      });
+      if (!typed.length) continue;
+
+      const summary = summariseTranscript(typed);
+      const { data: chatRow } = await crm
+        .from("web_chat_sessions")
+        .upsert(
+          {
+            source_id: `chat_logs:${r.id}`,
+            site: SITE,
+            source_table: "chat_logs",
+            started_at: typed[0].created_at,
+            last_message_at: typed[typed.length - 1].created_at,
+            message_count: typed.length,
+            user_messages: summary.user_messages,
+            assistant_messages: summary.assistant_messages,
+            first_user_message: summary.first_user_message,
+            transcript: summary.transcript,
+            captured_email: summary.captured_email,
+            captured_phone: summary.captured_phone,
+            ip_location: s(r.user_location, 200),
+            metadata: (r.metadata && typeof r.metadata === "object"
+              ? r.metadata
+              : {}) as Record<string, unknown>,
+            synced_at: new Date().toISOString(),
+          },
+          { onConflict: "source_id" },
+        )
+        .select("id")
+        .maybeSingle();
+
+      if (chatRow?.id) {
+        await crm.from("web_chat_messages").upsert(
+          typed.map((m) => ({
+            source_id: `chat_logs:${m.id}`,
+            chat_id: chatRow.id,
+            session_id: `chat_logs:${r.id}`,
+            role: m.role,
+            content: m.content.slice(0, 20_000),
+            char_count: m.content.length,
+            created_at: m.created_at,
+            synced_at: new Date().toISOString(),
+          })),
+          { onConflict: "source_id" },
+        );
+      }
+      rows += 1;
+    }
+
+    const last = s(data[data.length - 1].created_at, 40)!;
+    since = last === since && data.length === 200
+      ? new Date(new Date(last).getTime() + 1).toISOString()
+      : last;
+    if (data.length < 200) break;
+  }
+
+  await writeCursor(crm, "chat_logs", { cursor_ts: since, rows });
+  return { rows };
+}
+
+// ── identity stitching ──────────────────────────────────────────────────────
+
+/**
+ * Join anonymous browsing to the people already in the CRM.
+ *
+ * The moment a visitor types an email into a form or gives it to the
+ * chat agent, every page they viewed before that becomes attributable
+ * to a named lead — which is the difference between "someone read the
+ * pricing page" and "the £8k prospect read the pricing page twice".
+ */
+async function stitchIdentities(crm: DB): Promise<number> {
+  const { data: sessions } = await crm
+    .from("web_sessions")
+    .select("session_id, identified_email")
+    .not("identified_email", "is", null)
+    .is("matched_lead_id", null)
+    .limit(500);
+
+  const { data: chats } = await crm
+    .from("web_chat_sessions")
+    .select("id, captured_email")
+    .not("captured_email", "is", null)
+    .is("matched_lead_id", null)
+    .limit(500);
+
+  const emails = new Set<string>();
+  for (const row of sessions ?? []) {
+    if (row.identified_email) emails.add(row.identified_email.toLowerCase());
+  }
+  for (const row of chats ?? []) {
+    if (row.captured_email) emails.add(row.captured_email.toLowerCase());
+  }
+  if (!emails.size) return 0;
+
+  const list = [...emails];
+  const [leadsRes, clientsRes] = await Promise.all([
+    // A lead's address lives in `contact_email` — `email` is the clients table.
+    crm
+      .from("leads")
+      .select("id, contact_email")
+      .in("contact_email", list)
+      .is("deleted_at", null),
+    crm.from("clients").select("id, email").in("email", list),
+  ]);
+
+  const leadByEmail = new Map<string, string>();
+  for (const l of leadsRes.data ?? []) {
+    if (l.contact_email) leadByEmail.set(l.contact_email.toLowerCase(), l.id);
+  }
+  const clientByEmail = new Map<string, string>();
+  for (const c of clientsRes.data ?? []) {
+    if (c.email) clientByEmail.set(c.email.toLowerCase(), c.id);
+  }
+
+  let matched = 0;
+  for (const row of sessions ?? []) {
+    const email = row.identified_email?.toLowerCase();
+    if (!email) continue;
+    const leadId = leadByEmail.get(email) ?? null;
+    const clientId = clientByEmail.get(email) ?? null;
+    if (!leadId && !clientId) continue;
+    await crm
+      .from("web_sessions")
+      .update({ matched_lead_id: leadId, matched_client_id: clientId })
+      .eq("session_id", row.session_id);
+    matched++;
+  }
+  for (const row of chats ?? []) {
+    const email = row.captured_email?.toLowerCase();
+    if (!email) continue;
+    const leadId = leadByEmail.get(email) ?? null;
+    if (!leadId) continue;
+    await crm.from("web_chat_sessions").update({ matched_lead_id: leadId }).eq("id", row.id);
+    matched++;
+  }
+  return matched;
+}
+
+// ── orchestration ───────────────────────────────────────────────────────────
+
+async function runStream(
+  crm: DB,
+  name: StreamName,
+  work: () => Promise<{ rows: number }>,
+): Promise<StreamResult> {
+  const startedAt = Date.now();
+  const { data: run } = await crm
+    .from("web_sync_runs")
+    .insert({ stream: name, started_at: new Date().toISOString() })
+    .select("id")
+    .maybeSingle();
+
+  try {
+    const { rows } = await work();
+    const durationMs = Date.now() - startedAt;
+    if (run?.id) {
+      await crm
+        .from("web_sync_runs")
+        .update({
+          finished_at: new Date().toISOString(),
+          rows_synced: rows,
+          ok: true,
+          duration_ms: durationMs,
+        })
+        .eq("id", run.id);
+    }
+    return { stream: name, rows, ok: true, durationMs };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    const durationMs = Date.now() - startedAt;
+    if (run?.id) {
+      await crm
+        .from("web_sync_runs")
+        .update({
+          finished_at: new Date().toISOString(),
+          ok: false,
+          error: message.slice(0, 1000),
+          duration_ms: durationMs,
+        })
+        .eq("id", run.id);
+    }
+    await writeCursor(crm, name, { rows: 0, error: message.slice(0, 1000) });
+    return { stream: name, rows: 0, ok: false, error: message, durationMs };
+  }
+}
+
+/**
+ * Pull everything the website knows into the CRM.
+ *
+ * Streams run in sequence, not in parallel: they share one connection to
+ * a small Supabase instance, and five concurrent 1000-row scans is how
+ * you get rate-limited on the source rather than finishing faster.
+ * A stream that throws is caught and recorded — one broken table must
+ * not cost the run the other four.
+ */
+export async function syncWebsiteAnalytics(crm: DB): Promise<SyncResult> {
+  if (!isWebsiteSourceConfigured()) {
+    return {
+      ok: false,
+      streams: [],
+      totalRows: 0,
+      daysTouched: [],
+      skipped:
+        "Website source not configured — set WEBSITE_SUPABASE_URL and " +
+        "WEBSITE_SUPABASE_SERVICE_ROLE_KEY.",
+    };
+  }
+
+  const site = createWebsiteClient();
+  const days = new Set<string>();
+
+  const streams: StreamResult[] = [];
+  streams.push(await runStream(crm, "sessions", () => syncSessions(crm, site, days)));
+  streams.push(await runStream(crm, "events", () => syncEvents(crm, site, days)));
+  streams.push(await runStream(crm, "page_visits", () => syncPageVisits(crm, site, days)));
+  streams.push(await runStream(crm, "chat_messages", () => syncChatMessages(crm, site)));
+  streams.push(await runStream(crm, "chat_logs", () => syncChatLogs(crm, site)));
+
+  await stitchIdentities(crm).catch(() => 0);
+
+  return {
+    ok: streams.every((s) => s.ok),
+    streams,
+    totalRows: streams.reduce((sum, s) => sum + s.rows, 0),
+    daysTouched: [...days].sort(),
+  };
+}

@@ -1,5 +1,6 @@
 import {
   BadgeDollarSign,
+  BarChart3,
   BrainCircuit,
   CalendarClock,
   CreditCard,
@@ -45,6 +46,15 @@ export const NAV: NavItem[] = [
     label: "AI & Intelligence",
     href: "/intelligence",
     icon: BrainCircuit,
+    adminOnly: true,
+  },
+  {
+    // The agency's own website (arcai.agency), mirrored from its own
+    // Supabase project. Distinct from AI & Intelligence, which covers the
+    // CRM's internal signals and the snippet on client sites.
+    label: "Web Analytics",
+    href: "/web-analytics",
+    icon: BarChart3,
     adminOnly: true,
   },
   { label: "Meetings", href: "/meetings", icon: CalendarClock },

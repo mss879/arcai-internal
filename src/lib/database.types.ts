@@ -11,6 +11,25 @@ type Timestamp = string;
 type UUID = string;
 
 export type UserRole = "admin" | "member";
+
+// 0105 — Web Analytics (the agency's own site, mirrored from its own
+// Supabase project). Unrelated to VisitorEventKind, which belongs to the
+// in-app tracking snippet for client sites.
+export type WebChannel =
+  | "direct"
+  | "organic"
+  | "paid_search"
+  | "paid_social"
+  | "social"
+  | "email"
+  | "referral"
+  | "affiliate"
+  | "ai_assistant"
+  | "internal"
+  | "unknown";
+export type WebDeviceType = "desktop" | "mobile" | "tablet" | "bot" | "unknown";
+export type WebJourneyKind = "transition" | "path";
+export type WebReportKind = "daily" | "weekly" | "monthly" | "quarterly" | "custom";
 export type InviteStatus = "pending" | "accepted" | "revoked" | "expired";
 export type ClientStatus = "active" | "lead" | "inactive";
 export type TodoPriority = "low" | "medium" | "high" | "urgent";
@@ -3347,6 +3366,510 @@ export type Database = {
         Update: Partial<
           Database["public"]["Tables"]["visitor_events"]["Insert"]
         >;
+        Relationships: [];
+      };
+
+      // ===== 0105 — Web Analytics (www.arcai.agency) =====================
+      // Mirrored from the WEBSITE's own Supabase project by
+      // `@/lib/web-analytics/sync`. Deliberately separate from
+      // `visitor_events` above, which is the app's own snippet for
+      // client sites and is not touched by any of this.
+      web_sessions: {
+        Row: {
+          id: UUID;
+          session_id: string;
+          visitor_id: string;
+          site: string;
+          first_seen_at: Timestamp;
+          last_seen_at: Timestamp;
+          entry_path: string;
+          exit_path: string | null;
+          page_count: number;
+          event_count: number;
+          duration_seconds: number;
+          engaged_seconds: number;
+          is_bounce: boolean;
+          max_scroll_pct: number;
+          landing_referrer: string | null;
+          referrer_domain: string | null;
+          channel: WebChannel;
+          utm_source: string | null;
+          utm_medium: string | null;
+          utm_campaign: string | null;
+          utm_term: string | null;
+          utm_content: string | null;
+          gclid: string | null;
+          fbclid: string | null;
+          msclkid: string | null;
+          first_touch_channel: string | null;
+          first_touch_campaign: string | null;
+          landing_page_title: string | null;
+          device_type: WebDeviceType;
+          browser: string | null;
+          browser_version: string | null;
+          os: string | null;
+          os_version: string | null;
+          screen_w: number | null;
+          screen_h: number | null;
+          viewport_w: number | null;
+          viewport_h: number | null;
+          device_pixel_ratio: number | null;
+          language: string | null;
+          timezone: string | null;
+          connection_type: string | null;
+          user_agent: string | null;
+          country: string | null;
+          country_code: string | null;
+          region: string | null;
+          city: string | null;
+          converted: boolean;
+          conversion_kind: string | null;
+          conversion_at: Timestamp | null;
+          chat_engaged: boolean;
+          chat_message_count: number;
+          identified_email: string | null;
+          forms_started: number;
+          forms_abandoned: number;
+          outbound_clicks: number;
+          rage_clicks: number;
+          is_bot: boolean;
+          matched_lead_id: UUID | null;
+          matched_client_id: UUID | null;
+          source_updated_at: Timestamp;
+          synced_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          session_id: string;
+          visitor_id: string;
+          site?: string;
+          first_seen_at: Timestamp;
+          last_seen_at: Timestamp;
+          entry_path?: string;
+          exit_path?: string | null;
+          page_count?: number;
+          event_count?: number;
+          duration_seconds?: number;
+          engaged_seconds?: number;
+          is_bounce?: boolean;
+          max_scroll_pct?: number;
+          landing_referrer?: string | null;
+          referrer_domain?: string | null;
+          channel?: string;
+          utm_source?: string | null;
+          utm_medium?: string | null;
+          utm_campaign?: string | null;
+          utm_term?: string | null;
+          utm_content?: string | null;
+          gclid?: string | null;
+          fbclid?: string | null;
+          msclkid?: string | null;
+          first_touch_channel?: string | null;
+          first_touch_campaign?: string | null;
+          landing_page_title?: string | null;
+          device_type?: string;
+          browser?: string | null;
+          browser_version?: string | null;
+          os?: string | null;
+          os_version?: string | null;
+          screen_w?: number | null;
+          screen_h?: number | null;
+          viewport_w?: number | null;
+          viewport_h?: number | null;
+          device_pixel_ratio?: number | null;
+          language?: string | null;
+          timezone?: string | null;
+          connection_type?: string | null;
+          user_agent?: string | null;
+          country?: string | null;
+          country_code?: string | null;
+          region?: string | null;
+          city?: string | null;
+          converted?: boolean;
+          conversion_kind?: string | null;
+          conversion_at?: Timestamp | null;
+          chat_engaged?: boolean;
+          chat_message_count?: number;
+          identified_email?: string | null;
+          forms_started?: number;
+          forms_abandoned?: number;
+          outbound_clicks?: number;
+          rage_clicks?: number;
+          is_bot?: boolean;
+          matched_lead_id?: UUID | null;
+          matched_client_id?: UUID | null;
+          source_updated_at?: Timestamp;
+          synced_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["web_sessions"]["Insert"]>;
+        Relationships: [];
+      };
+      web_events: {
+        Row: {
+          id: number;
+          source: string;
+          source_id: string;
+          session_id: string;
+          visitor_id: string;
+          site: string;
+          seq: number;
+          occurred_at: Timestamp;
+          kind: string;
+          path: string;
+          page_title: string | null;
+          referrer: string | null;
+          element: string | null;
+          element_text: string | null;
+          href: string | null;
+          value: number | null;
+          meta: Record<string, unknown>;
+          synced_at: Timestamp;
+        };
+        Insert: {
+          id?: number;
+          source?: string;
+          source_id: string;
+          session_id: string;
+          visitor_id: string;
+          site?: string;
+          seq?: number;
+          occurred_at: Timestamp;
+          kind: string;
+          path?: string;
+          page_title?: string | null;
+          referrer?: string | null;
+          element?: string | null;
+          element_text?: string | null;
+          href?: string | null;
+          value?: number | null;
+          meta?: Record<string, unknown>;
+          synced_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["web_events"]["Insert"]>;
+        Relationships: [];
+      };
+      web_daily: {
+        Row: {
+          id: UUID;
+          site: string;
+          day: string;
+          sessions: number;
+          visitors: number;
+          new_visitors: number;
+          returning_visitors: number;
+          pageviews: number;
+          bounces: number;
+          bounce_rate: number;
+          avg_duration_seconds: number;
+          avg_engaged_seconds: number;
+          avg_pages_per_session: number;
+          avg_scroll_pct: number;
+          conversions: number;
+          conversion_rate: number;
+          forms_started: number;
+          forms_abandoned: number;
+          chat_sessions: number;
+          chat_messages: number;
+          rage_clicks: number;
+          outbound_clicks: number;
+          errors: number;
+          by_channel: Record<string, number>;
+          by_device: Record<string, number>;
+          by_country: Record<string, number>;
+          by_browser: Record<string, number>;
+          by_source: Record<string, number>;
+          by_campaign: Record<string, number>;
+          top_pages: { key: string; count: number }[];
+          top_entry_pages: { key: string; count: number }[];
+          top_exit_pages: { key: string; count: number }[];
+          top_referrers: { key: string; count: number }[];
+          web_vitals: Record<string, { avg: number; samples: number }>;
+          computed_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          site?: string;
+          day: string;
+          sessions?: number;
+          visitors?: number;
+          new_visitors?: number;
+          returning_visitors?: number;
+          pageviews?: number;
+          bounces?: number;
+          bounce_rate?: number;
+          avg_duration_seconds?: number;
+          avg_engaged_seconds?: number;
+          avg_pages_per_session?: number;
+          avg_scroll_pct?: number;
+          conversions?: number;
+          conversion_rate?: number;
+          forms_started?: number;
+          forms_abandoned?: number;
+          chat_sessions?: number;
+          chat_messages?: number;
+          rage_clicks?: number;
+          outbound_clicks?: number;
+          errors?: number;
+          by_channel?: Record<string, number>;
+          by_device?: Record<string, number>;
+          by_country?: Record<string, number>;
+          by_browser?: Record<string, number>;
+          by_source?: Record<string, number>;
+          by_campaign?: Record<string, number>;
+          top_pages?: { key: string; count: number }[];
+          top_entry_pages?: { key: string; count: number }[];
+          top_exit_pages?: { key: string; count: number }[];
+          top_referrers?: { key: string; count: number }[];
+          web_vitals?: Record<string, { avg: number; samples: number }>;
+          computed_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["web_daily"]["Insert"]>;
+        Relationships: [];
+      };
+      web_page_daily: {
+        Row: {
+          id: UUID;
+          site: string;
+          day: string;
+          path: string;
+          page_title: string | null;
+          pageviews: number;
+          unique_visitors: number;
+          entries: number;
+          exits: number;
+          bounces: number;
+          avg_seconds_on_page: number;
+          avg_scroll_pct: number;
+          conversions: number;
+          form_starts: number;
+          form_abandons: number;
+          rage_clicks: number;
+          cta_clicks: number;
+          computed_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          site?: string;
+          day: string;
+          path: string;
+          page_title?: string | null;
+          pageviews?: number;
+          unique_visitors?: number;
+          entries?: number;
+          exits?: number;
+          bounces?: number;
+          avg_seconds_on_page?: number;
+          avg_scroll_pct?: number;
+          conversions?: number;
+          form_starts?: number;
+          form_abandons?: number;
+          rage_clicks?: number;
+          cta_clicks?: number;
+          computed_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["web_page_daily"]["Insert"]>;
+        Relationships: [];
+      };
+      web_journeys: {
+        Row: {
+          id: UUID;
+          site: string;
+          period_start: string;
+          period_end: string;
+          kind: WebJourneyKind;
+          from_path: string | null;
+          to_path: string | null;
+          path_sequence: string | null;
+          step_index: number | null;
+          sessions: number;
+          conversions: number;
+          drop_offs: number;
+          avg_seconds: number;
+          computed_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          site?: string;
+          period_start: string;
+          period_end: string;
+          kind?: WebJourneyKind;
+          from_path?: string | null;
+          to_path?: string | null;
+          path_sequence?: string | null;
+          step_index?: number | null;
+          sessions?: number;
+          conversions?: number;
+          drop_offs?: number;
+          avg_seconds?: number;
+          computed_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["web_journeys"]["Insert"]>;
+        Relationships: [];
+      };
+      web_chat_sessions: {
+        Row: {
+          id: UUID;
+          source_id: string;
+          site: string;
+          source_table: string;
+          started_at: Timestamp;
+          last_message_at: Timestamp;
+          message_count: number;
+          user_messages: number;
+          assistant_messages: number;
+          first_user_message: string | null;
+          transcript: string;
+          topic: string | null;
+          intent: string | null;
+          sentiment: string | null;
+          summary: string | null;
+          buying_signals: unknown[];
+          questions_asked: unknown[];
+          analysed_at: Timestamp | null;
+          ip_location: string | null;
+          captured_email: string | null;
+          captured_phone: string | null;
+          metadata: Record<string, unknown>;
+          web_session_id: string | null;
+          matched_lead_id: UUID | null;
+          synced_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          source_id: string;
+          site?: string;
+          source_table?: string;
+          started_at: Timestamp;
+          last_message_at: Timestamp;
+          message_count?: number;
+          user_messages?: number;
+          assistant_messages?: number;
+          first_user_message?: string | null;
+          transcript?: string;
+          topic?: string | null;
+          intent?: string | null;
+          sentiment?: string | null;
+          summary?: string | null;
+          buying_signals?: unknown[];
+          questions_asked?: unknown[];
+          analysed_at?: Timestamp | null;
+          ip_location?: string | null;
+          captured_email?: string | null;
+          captured_phone?: string | null;
+          metadata?: Record<string, unknown>;
+          web_session_id?: string | null;
+          matched_lead_id?: UUID | null;
+          synced_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["web_chat_sessions"]["Insert"]>;
+        Relationships: [];
+      };
+      web_chat_messages: {
+        Row: {
+          id: UUID;
+          source_id: string;
+          chat_id: UUID | null;
+          session_id: string;
+          role: string;
+          content: string;
+          char_count: number;
+          created_at: Timestamp;
+          synced_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          source_id: string;
+          chat_id?: UUID | null;
+          session_id: string;
+          role?: string;
+          content?: string;
+          char_count?: number;
+          created_at: Timestamp;
+          synced_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["web_chat_messages"]["Insert"]>;
+        Relationships: [];
+      };
+      web_reports: {
+        Row: {
+          id: UUID;
+          site: string;
+          kind: WebReportKind;
+          period_start: string;
+          period_end: string;
+          title: string;
+          content: string;
+          stats: Record<string, unknown>;
+          highlights: string[];
+          recommendations: string[];
+          generated_by: string;
+          created_by: UUID | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          site?: string;
+          kind?: WebReportKind;
+          period_start: string;
+          period_end: string;
+          title?: string;
+          content?: string;
+          stats?: Record<string, unknown>;
+          highlights?: string[];
+          recommendations?: string[];
+          generated_by?: string;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["web_reports"]["Insert"]>;
+        Relationships: [];
+      };
+      web_sync_state: {
+        Row: {
+          stream: string;
+          cursor_ts: Timestamp | null;
+          cursor_id: number | null;
+          last_run_at: Timestamp | null;
+          last_ok_at: Timestamp | null;
+          rows_synced: number;
+          last_error: string | null;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          stream: string;
+          cursor_ts?: Timestamp | null;
+          cursor_id?: number | null;
+          last_run_at?: Timestamp | null;
+          last_ok_at?: Timestamp | null;
+          rows_synced?: number;
+          last_error?: string | null;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["web_sync_state"]["Insert"]>;
+        Relationships: [];
+      };
+      web_sync_runs: {
+        Row: {
+          id: UUID;
+          stream: string;
+          started_at: Timestamp;
+          finished_at: Timestamp | null;
+          rows_synced: number;
+          ok: boolean;
+          error: string | null;
+          duration_ms: number | null;
+        };
+        Insert: {
+          id?: UUID;
+          stream: string;
+          started_at?: Timestamp;
+          finished_at?: Timestamp | null;
+          rows_synced?: number;
+          ok?: boolean;
+          error?: string | null;
+          duration_ms?: number | null;
+        };
+        Update: Partial<Database["public"]["Tables"]["web_sync_runs"]["Insert"]>;
         Relationships: [];
       };
       lead_research: {

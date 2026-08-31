@@ -30,7 +30,7 @@ import {
 
 import { cn } from "@/lib/utils";
 import { Dropdown, DropdownItem } from "@/components/ui/dropdown";
-import { ADMIN_NAV, NAV, type NavItem } from "@/components/layout/nav";
+import { NAV, type NavItem } from "@/components/layout/nav";
 import type { ThreadSummary } from "@/lib/assistant-threads";
 
 export type ThreadRailProps = {
@@ -327,7 +327,7 @@ export function ThreadRail({
   }, []);
 
   const navItems = React.useMemo<NavItem[]>(
-    () => [...NAV, ...ADMIN_NAV].filter((item) => isAdmin || !item.adminOnly),
+    () => NAV.filter((item) => isAdmin || !item.adminOnly),
     [isAdmin],
   );
 

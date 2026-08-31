@@ -33,7 +33,7 @@ import {
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
-import { ADMIN_NAV, NAV } from "@/components/layout/nav";
+import { NAV } from "@/components/layout/nav";
 import type { Status } from "@/components/assistant/use-voice-chat";
 
 /** One row of the "/" palette. */
@@ -134,7 +134,7 @@ const CORE_COMMANDS: Omit<AssistantCommand, "id">[] = [
 
 function buildCommands(isAdmin: boolean): AssistantCommand[] {
   const core = CORE_COMMANDS.map((c, i) => ({ ...c, id: `core-${i}` }));
-  const areas = [...NAV, ...ADMIN_NAV]
+  const areas = NAV
     .filter((item) => isAdmin || !item.adminOnly)
     .map<AssistantCommand>((item) => ({
       id: `nav-${item.href}`,

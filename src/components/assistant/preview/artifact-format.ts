@@ -53,7 +53,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-import { ADMIN_NAV, NAV } from "@/components/layout/nav";
+import { NAV } from "@/components/layout/nav";
 import { formatCurrency } from "@/lib/utils";
 import type {
   AppArea,
@@ -194,7 +194,7 @@ export const TONE_TEXT: Record<ArtifactTone, string> = {
 
 /**
  * Where each artifact area lives in the app. The label and icon are looked up
- * from `NAV`/`ADMIN_NAV` by href so the canvas can never drift from the
+ * from `NAV` by href so the canvas can never drift from the
  * sidebar; only the area-to-href mapping lives here.
  */
 const AREA_HREF: Record<AppArea, string> = {
@@ -230,7 +230,7 @@ const AREA_FALLBACK: Partial<
 };
 
 const NAV_BY_HREF = new Map(
-  [...NAV, ...ADMIN_NAV].map((item) => [item.href, item] as const),
+  NAV.map((item) => [item.href, item] as const),
 );
 
 /** Area to nav entry (label + href + icon), derived from the real sidebar. */

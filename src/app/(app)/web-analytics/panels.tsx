@@ -42,8 +42,8 @@ export type PageRow = {
   entries: number;
   exits: number;
   bounces: number;
-  avgSeconds: number;
-  avgScroll: number;
+  avgSeconds: number | null;
+  avgScroll: number | null;
   conversions: number;
   formStarts: number;
   formAbandons: number;
@@ -358,10 +358,10 @@ export function PagesPanel({
                 {num(page.exits)}
               </td>
               <td className="px-3 py-2.5 text-right tabular-nums text-slate-500">
-                {secs(page.avgSeconds)}
+                {page.avgSeconds === null ? "—" : secs(page.avgSeconds)}
               </td>
               <td className="px-3 py-2.5 text-right tabular-nums text-slate-500">
-                {page.avgScroll}%
+                {page.avgScroll === null ? "—" : `${page.avgScroll}%`}
               </td>
               <td className="px-3 py-2.5 text-right tabular-nums text-slate-500">
                 {page.formStarts > 0 ? (
@@ -852,6 +852,16 @@ export function SyncPanel({
           morning. “Sync now” does the same thing immediately. Rows are stored under the
           label <span className="font-mono">{site}</span>, which is what every query here
           filters on.
+        </p>
+        <p className="mt-2 text-xs text-slate-400">
+          <strong className="text-slate-500">Rebuild history</strong> is the other button,
+          and it is the one to press after anything about how this data is interpreted has
+          changed. Both halves of the pipeline are incremental: the pull only reads rows
+          newer than its watermark, and the rollup only recomputes days that changed. So a
+          correction to the logic lands on new data and leaves everything older exactly as
+          it was — which reads as “the fix did nothing”. A rebuild winds the watermarks
+          back, re-reads the website through the current logic, and recomputes the last 90
+          days from scratch. It is slow and safe to repeat.
         </p>
       </div>
     </div>

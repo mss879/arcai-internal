@@ -8,6 +8,7 @@ import { createClient } from "@/lib/supabase/server";
 import type { ActionResult } from "@/lib/types";
 import { generateWebReport, analyseChatSessions } from "@/lib/web-analytics/report";
 import { runInsightScan } from "@/lib/web-analytics/insights";
+import { rebuildWebAnalytics } from "@/lib/web-analytics/rebuild";
 import { runWebAnalyticsPipeline } from "@/lib/web-analytics/run";
 import { pingWebsiteSource } from "@/lib/web-analytics/source";
 
@@ -43,6 +44,42 @@ export async function syncNow(): Promise<
     };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Sync failed." };
+  }
+}
+
+/**
+ * Re-read everything and recompute it, ignoring both watermarks.
+ *
+ * `syncNow` is the incremental path: it pulls what has arrived since the
+ * last run and rolls up the days that changed. That is the right default
+ * and it is useless after a bug fix, because the rows the fix was written
+ * for are behind the cursor and the days they belong to already have a
+ * rollup. Pressing "Sync now" then reports a cheerful success and changes
+ * nothing, which is exactly how a shipped fix comes to look like no fix.
+ *
+ * This is the other button: wind the cursors back, re-mirror the source
+ * through the current mapping, and recompute every day in the window
+ * whether or not anything about it changed.
+ */
+export async function rebuildNow(
+  days: number,
+): Promise<
+  ActionResult<{ rows: number; days: number; incomplete: boolean; errors: string[] }>
+> {
+  await requireAdmin();
+  try {
+    const result = await rebuildWebAnalytics(createAdminClient(), { days });
+    if (result.skipped) return { ok: false, error: result.skipped };
+    revalidatePath("/web-analytics");
+    return {
+      ok: true,
+      rows: result.rowsPulled,
+      days: result.daysRebuilt,
+      incomplete: result.incomplete,
+      errors: result.errors,
+    };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Rebuild failed." };
   }
 }
 

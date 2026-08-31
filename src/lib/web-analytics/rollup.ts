@@ -58,6 +58,36 @@ function topN(
 const avg = (nums: number[]): number =>
   nums.length ? Number((nums.reduce((a, b) => a + b, 0) / nums.length).toFixed(2)) : 0;
 
+/**
+ * The 75th percentile — the figure Core Web Vitals are actually assessed on.
+ *
+ * A mean hides the tail, and the tail is the whole point of a field metric:
+ * one visitor on a slow phone matters, and averaging them away with nineteen
+ * on fibre reports a page as fast that is not fast for the people it is slow
+ * for. Google's own thresholds are defined against p75, so a dashboard that
+ * shows a mean is not measuring the thing anyone is graded on.
+ */
+const p75 = (nums: number[]): number => {
+  if (!nums.length) return 0;
+  const sorted = [...nums].sort((a, b) => a - b);
+  const idx = Math.min(sorted.length - 1, Math.ceil(sorted.length * 0.75) - 1);
+  return Number(sorted[Math.max(0, idx)].toFixed(2));
+};
+
+/**
+ * Undo the tracker's CLS encoding.
+ *
+ * Cumulative Layout Shift is a small unitless number — 0.1 is the "good"
+ * threshold — so the website multiplies it by 1000 before storing it in an
+ * integer-ish column (`trackWebVital` in the site's tracker.ts). Nothing on
+ * this side ever divided it back, which is how a genuinely excellent CLS of
+ * 0.0018 was read off the dashboard as "CLS 1.8" — eighteen times worse than
+ * the failing threshold — and written up as a layout-shift problem that does
+ * not exist. Every other vital is already in milliseconds and passes through.
+ */
+const decodeVital = (name: string, value: number): number =>
+  name.toUpperCase() === "CLS" ? value / 1000 : value;
+
 const pct = (part: number, whole: number): number =>
   whole ? Number(((part / whole) * 100).toFixed(2)) : 0;
 
@@ -91,33 +121,65 @@ async function fetchAll<T>(
 /**
  * Recompute `web_daily` and `web_page_daily` for a single day.
  *
- * Bots are excluded from every figure. A crawler that reads forty pages
- * is not forty pages of interest, and leaving it in makes traffic look
- * healthy while conversion rate quietly collapses.
+ * Bots are excluded from every figure — including the ones derived from
+ * events, which is harder than it sounds. `web_events` carries no bot flag
+ * of its own, so the only way to drop a crawler's page views is to find
+ * which sessions were bots and filter the event stream through that set.
+ * The version that filtered only the session query counted crawler page
+ * views while excluding crawler sessions, so pages-per-session and every
+ * top-pages ranking were inflated by exactly the traffic the filter was
+ * there to remove.
+ *
+ * The second split is measured vs reconstructed. Sessions whose id begins
+ * `legacy:` come from the site's old thin log, which recorded a visitor, a
+ * path, a referrer and a time — and nothing else. They are real traffic and
+ * they count as traffic, but they cannot answer "on what device", "from
+ * where" or "for how long", and averaging their structural zeroes in with
+ * measured visits is what produced the contradiction that discredited the
+ * whole dashboard: an average duration of 443 seconds sitting next to an
+ * average engaged time of 0.08 seconds. Behavioural averages are therefore
+ * computed over measured sessions only, and the count of everything left
+ * out is stored alongside so nothing is hidden.
  */
 export async function rollupDay(supabase: DB, day: string): Promise<void> {
   const { start, end } = dayBounds(day);
 
-  const sessions = await fetchAll<SessionRow>((from, to) =>
+  const allSessions = await fetchAll<SessionRow>((from, to) =>
     supabase
       .from("web_sessions")
       .select("*")
       .eq("site", SITE)
       .gte("first_seen_at", start)
       .lte("first_seen_at", end)
-      .eq("is_bot", false)
+      // Ordered on purpose. `fetchAll` walks the result in 1000-row windows
+      // with a separate query per window, and Postgres guarantees nothing
+      // about row order without an ORDER BY — so on a day with more than a
+      // thousand rows the windows silently overlap and skip. Every busy day
+      // was being counted with some rows twice and others not at all.
+      .order("session_id", { ascending: true })
       .range(from, to),
   );
 
-  const events = await fetchAll<EventRow>((from, to) =>
+  const sessions = allSessions.filter((s) => !s.is_bot);
+  const botSessionIds = new Set(
+    allSessions.filter((s) => s.is_bot).map((s) => s.session_id),
+  );
+
+  const allEvents = await fetchAll<EventRow>((from, to) =>
     supabase
       .from("web_events")
       .select("*")
       .eq("site", SITE)
       .gte("occurred_at", start)
       .lte("occurred_at", end)
+      // See the sessions fetch above: paginating without a total order drops
+      // and duplicates rows. `id` is the bigserial primary key.
+      .order("id", { ascending: true })
       .range(from, to),
   );
+  const events = botSessionIds.size
+    ? allEvents.filter((e) => !botSessionIds.has(e.session_id))
+    : allEvents;
 
   const pageViews = events.filter((e) => e.kind === "page_view");
   const visitors = new Set(sessions.map((s) => s.visitor_id));
@@ -138,6 +200,8 @@ export async function rollupDay(supabase: DB, day: string): Promise<void> {
           .select("visitor_id, first_seen_at")
           .in("visitor_id", chunk)
           .order("first_seen_at", { ascending: true })
+          // first_seen_at is not unique, so it cannot page on its own.
+          .order("visitor_id", { ascending: true })
           .range(from, to),
     );
     for (const prior of priors) {
@@ -168,11 +232,11 @@ export async function rollupDay(supabase: DB, day: string): Promise<void> {
   const vitals: Record<string, number[]> = {};
   for (const e of events) {
     if (e.kind !== "web_vital" || !e.element_text) continue;
-    (vitals[e.element_text] ??= []).push(Number(e.value ?? 0));
+    (vitals[e.element_text] ??= []).push(decodeVital(e.element_text, Number(e.value ?? 0)));
   }
-  const webVitals: Record<string, { avg: number; samples: number }> = {};
+  const webVitals: Record<string, { avg: number; p75: number; samples: number }> = {};
   for (const [name, values] of Object.entries(vitals)) {
-    webVitals[name] = { avg: avg(values), samples: values.length };
+    webVitals[name] = { avg: avg(values), p75: p75(values), samples: values.length };
   }
 
   // The old `page_visits` log recorded no device, browser or country, so its
@@ -181,6 +245,17 @@ export async function rollupDay(supabase: DB, day: string): Promise<void> {
   // still count as traffic; they just cannot answer "on what" or "from where".
   const measured = sessions.filter((s2) => !s2.session_id.startsWith("legacy:"));
   const unmeasured = sessions.length - measured.length;
+
+  // Page views the tracker actually recorded. Sample counts for Core Web
+  // Vitals have to be read against this, not against the total: a vital
+  // fires once per full document load and never from the reconstructed
+  // archive, so "4 samples out of 1,035 pageviews" describes a pipeline
+  // failure that is not happening, while "4 out of 12 tracked loads" just
+  // describes a new tracker.
+  const measuredSessionIds = new Set(measured.map((s2) => s2.session_id));
+  const measuredPageviews = pageViews.filter((e) =>
+    measuredSessionIds.has(e.session_id),
+  ).length;
 
   const pageCounts = tally(pageViews.map((e) => e.path));
   const referrerCounts = tally(
@@ -192,16 +267,26 @@ export async function rollupDay(supabase: DB, day: string): Promise<void> {
       site: SITE,
       day,
       sessions: sessions.length,
+      // How much of that the tracker actually measured. Every behavioural
+      // average below is computed over this subset, so the weighting on the
+      // read side has to use this number and not `sessions`.
+      measured_sessions: measured.length,
+      legacy_sessions: unmeasured,
       visitors: visitors.size,
       new_visitors: newVisitors,
       returning_visitors: Math.max(0, visitors.size - newVisitors),
       pageviews: pageViews.length,
+      measured_pageviews: measuredPageviews,
       bounces,
       bounce_rate: pct(bounces, sessions.length),
-      avg_duration_seconds: avg(sessions.map((s) => s.duration_seconds)),
-      avg_engaged_seconds: avg(sessions.map((s) => s.engaged_seconds)),
+      // Measured sessions only. A legacy row's duration is reconstructed
+      // from timestamp gaps and its engaged time is a structural zero;
+      // mixing the two produces two averages that contradict each other,
+      // and a pair of contradictory numbers discredits the honest one too.
+      avg_duration_seconds: avg(measured.map((s) => s.duration_seconds)),
+      avg_engaged_seconds: avg(measured.map((s) => s.engaged_seconds)),
       avg_pages_per_session: avg(sessions.map((s) => s.page_count)),
-      avg_scroll_pct: avg(sessions.map((s) => s.max_scroll_pct)),
+      avg_scroll_pct: avg(measured.map((s) => s.max_scroll_pct)),
       conversions,
       conversion_rate: pct(conversions, sessions.length),
       forms_started: sessions.reduce((n, s) => n + s.forms_started, 0),
@@ -227,12 +312,11 @@ export async function rollupDay(supabase: DB, day: string): Promise<void> {
       top_entry_pages: topN(tally(sessions.map((s) => s.entry_path)), 15),
       top_exit_pages: topN(tally(sessions.map((s) => s.exit_path)), 15),
       top_referrers: topN(referrerCounts, 15),
-      web_vitals: {
-        ...webVitals,
-        // Not a vital — carried here so the dashboard and the AI scan can
-        // both tell "nobody was on mobile" from "we did not measure it".
-        _unmeasured_sessions: { avg: unmeasured, samples: sessions.length },
-      },
+      // Real vitals only. A session-quality counter used to be smuggled in
+      // here under a `_`-prefixed key, which meant the period merge weighted
+      // it like a latency metric and the AI scan was handed a "Core Web
+      // Vital" called _unmeasured_sessions. It has proper columns now.
+      web_vitals: webVitals,
       computed_at: new Date().toISOString(),
     },
     { onConflict: "site,day" },
@@ -275,6 +359,7 @@ export async function rollupDay(supabase: DB, day: string): Promise<void> {
   for (const [path, views] of viewsByPath) {
     const onPage = eventsByPath.get(path) ?? [];
     const exits = onPage.filter((e) => e.kind === "page_exit");
+    const scrolls = onPage.filter((e) => e.kind === "scroll_depth");
 
     rows.push({
       site: SITE,
@@ -287,9 +372,15 @@ export async function rollupDay(supabase: DB, day: string): Promise<void> {
       exits: exitsByPath.get(path) ?? 0,
       bounces: bouncesByPath.get(path) ?? 0,
       avg_seconds_on_page: avg(exits.map((e) => Number(e.value ?? 0))),
-      avg_scroll_pct: avg(
-        onPage.filter((e) => e.kind === "scroll_depth").map((e) => Number(e.value ?? 0)),
-      ),
+      avg_scroll_pct: avg(scrolls.map((e) => Number(e.value ?? 0))),
+      // How many measurements each average rests on. `avg([])` is 0, and a 0
+      // stored with no sample count is indistinguishable on read from a page
+      // nobody looked at — which is how every page in the reconstructed
+      // archive came to report "0 seconds, 0% scrolled" and get written up as
+      // a content problem. The read side weights by these and shows a page
+      // with none of them as unmeasured.
+      time_samples: exits.length,
+      scroll_samples: scrolls.length,
       conversions: onPage.filter((e) => e.kind === "conversion").length,
       form_starts: onPage.filter((e) => e.kind === "form_start").length,
       form_abandons: onPage.filter((e) => e.kind === "form_abandon").length,
@@ -341,8 +432,24 @@ export async function rollupJourneys(
         .range(from, to),
   );
 
+  // A crawler's walk of the sitemap is not a journey, and it is the most
+  // path-dense thing in the table — left in, it wins every transition count
+  // and the "route people take" panel describes a robot.
+  const botRows = await fetchAll<{ session_id: string }>((from, to) =>
+    supabase
+      .from("web_sessions")
+      .select("session_id")
+      .eq("site", SITE)
+      .eq("is_bot", true)
+      .gte("first_seen_at", `${periodStart}T00:00:00.000Z`)
+      .lte("first_seen_at", `${periodEnd}T23:59:59.999Z`)
+      .range(from, to),
+  );
+  const bots = new Set(botRows.map((r) => r.session_id));
+
   const bySession = new Map<string, string[]>();
   for (const v of views) {
+    if (bots.has(v.session_id)) continue;
     const list = bySession.get(v.session_id) ?? [];
     // Collapse a refresh or a re-render of the same page: "/ then /" is
     // not a journey step, and left in it dominates every transition count.
@@ -396,6 +503,17 @@ export async function rollupJourneys(
     .eq("site", SITE)
     .eq("period_start", periodStart)
     .eq("period_end", periodEnd);
+
+  // The window is a rolling 30 days, so its endpoints move every night and
+  // the delete above — keyed on the exact pair — never matches yesterday's
+  // run. Left alone the table grows by ~600 rows a day forever, and only
+  // `getJourneys` filtering to the newest period keeps the dashboard right.
+  // Anything that ended before this window began is history nothing reads.
+  await supabase
+    .from("web_journeys")
+    .delete()
+    .eq("site", SITE)
+    .lt("period_end", periodStart);
 
   const rows: Database["public"]["Tables"]["web_journeys"]["Insert"][] = [];
   const now = new Date().toISOString();

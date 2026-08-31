@@ -3574,6 +3574,12 @@ export type Database = {
           site: string;
           day: string;
           sessions: number;
+          /** 0109 — sessions the tracker instrumented; the avg_* columns average over exactly these. */
+          measured_sessions: number;
+          /** 0109 — sessions reconstructed from the site's old page_visits log. */
+          legacy_sessions: number;
+          /** 0109 — page views from tracker sessions; the denominator vitals are read against. */
+          measured_pageviews: number;
           visitors: number;
           new_visitors: number;
           returning_visitors: number;
@@ -3603,7 +3609,7 @@ export type Database = {
           top_entry_pages: { key: string; count: number }[];
           top_exit_pages: { key: string; count: number }[];
           top_referrers: { key: string; count: number }[];
-          web_vitals: Record<string, { avg: number; samples: number }>;
+          web_vitals: Record<string, { avg: number; p75?: number; samples: number }>;
           computed_at: Timestamp;
         };
         Insert: {
@@ -3611,6 +3617,9 @@ export type Database = {
           site?: string;
           day: string;
           sessions?: number;
+          measured_sessions?: number;
+          legacy_sessions?: number;
+          measured_pageviews?: number;
           visitors?: number;
           new_visitors?: number;
           returning_visitors?: number;
@@ -3640,7 +3649,7 @@ export type Database = {
           top_entry_pages?: { key: string; count: number }[];
           top_exit_pages?: { key: string; count: number }[];
           top_referrers?: { key: string; count: number }[];
-          web_vitals?: Record<string, { avg: number; samples: number }>;
+          web_vitals?: Record<string, { avg: number; p75?: number; samples: number }>;
           computed_at?: Timestamp;
         };
         Update: Partial<Database["public"]["Tables"]["web_daily"]["Insert"]>;
@@ -3660,6 +3669,10 @@ export type Database = {
           bounces: number;
           avg_seconds_on_page: number;
           avg_scroll_pct: number;
+          /** 0109 — page_exit events behind the average; 0 means never measured. */
+          time_samples: number;
+          /** 0109 — scroll_depth events behind the average; 0 means never measured. */
+          scroll_samples: number;
           conversions: number;
           form_starts: number;
           form_abandons: number;
@@ -3680,6 +3693,8 @@ export type Database = {
           bounces?: number;
           avg_seconds_on_page?: number;
           avg_scroll_pct?: number;
+          time_samples?: number;
+          scroll_samples?: number;
           conversions?: number;
           form_starts?: number;
           form_abandons?: number;

@@ -53,6 +53,10 @@ export type WebReport = Database["public"]["Tables"]["web_reports"]["Row"];
 /** The headline numbers, summed across a window. */
 export type Totals = {
   sessions: number;
+  /** Of those, the ones the tracker actually instrumented. */
+  measuredSessions: number;
+  /** The rest: reconstructed from the site's old thin log. */
+  legacySessions: number;
   visitors: number;
   newVisitors: number;
   returningVisitors: number;
@@ -84,6 +88,7 @@ const sum = (rows: DailyRow[], key: keyof DailyRow): number =>
  */
 export function totalsFrom(rows: DailyRow[]): Totals {
   const sessions = sum(rows, "sessions");
+  const measuredSessions = sum(rows, "measured_sessions");
   const weighted = (key: keyof DailyRow): number => {
     if (!sessions) return 0;
     const total = rows.reduce(
@@ -92,18 +97,38 @@ export function totalsFrom(rows: DailyRow[]): Totals {
     );
     return Number((total / sessions).toFixed(2));
   };
+  /**
+   * Weighted by the sessions the figure was actually computed over.
+   *
+   * `avg_engaged_seconds` and friends are averages over the MEASURED
+   * sessions of each day, so re-weighting them by every session — measured
+   * and reconstructed alike — divides by a denominator that never appeared
+   * in the numerator. On a period that is mostly legacy history that alone
+   * pushes the site-wide engaged time to a number like 0.08 seconds, which
+   * is not a finding about the website but an artefact of the arithmetic.
+   */
+  const weightedMeasured = (key: keyof DailyRow): number => {
+    if (!measuredSessions) return 0;
+    const total = rows.reduce(
+      (n, r) => n + Number(r[key] ?? 0) * Number(r.measured_sessions ?? 0),
+      0,
+    );
+    return Number((total / measuredSessions).toFixed(2));
+  };
   const bounces = sum(rows, "bounces");
   const conversions = sum(rows, "conversions");
 
   return {
     sessions,
+    measuredSessions,
+    legacySessions: Math.max(0, sessions - measuredSessions),
     visitors: sum(rows, "visitors"),
     newVisitors: sum(rows, "new_visitors"),
     returningVisitors: sum(rows, "returning_visitors"),
     pageviews: sum(rows, "pageviews"),
     bounceRate: sessions ? Number(((bounces / sessions) * 100).toFixed(2)) : 0,
-    avgDuration: weighted("avg_duration_seconds"),
-    avgEngaged: weighted("avg_engaged_seconds"),
+    avgDuration: weightedMeasured("avg_duration_seconds"),
+    avgEngaged: weightedMeasured("avg_engaged_seconds"),
     pagesPerSession: weighted("avg_pages_per_session"),
     conversions,
     conversionRate: sessions ? Number(((conversions / sessions) * 100).toFixed(2)) : 0,
@@ -158,8 +183,9 @@ export async function getTopPages(
     entries: number;
     exits: number;
     bounces: number;
-    avgSeconds: number;
-    avgScroll: number;
+    /** null when the page was never measured — not the same as zero. */
+    avgSeconds: number | null;
+    avgScroll: number | null;
     conversions: number;
     formStarts: number;
     formAbandons: number;
@@ -187,7 +213,9 @@ export async function getTopPages(
       exits: number;
       bounces: number;
       secondsWeighted: number;
+      timeSamples: number;
       scrollWeighted: number;
+      scrollSamples: number;
       conversions: number;
       formStarts: number;
       formAbandons: number;
@@ -206,7 +234,9 @@ export async function getTopPages(
       exits: 0,
       bounces: 0,
       secondsWeighted: 0,
+      timeSamples: 0,
       scrollWeighted: 0,
+      scrollSamples: 0,
       conversions: 0,
       formStarts: 0,
       formAbandons: 0,
@@ -222,8 +252,16 @@ export async function getTopPages(
     entry.entries += row.entries;
     entry.exits += row.exits;
     entry.bounces += row.bounces;
-    entry.secondsWeighted += Number(row.avg_seconds_on_page) * row.pageviews;
-    entry.scrollWeighted += Number(row.avg_scroll_pct) * row.pageviews;
+    // Weighted by the measurements behind each average, not by page views.
+    // A day's average is over its page_exit / scroll_depth events, and the
+    // reconstructed archive produces none of either — so weighting a
+    // measured day's 42 seconds against an unmeasured day's stored 0 by
+    // their page views drags every well-instrumented page toward zero. Pages
+    // with no measurements at all now read as unmeasured rather than as bad.
+    entry.secondsWeighted += Number(row.avg_seconds_on_page) * (row.time_samples ?? 0);
+    entry.timeSamples += row.time_samples ?? 0;
+    entry.scrollWeighted += Number(row.avg_scroll_pct) * (row.scroll_samples ?? 0);
+    entry.scrollSamples += row.scroll_samples ?? 0;
     entry.conversions += row.conversions;
     entry.formStarts += row.form_starts;
     entry.formAbandons += row.form_abandons;
@@ -243,8 +281,12 @@ export async function getTopPages(
       entries: e.entries,
       exits: e.exits,
       bounces: e.bounces,
-      avgSeconds: e.pageviews ? Number((e.secondsWeighted / e.pageviews).toFixed(1)) : 0,
-      avgScroll: e.pageviews ? Number((e.scrollWeighted / e.pageviews).toFixed(1)) : 0,
+      avgSeconds: e.timeSamples
+        ? Number((e.secondsWeighted / e.timeSamples).toFixed(1))
+        : null,
+      avgScroll: e.scrollSamples
+        ? Number((e.scrollWeighted / e.scrollSamples).toFixed(1))
+        : null,
       conversions: e.conversions,
       formStarts: e.formStarts,
       formAbandons: e.formAbandons,
@@ -298,6 +340,9 @@ export async function getConvertingSessions(
     .select("*")
     .eq("site", SITE)
     .eq("converted", true)
+    // The highest-trust list on the page, and the one a human acts on: a
+    // scanner that tripped a form must not appear in it.
+    .eq("is_bot", false)
     .gte("first_seen_at", `${range.from}T00:00:00.000Z`)
     .order("first_seen_at", { ascending: false })
     .limit(limit);
@@ -359,11 +404,22 @@ export async function getFunnel(
   supabase: DB,
   range: Range,
 ): Promise<{ stage: string; sessions: number; rate: number }[]> {
+  // Measured sessions only.
+  //
+  // Every stage below the first is read off a field the old thin log never
+  // captured — engaged time, form starts, chat, conversion — so a legacy
+  // session can appear in the denominator and in no stage beneath it, by
+  // construction. Leaving them in produced "2 engaged out of 775", a 0.3%
+  // rate that no amount of work on the website could ever move, because the
+  // other 773 were never capable of registering engagement in the first
+  // place. The funnel now describes the traffic it can actually see; the
+  // count of what it excludes rides along in `totals.legacySessions`.
   const { data } = await supabase
     .from("web_sessions")
     .select("page_count, engaged_seconds, forms_started, converted, chat_engaged")
     .eq("site", SITE)
     .eq("is_bot", false)
+    .not("session_id", "like", "legacy:%")
     .gte("first_seen_at", `${range.from}T00:00:00.000Z`)
     .lte("first_seen_at", `${range.to}T23:59:59.999Z`)
     .limit(20_000);

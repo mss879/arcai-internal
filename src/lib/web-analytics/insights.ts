@@ -169,6 +169,12 @@ export async function collectInsightEvidence(
       .gte("day", range.from)
       .lte("day", range.to)
       .order("day", { ascending: true }),
+    // Measured sessions only — the same exclusion `rollupDay` applies before
+    // computing by_device/by_country/by_browser. Without it this query and
+    // the rollup describe the same period differently: the dashboard shows a
+    // clean device split while the model is handed one where 99% of rows say
+    // "unknown", and it dutifully reports a device-tracking emergency the
+    // rollup had already correctly set aside.
     supabase
       .from("web_sessions")
       .select(
@@ -176,6 +182,7 @@ export async function collectInsightEvidence(
       )
       .eq("site", SITE)
       .eq("is_bot", false)
+      .not("session_id", "like", "legacy:%")
       .gte("first_seen_at", from)
       .lte("first_seen_at", to)
       .limit(20_000),
@@ -328,10 +335,17 @@ export async function collectInsightEvidence(
         "old page-visit log, which recorded only visitor, path, referrer and " +
         "time. They have no device, browser, country, engaged time, scroll, " +
         "form or conversion data because none was ever captured — this is " +
-        "history, NOT broken tracking. Do not report missing device/geo/" +
-        "engagement on these as an instrumentation fault. Base any finding " +
-        "about behaviour, devices, geography or conversion on tracked_sessions " +
-        "only, and say so when that number is small.",
+        "history, NOT broken tracking. Those sessions have ALREADY been " +
+        "excluded from everything you are shown that describes behaviour: " +
+        "device_split, the funnel, avgDuration, avgEngaged, avg scroll and " +
+        "the device/browser/country breakdowns are computed over " +
+        "tracked_sessions only. So do NOT subtract them again, and do not " +
+        "report missing device, geography or engagement as an instrumentation " +
+        "fault. Totals that are pure counts — sessions, visitors, pageviews, " +
+        "entry and exit pages, channels, referrers — still include them, " +
+        "because they are genuinely traffic that happened. Where " +
+        "tracked_sessions is small, say the tracker is new and the " +
+        "behavioural picture is still forming.",
     },
   };
 }
@@ -344,7 +358,7 @@ HARD RULES
 
 1. Every finding must cite the actual numbers it rests on. "Bounce rate is 71% on /pricing against 44% site-wide" — not "bounce rate could be improved".
 2. Never invent a figure. If something is not in the data, say it is not measured rather than estimating it.
-3. READ data_quality FIRST. legacy_sessions are reconstructed from an old page-visit log and never had device, geography, engagement, scroll, form or conversion data. Zeroes there are the shape of the archive, not a bug — do not spend a finding telling them to fix analytics that are not broken. Judge behaviour, devices, geography and conversion on tracked_sessions, and if that number is small, say the tracker is new and the picture is still forming.
+3. READ data_quality FIRST. legacy_sessions are reconstructed from an old page-visit log and never had device, geography, engagement, scroll, form or conversion data. Zeroes there are the shape of the archive, not a bug — do not spend a finding telling them to fix analytics that are not broken. Every behavioural figure you are given (device_split, funnel, avgEngaged, avgDuration, scroll, devices/browsers/countries) has ALREADY had those sessions removed, so read them at face value and do not discount them a second time. Raw counts — sessions, visitors, pageviews, channels, referrers, entry and exit pages — still include the archive, so a gap between "673 sessions" and a much smaller tracked_sessions is expected and is not a measurement fault. If tracked_sessions is small, say the tracker is new and the picture is still forming.
 4. If data_quality.thin is true, or a segment has fewer than about 30 sessions, say plainly that the sample is too small to draw conclusions from and keep findings to what IS safe to say. Do not pattern-match noise. A confident explanation of eleven visits is worse than saying eleven visits tells us nothing.
 5. Prefer findings that only exist ACROSS datasets — device against performance against bounce, channel against conversion, a page's traffic against where that traffic then goes. Anything visible on a single chart is already visible to them.
 6. Distinguish severity (what it is costing) from impact and effort (whether to do it next). A critical issue that takes a month is not the first thing to start on.

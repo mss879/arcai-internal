@@ -55,7 +55,8 @@ export type ReportStats = {
   funnel: { stage: string; sessions: number; rate: number }[];
   topPaths: { sequence: string; sessions: number; conversions: number }[];
   dropOffs: { from: string; sessions: number; dropOffs: number; rate: number }[];
-  webVitals: Record<string, { avg: number; samples: number }>;
+  /** p75 is the figure Core Web Vitals are graded on; avg is kept for context. */
+  webVitals: Record<string, { avg: number; p75: number; samples: number }>;
   chat: { sessions: number; messages: number; topics: { key: string; count: number }[] };
 };
 
@@ -99,18 +100,36 @@ export async function collectReportStats(
   const totals = totalsFrom(daily);
   const previous = totalsFrom(prevDaily);
 
-  const webVitals: Record<string, { avg: number; samples: number }> = {};
+  const webVitals: Record<string, { avg: number; p75: number; samples: number }> = {};
   for (const row of daily) {
-    const vitals = (row.web_vitals ?? {}) as Record<string, { avg: number; samples: number }>;
+    const vitals = (row.web_vitals ?? {}) as Record<
+      string,
+      { avg: number; p75?: number; samples: number }
+    >;
     for (const [name, v] of Object.entries(vitals)) {
-      const current = webVitals[name] ?? { avg: 0, samples: 0 };
+      // Keys beginning with `_` are not vitals. A session-quality counter
+      // used to be stored in this bag, and merging it here handed the AI a
+      // "Core Web Vital" called _unmeasured_sessions with a weighted mean.
+      if (name.startsWith("_")) continue;
+      const current = webVitals[name] ?? { avg: 0, p75: 0, samples: 0 };
       const samples = current.samples + (v?.samples ?? 0);
       // Weighted by sample count so a day with three measurements does
       // not swing the period's LCP as hard as a day with three hundred.
       const avg = samples
         ? (current.avg * current.samples + (v?.avg ?? 0) * (v?.samples ?? 0)) / samples
         : 0;
-      webVitals[name] = { avg: Number(avg.toFixed(1)), samples };
+      // A sample-weighted mean of daily p75s is an approximation of the
+      // period's p75 — the raw distribution is not kept per day — but it
+      // tracks the tail, which a mean of means does not.
+      const p75 = samples
+        ? (current.p75 * current.samples + (v?.p75 ?? v?.avg ?? 0) * (v?.samples ?? 0)) /
+          samples
+        : 0;
+      webVitals[name] = {
+        avg: Number(avg.toFixed(3)),
+        p75: Number(p75.toFixed(3)),
+        samples,
+      };
     }
   }
 
@@ -291,7 +310,7 @@ ${
           .slice(0, 12)
           .map(
             (p) =>
-              `| ${p.path} | ${p.pageviews} | ${mins(p.avgSeconds)} | ${p.avgScroll}% |`,
+              `| ${p.path} | ${p.pageviews} | ${p.avgSeconds === null ? "not measured" : mins(p.avgSeconds)} | ${p.avgScroll === null ? "not measured" : `${p.avgScroll}%`} |`,
           )
           .join("\n")
       : "| (nothing recorded) | 0 | 0s | 0% |"

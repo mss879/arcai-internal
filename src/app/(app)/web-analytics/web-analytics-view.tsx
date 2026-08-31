@@ -8,6 +8,7 @@ import {
   BarChart3,
   FileText,
   Globe2,
+  History,
   MessageSquare,
   Plug,
   RefreshCw,
@@ -42,6 +43,7 @@ import {
   deleteReport,
   dismissInsightTask,
   generateReport,
+  rebuildNow,
   scanInsights,
   toggleInsightTask,
   syncNow,
@@ -575,18 +577,37 @@ export function WebAnalyticsView({
 
       {tab === "setup" && (
         <div className="space-y-4">
-          <Button
-            variant="secondary"
-            size="sm"
-            loading={busy === "ping"}
-            onClick={() =>
-              run("ping", testConnection, (r: { sessions: number }) =>
-                `Connected — ${r.sessions.toLocaleString()} sessions on the website.`,
-              )
-            }
-          >
-            <Plug className="h-4 w-4" /> Test connection
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              loading={busy === "ping"}
+              onClick={() =>
+                run("ping", testConnection, (r: { sessions: number }) =>
+                  `Connected — ${r.sessions.toLocaleString()} sessions on the website.`,
+                )
+              }
+            >
+              <Plug className="h-4 w-4" /> Test connection
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              loading={busy === "rebuild"}
+              onClick={() =>
+                run(
+                  "rebuild",
+                  () => rebuildNow(90),
+                  (r: { rows: number; days: number; incomplete: boolean; errors: string[] }) =>
+                    r.incomplete
+                      ? `Re-read ${r.rows.toLocaleString()} rows and recomputed ${r.days} days — more history is still queued and will finish on the next hourly runs.`
+                      : `Re-read ${r.rows.toLocaleString()} rows and recomputed ${r.days} days.`,
+                )
+              }
+            >
+              <History className="h-4 w-4" /> Rebuild history
+            </Button>
+          </div>
           <SyncPanel
             status={syncStatus}
             site={site}

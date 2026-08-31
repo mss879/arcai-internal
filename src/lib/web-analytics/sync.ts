@@ -113,6 +113,62 @@ function initialSince(days = 400): string {
   return new Date(Date.now() - days * 86_400_000).toISOString();
 }
 
+/** Every stream that reads from the website and can be re-read from scratch. */
+export const REPLAYABLE_STREAMS: StreamName[] = [
+  "sessions",
+  "events",
+  "page_visits",
+  "chat_messages",
+  "chat_logs",
+];
+
+/**
+ * Wind the watermarks back to the beginning.
+ *
+ * The pull is incremental by design, and that design has one sharp edge:
+ * a row mirrored by a mapper that was later corrected is never looked at
+ * again, because the cursor has already moved past it. Every fix to the
+ * mapping — channel classification, session length, the legacy cutover —
+ * is therefore invisible on the data that provoked the fix. This is the
+ * escape hatch: clear the cursors, and the next pull re-reads the source
+ * and rewrites every mirrored row through the current logic.
+ *
+ * Safe to run at any time. Each write is still an upsert on a natural
+ * key, so a replay overwrites rather than duplicates.
+ */
+export async function resetSyncCursors(
+  crm: DB,
+  streams: StreamName[] = REPLAYABLE_STREAMS,
+): Promise<void> {
+  const now = new Date().toISOString();
+  await crm.from("web_sync_state").upsert(
+    streams.map((stream) => ({
+      stream,
+      cursor_ts: null,
+      cursor_id: null,
+      last_run_at: now,
+      last_error: null,
+      updated_at: now,
+    })),
+    { onConflict: "stream" },
+  );
+}
+
+/**
+ * Throw away the synthesised legacy sessions so they can be rebuilt.
+ *
+ * `web_events` is deliberately left alone: its natural key is the immutable
+ * `page_visits` row id, so a re-mirror overwrites every one of those rows in
+ * place, and deleting them would open a window where the dashboard reads zero
+ * page views. `web_sessions` is the opposite case — the key
+ * `legacy:<visitor>:<date>` is DERIVED from the grouping logic, so any change
+ * to that logic orphans the old ids rather than replacing them, and an orphan
+ * is indistinguishable from a real quiet visit forever after.
+ */
+export async function purgeLegacyMirror(crm: DB): Promise<void> {
+  await crm.from("web_sessions").delete().eq("site", SITE).like("session_id", "legacy:%");
+}
+
 /** True when PostgREST is telling us the table simply is not there. */
 function isMissingTable(message: string): boolean {
   return /does not exist|schema cache|PGRST205/i.test(message);
@@ -150,7 +206,36 @@ const SEARCH_ENGINES =
 const SOCIAL =
   /(facebook|instagram|linkedin|twitter|x\.com|t\.co|tiktok|pinterest|reddit|youtube|threads|snapchat|whatsapp|telegram|quora|medium)\./i;
 const AI_ASSISTANTS =
-  /(chatgpt|chat\.openai|perplexity|claude\.ai|gemini\.google|copilot\.microsoft|you\.com|phind)\./i;
+  /(chatgpt|chat\.openai|perplexity|claude\.ai|gemini\.google|copilot\.microsoft|bard\.google|you\.com|phind)\./i;
+const EMAIL_CLIENTS = /(mail\.google|outlook|mail\.yahoo|superhuman|hey\.com)\./i;
+
+/**
+ * The host a legacy referrer came from.
+ *
+ * `new URL()` covers the ordinary cases and the `android-app://` scheme the
+ * Google app on Android sends. What it does NOT cover is a referrer stored
+ * without a scheme at all — `com.google.android.googlequicksearchbox`,
+ * `www.google.com` — which the old log has plenty of, because it recorded
+ * `document.referrer` verbatim from whatever the browser handed it. Those
+ * throw, and a thrown referrer used to become a null domain and a "direct"
+ * visit: search traffic quietly reclassified as nobody-knows.
+ */
+function legacyReferrerHost(referrer: string | null): string | null {
+  if (!referrer) return null;
+  const raw = referrer.trim();
+  if (!raw) return null;
+  try {
+    const host = new URL(raw).hostname;
+    if (host) return host.toLowerCase();
+  } catch {
+    /* no scheme — fall through and read it as a bare host */
+  }
+  // A bare host, possibly with a path: take everything up to the first slash.
+  const bare = raw.replace(/^\/+/, "").split(/[/?#]/)[0]?.toLowerCase() ?? "";
+  return /^[a-z0-9.-]+\.[a-z]{2,}$/.test(bare) || /^[a-z0-9]+(\.[a-z0-9-]+){2,}$/.test(bare)
+    ? bare
+    : null;
+}
 
 /**
  * Channel for a legacy row, from its referrer alone.
@@ -162,11 +247,36 @@ const AI_ASSISTANTS =
  */
 function classifyLegacyChannel(referrer: string | null, host: string | null): string {
   if (!referrer || !host) return "direct";
-  if (host.endsWith("arcai.agency")) return "internal";
+  if (host === "arcai.agency" || host.endsWith(".arcai.agency")) return "internal";
   if (AI_ASSISTANTS.test(`${host}.`)) return "ai_assistant";
   if (SEARCH_ENGINES.test(`${host}.`)) return "organic";
   if (SOCIAL.test(`${host}.`)) return "social";
+  if (EMAIL_CLIENTS.test(`${host}.`)) return "email";
   return "referral";
+}
+
+/**
+ * A legacy visit that no human plausibly made.
+ *
+ * The old log was written by a server route with no user-agent check of any
+ * kind, so every crawler that ever hit the site is in there indistinguishable
+ * from a customer. There is no UA to test after the fact, which leaves shape:
+ * a crawler walks many distinct URLs in seconds and never comes back to one.
+ * Deliberately conservative — the cost of a false positive is deleting real
+ * traffic from every number, and the cost of a false negative is one more
+ * bounce in an archive already labelled as an estimate.
+ */
+function looksAutomated(paths: string[], timestamps: string[]): boolean {
+  if (paths.length < 8) return false;
+  const distinct = new Set(paths).size;
+  // A person re-reads pages; a crawler almost never does.
+  if (distinct < paths.length * 0.9) return false;
+  const first = new Date(timestamps[0]).getTime();
+  const last = new Date(timestamps[timestamps.length - 1]).getTime();
+  if (!Number.isFinite(first) || !Number.isFinite(last)) return false;
+  const seconds = (last - first) / 1000;
+  // Eight or more distinct pages at better than two seconds a page.
+  return seconds >= 0 && seconds < paths.length * 2;
 }
 
 /**
@@ -187,6 +297,81 @@ function legacyDuration(timestamps: string[]): number {
     if (Number.isFinite(gap) && gap > 0) total += Math.min(gap, CAP_MS);
   }
   return Math.round(total / 1000);
+}
+
+/**
+ * The moment the rich tracker took over, and the hard boundary of the
+ * legacy stream.
+ *
+ * This matters more than it looks. The site's collector writes BOTH tables
+ * for every page view — `analytics_events` for the real event stream and
+ * `page_visits` so the old /admin dashboard keeps working. Mirroring both
+ * streams unconditionally therefore counts every modern page view twice:
+ * once as an `analytics_events` row and again as a `page_visits` row, and
+ * — far worse — synthesises a `legacy:<visitor>:<date>` session ALONGSIDE
+ * the real `s_<uuid>` one for the same visit. That phantom twin carries no
+ * device, no country and no engagement, so it drags every breakdown toward
+ * "unknown" and every engagement average toward zero while inflating the
+ * session count.
+ *
+ * So: page_visits rows are mirrored only from BEFORE the first real
+ * session. After that instant the rich stream is the only truth, and the
+ * legacy log is a duplicate of it.
+ */
+async function trackerCutover(site: SupabaseClient): Promise<string | null> {
+  const { data, error } = await site
+    .from("analytics_sessions")
+    .select("first_seen_at")
+    .order("first_seen_at", { ascending: true })
+    .limit(1);
+  // No tracker table, or no tracked session yet: the legacy log is still
+  // the only record there is, so nothing is excluded.
+  if (error || !data?.length) return null;
+  return s(data[0].first_seen_at, 40);
+}
+
+/**
+ * Remove legacy rows that the cutover now says should never have existed.
+ *
+ * Runs on every sync rather than only on a rebuild, because the damage is
+ * silent: a phantom twin looks exactly like a real quiet visit, and the
+ * only way to notice is to reconcile two totals that nobody reconciles.
+ * Both deletes are indexed and normally match nothing.
+ */
+async function pruneLegacyAfterCutover(
+  crm: DB,
+  cutover: string | null,
+  days: Set<string>,
+): Promise<void> {
+  if (!cutover) return;
+
+  // Which days lose rows — read before the delete, because afterwards
+  // there is nothing left to ask. A day whose numbers change and never
+  // gets rolled up again keeps the wrong total forever.
+  const { data: staleEvents } = await crm
+    .from("web_events")
+    .select("occurred_at")
+    .eq("site", SITE)
+    .eq("source", "page_visits")
+    .gte("occurred_at", cutover)
+    .limit(20_000);
+  for (const row of staleEvents ?? []) {
+    const d = day(row.occurred_at);
+    if (d) days.add(d);
+  }
+
+  await crm
+    .from("web_events")
+    .delete()
+    .eq("site", SITE)
+    .eq("source", "page_visits")
+    .gte("occurred_at", cutover);
+  await crm
+    .from("web_sessions")
+    .delete()
+    .eq("site", SITE)
+    .like("session_id", "legacy:%")
+    .gte("first_seen_at", cutover);
 }
 
 // ── sessions ────────────────────────────────────────────────────────────────
@@ -375,16 +560,39 @@ async function syncPageVisits(
   crm: DB,
   site: SupabaseClient,
   days: Set<string>,
+  cutover: string | null,
 ): Promise<{ rows: number }> {
   const cursor = await readCursor(crm, "page_visits");
   let since = cursor.cursor_ts ?? initialSince(730);
   let rows = 0;
 
+  // Anything the rich tracker also recorded is not history, it is a
+  // duplicate. Stop the legacy stream dead at the cutover.
+  if (cutover && since >= cutover) {
+    await writeCursor(crm, "page_visits", { cursor_ts: since, rows: 0 });
+    return { rows: 0 };
+  }
+
+  // Read the whole run's worth of rows FIRST, then group.
+  //
+  // Grouping inside the pagination loop looks equivalent and is not: a
+  // visitor-day whose rows straddle a 1000-row boundary produces the same
+  // `legacy:<visitor>:<date>` key on two consecutive pages, and the second
+  // upsert replaces the first wholesale. The surviving row then describes
+  // only the tail of that visit — too few pages, the wrong entry path, a
+  // duration that stops early, and a bounce flag that may have flipped.
+  // Assembling every page of the run before writing anything removes the
+  // boundary entirely.
+  const collected: Record<string, unknown>[] = [];
+  let exhausted = false;
+
   for (let page = 0; page < MAX_PAGES; page++) {
-    const { data, error } = await site
+    let query = site
       .from("page_visits")
       .select("id, visitor_id, page_path, referrer, created_at")
-      .gte("created_at", since)
+      .gte("created_at", since);
+    if (cutover) query = query.lt("created_at", cutover);
+    const { data, error } = await query
       .order("created_at", { ascending: true })
       .limit(PAGE);
     if (error) {
@@ -392,127 +600,168 @@ async function syncPageVisits(
       if (isMissingTable(error.message)) return { rows: 0 };
       throw new Error(`page_visits: ${error.message}`);
     }
-    if (!data?.length) break;
-
-    // Group by visitor and day first: that grouping IS the synthetic session,
-    // and it also gives each row a stable `seq` so the journey rollup can put
-    // a legacy day back in order. Without a seq these rows all sort equally
-    // and any "journey" read out of them is whatever order Postgres returned.
-    const groups = new Map<string, Record<string, unknown>[]>();
-    for (const r of data as Record<string, unknown>[]) {
-      const created = s(r.created_at, 40) ?? new Date().toISOString();
-      const visitor = s(r.visitor_id, 120) ?? "unknown";
-      const key = `legacy:${visitor}:${created.slice(0, 10)}`;
-      const list = groups.get(key);
-      if (list) list.push(r);
-      else groups.set(key, [r]);
+    if (!data?.length) {
+      exhausted = true;
+      break;
     }
 
-    const mapped: Database["public"]["Tables"]["web_events"]["Insert"][] = [];
-    const synthetic: Database["public"]["Tables"]["web_sessions"]["Insert"][] = [];
+    collected.push(...(data as Record<string, unknown>[]));
 
-    for (const [sessionId, rows] of groups) {
-      rows.sort((a, b) =>
-        String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")),
-      );
-      const visitor = s(rows[0].visitor_id, 120) ?? "unknown";
-      const firstAt = s(rows[0].created_at, 40) ?? new Date().toISOString();
-      const lastAt = s(rows[rows.length - 1].created_at, 40) ?? firstAt;
+    const last = s(data[data.length - 1].created_at, 40)!;
+    // A full page whose rows all share one timestamp would loop forever on
+    // `>=`. Nudging past it costs at most those tied rows, which the upsert
+    // would have made a no-op anyway.
+    since =
+      last === since && data.length === PAGE
+        ? new Date(new Date(last).getTime() + 1).toISOString()
+        : last;
+    if (data.length < PAGE) {
+      exhausted = true;
+      break;
+    }
+  }
 
-      rows.forEach((r, idx) => {
-        mapped.push({
-          source: "page_visits",
-          source_id: String(r.id),
-          session_id: sessionId,
-          visitor_id: visitor,
-          site: SITE,
-          seq: idx,
-          occurred_at: s(r.created_at, 40) ?? firstAt,
-          kind: "page_view",
-          path: s(r.page_path, 500) ?? "/",
-          page_title: null,
-          referrer: s(r.referrer, 2000),
-          element: null,
-          element_text: null,
-          href: null,
-          value: null,
-          meta: { legacy: true },
-          synced_at: new Date().toISOString(),
-        });
-      });
+  if (!collected.length) {
+    await writeCursor(crm, "page_visits", { cursor_ts: since, rows: 0 });
+    return { rows: 0 };
+  }
 
-      // A session row per visitor per day.
-      //
-      // It is an approximation and it is labelled as one — the data to build
-      // a real session was never captured. But WITHOUT it, `web_daily` counts
-      // sessions from `web_sessions` (which has none of this) while counting
-      // pageviews from `web_events` (which has all of it), and the dashboard
-      // reports 2 visits against 214 page views. Two numbers from the same
-      // period that cannot both be true is worse than an honest estimate.
-      const referrer = s(rows[0].referrer, 2000);
-      const referrerDomain = referrer
-        ? (() => {
-            try {
-              return new URL(referrer).hostname;
-            } catch {
-              return null;
-            }
-          })()
-        : null;
-      const timestamps = rows.map((r) => s(r.created_at, 40) ?? firstAt);
+  // If the run stopped on the page cap rather than on the end of the table,
+  // the newest UTC day it reached is almost certainly half-read. Holding it
+  // back — and winding the cursor to the start of that day — means the next
+  // run assembles it whole rather than writing a truncated session now and
+  // a replacement later.
+  let batch = collected;
+  if (!exhausted) {
+    const lastDay = String(collected[collected.length - 1].created_at ?? "").slice(0, 10);
+    const complete = collected.filter(
+      (r) => String(r.created_at ?? "").slice(0, 10) < lastDay,
+    );
+    // Unless a single day is bigger than the whole run, in which case there
+    // is no way to assemble it whole and taking it as-is beats stalling.
+    if (complete.length) {
+      batch = complete;
+      since = `${lastDay}T00:00:00.000Z`;
+    }
+  }
 
-      synthetic.push({
+  // Group by visitor and day: that grouping IS the synthetic session, and it
+  // also gives each row a stable `seq` so the journey rollup can put a legacy
+  // day back in order. Without a seq these rows all sort equally and any
+  // "journey" read out of them is whatever order Postgres returned.
+  const groups = new Map<string, Record<string, unknown>[]>();
+  for (const r of batch) {
+    const created = s(r.created_at, 40) ?? new Date().toISOString();
+    const visitor = s(r.visitor_id, 120) ?? "unknown";
+    const key = `legacy:${visitor}:${created.slice(0, 10)}`;
+    const list = groups.get(key);
+    if (list) list.push(r);
+    else groups.set(key, [r]);
+  }
+
+  const mapped: Database["public"]["Tables"]["web_events"]["Insert"][] = [];
+  const synthetic: Database["public"]["Tables"]["web_sessions"]["Insert"][] = [];
+
+  for (const [sessionId, group] of groups) {
+    group.sort((a, b) =>
+      String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")),
+    );
+    const visitor = s(group[0].visitor_id, 120) ?? "unknown";
+    const firstAt = s(group[0].created_at, 40) ?? new Date().toISOString();
+    const lastAt = s(group[group.length - 1].created_at, 40) ?? firstAt;
+
+    group.forEach((r, idx) => {
+      mapped.push({
+        source: "page_visits",
+        source_id: String(r.id),
         session_id: sessionId,
         visitor_id: visitor,
         site: SITE,
-        first_seen_at: firstAt,
-        last_seen_at: lastAt,
-        entry_path: s(rows[0].page_path, 500) ?? "/",
-        exit_path: s(rows[rows.length - 1].page_path, 500) ?? "/",
-        page_count: rows.length,
-        event_count: rows.length,
-        duration_seconds: legacyDuration(timestamps),
-        // Never fabricated: the old log recorded no engagement at all, and a
-        // guess here would flow straight into the bounce rate.
-        engaged_seconds: 0,
-        is_bounce: rows.length <= 1,
-        landing_referrer: referrer,
-        referrer_domain: referrerDomain,
-        channel: classifyLegacyChannel(referrer, referrerDomain),
-        // Genuinely unknown — the old log never captured it. The rollup
-        // excludes these rows from the device/browser/country breakdowns
-        // rather than letting "unknown" swamp them.
-        device_type: "unknown",
-        source_updated_at: lastAt,
+        seq: idx,
+        occurred_at: s(r.created_at, 40) ?? firstAt,
+        kind: "page_view",
+        path: s(r.page_path, 500) ?? "/",
+        page_title: null,
+        referrer: s(r.referrer, 2000),
+        element: null,
+        element_text: null,
+        href: null,
+        value: null,
+        meta: { legacy: true },
         synced_at: new Date().toISOString(),
       });
-    }
+    });
 
+    // A session row per visitor per day.
+    //
+    // It is an approximation and it is labelled as one — the data to build
+    // a real session was never captured. But WITHOUT it, `web_daily` counts
+    // sessions from `web_sessions` (which has none of this) while counting
+    // pageviews from `web_events` (which has all of it), and the dashboard
+    // reports 2 visits against 214 page views. Two numbers from the same
+    // period that cannot both be true is worse than an honest estimate.
+    const referrer = s(group[0].referrer, 2000);
+    const referrerDomain = legacyReferrerHost(referrer);
+    const timestamps = group.map((r) => s(r.created_at, 40) ?? firstAt);
+    const paths = group.map((r) => s(r.page_path, 500) ?? "/");
+
+    synthetic.push({
+      session_id: sessionId,
+      visitor_id: visitor,
+      site: SITE,
+      first_seen_at: firstAt,
+      last_seen_at: lastAt,
+      entry_path: paths[0],
+      exit_path: paths[paths.length - 1],
+      page_count: group.length,
+      event_count: group.length,
+      duration_seconds: legacyDuration(timestamps),
+      // Never fabricated: the old log recorded no engagement at all, and a
+      // guess here would flow straight into the bounce rate.
+      engaged_seconds: 0,
+      is_bounce: group.length <= 1,
+      landing_referrer: referrer,
+      referrer_domain: referrerDomain,
+      channel: classifyLegacyChannel(referrer, referrerDomain),
+      // Genuinely unknown — the old log never captured it. The rollup
+      // excludes these rows from the device/browser/country breakdowns
+      // rather than letting "unknown" swamp them.
+      device_type: "unknown",
+      // The old log ran with no user-agent check of any kind, so the one
+      // signal left is behavioural. Stated explicitly rather than left to
+      // the column default, which quietly asserted "human" about rows
+      // nothing had ever examined.
+      is_bot: looksAutomated(paths, timestamps),
+      source_updated_at: lastAt,
+      synced_at: new Date().toISOString(),
+    });
+  }
+
+  // Chunked: a single upsert of 20,000 rows is a request body large enough
+  // for PostgREST to refuse, and refusing it loses the whole run.
+  for (let i = 0; i < mapped.length; i += PAGE) {
     const { error: upErr } = await crm
       .from("web_events")
-      .upsert(mapped, { onConflict: "source,source_id" });
+      .upsert(mapped.slice(i, i + PAGE), { onConflict: "source,source_id" });
     if (upErr) throw new Error(`page_visits upsert: ${upErr.message}`);
+  }
 
-    // Never overwrite a REAL session that happens to share an id — the rich
-    // tracker's ids are `s_<uuid>`, these are `legacy:<visitor>:<date>`, so
-    // they cannot collide, but the upsert is scoped by that id regardless.
+  // Never overwrite a REAL session that happens to share an id — the rich
+  // tracker's ids are `s_<uuid>`, these are `legacy:<visitor>:<date>`, so
+  // they cannot collide, but the upsert is scoped by that id regardless.
+  for (let i = 0; i < synthetic.length; i += PAGE) {
     const { error: sessErr } = await crm
       .from("web_sessions")
-      .upsert(synthetic, { onConflict: "session_id" });
+      .upsert(synthetic.slice(i, i + PAGE), { onConflict: "session_id" });
     if (sessErr) throw new Error(`page_visits sessions upsert: ${sessErr.message}`);
-
-    for (const row of mapped) {
-      const d = day(row.occurred_at);
-      if (d) days.add(d);
-    }
-
-    rows += mapped.length;
-    const last = s(data[data.length - 1].created_at, 40)!;
-    since = last === since && data.length === PAGE
-      ? new Date(new Date(last).getTime() + 1).toISOString()
-      : last;
-    if (data.length < PAGE) break;
   }
+
+  for (const row of mapped) {
+    const d = day(row.occurred_at);
+    if (d) days.add(d);
+  }
+
+  rows = mapped.length;
 
   await writeCursor(crm, "page_visits", { cursor_ts: since, rows });
   return { rows };
@@ -564,7 +813,11 @@ function summariseTranscript(messages: ChatMsg[]): {
   };
 }
 
-async function syncChatMessages(crm: DB, site: SupabaseClient): Promise<{ rows: number }> {
+async function syncChatMessages(
+  crm: DB,
+  site: SupabaseClient,
+  days: Set<string>,
+): Promise<{ rows: number }> {
   const cursor = await readCursor(crm, "chat_messages");
   let since = cursor.cursor_ts ?? initialSince(730);
   let rows = 0;
@@ -641,6 +894,14 @@ async function syncChatMessages(crm: DB, site: SupabaseClient): Promise<{ rows: 
       .select("id")
       .maybeSingle();
 
+    // The day this conversation happened on has to be rolled up again, or
+    // `web_daily.chat_sessions` — which the rollup counts from exactly this
+    // table — stays at whatever it was when the day was last touched by some
+    // other stream. This is why the dashboard could report chatSessions=0
+    // for a period in which the chat panel listed twelve conversations.
+    const chatDay = day(typed[0].created_at);
+    if (chatDay) days.add(chatDay);
+
     if (chatRow?.id) {
       await crm.from("web_chat_messages").upsert(
         typed.map((m) => ({
@@ -663,7 +924,11 @@ async function syncChatMessages(crm: DB, site: SupabaseClient): Promise<{ rows: 
 }
 
 /** The older one-blob-per-conversation format, kept for its history. */
-async function syncChatLogs(crm: DB, site: SupabaseClient): Promise<{ rows: number }> {
+async function syncChatLogs(
+  crm: DB,
+  site: SupabaseClient,
+  days: Set<string>,
+): Promise<{ rows: number }> {
   const cursor = await readCursor(crm, "chat_logs");
   let since = cursor.cursor_ts ?? initialSince(730);
   let rows = 0;
@@ -738,6 +1003,10 @@ async function syncChatLogs(crm: DB, site: SupabaseClient): Promise<{ rows: numb
           { onConflict: "source_id" },
         );
       }
+      // Same reason as the chat_messages stream: a conversation that does
+      // not mark its own day dirty leaves `web_daily.chat_sessions` frozen.
+      const chatDay = day(typed[0].created_at);
+      if (chatDay) days.add(chatDay);
       rows += 1;
     }
 
@@ -903,12 +1172,21 @@ export async function syncWebsiteAnalytics(crm: DB): Promise<SyncResult> {
   const site = createWebsiteClient();
   const days = new Set<string>();
 
+  // Read once, before anything is written: every legacy decision below
+  // depends on where the rich tracker starts.
+  const cutover = await trackerCutover(site).catch(() => null);
+  await pruneLegacyAfterCutover(crm, cutover, days).catch(() => undefined);
+
   const streams: StreamResult[] = [];
   streams.push(await runStream(crm, "sessions", () => syncSessions(crm, site, days)));
   streams.push(await runStream(crm, "events", () => syncEvents(crm, site, days)));
-  streams.push(await runStream(crm, "page_visits", () => syncPageVisits(crm, site, days)));
-  streams.push(await runStream(crm, "chat_messages", () => syncChatMessages(crm, site)));
-  streams.push(await runStream(crm, "chat_logs", () => syncChatLogs(crm, site)));
+  streams.push(
+    await runStream(crm, "page_visits", () => syncPageVisits(crm, site, days, cutover)),
+  );
+  streams.push(
+    await runStream(crm, "chat_messages", () => syncChatMessages(crm, site, days)),
+  );
+  streams.push(await runStream(crm, "chat_logs", () => syncChatLogs(crm, site, days)));
 
   await stitchIdentities(crm).catch(() => 0);
 

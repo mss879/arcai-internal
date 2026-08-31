@@ -285,8 +285,11 @@ async function pagePerformance(
         views: p.pageviews,
         entries: p.entries,
         exits: p.exits,
-        avg_time: secs(p.avgSeconds),
-        avg_scroll: `${p.avgScroll}%`,
+        // null means the page has no page_exit / scroll_depth measurements at
+        // all — usually reconstructed history. Saying "0s" instead would have
+        // the assistant report a content problem that was never measured.
+        avg_time: p.avgSeconds === null ? "not measured" : secs(p.avgSeconds),
+        avg_scroll: p.avgScroll === null ? "not measured" : `${p.avgScroll}%`,
         form_starts: p.formStarts,
         form_abandons: p.formAbandons,
         conversions: p.conversions,

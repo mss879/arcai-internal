@@ -23,8 +23,47 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
  *   WEBSITE_ANALYTICS_SITE            label stored on every mirrored row
  */
 
+/**
+ * Normalise whatever was put in `WEBSITE_ANALYTICS_SITE` down to the bare
+ * registrable domain.
+ *
+ * This is a LABEL, not a URL — every mirrored row is stamped with it and
+ * every query filters on it, so it has to match the value the website's
+ * tracker writes, which is the hardcoded bare domain. `www.arcai.agency` or
+ * `https://www.arcai.agency/` are the obvious things to type into a box
+ * labelled "site", and getting it wrong used to mean the rollup and the
+ * dashboard filtered on a label no row carried: zero results, no error, no
+ * clue why. Accepting all three spellings is cheaper than a support puzzle.
+ */
+function normaliseSiteLabel(raw: string): string {
+  return (
+    raw
+      .trim()
+      .toLowerCase()
+      .replace(/^https?:\/\//, "")
+      .replace(/^www\./, "")
+      // Drop any path, query or trailing slash someone pasted along with it.
+      .replace(/[/?#].*$/, "") || "arcai.agency"
+  );
+}
+
 /** The site label written onto every mirrored row. */
-export const SITE = process.env.WEBSITE_ANALYTICS_SITE?.trim() || "arcai.agency";
+export const SITE = normaliseSiteLabel(
+  process.env.WEBSITE_ANALYTICS_SITE?.trim() || "arcai.agency",
+);
+
+/**
+ * The public origin the site is served from, used to turn a recorded path
+ * into a link you can actually click from the dashboard.
+ *
+ * Kept separate from SITE: that one is a label the rows are filtered on and
+ * must never change, this one is a URL and would change if the site moved to
+ * a different host. Note the `www` — the apex 301s to it, so linking to the
+ * canonical host avoids a redirect on every click.
+ */
+export const SITE_URL = (
+  process.env.WEBSITE_PUBLIC_URL?.trim() || "https://www.arcai.agency"
+).replace(/\/+$/, "");
 
 export function isWebsiteSourceConfigured(): boolean {
   return Boolean(

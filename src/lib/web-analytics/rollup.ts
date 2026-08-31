@@ -310,6 +310,9 @@ export async function rollupJourneys(
         .lte("occurred_at", `${periodEnd}T23:59:59.999Z`)
         .order("session_id", { ascending: true })
         .order("seq", { ascending: true })
+        // Tertiary sort so rows that share a seq still have one defined
+        // order. Without it a "journey" is whatever order Postgres returned.
+        .order("occurred_at", { ascending: true })
         .range(from, to),
   );
 

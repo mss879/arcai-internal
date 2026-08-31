@@ -349,34 +349,111 @@ async function syncPageVisits(
     }
     if (!data?.length) break;
 
-    const mapped = data.map((r: Record<string, unknown>) => {
+    // Group by visitor and day first: that grouping IS the synthetic session,
+    // and it also gives each row a stable `seq` so the journey rollup can put
+    // a legacy day back in order. Without a seq these rows all sort equally
+    // and any "journey" read out of them is whatever order Postgres returned.
+    const groups = new Map<string, Record<string, unknown>[]>();
+    for (const r of data as Record<string, unknown>[]) {
       const created = s(r.created_at, 40) ?? new Date().toISOString();
       const visitor = s(r.visitor_id, 120) ?? "unknown";
-      return {
-        source: "page_visits",
-        source_id: String(r.id),
-        session_id: `legacy:${visitor}:${created.slice(0, 10)}`,
+      const key = `legacy:${visitor}:${created.slice(0, 10)}`;
+      const list = groups.get(key);
+      if (list) list.push(r);
+      else groups.set(key, [r]);
+    }
+
+    const mapped: Database["public"]["Tables"]["web_events"]["Insert"][] = [];
+    const synthetic: Database["public"]["Tables"]["web_sessions"]["Insert"][] = [];
+
+    for (const [sessionId, rows] of groups) {
+      rows.sort((a, b) =>
+        String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")),
+      );
+      const visitor = s(rows[0].visitor_id, 120) ?? "unknown";
+      const firstAt = s(rows[0].created_at, 40) ?? new Date().toISOString();
+      const lastAt = s(rows[rows.length - 1].created_at, 40) ?? firstAt;
+
+      rows.forEach((r, idx) => {
+        mapped.push({
+          source: "page_visits",
+          source_id: String(r.id),
+          session_id: sessionId,
+          visitor_id: visitor,
+          site: SITE,
+          seq: idx,
+          occurred_at: s(r.created_at, 40) ?? firstAt,
+          kind: "page_view",
+          path: s(r.page_path, 500) ?? "/",
+          page_title: null,
+          referrer: s(r.referrer, 2000),
+          element: null,
+          element_text: null,
+          href: null,
+          value: null,
+          meta: { legacy: true },
+          synced_at: new Date().toISOString(),
+        });
+      });
+
+      // A session row per visitor per day.
+      //
+      // It is an approximation and it is labelled as one — the data to build
+      // a real session was never captured. But WITHOUT it, `web_daily` counts
+      // sessions from `web_sessions` (which has none of this) while counting
+      // pageviews from `web_events` (which has all of it), and the dashboard
+      // reports 2 visits against 214 page views. Two numbers from the same
+      // period that cannot both be true is worse than an honest estimate.
+      const referrer = s(rows[0].referrer, 2000);
+      const referrerDomain = referrer
+        ? (() => {
+            try {
+              return new URL(referrer).hostname;
+            } catch {
+              return null;
+            }
+          })()
+        : null;
+
+      synthetic.push({
+        session_id: sessionId,
         visitor_id: visitor,
         site: SITE,
-        seq: 0,
-        occurred_at: created,
-        kind: "page_view",
-        path: s(r.page_path, 500) ?? "/",
-        page_title: null,
-        referrer: s(r.referrer, 2000),
-        element: null,
-        element_text: null,
-        href: null,
-        value: null,
-        meta: { legacy: true },
+        first_seen_at: firstAt,
+        last_seen_at: lastAt,
+        entry_path: s(rows[0].page_path, 500) ?? "/",
+        exit_path: s(rows[rows.length - 1].page_path, 500) ?? "/",
+        page_count: rows.length,
+        event_count: rows.length,
+        duration_seconds: Math.max(
+          0,
+          Math.round((new Date(lastAt).getTime() - new Date(firstAt).getTime()) / 1000),
+        ),
+        // Never fabricated: the old log recorded no engagement at all, and a
+        // guess here would flow straight into the bounce rate.
+        engaged_seconds: 0,
+        is_bounce: rows.length <= 1,
+        landing_referrer: referrer,
+        referrer_domain: referrerDomain,
+        channel: referrerDomain ? "referral" : "direct",
+        device_type: "unknown",
+        source_updated_at: lastAt,
         synced_at: new Date().toISOString(),
-      };
-    });
+      });
+    }
 
     const { error: upErr } = await crm
       .from("web_events")
       .upsert(mapped, { onConflict: "source,source_id" });
     if (upErr) throw new Error(`page_visits upsert: ${upErr.message}`);
+
+    // Never overwrite a REAL session that happens to share an id — the rich
+    // tracker's ids are `s_<uuid>`, these are `legacy:<visitor>:<date>`, so
+    // they cannot collide, but the upsert is scoped by that id regardless.
+    const { error: sessErr } = await crm
+      .from("web_sessions")
+      .upsert(synthetic, { onConflict: "session_id" });
+    if (sessErr) throw new Error(`page_visits sessions upsert: ${sessErr.message}`);
 
     for (const row of mapped) {
       const d = day(row.occurred_at);
@@ -384,7 +461,7 @@ async function syncPageVisits(
     }
 
     rows += mapped.length;
-    const last = mapped[mapped.length - 1].occurred_at;
+    const last = s(data[data.length - 1].created_at, 40)!;
     since = last === since && data.length === PAGE
       ? new Date(new Date(last).getTime() + 1).toISOString()
       : last;

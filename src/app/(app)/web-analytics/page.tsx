@@ -1,7 +1,7 @@
 import { requireAdmin } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { isOpenAIConfigured } from "@/lib/ai/openai";
-import { isWebsiteSourceConfigured, SITE } from "@/lib/web-analytics/source";
+import { isWebsiteSourceConfigured, SITE, SITE_URL } from "@/lib/web-analytics/source";
 import {
   getChatSessions,
   getConvertingSessions,
@@ -75,6 +75,7 @@ export default async function WebAnalyticsPage({
   return (
     <WebAnalyticsView
       site={SITE}
+      siteUrl={SITE_URL}
       days={days}
       range={range}
       daily={daily}

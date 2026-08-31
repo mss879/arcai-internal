@@ -23,6 +23,10 @@ const PUBLIC_PREFIXES = [
   // morning briefing, missions and the janitor.
   "/api/assistant/tick",
   "/api/intelligence/digest",
+  // 0105 — the website analytics pull. Invoked by its own Netlify scheduled
+  // function server-to-server, so there is no auth cookie; the route guards
+  // itself with SMS_CRON_SECRET.
+  "/api/web-analytics/sync",
   // Meta's WhatsApp Cloud API webhook — must be reachable by Meta's servers.
   // The route guards itself: GET needs the verify token, POST needs a valid
   // X-Hub-Signature-256 signature from WHATSAPP_APP_SECRET.

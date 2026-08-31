@@ -288,7 +288,13 @@ export function FunnelPanel({
 
 // -- pages ------------------------------------------------------------------
 
-export function PagesPanel({ pages }: { pages: PageRow[] }) {
+export function PagesPanel({
+  pages,
+  siteUrl,
+}: {
+  pages: PageRow[];
+  siteUrl: string;
+}) {
   if (!pages.length) {
     return (
       <EmptyState
@@ -319,9 +325,17 @@ export function PagesPanel({ pages }: { pages: PageRow[] }) {
           {pages.map((page) => (
             <tr key={page.path} className="hover:bg-slate-50/60">
               <td className="max-w-[300px] px-4 py-2.5">
-                <p className="truncate font-medium text-slate-800" title={page.path}>
+                {/* Straight through to the live page — the question after
+                    "this page loses everyone" is always "let me look at it". */}
+                <a
+                  href={`${siteUrl}${page.path}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block truncate font-medium text-slate-800 hover:text-primary-600 hover:underline"
+                  title={`${siteUrl}${page.path}`}
+                >
                   {page.path}
-                </p>
+                </a>
                 {page.title && (
                   <p className="truncate text-xs text-slate-400" title={page.title}>
                     {page.title}
@@ -711,6 +725,7 @@ export function ChatPanel({ chats }: { chats: WebChatSession[] }) {
 export function SyncPanel({
   status,
   site,
+  siteUrl,
   sourceReady,
 }: {
   status: {
@@ -721,6 +736,7 @@ export function SyncPanel({
     lastError: string | null;
   }[];
   site: string;
+  siteUrl: string;
   sourceReady: boolean;
 }) {
   return (
@@ -729,7 +745,15 @@ export function SyncPanel({
         <div className="mb-3 flex items-center gap-2">
           <Globe className="h-4 w-4 text-slate-400" />
           <p className="text-sm font-medium text-slate-700">
-            Source: <span className="font-mono text-xs">{site}</span>
+            Source:{" "}
+            <a
+              href={siteUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-mono text-xs text-primary-600 hover:underline"
+            >
+              {siteUrl}
+            </a>
           </p>
           {sourceReady ? (
             <Badge className="bg-emerald-50 text-emerald-700 ring-emerald-200">
@@ -800,9 +824,9 @@ export function SyncPanel({
         <p className="mb-2 text-sm font-medium text-slate-700">How the data gets here</p>
         <ol className="list-inside list-decimal space-y-1.5 text-sm text-slate-600">
           <li>
-            The tracker on <span className="font-mono text-xs">{site}</span> records every
-            page view, click, scroll, form interaction, chat message and Core Web Vital into
-            the website&apos;s own Supabase project.
+            The tracker on <span className="font-mono text-xs">{siteUrl}</span> records
+            every page view, click, scroll, form interaction, chat message and Core Web
+            Vital into the website&apos;s own Supabase project.
           </li>
           <li>
             This CRM reads that project directly with its service-role key — every stream
@@ -819,7 +843,9 @@ export function SyncPanel({
         </ol>
         <p className="mt-3 text-xs text-slate-400">
           Runs hourly on the automation tick, plus a full pass with a written report each
-          morning. “Sync now” does the same thing immediately.
+          morning. “Sync now” does the same thing immediately. Rows are stored under the
+          label <span className="font-mono">{site}</span>, which is what every query here
+          filters on.
         </p>
       </div>
     </div>

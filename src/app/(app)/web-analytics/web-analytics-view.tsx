@@ -80,6 +80,7 @@ const WINDOWS = [7, 14, 30, 90, 180, 365];
  */
 export function WebAnalyticsView({
   site,
+  siteUrl,
   days,
   range,
   daily,
@@ -104,6 +105,7 @@ export function WebAnalyticsView({
   aiReady,
 }: {
   site: string;
+  siteUrl: string;
   days: number;
   range: Range;
   daily: WebDaily[];
@@ -164,7 +166,7 @@ export function WebAnalyticsView({
     <div className="space-y-6">
       <PageHeader
         title="Web Analytics"
-        description={`Everything ${site} knows about its visitors — where they came from, what they read, the route they took, and what it turned into.`}
+        description={`Everything ${siteUrl.replace(/^https?:\/\//, "")} knows about its visitors — where they came from, what they read, the route they took, and what it turned into.`}
         actions={
           <div className="flex flex-wrap gap-2">
             <Button
@@ -364,7 +366,7 @@ export function WebAnalyticsView({
         </div>
       )}
 
-      {tab === "pages" && <PagesPanel pages={topPages} />}
+      {tab === "pages" && <PagesPanel pages={topPages} siteUrl={siteUrl} />}
 
       {tab === "journeys" && <JourneysPanel paths={paths} transitions={transitions} />}
 
@@ -533,7 +535,12 @@ export function WebAnalyticsView({
           >
             <Plug className="h-4 w-4" /> Test connection
           </Button>
-          <SyncPanel status={syncStatus} site={site} sourceReady={sourceReady} />
+          <SyncPanel
+            status={syncStatus}
+            site={site}
+            siteUrl={siteUrl}
+            sourceReady={sourceReady}
+          />
         </div>
       )}
     </div>

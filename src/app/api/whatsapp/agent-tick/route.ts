@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { requireCronSecret } from "@/lib/cron-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
   processDueWaAgentRuns,
@@ -23,21 +24,12 @@ import {
  * ("call me Monday") beats the generic cadence.
  *
  * Netlify runs this every minute via netlify/functions/wa-agent-tick.mts.
- * If SMS_CRON_SECRET is set, pass it as `Authorization: Bearer <secret>`
- * or `?secret=<secret>` — same guard as the automation tick.
+ * SMS_CRON_SECRET is required, as `Authorization: Bearer <secret>` only —
+ * same guard as the automation tick.
  */
 export async function GET(request: Request) {
-  const secret = process.env.SMS_CRON_SECRET?.trim();
-  if (secret) {
-    const url = new URL(request.url);
-    const provided =
-      request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ??
-      url.searchParams.get("secret") ??
-      "";
-    if (provided !== secret) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-  }
+  const denied = requireCronSecret(request);
+  if (denied) return denied;
 
   try {
     const supabase = createAdminClient();

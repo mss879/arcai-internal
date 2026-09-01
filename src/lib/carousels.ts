@@ -66,6 +66,12 @@ const LOCK_TTL_MS = 60 * 1000;
 /** Transient-failure grace: a step may fail this many times before the
  *  post is marked `error` (Gemini/OpenAI hiccups shouldn't kill a run). */
 const MAX_STEP_FAILS = 3;
+/** Consecutive claims without committed progress before the post is parked
+ * as `error`. MAX_STEP_FAILS above only counts errors the catch SEES — a
+ * platform kill never reaches it, and without this cap the expired lease
+ * re-runs the same paid render every tick forever. Bumped at claim time,
+ * reset on every commit. See research.ts. */
+const MAX_CLAIMS = 5;
 
 /** Non-terminal states the pipeline can be claimed in. */
 const CLAIMABLE: CarouselPostStatus[] = ["copywriting", "rendering"];
@@ -122,6 +128,7 @@ export async function startCarouselGeneration(
       error: null,
       analysis: { runStartedAt: Date.now() },
       locked_at: null,
+      claims: 0,
     })
     .eq("id", postId)
     .in("status", ["planned", "ready", "error", "copywriting", "rendering"]);
@@ -167,7 +174,7 @@ export async function processPendingCarousels(
   // planned → copywriting once the post date is within the lead time.
   const { data: due } = await supabase
     .from("carousel_posts")
-    .update({ status: "copywriting", error: null })
+    .update({ status: "copywriting", error: null, claims: 0 })
     .eq("status", "planned")
     .lte("scheduled_for", datePlusDays(GENERATE_DAYS_AHEAD))
     .select("id");
@@ -214,6 +221,27 @@ export async function advanceCarouselPost(
   const token = post.locked_at;
   if (!token) return "skipped";
 
+  // Kill-loop breaker — see MAX_CLAIMS.
+  const priorClaims = post.claims ?? 0;
+  if (priorClaims >= MAX_CLAIMS) {
+    await supabase
+      .from("carousel_posts")
+      .update({
+        status: "error",
+        error:
+          "Gave up after repeated interrupted attempts — retry to try again.",
+        locked_at: null,
+      })
+      .eq("id", postId)
+      .eq("locked_at", token);
+    return "error";
+  }
+  await supabase
+    .from("carousel_posts")
+    .update({ claims: priorClaims + 1 })
+    .eq("id", postId)
+    .eq("locked_at", token);
+
   const analysis = (post.analysis ?? {}) as Record<string, unknown>;
   // Carried across every commit (each step replaces `analysis` wholesale).
   const runStartedAt =
@@ -231,7 +259,8 @@ export async function advanceCarouselPost(
     };
     const { error } = await supabase
       .from("carousel_posts")
-      .update({ ...merged, locked_at: null })
+      // Progress committed → the claim counter starts over.
+      .update({ ...merged, locked_at: null, claims: 0 })
       .eq("id", postId)
       .eq("locked_at", token);
     if (error) throw new Error(error.message);
@@ -357,7 +386,10 @@ Return JSON exactly in this shape:
       { role: "system", content: system },
       { role: "user", content: user },
     ],
-    { temperature: 0.8, timeoutMs: 45_000 },
+    // Must land inside the serverless window with room for the DB commit —
+    // at 45s the platform killed the invocation first and the (paid) call
+    // simply re-ran on the next tick.
+    { temperature: 0.8, timeoutMs: 18_000 },
   );
 
   const parsed = parseCopy(raw);

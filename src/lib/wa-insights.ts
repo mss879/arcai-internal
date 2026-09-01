@@ -380,7 +380,7 @@ Return JSON:
 Empty arrays are fine — accuracy beats volume.`,
       },
     ],
-    { temperature: 0.2, timeoutMs: 60_000 },
+    { temperature: 0.2, timeoutMs: 20_000 },
   );
 
   let parsed: Record<string, unknown>;
@@ -536,7 +536,7 @@ Propose up to ${MAX_LESSONS_PER_RUN} NEW lessons as JSON:
 Fewer, sharper lessons beat filler. Return {"lessons": []} if the evidence is thin.`,
       },
     ],
-    { temperature: 0.4, timeoutMs: 60_000 },
+    { temperature: 0.4, timeoutMs: 20_000 },
   );
 
   let proposals: { kind: string; title: string; body: string }[] = [];

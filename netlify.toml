@@ -5,8 +5,9 @@
   NODE_VERSION = "20"
 
 # User-defined serverless functions. The scheduled automation tick lives in
-# netlify/functions/automation-tick.mts and runs every minute to fire timers
-# (CRM research, SMS drips, finance + to-do reminders) with no external cron.
+# netlify/functions/automation-tick.mts and runs every 5 minutes to fire
+# timers (CRM research, SMS drips, finance + to-do reminders) with no
+# external cron; the WhatsApp agent keeps its own every-minute tick.
 [functions]
   directory = "netlify/functions"
   node_bundler = "esbuild"

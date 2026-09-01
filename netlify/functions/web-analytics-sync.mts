@@ -1,9 +1,9 @@
 // Netlify Scheduled Function — the nightly website analytics pull.
 //
-// The every-minute automation tick already runs this pipeline hourly, so
-// this is not what keeps the data fresh. It exists for the one job the
-// hourly pass deliberately does not do: write the day's report, having
-// first pulled a full day of settled data.
+// The automation tick already runs this pipeline hourly, so this is not
+// what keeps the data fresh. It exists for the one job the hourly pass
+// deliberately does not do: write the day's report (and label the day's
+// chats), having first pulled a full day of settled data.
 //
 // 06:15 UTC, a little after the hourly pass at 06:00, so the two never
 // contend for the same source connection.
@@ -21,14 +21,17 @@ const handler = async () => {
     return;
   }
 
+  // Fail closed, matching the route: no secret, no pull. Header only —
+  // a query param would put the secret in logs.
   const secret = process.env.SMS_CRON_SECRET?.trim();
-  const url = `${base}/api/web-analytics/sync?report=daily&chats=1${
-    secret ? `&secret=${encodeURIComponent(secret)}` : ""
-  }`;
+  if (!secret) {
+    console.error("[web-analytics] SMS_CRON_SECRET unset — refusing to run.");
+    return;
+  }
 
   try {
-    const res = await fetch(url, {
-      headers: secret ? { authorization: `Bearer ${secret}` } : {},
+    const res = await fetch(`${base}/api/web-analytics/sync?report=daily&chats=1`, {
+      headers: { authorization: `Bearer ${secret}` },
     });
     if (!res.ok) {
       console.error(`[web-analytics] sync returned ${res.status}`);

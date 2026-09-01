@@ -92,8 +92,10 @@ const MAX_AGENT_RUNS_PER_TICK =
  * which earns 429s on a small tier. Three at a time is the compromise. */
 const AGENT_RUN_CONCURRENCY = 3;
 /** Wall-clock ceiling for one drain — stop claiming new work near the end so
- * runs finish cleanly instead of being killed holding a lease. */
-const DRAIN_BUDGET_MS = 60_000;
+ * runs finish cleanly instead of being killed holding a lease. Inside the
+ * ~26s platform window: at 60s the platform killed the drain first, which is
+ * exactly the "killed holding a lease" this constant exists to prevent. */
+const DRAIN_BUDGET_MS = 20_000;
 /** Re-arm delays after a run that couldn't answer. */
 const AGENT_RETRY_BACKOFF_MS = [60_000, 5 * 60_000, 15 * 60_000];
 const MAX_AGENT_ATTEMPTS = 3;
@@ -102,13 +104,41 @@ const MAX_AGENT_ATTEMPTS = 3;
 // Config
 // ---------------------------------------------------------------------------
 
-export async function getWaAgentConfig(supabase: DB): Promise<WaConfig> {
+/**
+ * The config row is read by half a dozen subsystems that can share one tick
+ * invocation (delivery, cold outreach, revival, insights, the agent itself) —
+ * without a cache that is 4-6 identical SELECTs per tick. 30 seconds is one
+ * warm invocation's worth of reuse; config edits call bustWaAgentConfigCache
+ * so their own container sees the change immediately, and other containers
+ * within half a minute.
+ */
+let waConfigCache: { at: number; config: WaConfig } | null = null;
+const WA_CONFIG_TTL_MS = 30_000;
+
+export function bustWaAgentConfigCache(): void {
+  waConfigCache = null;
+}
+
+export async function getWaAgentConfig(
+  supabase: DB,
+  opts?: { fresh?: boolean },
+): Promise<WaConfig> {
+  if (
+    !opts?.fresh &&
+    waConfigCache &&
+    Date.now() - waConfigCache.at < WA_CONFIG_TTL_MS
+  ) {
+    return waConfigCache.config;
+  }
   const { data } = await supabase
     .from("wa_agent_config")
     .select("*")
     .eq("id", 1)
     .maybeSingle();
-  if (data) return data;
+  if (data) {
+    waConfigCache = { at: Date.now(), config: data };
+    return data;
+  }
   // Self-heal: the migration seeds this row, but never assume.
   const { data: created } = await supabase
     .from("wa_agent_config")
@@ -116,6 +146,7 @@ export async function getWaAgentConfig(supabase: DB): Promise<WaConfig> {
     .select("*")
     .single();
   if (!created) throw new Error("wa_agent_config row is missing.");
+  waConfigCache = { at: Date.now(), config: created };
   return created;
 }
 
@@ -533,9 +564,10 @@ type WaRunOutcome =
   | { status: "failed"; retryAfterMs?: number | null };
 
 /** Wall-clock ceiling for one agent run across all its tool rounds. Below
- * a scheduled function's budget, so a slow run yields instead of being
- * killed mid-flight (which would strand its lease). */
-const RUN_BUDGET_MS = 90_000;
+ * the ~26s serverless window, so a slow run yields (and re-arms with
+ * backoff) instead of being killed mid-flight — a kill strands the lease
+ * AND throws away every token the run already paid for. */
+const RUN_BUDGET_MS = 18_000;
 
 /** A quiet stretch this long earns a timeline marker in the thread; below
  * it, messages read as one continuous exchange and a marker is noise. */

@@ -86,8 +86,11 @@ export class OpenAIRateLimitError extends Error {
 
 /** Ceiling on any single chat round-trip. Finite by default on purpose: an
  * opt-in timeout leaves every un-migrated caller able to hang a serverless
- * invocation forever. */
-const CHAT_TIMEOUT_MS = 45_000;
+ * invocation forever. 20s by default because the deployed platform kills the
+ * whole invocation at ~26s — a 45s "timeout" was really "wait to be killed,
+ * billed for the tokens, with nothing persisted". Callers with real room
+ * (background jobs, local dev) pass their own timeoutMs. */
+const CHAT_TIMEOUT_MS = Number(process.env.OPENAI_CHAT_TIMEOUT_MS) || 20_000;
 
 /** One round-trip to chat completions. Returns the assistant message. */
 export async function openaiChat(

@@ -177,7 +177,7 @@ async function mineOneMember(supabase: DB, userId: string): Promise<number> {
         model: process.env.OPENAI_MEMORY_MODEL?.trim() || AI_MODELS.chat,
         reasoningEffort: "low",
         temperature: 0,
-        timeoutMs: 60_000,
+        timeoutMs: 20_000,
       },
     );
     parsed = JSON.parse(raw) as { memories?: unknown };

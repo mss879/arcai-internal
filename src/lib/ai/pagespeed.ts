@@ -28,7 +28,7 @@ const PSI_URL =
  * `process.env.NETLIFY`, which is a build-time flag not present in the function
  * runtime.
  */
-const TIMEOUT_MS = process.env.NODE_ENV === "production" ? 23000 : 60000;
+const TIMEOUT_MS = process.env.NODE_ENV === "production" ? 15000 : 60000;
 
 /** Normalised Lighthouse result. Category scores are 0-100, or -1 = unknown. */
 export type PageSpeedResult = {

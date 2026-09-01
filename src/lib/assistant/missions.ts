@@ -60,8 +60,11 @@ type DB = SupabaseClient<Database>;
 /** Tool rounds allowed per step. A step is one small job, not a conversation. */
 const MAX_ROUNDS_PER_STEP = 4;
 
-/** How long a tick may spend draining missions before it must yield. */
-const DRAIN_BUDGET_MS = 45_000;
+/** How long a tick may spend draining missions before it must yield. Must
+ * sit inside the ~26s platform window (with the model call's own 20s cap on
+ * top of the last-started step) — a bigger number here was never real budget,
+ * just a guarantee of being killed mid-step. */
+const DRAIN_BUDGET_MS = 18_000;
 
 /** Lease length: a crashed run is retried after this. */
 const LEASE_MS = 3 * 60_000;
@@ -123,10 +126,12 @@ export async function planMission(goal: string): Promise<PlanResult> {
       {
         model,
         // The one place a mission is worth real thinking: a bad plan wastes
-        // every step after it.
+        // every step after it. But the serverless window is ~26s, so the
+        // budget must fit it — a 120s "allowance" only ever meant being
+        // killed mid-plan and paying for the tokens anyway.
         reasoningEffort: "high",
         temperature: 0.2,
-        timeoutMs: 120_000,
+        timeoutMs: 20_000,
       },
     );
     const parsed = JSON.parse(raw) as {
@@ -232,7 +237,7 @@ async function runStep(
       assistant = await openaiChat(messages, ALL_ASSISTANT_TOOLS, {
         model,
         reasoningEffort: "low",
-        timeoutMs: 45_000,
+        timeoutMs: 20_000,
       });
     } catch (e) {
       return {
@@ -297,7 +302,7 @@ async function runStep(
       const wrap = await openaiChat(messages, undefined, {
         model,
         reasoningEffort: "low",
-        timeoutMs: 30_000,
+        timeoutMs: 15_000,
       });
       note = (wrap.content ?? "").trim().slice(0, 400);
     } catch {

@@ -27,6 +27,17 @@ export type ResearchTickResult = { processed: number; failed: number };
 const LOCK_TTL_MS = 45 * 1000;
 
 /**
+ * Consecutive claims one row may burn without committing progress before it
+ * is parked as `error`. A thrown step already parks immediately — this cap
+ * exists for the failure the catch can never see: the platform KILLING the
+ * function mid-step. The lease just expires and the next tick would repeat
+ * the same paid step (scrape, model call) forever. The counter is bumped at
+ * claim time (kill-proof) and reset by every commit and healthy release, so
+ * only a genuine kill-loop trips it.
+ */
+const MAX_CLAIMS = 5;
+
+/**
  * The dossier synthesis runs as an OpenAI *background* job (see
  * `kickoffBackgroundSynthesis`/`pollBackgroundSynthesis`): the app starts it in
  * ~2s and polls for the result on later ticks/polls, so no single serverless
@@ -66,6 +77,7 @@ export async function queueLeadResearch(
           // resets it, which is exactly right for a re-run.
           analysis: { runStartedAt: Date.now() },
           locked_at: null,
+          claims: 0,
           ...(opts.requestedBy ? { requested_by: opts.requestedBy } : {}),
         },
         { onConflict: "lead_id" },
@@ -210,7 +222,7 @@ export async function advanceResearchRow(
     .eq("id", rowId)
     .in("status", CLAIMABLE)
     .or(`locked_at.is.null,locked_at.lt.${lockCutoff}`)
-    .select("id, lead_id, company_name, status, analysis, locked_at");
+    .select("id, lead_id, company_name, status, analysis, locked_at, claims");
   if (!claimed?.length) return "skipped";
   const row = claimed[0];
   // The exact lease value we hold. Every commit is FENCED on it: if our lease
@@ -218,6 +230,30 @@ export async function advanceResearchRow(
   // zero rows and no-ops instead of clobbering their state.
   const token = row.locked_at;
   if (!token) return "skipped"; // we just set it; guards the type + a freak null
+
+  // Kill-loop breaker: too many consecutive claims without progress means
+  // this step keeps getting the function killed — park it for a human
+  // instead of repeating the same paid work every tick. Bump BEFORE the
+  // step so a kill still counts.
+  const priorClaims = row.claims ?? 0;
+  if (priorClaims >= MAX_CLAIMS) {
+    await supabase
+      .from("lead_research")
+      .update({
+        status: "error",
+        error:
+          "Gave up after repeated interrupted attempts — re-run to try again.",
+        locked_at: null,
+      })
+      .eq("id", rowId)
+      .eq("locked_at", token);
+    return "error";
+  }
+  await supabase
+    .from("lead_research")
+    .update({ claims: priorClaims + 1 })
+    .eq("id", rowId)
+    .eq("locked_at", token);
 
   // The run-start stamp is set once at queue time; carry it across each step so
   // the UI's elapsed timer stays anchored to the real start (every step below
@@ -241,7 +277,8 @@ export async function advanceResearchRow(
         : patch;
     const { error } = await supabase
       .from("lead_research")
-      .update({ ...merged, locked_at: null })
+      // Progress committed → the claim counter starts over.
+      .update({ ...merged, locked_at: null, claims: 0 })
       .eq("id", rowId)
       .eq("locked_at", token);
     if (error) throw new Error(error.message);
@@ -399,10 +436,12 @@ export async function advanceResearchRow(
         });
         return "done";
       }
-      // Still running — release the lease and let a later tick/poll check back.
+      // Still running — release the lease and let a later tick/poll check
+      // back. A healthy wait, so the claim counter resets: only claims that
+      // end in a kill should accumulate.
       await supabase
         .from("lead_research")
-        .update({ locked_at: null })
+        .update({ locked_at: null, claims: 0 })
         .eq("id", rowId)
         .eq("locked_at", token);
       return "skipped";

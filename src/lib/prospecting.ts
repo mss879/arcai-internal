@@ -65,6 +65,12 @@ type LeadRow = Database["public"]["Tables"]["leads"]["Row"];
  */
 
 const LOCK_TTL_MS = 45 * 1000;
+/** Consecutive claims without committed progress before the scan is parked
+ * as `error` — the breaker for the one failure the catch can't see: the
+ * platform killing the function mid-step, which would otherwise repeat the
+ * same paid scrape/model call on every tick forever. Bumped at claim time,
+ * reset by every commit and healthy release. See research.ts. */
+const MAX_CLAIMS = 5;
 /** Sites scraped + verdicted per advance (fits the ~26s serverless budget). */
 const QUALIFY_BATCH = 4;
 /** Cold-outreach drafts per OpenAI call. */
@@ -222,6 +228,27 @@ export async function advanceProspectScan(
   const token = scan.locked_at;
   if (!token) return "skipped";
 
+  // Kill-loop breaker — see MAX_CLAIMS.
+  const priorClaims = scan.claims ?? 0;
+  if (priorClaims >= MAX_CLAIMS) {
+    await supabase
+      .from("prospect_scans")
+      .update({
+        status: "error",
+        error:
+          "Gave up after repeated interrupted attempts — re-run to try again.",
+        locked_at: null,
+      })
+      .eq("id", scanId)
+      .eq("locked_at", token);
+    return "error";
+  }
+  await supabase
+    .from("prospect_scans")
+    .update({ claims: priorClaims + 1 })
+    .eq("id", scanId)
+    .eq("locked_at", token);
+
   // Carried across every analysis write (each step replaces the jsonb).
   const carry = (scan.analysis ?? {}) as Record<string, unknown>;
 
@@ -238,7 +265,8 @@ export async function advanceProspectScan(
         : patch;
     const { error } = await supabase
       .from("prospect_scans")
-      .update({ ...merged, locked_at: null })
+      // Progress committed → the claim counter starts over.
+      .update({ ...merged, locked_at: null, claims: 0 })
       .eq("id", scanId)
       .eq("locked_at", token);
     if (error) throw new Error(error.message);
@@ -982,7 +1010,7 @@ async function runDraftStep(
             content: `Prospects in ${scan.city}, ${scan.country}:\n${listing}\n\nReturn {"drop":[{"id":"...","reason":"one short line"}]} — drop only clear misfits.`,
           },
         ],
-        { model: MODEL, reasoningEffort: "low", timeoutMs: 60_000 },
+        { model: MODEL, reasoningEffort: "low", timeoutMs: 20_000 },
       );
       const parsed = JSON.parse(raw) as {
         drop?: { id?: string; reason?: string }[];
@@ -1041,7 +1069,7 @@ Return JSON only: {"drafts":[{"id","subject","body","sms"}]}.`,
           },
           { role: "user", content: listing },
         ],
-        { model: MODEL, reasoningEffort: "low", timeoutMs: 90_000 },
+        { model: MODEL, reasoningEffort: "low", timeoutMs: 20_000 },
       );
       const parsed = JSON.parse(raw) as {
         drafts?: { id?: string; subject?: string; body?: string; sms?: string }[];
@@ -1304,7 +1332,7 @@ export async function requalifyCandidate(
   if (scan.status === "done" && applied.needsRedraft) {
     await supabase
       .from("prospect_scans")
-      .update({ status: "drafting", locked_at: null })
+      .update({ status: "drafting", locked_at: null, claims: 0 })
       .eq("id", candidate.scan_id);
   }
 
@@ -1417,7 +1445,13 @@ export async function queueScanRecheck(
   };
   const { error } = await supabase
     .from("prospect_scans")
-    .update({ status: "qualifying", analysis, locked_at: null, error: null })
+    .update({
+      status: "qualifying",
+      analysis,
+      locked_at: null,
+      error: null,
+      claims: 0,
+    })
     .eq("id", scanId)
     // Guard against a double-click racing two queues onto the same scan.
     .in("status", ["done", "error"]);

@@ -5,8 +5,11 @@ import { useRouter } from "next/navigation";
 
 import { advanceCarousels } from "./actions";
 
-/** How often to nudge an in-progress carousel forward while the page is open. */
-const POLL_MS = 6000;
+/** How often to nudge an in-progress carousel forward while the page is open.
+ *  Every poll is a serverless invocation, so this is deliberately relaxed —
+ *  a slide render takes seconds anyway, and the cron tick advances posts
+ *  regardless. */
+const POLL_MS = 15000;
 
 /**
  * Drive in-progress carousel generation to completion while the page is

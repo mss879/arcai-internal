@@ -12,6 +12,10 @@
 //   • promised follow-ups ("call me Monday")
 //   • the autonomous follow-up cadence
 //
+// This is the ONE tick that stays at every minute — reply speed is the
+// point of it — which is affordable because its idle path is three cheap
+// lease queries. The automation and assistant ticks run far less often.
+//
 // Like automation-tick it only makes one lightweight HTTP call; the route
 // does the work.
 
@@ -28,14 +32,17 @@ const handler = async () => {
     return;
   }
 
+  // Fail closed, matching the route: no secret, no tick. Header only —
+  // a query param would put the secret in logs.
   const secret = process.env.SMS_CRON_SECRET?.trim();
-  const url = `${base}/api/whatsapp/agent-tick${
-    secret ? `?secret=${encodeURIComponent(secret)}` : ""
-  }`;
+  if (!secret) {
+    console.error("[wa-agent-tick] SMS_CRON_SECRET unset — refusing to tick.");
+    return;
+  }
 
   try {
-    const res = await fetch(url, {
-      headers: secret ? { authorization: `Bearer ${secret}` } : {},
+    const res = await fetch(`${base}/api/whatsapp/agent-tick`, {
+      headers: { authorization: `Bearer ${secret}` },
     });
     if (!res.ok) {
       console.error(`[wa-agent-tick] tick returned ${res.status}`);

@@ -5,8 +5,11 @@ import { useRouter } from "next/navigation";
 
 import { driveOutreach } from "./actions";
 
-/** How often to nudge an in-flight campaign forward while the page is open. */
-const POLL_MS = 8000;
+/** How often to nudge an in-flight campaign forward while the page is open.
+ *  Every poll is a serverless invocation, so this is deliberately relaxed —
+ *  drafting steps take seconds anyway, and the cron tick drives campaigns
+ *  regardless. */
+const POLL_MS = 20000;
 
 /**
  * Drive campaign drafting + auto-sending while the page is open — the same

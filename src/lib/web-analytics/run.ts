@@ -165,14 +165,13 @@ export async function processWebAnalytics(supabase: DB): Promise<PipelineResult 
   if (!isWebsiteSourceConfigured()) return null;
   if (!(await pipelineIsDue(supabase))) return null;
 
-  const hour = new Date().getUTCHours();
-  // One daily report, written at 06:00 UTC — early enough to be waiting
-  // at the start of a UK working day, late enough that yesterday is
-  // fully recorded. Chat labelling rides along with it.
-  const isMorningRun = hour === 6;
-
+  // Data only. The daily report AND the chat labelling belong to the 06:15
+  // scheduled function (web-analytics-sync.mts → ?report=daily&chats=1):
+  // labelling is a paid model call per conversation, so running it on every
+  // hourly pass was a recurring OpenAI bill — and the 06:00 hourly report
+  // double-wrote the day the 06:15 pass was about to report on anyway.
   return runWebAnalyticsPipeline(supabase, {
-    report: isMorningRun ? "daily" : null,
-    analyseChats: true,
+    report: null,
+    analyseChats: false,
   });
 }

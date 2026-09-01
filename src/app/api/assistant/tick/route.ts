@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { requireCronSecret } from "@/lib/cron-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { processAssistantBriefing } from "@/lib/assistant/briefing";
 import { processAssistantJanitor } from "@/lib/assistant/janitor";
@@ -29,22 +30,13 @@ import {
  * lease-gated, so running every minute costs almost nothing when there is
  * nothing to do.
  *
- * Point a scheduler at it every minute: GET /api/assistant/tick
- * If SMS_CRON_SECRET is set, pass it as `Authorization: Bearer <secret>` or
- * `?secret=<secret>` — the same secret the automation tick uses.
+ * Point a scheduler at it: GET /api/assistant/tick
+ * SMS_CRON_SECRET is required, as `Authorization: Bearer <secret>` only —
+ * the same secret the automation tick uses.
  */
 export async function GET(request: Request) {
-  const secret = process.env.SMS_CRON_SECRET?.trim();
-  if (secret) {
-    const url = new URL(request.url);
-    const provided =
-      request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ??
-      url.searchParams.get("secret") ??
-      "";
-    if (provided !== secret) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-  }
+  const denied = requireCronSecret(request);
+  if (denied) return denied;
 
   try {
     const supabase = createAdminClient();

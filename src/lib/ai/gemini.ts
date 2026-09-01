@@ -67,26 +67,41 @@ export async function generateImage(
     });
   }
 
-  const res = await fetch(
-    `${BASE_URL}/models/${input.model?.trim() || GEMINI_IMAGE_MODEL}:generateContent`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": apiKey(),
-      },
-      body: JSON.stringify({
-        contents: [{ parts }],
-        generationConfig: {
-          responseModalities: ["TEXT", "IMAGE"],
-          imageConfig: {
-            aspectRatio: input.aspectRatio,
-            imageSize: input.imageSize,
-          },
+  let res: Response;
+  try {
+    res = await fetch(
+      `${BASE_URL}/models/${input.model?.trim() || GEMINI_IMAGE_MODEL}:generateContent`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey(),
         },
-      }),
-    },
-  );
+        body: JSON.stringify({
+          contents: [{ parts }],
+          generationConfig: {
+            responseModalities: ["TEXT", "IMAGE"],
+            imageConfig: {
+              aspectRatio: input.aspectRatio,
+              imageSize: input.imageSize,
+            },
+          },
+        }),
+        // A render that hasn't answered by now never will inside a serverless
+        // window — without this bound, a slow response holds the invocation
+        // open until the platform kills it, which reads as a 502 and re-runs
+        // the whole (paid) render on the next tick.
+        signal: AbortSignal.timeout(
+          Number(process.env.GEMINI_IMAGE_TIMEOUT_MS) || 20_000,
+        ),
+      },
+    );
+  } catch (e) {
+    if (e instanceof Error && e.name === "TimeoutError") {
+      throw new Error("Gemini image generation timed out.");
+    }
+    throw e;
+  }
 
   if (!res.ok) {
     const detail = await res.text();
@@ -133,7 +148,9 @@ export async function generateImage(
  * sent to Gemini as an inline reference part.
  */
 export async function fetchAsInlineImage(url: string): Promise<InlineImage> {
-  const res = await fetch(url);
+  // Same reasoning as the generate call: an unbounded fetch can pin the
+  // serverless invocation until the platform kills it.
+  const res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
   if (!res.ok) {
     throw new Error(`Failed to fetch reference image (${res.status}).`);
   }

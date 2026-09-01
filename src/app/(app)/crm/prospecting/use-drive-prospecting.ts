@@ -5,8 +5,10 @@ import { useRouter } from "next/navigation";
 
 import { advanceProspecting } from "./actions";
 
-/** How often to nudge an in-progress scan forward while the page is open. */
-const POLL_MS = 6000;
+/** How often to nudge an in-progress scan forward while the page is open.
+ *  Every poll is a serverless invocation, so this is deliberately relaxed —
+ *  steps take seconds anyway, and the cron tick advances things regardless. */
+const POLL_MS = 15000;
 
 /**
  * Drive in-progress prospecting scans to completion while the page is open —

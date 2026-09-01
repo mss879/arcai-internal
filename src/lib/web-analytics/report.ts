@@ -389,7 +389,7 @@ async function writeAiReport(
           content: `Title: ${title}\nSite: ${SITE}\n\nAnalytics JSON:\n${JSON.stringify(stats)}`,
         },
       ],
-      { timeoutMs: 90_000 },
+      { timeoutMs: 20_000 },
     );
 
     const parsed = JSON.parse(raw) as {
@@ -516,7 +516,7 @@ export async function analyseChatSessions(
           },
           { role: "user", content: (chat.transcript || "").slice(0, 12_000) },
         ],
-        { timeoutMs: 45_000 },
+        { timeoutMs: 20_000 },
       );
 
       const parsed = JSON.parse(raw) as Record<string, unknown>;

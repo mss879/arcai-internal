@@ -131,7 +131,7 @@ ${ghostTails.join("\n---\n") || "(none)"}
 Return JSON: { "notes": ["...", "..."] } — 5 to 8 short, specific coaching bullets (max ~22 words each) the agent should apply next week. Base every bullet on the evidence above, not generic sales advice.`,
       },
     ],
-    { temperature: 0.4, timeoutMs: 60_000 },
+    { temperature: 0.4, timeoutMs: 20_000 },
   );
 
   let notes: string[] = [];

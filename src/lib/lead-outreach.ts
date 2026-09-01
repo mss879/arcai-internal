@@ -87,6 +87,12 @@ const MAX_RECIPIENTS = 5;
 const CAMPAIGN_MAX_RECIPIENTS = 1;
 /** Lease TTL — mirror research.ts; each step is internally timeout-capped well under this. */
 const LOCK_TTL_MS = 45 * 1000;
+/** Consecutive claims without committed progress before the draft is parked
+ * as `failed` — the breaker for a platform kill mid-step, which never
+ * reaches the catch and would otherwise repeat the same paid step on every
+ * tick. Bumped at claim time, reset by every commit and healthy release.
+ * See research.ts. */
+const MAX_CLAIMS = 5;
 /**
  * How long the `researching` step waits for the full dossier before giving up
  * and drafting from the site audit alone. Research is a 3-step pipeline driven
@@ -271,10 +277,32 @@ export async function advanceOutreachRow(
   const token = row.locked_at;
   if (!token) return "skipped";
 
+  // Kill-loop breaker — see MAX_CLAIMS.
+  const priorClaims = row.claims ?? 0;
+  if (priorClaims >= MAX_CLAIMS) {
+    await supabase
+      .from("lead_outreach")
+      .update({
+        status: "failed",
+        error:
+          "Gave up after repeated interrupted attempts — re-queue to try again.",
+        locked_at: null,
+      })
+      .eq("id", rowId)
+      .eq("locked_at", token);
+    return "error";
+  }
+  await supabase
+    .from("lead_outreach")
+    .update({ claims: priorClaims + 1 })
+    .eq("id", rowId)
+    .eq("locked_at", token);
+
   const commit = async (patch: Record<string, unknown>) => {
     const { error } = await supabase
       .from("lead_outreach")
-      .update({ ...patch, locked_at: null })
+      // Progress committed → the claim counter starts over.
+      .update({ ...patch, locked_at: null, claims: 0 })
       .eq("id", rowId)
       .eq("locked_at", token);
     if (error) throw new Error(error.message);
@@ -353,9 +381,11 @@ export async function advanceOutreachRow(
       if (!done && !timedOut) {
         // Still cooking. Drop the lease so the next tick re-checks; this is
         // NOT progress, so drainOutreachRow stops here rather than spinning.
+        // It IS a healthy wait though, so the claim counter resets — only
+        // claims that end in a kill should accumulate.
         await supabase
           .from("lead_outreach")
-          .update({ locked_at: null })
+          .update({ locked_at: null, claims: 0 })
           .eq("id", rowId)
           .eq("locked_at", token);
         return "waiting";

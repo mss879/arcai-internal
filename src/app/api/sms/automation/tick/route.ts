@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { requireCronSecret } from "@/lib/cron-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { processDueSmsRuns } from "@/lib/sms-automation";
 import { processTodoReminders } from "@/lib/todo-reminders";
@@ -13,27 +14,16 @@ import { isSmsConfigured } from "@/lib/sms";
  * when nobody is in the app, e.g. every minute:
  *   GET /api/sms/automation/tick
  *
- * If SMS_CRON_SECRET is set in the environment, the request must carry it
- * as `Authorization: Bearer <secret>` or `?secret=<secret>`.
+ * SMS_CRON_SECRET is required, as `Authorization: Bearer <secret>` only.
  */
 export async function GET(request: Request) {
-  const secret = process.env.SMS_CRON_SECRET?.trim();
-  if (secret) {
-    const url = new URL(request.url);
-    const provided =
-      request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ??
-      url.searchParams.get("secret") ??
-      "";
-    if (provided !== secret) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-  }
+  const denied = requireCronSecret(request);
+  if (denied) return denied;
 
+  // Unconfigured SMS is a normal state, not an error — a scheduler retrying
+  // a 503 (or an error-rate graph counting it) helps nobody.
   if (!isSmsConfigured()) {
-    return NextResponse.json(
-      { error: "Notify.lk is not configured (NOTIFYLK_USER_ID / NOTIFYLK_API_KEY)." },
-      { status: 503 },
-    );
+    return NextResponse.json({ ok: true, skipped: "sms_unconfigured" });
   }
 
   try {

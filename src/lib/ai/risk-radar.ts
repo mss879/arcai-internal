@@ -292,7 +292,7 @@ async function narrate(top: Candidate[]): Promise<Map<string, string>> {
             .join("\n---\n"),
         },
       ],
-      { temperature: 0.3, timeoutMs: 45_000 },
+      { temperature: 0.3, timeoutMs: 20_000 },
     );
     const parsed = JSON.parse(raw) as { notes?: unknown };
     if (Array.isArray(parsed.notes)) {

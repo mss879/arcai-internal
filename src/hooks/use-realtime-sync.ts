@@ -10,19 +10,34 @@ import { createClient } from "@/lib/supabase/client";
  * of row changes (e.g. a drag re-positioning a whole kanban column writes
  * one row per card) coalesces into a single router.refresh() that lands
  * after the last write, instead of N full-page refetches racing the save.
+ *
+ * On top of the debounce sits a refresh-rate floor. The debounce alone only
+ * merges writes that land within 400ms of each other — a server-side batch
+ * job trickling rows (the hourly analytics mirror writes thousands, seconds
+ * apart) slips between debounce windows and turns an open tab into a
+ * continuous stream of full RSC refetches. Each refresh is a serverless
+ * render, so the floor is what keeps a background sync from billing a
+ * refresh per row.
  */
 const REFRESH_DEBOUNCE_MS = 400;
+const MIN_REFRESH_GAP_MS = 5_000;
 const refreshers = new Set<() => void>();
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+let lastRefreshAt = 0;
 
 function scheduleRefresh() {
   if (refreshTimer) clearTimeout(refreshTimer);
+  const wait = Math.max(
+    REFRESH_DEBOUNCE_MS,
+    lastRefreshAt + MIN_REFRESH_GAP_MS - Date.now(),
+  );
   refreshTimer = setTimeout(() => {
     refreshTimer = null;
+    lastRefreshAt = Date.now();
     // Every registered refresher is the same app router — one call is enough.
     const refresh = refreshers.values().next().value;
     refresh?.();
-  }, REFRESH_DEBOUNCE_MS);
+  }, wait);
 }
 
 function useDebouncedRefresh(): void {

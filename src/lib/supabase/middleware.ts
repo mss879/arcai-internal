@@ -64,6 +64,30 @@ function isPublicPath(pathname: string) {
   return PUBLIC_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`));
 }
 
+// Machine-only paths: cron ticks, inbound webhooks, the token-guarded public
+// API. Server-to-server, cookie-free, and every one guards itself — so the
+// session refresh below can never do anything for them, it only costs an auth
+// round-trip per hit. The proxy matcher already excludes these; this list is
+// the belt-and-braces copy so a future matcher edit can't silently put an
+// auth call back in front of every cron tick.
+const MACHINE_PREFIXES = [
+  "/api/automation/tick",
+  "/api/assistant/tick",
+  "/api/whatsapp/agent-tick",
+  "/api/whatsapp/webhook",
+  "/api/webhooks",
+  "/api/sms/automation/tick",
+  "/api/web-analytics/sync",
+  "/api/intelligence/digest",
+  "/api/public",
+  "/api/outreach/unsubscribe",
+  "/.netlify/functions",
+];
+
+function isMachinePath(pathname: string) {
+  return MACHINE_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`));
+}
+
 function isValidUrl(value: string): boolean {
   try {
     new URL(value);
@@ -100,6 +124,13 @@ export async function updateSession(request: NextRequest) {
 }
 
 async function refreshAndGuard(request: NextRequest) {
+  // Machine traffic short-circuits before any Supabase work — see
+  // MACHINE_PREFIXES. No cookie ever rides on these requests, so there is
+  // no session to refresh and nothing to guard.
+  if (isMachinePath(request.nextUrl.pathname)) {
+    return NextResponse.next({ request });
+  }
+
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
   const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim();
 

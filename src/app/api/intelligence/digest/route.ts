@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { requireCronSecret } from "@/lib/cron-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { generateWeeklyDigest } from "@/lib/intelligence";
 import { sendPushToUser } from "@/lib/push";
@@ -10,20 +11,12 @@ import { analyzeWaSalesWeek } from "@/lib/wa-coaching";
  *   GET /api/intelligence/digest
  *
  * Generates (or refreshes) this week's AI digest and notifies every member.
- * Guarded by SMS_CRON_SECRET like the other tick endpoints.
+ * Guarded by SMS_CRON_SECRET like the other tick endpoints (required,
+ * `Authorization: Bearer <secret>` only).
  */
 export async function GET(request: Request) {
-  const secret = process.env.SMS_CRON_SECRET?.trim();
-  if (secret) {
-    const url = new URL(request.url);
-    const provided =
-      request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ??
-      url.searchParams.get("secret") ??
-      "";
-    if (provided !== secret) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-  }
+  const denied = requireCronSecret(request);
+  if (denied) return denied;
 
   try {
     const supabase = createAdminClient();

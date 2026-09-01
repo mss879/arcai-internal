@@ -12,8 +12,14 @@ type DB = SupabaseClient<Database>;
  *
  * Deliberately RULE-BASED, not a model. Three reasons: it is arithmetic and a
  * model would be worse at it; it has to be explainable to the person being
- * told they made a mistake; and it runs over every project on every tick, so
- * it must cost nothing.
+ * told they made a mistake; and it needs no model call to run.
+ *
+ * Self-gated to about once a day: the scan pulls up to 300 projects plus all
+ * their expenses and does pairwise comparisons, which is far too much work to
+ * repeat on every tick — and a duplicate entered today is exactly as
+ * catchable tomorrow morning. The gate is claimed BEFORE scanning, so a
+ * failing scan waits for the next window instead of hammering the same
+ * heavy queries every tick.
  *
  * `buildLedger()` already flags cross-table duplicates on one project's money
  * (invariant 1). This extends the same idea to the cases it can't see: the
@@ -40,6 +46,11 @@ function pairKey(kind: string, a: string, b: string): string {
   return `${kind}:${[a, b].sort().join(":")}`;
 }
 
+/** How often the scan is allowed to run (a shade under a day, so a scan that
+ *  lands at 09:05 one morning is not pushed to 09:06, 09:07… on later days). */
+const SCAN_INTERVAL_MS = 20 * 60 * 60 * 1000;
+const SCAN_GATE_KEY = "anomaly_scan";
+
 export async function processProjectAnomalies(
   supabase: DB,
 ): Promise<AnomalyScanResult> {
@@ -47,6 +58,26 @@ export async function processProjectAnomalies(
   const findings: Finding[] = [];
 
   try {
+    const { data: gate } = await supabase
+      .from("app_settings")
+      .select("value")
+      .eq("key", SCAN_GATE_KEY)
+      .maybeSingle();
+    const lastRun = Date.parse(
+      String((gate?.value as { last_run_at?: unknown } | null)?.last_run_at ?? ""),
+    );
+    if (Number.isFinite(lastRun) && Date.now() - lastRun < SCAN_INTERVAL_MS) {
+      return result;
+    }
+    await supabase.from("app_settings").upsert(
+      {
+        key: SCAN_GATE_KEY,
+        value: { last_run_at: new Date().toISOString() },
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "key" },
+    );
+
     const { data: projects } = await supabase
       .from("projects")
       .select(

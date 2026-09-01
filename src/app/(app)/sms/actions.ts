@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import { createClient } from "@/lib/supabase/server";
-import { sendSms } from "@/lib/sms";
+import { isSmsConfigured, sendSms } from "@/lib/sms";
 import { processDueSmsRuns } from "@/lib/sms-automation";
 import {
   SMS_MAX_LENGTH,
@@ -445,6 +445,13 @@ export async function tickSmsAutomation(): Promise<
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return { ok: false, error: "Not authenticated." };
+
+  // No SMS provider, nothing to advance — same skip the cron route makes,
+  // so an open SMS page doesn't run the queue scan every interval for a
+  // feature that cannot send.
+  if (!isSmsConfigured()) {
+    return { ok: true, processed: 0, sent: 0 };
+  }
 
   const result = await processDueSmsRuns(supabase);
   if (result.processed > 0) revalidatePath("/sms");

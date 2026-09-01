@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { requireCronSecret } from "@/lib/cron-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { runWebAnalyticsPipeline } from "@/lib/web-analytics/run";
 
@@ -10,8 +11,8 @@ import { runWebAnalyticsPipeline } from "@/lib/web-analytics/run";
  *     ?report=daily|weekly|monthly   also write a report for that window
  *     &chats=1                       also label new chat conversations
  *
- * Guarded by SMS_CRON_SECRET (the same secret the rest of the app's
- * scheduled work uses) as `Authorization: Bearer <secret>` or `?secret=`.
+ * SMS_CRON_SECRET is required (the same secret the rest of the app's
+ * scheduled work uses), as `Authorization: Bearer <secret>` only.
  * The automation tick calls the pipeline directly and does not come
  * through here; this endpoint exists for the Netlify daily schedule and
  * for pulling on demand while debugging.
@@ -21,18 +22,10 @@ export const maxDuration = 300;
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
-  const url = new URL(request.url);
+  const denied = requireCronSecret(request);
+  if (denied) return denied;
 
-  const secret = process.env.SMS_CRON_SECRET?.trim();
-  if (secret) {
-    const provided =
-      request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ??
-      url.searchParams.get("secret") ??
-      "";
-    if (provided !== secret) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-  }
+  const url = new URL(request.url);
 
   const reportParam = url.searchParams.get("report");
   const report =

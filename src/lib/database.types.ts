@@ -1733,6 +1733,8 @@ export type Database = {
           analysis: Record<string, unknown>;
           error: string | null;
           locked_at: Timestamp | null;
+          /** 0111 — consecutive claims without committed progress. */
+          claims: number;
           created_by: UUID | null;
           created_at: Timestamp;
           updated_at: Timestamp;
@@ -1749,6 +1751,7 @@ export type Database = {
           analysis?: Record<string, unknown>;
           error?: string | null;
           locked_at?: Timestamp | null;
+          claims?: number;
           created_by?: UUID | null;
           created_at?: Timestamp;
           updated_at?: Timestamp;
@@ -2122,6 +2125,8 @@ export type Database = {
           imported: number;
           error: string | null;
           locked_at: Timestamp | null;
+          /** 0111 — consecutive claims without committed progress. */
+          claims: number;
           created_by: UUID | null;
           created_at: Timestamp;
           updated_at: Timestamp;
@@ -2144,6 +2149,7 @@ export type Database = {
           imported?: number;
           error?: string | null;
           locked_at?: Timestamp | null;
+          claims?: number;
           created_by?: UUID | null;
           created_at?: Timestamp;
           updated_at?: Timestamp;
@@ -2730,6 +2736,8 @@ export type Database = {
           attempts: number;
           error: string | null;
           locked_at: Timestamp | null;
+          /** 0111 — consecutive claims without committed progress. */
+          claims: number;
           requested_by: UUID | null;
           created_by: UUID | null;
           created_at: Timestamp;
@@ -2757,6 +2765,7 @@ export type Database = {
           attempts?: number;
           error?: string | null;
           locked_at?: Timestamp | null;
+          claims?: number;
           requested_by?: UUID | null;
           created_by?: UUID | null;
           created_at?: Timestamp;
@@ -4132,6 +4141,8 @@ export type Database = {
           // 0039 — multi-step dossier pipeline
           analysis: Record<string, unknown>;
           locked_at: Timestamp | null;
+          /** 0111 — consecutive claims without committed progress. */
+          claims: number;
         };
         Insert: {
           id?: UUID;
@@ -4146,6 +4157,7 @@ export type Database = {
           updated_at?: Timestamp;
           analysis?: Record<string, unknown>;
           locked_at?: Timestamp | null;
+          claims?: number;
         };
         Update: Partial<
           Database["public"]["Tables"]["lead_research"]["Insert"]

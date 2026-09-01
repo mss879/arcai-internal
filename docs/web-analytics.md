@@ -132,10 +132,9 @@ ad platforms that read from GA.
 
 | When | What |
 | --- | --- |
-| Every minute | The automation tick calls the pipeline, which self-gates to once an hour |
-| Hourly | Pull all five streams → roll up the days that changed → label new chat conversations |
-| 06:00 UTC | The same, plus a written daily report |
-| 06:15 UTC | A Netlify scheduled function as a belt-and-braces second pass |
+| Every 5 minutes | The automation tick calls the pipeline, which self-gates to once an hour |
+| Hourly | Pull all five streams → roll up the days that changed (data only — no reports, no chat labelling) |
+| 06:15 UTC | The Netlify scheduled function pulls a settled full day, writes the daily report and labels new chat conversations |
 | On demand | **Sync now** on the page, or `GET /api/web-analytics/sync` |
 
 Every stream is incremental (a watermark in `web_sync_state`) and idempotent

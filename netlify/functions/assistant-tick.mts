@@ -8,12 +8,15 @@
 // them inside the automation tick would push the twenty-odd timers that share
 // that invocation towards the platform's ceiling.
 //
-// So Arcus gets its own minute: the memory miner, the pulse, the nudges, the
-// morning briefing, the mission driver and the janitor.
+// Every 30 minutes, not every minute: the pulse self-gates to 15 minutes,
+// the briefing and the memory miner to once a day, the janitor to hours —
+// a per-minute cron mostly paid to discover that every gate was shut. The
+// only real trade is mission latency (a step advances ~each half hour),
+// which is fine for errands nobody is watching in real time.
 //
 // One lightweight HTTP call to /api/assistant/tick, which does the work.
 
-export const config = { schedule: "* * * * *" };
+export const config = { schedule: "*/30 * * * *" };
 
 const handler = async () => {
   const base = (process.env.URL || process.env.NEXT_PUBLIC_APP_URL || "")
@@ -26,14 +29,17 @@ const handler = async () => {
     return;
   }
 
+  // Fail closed, matching the route: no secret, no tick. Header only —
+  // a query param would put the secret in logs.
   const secret = process.env.SMS_CRON_SECRET?.trim();
-  const url = `${base}/api/assistant/tick${
-    secret ? `?secret=${encodeURIComponent(secret)}` : ""
-  }`;
+  if (!secret) {
+    console.error("[assistant-tick] SMS_CRON_SECRET unset — refusing to tick.");
+    return;
+  }
 
   try {
-    const res = await fetch(url, {
-      headers: secret ? { authorization: `Bearer ${secret}` } : {},
+    const res = await fetch(`${base}/api/assistant/tick`, {
+      headers: { authorization: `Bearer ${secret}` },
     });
     if (!res.ok) {
       console.error(`[assistant-tick] tick returned ${res.status}`);

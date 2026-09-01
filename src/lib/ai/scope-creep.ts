@@ -180,7 +180,7 @@ export async function scanProjectScope(
             .slice(0, 8000)}`,
         },
       ],
-      { temperature: 0.2, timeoutMs: 45_000 },
+      { temperature: 0.2, timeoutMs: 20_000 },
     );
     findings = normalize((JSON.parse(raw) as { requests?: unknown }).requests);
   } catch (e) {

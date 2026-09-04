@@ -74,7 +74,6 @@ export type ContentReference = Tables["content_references"]["Row"];
 export type ContentGeneration = Tables["content_generations"]["Row"];
 export type CarouselPost = Tables["carousel_posts"]["Row"];
 export type CarouselOption = Tables["carousel_options"]["Row"];
-export type WebsiteProject = Tables["website_projects"]["Row"];
 export type SmsMessage = Tables["sms_messages"]["Row"];
 export type WaContact = Tables["wa_contacts"]["Row"];
 export type WaMessage = Tables["wa_messages"]["Row"];

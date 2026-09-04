@@ -102,7 +102,6 @@ export default async function ProjectDetailPage({
     templatesRes,
     eventsRes,
     costRatesRes,
-    siteRes,
     changeRequestsRes,
     approvalsRes,
     reviewsRes,
@@ -191,12 +190,6 @@ export default async function ProjectDetailPage({
     // getMembers(): 0092 says a cost rate is never shown to the member it
     // belongs to, and getMembers feeds every picker in the app.
     supabase.from("profiles").select("id, hourly_cost"),
-    // 0092 — the /website-progress build linked to this project (PLAN-9).
-    supabase
-      .from("website_projects")
-      .select("id, name, url, progress, status, notes, launched_at")
-      .eq("project_id", id)
-      .maybeSingle(),
     // 0094 — what the client has sent in, and what we've asked of them.
     supabase
       .from("project_change_requests")
@@ -848,7 +841,6 @@ export default async function ProjectDetailPage({
                 clientNote={project.client_note}
                 clientNoteAt={project.client_note_at}
               />
-              {siteRes.data && <WebsiteBuildCard site={siteRes.data} />}
             </div>
           </div>
         }
@@ -1023,85 +1015,6 @@ export default async function ProjectDetailPage({
         }
       />
     </div>
-  );
-}
-
-/**
- * The linked /website-progress build (PLAN-9).
- *
- * website_projects (0026) predates projects having a delivery pipeline, so the
- * same job was tracked in two places that never spoke. Linked rows now surface
- * here, so the project page is the whole picture.
- */
-function WebsiteBuildCard({
-  site,
-}: {
-  site: {
-    id: string;
-    name: string;
-    url: string;
-    progress: number;
-    status: string;
-    notes: string;
-    launched_at: string | null;
-  };
-}) {
-  const label =
-    site.status === "launched"
-      ? "Live"
-      : site.status === "waiting_client"
-        ? "Waiting on the client"
-        : "In progress";
-
-  return (
-    <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[var(--shadow-card)]">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h2 className="text-sm font-semibold text-slate-900">Website build</h2>
-          <a
-            href={site.url}
-            target="_blank"
-            rel="noreferrer"
-            className="mt-0.5 block truncate text-xs text-primary-600 hover:underline"
-          >
-            {site.url}
-          </a>
-        </div>
-        <Badge
-          className={
-            site.status === "launched"
-              ? "bg-emerald-50 text-emerald-600 ring-emerald-200"
-              : site.status === "waiting_client"
-                ? "bg-amber-50 text-amber-600 ring-amber-200"
-                : "bg-primary-50 text-primary-600 ring-primary-200"
-          }
-        >
-          {label}
-        </Badge>
-      </div>
-
-      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-100">
-        <div
-          className={cn(
-            "h-full rounded-full transition-all",
-            site.progress >= 100 ? "bg-emerald-500" : "bg-primary-500",
-          )}
-          style={{ width: `${site.progress}%` }}
-        />
-      </div>
-      <p className="mt-1.5 flex items-center justify-between text-xs text-slate-400">
-        <span>{site.progress}% built</span>
-        <Link href="/website-progress" className="hover:text-primary-600">
-          Update
-        </Link>
-      </p>
-
-      {site.notes && (
-        <p className="mt-3 border-t border-slate-100 pt-3 text-xs text-slate-500">
-          {site.notes}
-        </p>
-      )}
-    </section>
   );
 }
 

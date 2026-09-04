@@ -1,39 +1,14 @@
-import { createClient } from "@/lib/supabase/server";
-import type { Client, WebsiteProject } from "@/lib/types";
+import { redirect } from "next/navigation";
 
-import { WebsiteProgressView } from "./website-progress-view";
-
-export const metadata = { title: "Website Progress" };
-
-type WebsiteProjectRow = WebsiteProject & {
-  client?: Pick<Client, "id" | "name" | "company"> | null;
-};
-
-export default async function WebsiteProgressPage() {
-  const supabase = await createClient();
-
-  const [sitesRes, clientsRes, projectsRes] = await Promise.all([
-    supabase
-      .from("website_projects")
-      .select("*, client:clients(id, name, company)")
-      .order("created_at", { ascending: false }),
-    supabase.from("clients").select("id, name, company").order("name"),
-    // 0092 — a build can point at the project it belongs to, so the same job
-    // isn't tracked in two disconnected places.
-    supabase
-      .from("projects")
-      .select("id, name")
-      .is("deleted_at", null)
-      .order("created_at", { ascending: false }),
-  ]);
-
-  return (
-    <WebsiteProgressView
-      // The clients join isn't declared in the hand-authored DB types.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      sites={(sitesRes.data ?? []) as any as WebsiteProjectRow[]}
-      clients={clientsRes.data ?? []}
-      projects={projectsRes.data ?? []}
-    />
-  );
+/**
+ * Website Progress folded into Projects (0113).
+ *
+ * A client's website build IS its project: the build percentage, preview
+ * link, live address and launch date now live on the project row (0112) and
+ * show on the project page and the client's portal. The board filtered to
+ * website builds is what this page used to be. Kept as a redirect so old
+ * bookmarks and the assistant's older links still land somewhere useful.
+ */
+export default function WebsiteProgressPage() {
+  redirect("/projects?service=website&mode=table");
 }

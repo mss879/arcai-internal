@@ -673,29 +673,6 @@ export async function templateFromProject(
   return { ok: true, id: templateId };
 }
 
-// ---------------------------------------------------------------------------
-// The other build tracker (PLAN-9)
-// ---------------------------------------------------------------------------
-
-/** Point a /website-progress row at the project it belongs to. */
-export async function linkWebsiteProject(
-  websiteProjectId: string,
-  projectId: string | null,
-): Promise<ActionResult> {
-  const { supabase, user } = await authed();
-  if (!user) return { ok: false, error: "Not authenticated." };
-
-  const { error } = await supabase
-    .from("website_projects")
-    .update({ project_id: projectId })
-    .eq("id", websiteProjectId);
-  if (error) return { ok: false, error: error.message };
-
-  revalidatePath("/website-progress");
-  if (projectId) touch(projectId);
-  return { ok: true };
-}
-
 /**
  * Create this month's aftercare tasks for a delivered project.
  *

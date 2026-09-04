@@ -107,12 +107,12 @@ export const APP_AREAS: AppAreaEntry[] = [
   },
   {
     area: "website",
-    label: "Website Progress",
-    href: "/website-progress",
+    label: "Website builds",
+    href: "/projects?service=website",
     blurb:
-      "Build progress on each website, tracked section by section so a client can see how far along their site is.",
+      "Every client website build as a project (0113): how far along it is, the preview and live links, the launch date — the same numbers the client sees on their tracking link.",
     icon: "Globe",
-    aliases: ["websites", "site progress", "web builds", "site build"],
+    aliases: ["websites", "site progress", "web builds", "site build", "website progress"],
   },
   {
     area: "crm",

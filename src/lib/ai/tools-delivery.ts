@@ -1,7 +1,7 @@
 import "server-only";
 
 /**
- * The assistant's delivery desk — Client Delivery, Website Progress, the
+ * The assistant's delivery desk — Client Delivery, website builds, the
  * Projects deep-dive, Meetings and Resources.
  *
  * Delivery is the half of the workspace where the answer is almost never a
@@ -60,7 +60,6 @@ import {
   PROJECT_EXPENSE_CATEGORY_LABELS,
   PROJECT_STATUS_META,
   SERVICE_TYPE_LABELS,
-  WEBSITE_STATUS_META,
 } from "@/lib/constants";
 import type {
   ApprovalStatus,
@@ -68,9 +67,9 @@ import type {
   DeliveryStage,
   ProjectAnomalyStatus,
   ReviewStatus,
-  WebsiteStatus,
 } from "@/lib/database.types";
 import { projectCostsByProject } from "@/lib/project-costs";
+import { computeProjectProgress } from "@/lib/project-progress";
 import { benchmarkByService, finishedProjects } from "@/lib/project-history";
 import {
   balanceDue,
@@ -115,7 +114,7 @@ export const DELIVERY_TOOLS: ToolSchema[] = [
     function: {
       name: "delivery_query",
       description:
-        "List any delivery or project record set as a table: pick the `dataset`. projects = the delivery view of every project (stage, balance, days idle, what is blocking it). milestones = client-facing phases and internal launch checks. assets = the client asset checklist. tasks / time / expenses = the work, the hours and the extra costs raised on projects. approvals = sign-offs asked of the client. change_requests = what the client asked for after the quote. comments / pulses / reviews = what the client has said. activity = the delivery event feed. websites = the Website Progress board. resources = the shared files and links. templates = project plan templates. lessons / anomalies = the AI layer's findings. views = the board's saved filter views. Use this for 'what milestones are due in October', 'which websites are waiting on the client', 'which projects have work nobody approved', 'what did we agree in the last change request', 'what's missing from Nimal's checklist' or 'what happened on delivery this week'.",
+        "List any delivery or project record set as a table: pick the `dataset`. projects = the delivery view of every project (stage, balance, days idle, what is blocking it). milestones = client-facing phases and internal launch checks. assets = the client asset checklist. tasks / time / expenses = the work, the hours and the extra costs raised on projects. approvals = sign-offs asked of the client. change_requests = what the client asked for after the quote. comments / pulses / reviews = what the client has said. activity = the delivery event feed. websites = every website build (projects of a website type, with the progress the client sees on their tracking link). resources = the shared files and links. templates = project plan templates. lessons / anomalies = the AI layer's findings. views = the board's saved filter views. Use this for 'what milestones are due in October', 'which websites are waiting on the client', 'which projects have work nobody approved', 'what did we agree in the last change request', 'what's missing from Nimal's checklist' or 'what happened on delivery this week'.",
       parameters: {
         type: "object",
         properties: {
@@ -435,7 +434,8 @@ function serviceLabel(service: string | null): string {
 // rather than silently returning nothing at run time.
 const APPROVAL_STATUSES: ApprovalStatus[] = ["pending", "approved", "changes_requested"];
 const REVIEW_STATUSES: ReviewStatus[] = ["requested", "submitted", "declined"];
-const WEBSITE_STATUSES: WebsiteStatus[] = ["in_progress", "waiting_client", "launched"];
+/** 0113 — website builds are projects; these are derived: launched = live_url set, waiting_client = blocked. */
+const WEBSITE_FILTERS = ["in_progress", "waiting_client", "launched"] as const;
 const ANOMALY_STATUSES: ProjectAnomalyStatus[] = ["open", "dismissed", "fixed"];
 
 /** Truncate free prose for the model's copy; the artifact keeps it whole. */
@@ -525,10 +525,15 @@ type ProjectLite = {
   risk_note: string | null;
   chaser_paused: boolean;
   automation_paused: boolean;
+  // 0112 — the website build, as the client's tracking link shows it.
+  progress_override?: number | null;
+  preview_url?: string | null;
+  live_url?: string | null;
+  launched_at?: string | null;
 };
 
 const PROJECT_COLUMNS =
-  "id, name, client_id, status, service_type, currency, delivery_stage, delivery_stage_changed_at, updated_at, created_at, start_date, due_date, total_value, deposit_paid, budget, expense_cap, blocked_reason, blocked_since, risk_rank, risk_note, chaser_paused, automation_paused";
+  "id, name, client_id, status, service_type, currency, delivery_stage, delivery_stage_changed_at, updated_at, created_at, start_date, due_date, total_value, deposit_paid, budget, expense_cap, blocked_reason, blocked_since, risk_rank, risk_note, chaser_paused, automation_paused, progress_override, preview_url, live_url, launched_at";
 
 /** Every live project. Archived ones never appear — acting on one silently is how a mistake gets made. */
 async function loadProjects(supabase: DB): Promise<{ rows: ProjectLite[]; error: string | null }> {
@@ -711,7 +716,6 @@ async function projectDossier(
     reviewsRes,
     eventsRes,
     paymentsRes,
-    siteRes,
     isAdmin,
   ] = await Promise.all([
     supabase.from("projects").select(PROJECT_COLUMNS).eq("id", id).maybeSingle(),
@@ -774,10 +778,6 @@ async function projectDossier(
       .select("id, amount, status, paid_at, method, notes")
       .eq("project_id", id)
       .order("paid_at", { ascending: false }),
-    supabase
-      .from("website_projects")
-      .select("id, name, url, progress, status, launched_at")
-      .eq("project_id", id),
     callerIsAdmin(ctx),
   ]);
 
@@ -820,7 +820,17 @@ async function projectDossier(
   const reviews = reviewsRes.data ?? [];
   const events = eventsRes.data ?? [];
   const payments = paymentsRes.data ?? [];
-  const site = (siteRes.data ?? [])[0] ?? null;
+  // 0112 — the number the client's tracking link shows, computed the same way.
+  const buildProgress = computeProjectProgress({
+    status: project.status,
+    deliveryStage: project.delivery_stage,
+    milestones: milestones.map((m) => ({
+      status: m.status,
+      client_visible: m.client_visible,
+      kind: m.kind,
+    })),
+    override: project.progress_override ?? null,
+  });
 
   const moneyMap = await moneyForProjects(supabase, [project]);
   const cash = moneyMap.get(id) ?? { value: 0, received: 0, balance: 0, percent: 0 };
@@ -1015,13 +1025,18 @@ async function projectDossier(
           value: reviews[0] ? `${reviews[0].status}${reviews[0].rating ? ` — ${reviews[0].rating}/5` : ""}` : "none asked",
           format: "status",
         },
-        ...(site
+        {
+          label: "Website build",
+          value: `${buildProgress.percent}% — ${project.live_url ? "live" : buildProgress.bandLabel}${buildProgress.source === "override" ? " (set by the team)" : ""}`,
+          format: "status" as ArtifactFormat,
+          href,
+        },
+        ...(project.live_url || project.preview_url
           ? [
               {
-                label: "Website build",
-                value: `${site.progress}% — ${WEBSITE_STATUS_META[site.status].label}`,
-                format: "status" as ArtifactFormat,
-                href: "/website-progress",
+                label: project.live_url ? "Live site" : "Preview site",
+                value: project.live_url ?? project.preview_url ?? "",
+                format: "url" as ArtifactFormat,
               },
             ]
           : []),
@@ -2224,31 +2239,72 @@ async function datasetActivity(supabase: DB, scope: Scope, f: Filters): Promise<
 // -- websites ---------------------------------------------------------------
 
 async function datasetWebsites(supabase: DB, scope: Scope, f: Filters): Promise<Dataset | string> {
+  // 0113 — Website Progress folded into Projects: a build IS a project of a
+  // website service type, and its progress is the number the client sees.
   let q = supabase
-    .from("website_projects")
-    .select("id, name, url, progress, status, notes, launched_at, project_id, client_id, updated_at");
-  if (scope.ids) q = q.in("project_id", scope.ids);
-  if ((WEBSITE_STATUSES as string[]).includes(f.status)) {
-    q = q.eq("status", f.status as WebsiteStatus);
-  }
-  const { data, error } = await q.order("progress", { ascending: false }).limit(300);
+    .from("projects")
+    .select(
+      "id, name, status, delivery_stage, service_type, progress_override, preview_url, live_url, launched_at, blocked_reason, description, updated_at, client:clients(name), milestones:project_milestones(status, client_visible, kind)",
+    )
+    .is("deleted_at", null)
+    .in("service_type", ["business_website", "ecommerce_website"]);
+  if (scope.ids) q = q.in("id", scope.ids);
+  const { data, error } = await q.order("updated_at", { ascending: false }).limit(300);
   if (error) return error.message;
 
-  let rows = (data ?? []).map((w) => ({
-    ...w,
-    project: w.project_id ? (scope.names.get(w.project_id) ?? "—") : "not linked",
-  }));
-  if (f.query) rows = rows.filter((w) => contains(w.name, f.query) || contains(w.url, f.query));
+  type Row = {
+    id: string;
+    name: string;
+    status: string;
+    delivery_stage: string | null;
+    service_type: string | null;
+    progress_override: number | null;
+    preview_url: string | null;
+    live_url: string | null;
+    launched_at: string | null;
+    blocked_reason: string | null;
+    description: string | null;
+    updated_at: string;
+    client: { name: string } | null;
+    milestones: { status: string; client_visible: boolean | null; kind: string }[] | null;
+  };
+  let rows = ((data ?? []) as unknown as Row[]).map((p) => {
+    const progress = computeProjectProgress({
+      status: p.status,
+      deliveryStage: p.delivery_stage,
+      milestones: p.milestones ?? [],
+      override: p.progress_override,
+    });
+    const state: (typeof WEBSITE_FILTERS)[number] = p.live_url
+      ? "launched"
+      : p.blocked_reason
+        ? "waiting_client"
+        : "in_progress";
+    return { ...p, progress: progress.percent, band: progress.bandLabel, state };
+  });
+  if ((WEBSITE_FILTERS as readonly string[]).includes(f.status)) {
+    rows = rows.filter((w) => w.state === f.status);
+  }
+  if (f.query) {
+    rows = rows.filter(
+      (w) =>
+        contains(w.name, f.query) ||
+        contains(w.live_url ?? "", f.query) ||
+        contains(w.preview_url ?? "", f.query) ||
+        contains(w.client?.name ?? "", f.query),
+    );
+  }
   if (f.from || f.to) rows = rows.filter((w) => inWindow(w.launched_at, f));
+  rows.sort((a, b) => b.progress - a.progress);
 
   const columns: ArtifactColumn[] = [
     { key: "site", label: "Website" },
+    { key: "client", label: "Client", secondary: true },
     { key: "url", label: "Address", format: "url", secondary: true },
     { key: "progress", label: "Progress", format: "percent", align: "right" },
     { key: "status", label: "Status", format: "status" },
-    { key: "project", label: "Project", secondary: true },
     { key: "launched", label: "Launched", format: "datetime" },
-    { key: "notes", label: "Notes", secondary: true },
+    { key: "notes", label: "Waiting on", secondary: true },
   ];
 
   return {
@@ -2256,29 +2312,32 @@ async function datasetWebsites(supabase: DB, scope: Scope, f: Filters): Promise<
     subtitle:
       f.status === "waiting_client"
         ? "Waiting on the client"
-        : f.status
-          ? `Filtered: ${f.status}`
-          : "Furthest along first",
-    summary: "Launching a site sets it to 100% and stamps the launch date, so progress and status never disagree.",
-    href: "/website-progress",
+        : f.status === "launched"
+          ? "Live sites"
+          : f.status
+            ? `Filtered: ${f.status}`
+            : "Furthest along first",
+    summary:
+      "Progress is what the client's tracking link shows: the delivery stage sets the range, client-visible milestones move it, or the team set a number. Launching records the live address and moves the project to Delivered.",
+    href: "/projects?service=website",
     area: "website",
     columns,
     rows: rowsToTable(rows, columns, (w) => ({
       id: w.id,
-      href: w.project_id ? `/projects/${w.project_id}` : "/website-progress",
-      tone: (w.status === "launched"
+      href: `/projects/${w.id}`,
+      tone: (w.state === "launched"
         ? "positive"
-        : w.status === "waiting_client"
+        : w.state === "waiting_client"
           ? "warning"
           : "info") as ArtifactTone,
       cells: {
         site: w.name,
-        url: w.url,
+        client: w.client?.name ?? "—",
+        url: w.live_url ?? w.preview_url ?? "—",
         progress: w.progress,
-        status: WEBSITE_STATUS_META[w.status].label,
-        project: w.project,
+        status: w.state === "launched" ? "Live" : w.state === "waiting_client" ? "Waiting on client" : w.band,
         launched: w.launched_at,
-        notes: w.notes || "—",
+        notes: w.blocked_reason || "—",
       },
     })),
   };

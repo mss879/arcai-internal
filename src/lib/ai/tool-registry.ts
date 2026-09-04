@@ -218,7 +218,7 @@ const TOOL_LABELS: Record<string, string> = {
   preview_campaign: "Previewing the campaign",
   run_weekly_digest: "Writing the weekly digest",
   run_churn_scan: "Scanning for churn risk",
-  save_website_project: "Updating Website Progress",
+  save_website_project: "Updating a website build",
   apply_project_template: "Seeding from the template",
 
   // Web Analytics — @/lib/ai/tools-web-analytics

@@ -41,7 +41,6 @@ import "server-only";
 import { after } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import { saveWebsiteProject } from "@/app/(app)/website-progress/actions";
 import { generateWeeklyDigest, scanChurn } from "@/lib/intelligence";
 import { eligibleLeads } from "@/lib/outreach-campaign";
 import {
@@ -464,12 +463,12 @@ export const GROWTH_TOOLS: ToolSchema[] = [
     function: {
       name: "save_website_project",
       description:
-        "Add or update a site on the Website Progress board — 'track silvamotors.lk, in progress, 40%'. Links to a client when one matches the name given.",
+        "Record a website build on its PROJECT — 'track silvamotors.lk, in progress, 40%', 'the Nimal site is live at nimal.lk'. Finds the website project by name (then by client) or creates one; writes the preview or live address, the progress percentage and whether it is waiting on the client. 'launched' records the live address and the launch date and moves the project to Delivered (the deposit and launch-check gates still apply). The client sees the same numbers on their tracking link.",
       parameters: {
         type: "object",
         properties: {
-          name: { type: "string", description: "The site's display name." },
-          url: { type: "string", description: "The site's URL." },
+          name: { type: "string", description: "The project / site name." },
+          url: { type: "string", description: "The site's address — preview until launched, live once launched." },
           client_name: {
             type: "string",
             description: "Client to link, matched loosely. Omit for none.",
@@ -477,13 +476,13 @@ export const GROWTH_TOOLS: ToolSchema[] = [
           status: {
             type: "string",
             enum: ["in_progress", "waiting_client", "launched"],
-            description: "Defaults to in_progress.",
+            description: "Defaults to in_progress. waiting_client marks the project blocked on the client; launched records the live site.",
           },
           progress: {
             type: "integer",
-            description: "0-100. Launched is always 100.",
+            description: "0-100, sets the manual progress the client sees. Omit to leave it computed from the stage and milestones.",
           },
-          notes: { type: "string" },
+          notes: { type: "string", description: "What is outstanding — becomes the blocked reason when waiting on the client, else the description if empty." },
         },
         required: ["name", "url"],
         additionalProperties: false,
@@ -5204,24 +5203,28 @@ async function runChurnScanTool(ctx: ToolContext): Promise<ToolResult> {
 }
 
 /**
- * Website Progress writes (0104) — the area had exactly one read tool. The
- * server action does the real validation and URL normalisation; this only
- * resolves the client name first.
+ * Website build writes (0104, reshaped in 0113) — "track silvamotors.lk, in
+ * progress, 40%". The Website Progress board folded into Projects: a build IS
+ * a project, so this finds the website project (by name, then by client) or
+ * creates one, and writes the site's address, progress and state onto it —
+ * the same columns the project page and the client's portal read.
  */
 async function saveWebsiteProjectTool(
   args: Record<string, unknown>,
   ctx: ToolContext,
 ): Promise<ToolResult> {
   const name = String(args.name ?? "").trim();
-  const url = String(args.url ?? "").trim();
-  if (!name || !url) {
+  const rawUrl = String(args.url ?? "").trim();
+  if (!name || !rawUrl) {
     return { content: { ok: false, error: "A site needs a name and a URL." } };
   }
+  const url = /^https?:\/\//i.test(rawUrl) ? rawUrl : `https://${rawUrl}`;
+  const supabase = ctx.supabase;
 
   let clientId: string | null = null;
   const clientName = String(args.client_name ?? "").trim();
   if (clientName) {
-    const { data } = await ctx.supabase
+    const { data } = await supabase
       .from("clients")
       .select("id, name")
       .ilike("name", `%${clientName}%`)
@@ -5242,25 +5245,136 @@ async function saveWebsiteProjectTool(
     String(args.status),
   )
     ? (String(args.status) as "in_progress" | "waiting_client" | "launched")
-    : undefined;
+    : "in_progress";
+  const progress =
+    typeof args.progress === "number"
+      ? Math.min(Math.max(Math.round(args.progress), 0), 100)
+      : null;
+  const notes = typeof args.notes === "string" ? args.notes.trim() : "";
+  const websiteTypes = ["business_website", "ecommerce_website"];
 
-  const result = await saveWebsiteProject({
-    name,
-    url,
-    client_id: clientId,
-    ...(status ? { status } : {}),
-    ...(typeof args.progress === "number"
-      ? { progress: Math.min(Math.max(Math.round(args.progress), 0), 100) }
-      : {}),
-    ...(typeof args.notes === "string" ? { notes: args.notes } : {}),
-  });
-  if (!result.ok) return { content: result };
+  // ---- Find the project: by name, then the client's open website build.
+  let projectId: string | null = null;
+  let projectName = name;
+  let created = false;
+  const { data: byName } = await supabase
+    .from("projects")
+    .select("id, name")
+    .is("deleted_at", null)
+    .in("service_type", websiteTypes)
+    .ilike("name", `%${name}%`)
+    .limit(2);
+  if (byName?.length === 1) {
+    projectId = byName[0].id;
+    projectName = byName[0].name;
+  } else if ((byName?.length ?? 0) > 1) {
+    return {
+      content: {
+        ok: false,
+        ambiguous: byName!.map((p) => p.name),
+        error: "Several website projects match that name — ask which one.",
+      },
+    };
+  }
+  if (!projectId && clientId) {
+    const { data: byClient } = await supabase
+      .from("projects")
+      .select("id, name")
+      .is("deleted_at", null)
+      .eq("client_id", clientId)
+      .in("service_type", websiteTypes)
+      .neq("status", "completed")
+      .order("created_at", { ascending: false })
+      .limit(1);
+    if (byClient?.[0]) {
+      projectId = byClient[0].id;
+      projectName = byClient[0].name;
+    }
+  }
+  if (!projectId) {
+    const { data: inserted, error } = await supabase
+      .from("projects")
+      .insert({
+        name,
+        client_id: clientId,
+        status: "active",
+        service_type: "business_website",
+        delivery_stage: "build",
+        delivery_stage_changed_at: new Date().toISOString(),
+        currency: "LKR",
+        start_date: new Date().toISOString().slice(0, 10),
+        description: notes || null,
+        created_by: ctx.userId,
+      })
+      .select("id, name")
+      .single();
+    if (error || !inserted)
+      return { content: { ok: false, error: error?.message ?? "Couldn't create the project." } };
+    projectId = inserted.id;
+    projectName = inserted.name;
+    created = true;
+    const { fireProjectCreated } = await import("@/lib/project-events");
+    await fireProjectCreated(supabase, projectId, "assistant");
+  }
+
+  // ---- Write the build state onto the project.
+  const patch: {
+    preview_url?: string | null;
+    progress_override?: number | null;
+    blocked_reason?: string | null;
+    blocked_since?: string | null;
+    description?: string | null;
+  } = {};
+  if (status !== "launched") patch.preview_url = url;
+  if (progress !== null && status !== "launched") patch.progress_override = progress;
+  if (status === "waiting_client") {
+    patch.blocked_reason = notes || "Waiting on the client";
+    patch.blocked_since = new Date().toISOString();
+  } else if (status === "in_progress") {
+    patch.blocked_reason = null;
+    patch.blocked_since = null;
+    if (notes && !created) {
+      const { data: row } = await supabase
+        .from("projects")
+        .select("description")
+        .eq("id", projectId)
+        .maybeSingle();
+      if (!row?.description?.trim()) patch.description = notes;
+    }
+  }
+  if (Object.keys(patch).length) {
+    const { error } = await supabase.from("projects").update(patch).eq("id", projectId);
+    if (error) return { content: { ok: false, error: error.message } };
+  }
+
+  let launch: string | null = null;
+  if (status === "launched") {
+    // The same action the Launch button uses, so the deposit and
+    // launch-checklist gates apply to a voice command too.
+    const { launchProjectSite } = await import("@/app/(app)/projects/actions");
+    const res = await launchProjectSite(projectId, { liveUrl: url });
+    launch = res.ok
+      ? res.warning
+        ? `Site recorded as live at ${url}; ${res.warning}`
+        : `Site live at ${url} and the project is Delivered.`
+      : `Couldn't launch — ${res.error}`;
+  }
+
   return {
-    content: { ok: true, name, url },
+    content: {
+      ok: true,
+      project: projectName,
+      created,
+      url,
+      status,
+      progress,
+      launch,
+      note: "The client sees the same progress, preview and live links on their tracking link.",
+    },
     event: {
-      kind: "created",
-      label: `Tracking ${name} on Website Progress`,
-      href: "/website-progress",
+      kind: created ? "created" : "updated",
+      label: `Website build: ${projectName}`,
+      href: `/projects/${projectId}`,
     },
   };
 }

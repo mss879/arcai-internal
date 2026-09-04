@@ -8,7 +8,6 @@ import {
   FileText,
   FolderKanban,
   FolderOpen,
-  Globe,
   KanbanSquare,
   Landmark,
   LayoutDashboard,
@@ -63,10 +62,10 @@ export const PINNED_NAV: NavItem[] = [
  *   the line items would be (see @/lib/notice). It is a document you send to
  *   get paid, not a marketing tool, whatever the megaphone icon suggests.
  *
- *   Website Progress sits under Clients & Delivery because it tracks the
- *   builds of CLIENT sites. The agency's own site is Web Analytics, under
- *   Insights. Those two have never been the same thing and the old flat menu
- *   listed them four apart, which is exactly how you end up in the wrong one.
+ *   Website Progress is gone (0113): a client's website build IS its project,
+ *   so its progress, preview and live links live on the project and the board
+ *   filters to website builds (/projects?service=website). The agency's own
+ *   site is Web Analytics, under Insights — never the same thing.
  */
 export const NAV_GROUPS: NavGroup[] = [
   {
@@ -82,7 +81,6 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { label: "Clients", href: "/clients", icon: Users },
       { label: "Client Delivery", href: "/delivery", icon: PackageCheck },
-      { label: "Website Progress", href: "/website-progress", icon: Globe },
       { label: "Meetings", href: "/meetings", icon: CalendarClock },
     ],
   },

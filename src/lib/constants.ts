@@ -3,7 +3,6 @@ import type {
   TodoStatus,
   ProjectStatus,
   PaymentStatus,
-  WebsiteStatus,
   CommissionStatus,
   ClientStatus,
 } from "@/lib/types";
@@ -76,24 +75,6 @@ export const PROJECT_STATUS_META: Record<
   cancelled: {
     label: "Cancelled",
     badge: "bg-rose-50 text-rose-600 ring-rose-200",
-  },
-};
-
-export const WEBSITE_STATUS_META: Record<
-  WebsiteStatus,
-  { label: string; badge: string }
-> = {
-  in_progress: {
-    label: "In progress",
-    badge: "bg-primary-50 text-primary-600 ring-primary-200",
-  },
-  waiting_client: {
-    label: "Waiting on client",
-    badge: "bg-amber-50 text-amber-600 ring-amber-200",
-  },
-  launched: {
-    label: "Launched",
-    badge: "bg-emerald-50 text-emerald-600 ring-emerald-200",
   },
 };
 

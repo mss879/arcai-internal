@@ -68,6 +68,18 @@ type Copy = {
   pulseOk: string;
   pulseGreat: string;
   pulseThanks: string;
+  /** 0112 — progress, the latest update, the site itself */
+  overallProgress: string;
+  youAreHere: string;
+  notStartedYet: string;
+  latestUpdate: string;
+  noUpdateYet: string;
+  daysToGo: (n: number) => string;
+  dueToday: string;
+  pastTarget: string;
+  previewSite: string;
+  visitLiveSite: string;
+  launchedOn: string;
   stages: Record<DeliveryStage, string>;
 };
 
@@ -120,6 +132,18 @@ const EN: Copy = {
   pulseOk: "Fine",
   pulseGreat: "Great",
   pulseThanks: "Thank you — that helps.",
+  // 0112
+  overallProgress: "Overall progress",
+  youAreHere: "You are here:",
+  notStartedYet: "Not started yet",
+  latestUpdate: "Latest update",
+  noUpdateYet: "We'll post updates here as the work moves along.",
+  daysToGo: (n) => (n === 1 ? "1 day to go" : `${n} days to go`),
+  dueToday: "Due today",
+  pastTarget: "Past the target date — we'll confirm a new one with you",
+  previewSite: "Preview your site",
+  visitLiveSite: "Visit your live site",
+  launchedOn: "Launched on",
   stages: {
     onboarding: "Getting started",
     assets: "Collecting your content",
@@ -178,6 +202,18 @@ const SI: Copy = {
   pulseOk: "හොඳයි",
   pulseGreat: "ඉතා හොඳයි",
   pulseThanks: "ස්තූතියි — එය අපට උදවු වේ.",
+  // 0112
+  overallProgress: "සමස්ත ප්‍රගතිය",
+  youAreHere: "ඔබ දැන් සිටින්නේ:",
+  notStartedYet: "තවම ආරම්භ වී නැත",
+  latestUpdate: "නවතම යාවත්කාලීනය",
+  noUpdateYet: "වැඩ ඉදිරියට යන විට යාවත්කාලීන මෙහි පළ කරන්නෙමු.",
+  daysToGo: (n) => `තව දින ${n}යි`,
+  dueToday: "නියමිත දිනය අදයි",
+  pastTarget: "නියමිත දිනය පසු වී ඇත — නව දිනයක් ඔබ සමඟ තහවුරු කරන්නෙමු",
+  previewSite: "ඔබේ වෙබ් අඩවියේ පෙරදසුන බලන්න",
+  visitLiveSite: "ඔබේ සජීවී වෙබ් අඩවියට යන්න",
+  launchedOn: "දියත් කළ දිනය",
   stages: {
     onboarding: "පටන් ගනිමු",
     assets: "ඔබේ අන්තර්ගතය එකතු කිරීම",
@@ -238,6 +274,18 @@ const TA: Copy = {
   pulseOk: "பரவாயில்லை",
   pulseGreat: "மிக நன்று",
   pulseThanks: "நன்றி — இது எங்களுக்கு உதவுகிறது.",
+  // 0112
+  overallProgress: "ஒட்டுமொத்த முன்னேற்றம்",
+  youAreHere: "நீங்கள் இப்போது இங்கே:",
+  notStartedYet: "இன்னும் தொடங்கவில்லை",
+  latestUpdate: "சமீபத்திய புதுப்பிப்பு",
+  noUpdateYet: "வேலை முன்னேறும்போது புதுப்பிப்புகளை இங்கே பதிவிடுவோம்.",
+  daysToGo: (n) => `இன்னும் ${n} நாட்கள்`,
+  dueToday: "இன்றே இலக்கு நாள்",
+  pastTarget: "இலக்கு நாள் கடந்துவிட்டது — புதிய நாளை உங்களுடன் உறுதிப்படுத்துவோம்",
+  previewSite: "உங்கள் தளத்தை முன்னோட்டமாகப் பாருங்கள்",
+  visitLiveSite: "உங்கள் நேரலை தளத்திற்குச் செல்லுங்கள்",
+  launchedOn: "தொடங்கப்பட்ட நாள்",
   stages: {
     onboarding: "தொடங்குகிறோம்",
     assets: "உங்கள் உள்ளடக்கம் சேகரிக்கிறோம்",
@@ -282,6 +330,26 @@ export function portalMessage(opts: {
   return [
     `Hi ${opts.name}, you can follow ${opts.projectName} here and send us anything we need:`,
     opts.link,
+    opts.passcode ? `Passcode: ${opts.passcode}` : null,
+    opts.note?.trim() || null,
+    "— ARC AI",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+/**
+ * The same message for a WhatsApp button send (0112): the link rides the
+ * "Open your project" button, so the body never repeats it as a raw URL.
+ */
+export function portalCtaBody(opts: {
+  name: string;
+  projectName: string;
+  passcode: string | null;
+  note?: string;
+}): string {
+  return [
+    `Hi ${opts.name}, you can follow ${opts.projectName} and send us anything we need — tap the button below.`,
     opts.passcode ? `Passcode: ${opts.passcode}` : null,
     opts.note?.trim() || null,
     "— ARC AI",

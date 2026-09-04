@@ -3,7 +3,12 @@
 import { revalidatePath } from "next/cache";
 
 import { fireAutomationTrigger } from "@/lib/automation";
-import { buildPaymentEvent } from "@/lib/delivery";
+import {
+  buildPaymentEvent,
+  logDeliveryEvent,
+  setProjectDeliveryStage,
+} from "@/lib/delivery";
+import type { PortalSendResult } from "@/lib/portal-send";
 import { createClient } from "@/lib/supabase/server";
 import type {
   ActionResult,
@@ -47,9 +52,23 @@ export type ProjectInput = {
   lead_id?: string | null;
   quote_id?: string | null;
   proposal_id?: string | null;
+  /** 0112 — the catalogue package sold (web_smart_site …). */
+  package_key?: string | null;
+  /** 0112 — create only: hand the client their tracking link straight away. */
+  send_portal?: boolean;
 };
 
-export async function saveProject(input: ProjectInput): Promise<ActionResult> {
+export type SaveProjectResult = {
+  id: string;
+  shareToken: string | null;
+  created: boolean;
+  /** Creation only: what happened to the tracking link. null = not attempted. */
+  send: PortalSendResult | null;
+};
+
+export async function saveProject(
+  input: ProjectInput,
+): Promise<ActionResult<SaveProjectResult>> {
   const { supabase, user } = await authed();
   if (!user) return { ok: false, error: "Not authenticated." };
   if (!input.name?.trim()) return { ok: false, error: "Project name is required." };
@@ -71,6 +90,7 @@ export async function saveProject(input: ProjectInput): Promise<ActionResult> {
     ...(input.lead_id !== undefined ? { lead_id: input.lead_id } : {}),
     ...(input.quote_id !== undefined ? { quote_id: input.quote_id } : {}),
     ...(input.proposal_id !== undefined ? { proposal_id: input.proposal_id } : {}),
+    ...(input.package_key !== undefined ? { package_key: input.package_key || null } : {}),
     // Documents are only written when the form actually passed them, so an
     // edit that doesn't touch the uploads can never blank an existing file.
     ...(input.proposal_url !== undefined
@@ -100,23 +120,68 @@ export async function saveProject(input: ProjectInput): Promise<ActionResult> {
         .from("projects")
         .update(payload)
         .eq("id", input.id)
-        .select("id")
+        .select("id, share_token")
         .single()
-    : await supabase.from("projects").insert(payload).select("id").single();
+    : await supabase
+        .from("projects")
+        .insert(payload)
+        .select("id, share_token")
+        .single();
 
-  if (saved.error) return { ok: false, error: saved.error.message };
+  if (saved.error || !saved.data)
+    return { ok: false, error: saved.error?.message ?? "The project didn't save." };
 
-  if (saved.data) {
+  const created = !input.id;
+  const projectId = saved.data.id;
+
+  {
     const { fireProjectCompleted, fireProjectCreated } = await import(
       "@/lib/project-events"
     );
-    if (!input.id) await fireProjectCreated(supabase, saved.data.id, "team");
+    if (created) await fireProjectCreated(supabase, projectId, "team");
     if (payload.status === "completed" && before?.status !== "completed")
-      await fireProjectCompleted(supabase, saved.data.id);
+      await fireProjectCompleted(supabase, projectId);
+  }
+
+  // 0112 — a proposal that produced this project points back at it, so the
+  // chain reads in both directions.
+  if (created && input.proposal_id) {
+    await supabase
+      .from("proposals")
+      .update({ project_id: projectId })
+      .eq("id", input.proposal_id);
+  }
+
+  // 0112 — the tracking link, the moment the project exists. A send that
+  // fails is reported back to the form; it never fails the save.
+  let send: PortalSendResult | null = null;
+  if (created && input.send_portal && payload.client_id) {
+    try {
+      const { sendPortalLink } = await import("@/lib/portal-send");
+      send = await sendPortalLink(supabase, projectId, {
+        channel: "auto",
+        actor: "creation",
+        actorId: user.id,
+        onlyIfNeverSent: true,
+      });
+    } catch (e) {
+      send = {
+        ok: false,
+        reason: "send_failed",
+        error: e instanceof Error ? e.message : "The link couldn't be sent.",
+      };
+    }
   }
 
   revalidatePath("/projects");
-  return { ok: true };
+  if (!created) revalidatePath(`/projects/${projectId}`);
+  return {
+    ok: true,
+    id: projectId,
+    shareToken: saved.data.share_token,
+    created,
+    send,
+  };
 }
 
 export async function deleteProject(id: string): Promise<ActionResult> {
@@ -811,4 +876,196 @@ export async function readReceipt(dataUrl: string): Promise<ReadReceiptResult> {
     };
   }
   return { ok: true, parsed };
+}
+
+// ---------------------------------------------------------------------------
+// The site itself, and what the client is told (0112)
+// ---------------------------------------------------------------------------
+
+/** A team-entered URL: blank clears it; anything else must be http(s). */
+function cleanSiteUrl(raw: string | null | undefined): { ok: true; value: string | null } | { ok: false; error: string } {
+  const value = (raw ?? "").trim();
+  if (!value) return { ok: true, value: null };
+  const withScheme = /^https?:\/\//i.test(value) ? value : `https://${value}`;
+  try {
+    const url = new URL(withScheme);
+    if (url.username || url.password)
+      return { ok: false, error: "Don't put credentials in a site link — the client sees it." };
+    return { ok: true, value: url.toString() };
+  } catch {
+    return { ok: false, error: `"${value}" isn't a valid web address.` };
+  }
+}
+
+/**
+ * The one line the client reads first on their portal ("what's happening
+ * now"). Blank clears it. Every update is a History line, so the team can
+ * see what the client was last told.
+ */
+export async function updateClientNote(
+  projectId: string,
+  note: string,
+): Promise<ActionResult> {
+  const { supabase, user } = await authed();
+  if (!user) return { ok: false, error: "Not authenticated." };
+
+  const clean = note.trim().slice(0, 600);
+  const { error } = await supabase
+    .from("projects")
+    .update({
+      client_note: clean || null,
+      client_note_at: clean ? new Date().toISOString() : null,
+    })
+    .eq("id", projectId);
+  if (error) return { ok: false, error: error.message };
+
+  if (clean) {
+    await logDeliveryEvent(
+      supabase,
+      projectId,
+      "client_note",
+      `Client update: "${clean.length > 90 ? `${clean.slice(0, 87)}…` : clean}"`,
+      "team",
+      { actor_id: user.id },
+    );
+  }
+  revalidatePath(`/projects/${projectId}`);
+  return { ok: true };
+}
+
+/** Preview and/or live site links. Only the keys passed are written. */
+export async function setSiteUrls(
+  projectId: string,
+  input: { previewUrl?: string | null; liveUrl?: string | null },
+): Promise<ActionResult> {
+  const { supabase, user } = await authed();
+  if (!user) return { ok: false, error: "Not authenticated." };
+
+  const patch: { preview_url?: string | null; live_url?: string | null } = {};
+  if (input.previewUrl !== undefined) {
+    const res = cleanSiteUrl(input.previewUrl);
+    if (!res.ok) return { ok: false, error: res.error };
+    patch.preview_url = res.value;
+  }
+  if (input.liveUrl !== undefined) {
+    const res = cleanSiteUrl(input.liveUrl);
+    if (!res.ok) return { ok: false, error: res.error };
+    patch.live_url = res.value;
+  }
+  if (!Object.keys(patch).length) return { ok: true };
+
+  const { error } = await supabase.from("projects").update(patch).eq("id", projectId);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath(`/projects/${projectId}`);
+  return { ok: true };
+}
+
+/**
+ * The team's manual progress number, or null to go back to the computed one
+ * (src/lib/project-progress.ts). The portal shows whichever is set.
+ */
+export async function setProgressOverride(
+  projectId: string,
+  value: number | null,
+): Promise<ActionResult> {
+  const { supabase, user } = await authed();
+  if (!user) return { ok: false, error: "Not authenticated." };
+
+  const clamped =
+    value === null || value === undefined || !Number.isFinite(Number(value))
+      ? null
+      : Math.max(0, Math.min(100, Math.round(Number(value))));
+
+  const { error } = await supabase
+    .from("projects")
+    .update({ progress_override: clamped })
+    .eq("id", projectId);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath(`/projects/${projectId}`);
+  revalidatePath("/projects");
+  return { ok: true };
+}
+
+export type LaunchResult = ActionResult<{ warning?: string }>;
+
+/**
+ * The site is live.
+ *
+ * Records the live URL and the launch stamp, then moves the delivery stage
+ * to Delivered through the same gates the stage control obeys (deposit,
+ * launch checklist). A gate that would block only WARNS here: the site IS
+ * live whatever the checklist says, so the fact is recorded and the stage
+ * move is left for the team to confirm.
+ */
+export async function launchProjectSite(
+  projectId: string,
+  input: { liveUrl: string; force?: boolean },
+): Promise<LaunchResult> {
+  const { supabase, user } = await authed();
+  if (!user) return { ok: false, error: "Not authenticated." };
+
+  const url = cleanSiteUrl(input.liveUrl);
+  if (!url.ok) return { ok: false, error: url.error };
+  if (!url.value) return { ok: false, error: "Enter the live site's address." };
+
+  const [projectRes, linkedRes, ownRes] = await Promise.all([
+    supabase
+      .from("projects")
+      .select(
+        "id, name, delivery_stage, launched_at, total_value, deposit_paid, deposit_required_percent, currency",
+      )
+      .eq("id", projectId)
+      .maybeSingle(),
+    supabase
+      .from("company_payments")
+      .select("price_lkr, is_paid")
+      .eq("project_id", projectId),
+    supabase.from("payments").select("amount, status").eq("project_id", projectId),
+  ]);
+  const project = projectRes.data;
+  if (!project) return { ok: false, error: "Project not found." };
+
+  const { error } = await supabase
+    .from("projects")
+    .update({
+      live_url: url.value,
+      launched_at: project.launched_at ?? new Date().toISOString(),
+    })
+    .eq("id", projectId);
+  if (error) return { ok: false, error: error.message };
+
+  await logDeliveryEvent(supabase, projectId, "site_launched", `Site launched at ${url.value}`, "team", {
+    actor_id: user.id,
+    url: url.value,
+  });
+
+  let warning: string | undefined;
+  const alreadyDelivered =
+    project.delivery_stage === "delivered" || project.delivery_stage === "aftercare";
+  if (!alreadyDelivered) {
+    if (!input.force) {
+      const gate = await checkStageGates(
+        supabase,
+        {
+          ...project,
+          company_payments: linkedRes.data ?? [],
+          payments: ownRes.data ?? [],
+        },
+        "delivered",
+      );
+      if (gate)
+        warning = `${gate.message} The site is marked live — move the stage to Delivered when you're ready.`;
+    }
+    if (!warning) {
+      const res = await setProjectDeliveryStage(supabase, projectId, "delivered", {
+        actor: "team",
+      });
+      if (!res.ok) warning = res.detail;
+    }
+  }
+
+  revalidatePath(`/projects/${projectId}`);
+  revalidatePath("/projects");
+  revalidatePath("/delivery");
+  return { ok: true, warning };
 }

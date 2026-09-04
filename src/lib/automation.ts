@@ -1560,50 +1560,21 @@ async function executeStep(
     case "send_portal_link": {
       const projectId = runProjectId(run);
       if (!projectId) return { ok: true, detail: NO_PROJECT };
-      const { data: project } = await supabase
-        .from("projects")
-        .select("share_token, portal_passcode, portal_revoked_at")
-        .eq("id", projectId)
-        .maybeSingle();
-      if (!project?.share_token)
-        return { ok: false, detail: "This project has no portal link yet." };
-      if (project.portal_revoked_at)
-        return { ok: false, detail: "The portal link is revoked." };
-
-      const link = appLink(`/public/project/${project.share_token}`);
-      if (!link)
-        return { ok: false, detail: "NEXT_PUBLIC_APP_URL isn't set — no link to send." };
-
-      const { projectClientContact, sendClientSms, firstName } = await import(
-        "@/lib/project-sms"
-      );
-      const contact = await projectClientContact(supabase, projectId);
-      if ("error" in contact) return { ok: false, detail: contact.error };
-
-      const { portalMessage } = await import("@/lib/portal-copy");
+      // 0112 — the same ladder the Client tab and project creation use:
+      // WhatsApp button message → approved template → SMS → team task.
+      const { sendPortalLink } = await import("@/lib/portal-send");
+      const wanted = String(cfg.channel ?? "auto");
       const note = renderTokens(String(cfg.note ?? ""), run, lead).trim();
-      const message = portalMessage({
-        name: firstName(contact.clientName),
-        projectName: contact.projectName,
-        link,
-        passcode: project.portal_passcode,
+      const sent = await sendPortalLink(supabase, projectId, {
+        channel: wanted === "whatsapp" || wanted === "sms" ? wanted : "auto",
+        actor: "automation",
         note: note || undefined,
       });
-
-      const sent = await sendClientSms(supabase, {
-        contact,
-        message,
-        kind: "custom",
-        actorId: null,
-        eventDetail: "Portal link texted by an automation",
-      });
       if (!sent.ok) return { ok: false, detail: sent.error };
-
-      await supabase
-        .from("projects")
-        .update({ portal_last_sent_at: new Date().toISOString() })
-        .eq("id", projectId);
-      return { ok: true, detail: `Portal link to ${sent.to}` };
+      return {
+        ok: true,
+        detail: `Portal link to ${sent.to} via ${sent.channel === "sms" ? "SMS" : "WhatsApp"}`,
+      };
     }
 
     case "seed_task_template": {

@@ -6,6 +6,7 @@ import { PortalClient, type PortalProject } from "./portal-client";
 import { PortalLock } from "./portal-lock";
 import { DELIVERY_STAGES } from "@/lib/constants";
 import { checkPortalGate } from "@/lib/portal-access";
+import { computeProjectProgress } from "@/lib/project-progress";
 import { buildLedger, settledAmount } from "@/lib/projects";
 import type {
   DeliveryStage,
@@ -97,7 +98,7 @@ export default async function PublicProjectPortal({
     .from("projects")
     // Explicit column list, never select("*") — see rule 2 above.
     .select(
-      "id, name, description, status, service_type, delivery_stage, currency, total_value, deposit_paid, start_date, due_date, proposal_url, proposal_name, invoice_url, invoice_name, client:clients(name, company)",
+      "id, name, description, status, service_type, delivery_stage, currency, total_value, deposit_paid, start_date, due_date, proposal_url, proposal_name, invoice_url, invoice_name, progress_override, preview_url, live_url, launched_at, client_note, client_note_at, client:clients(name, company)",
     )
     .eq("id", access.id)
     .maybeSingle();
@@ -183,6 +184,19 @@ export default async function PublicProjectPortal({
 
   const stage = (project.delivery_stage ?? null) as DeliveryStage | null;
 
+  // 0112 — the one number the client sees. The milestones query above is
+  // already the client-visible set, which is exactly what the rule counts.
+  const progress = computeProjectProgress({
+    status: project.status,
+    deliveryStage: stage,
+    milestones: (milestonesRes.data ?? []).map((m) => ({
+      status: m.status,
+      client_visible: true,
+      kind: "milestone",
+    })),
+    override: project.progress_override,
+  });
+
   // A pulse already given in the last week isn't asked for again.
   // differenceInCalendarDays rather than Date.now(): react-hooks/purity
   // forbids the impure global during render.
@@ -257,6 +271,13 @@ export default async function PublicProjectPortal({
       createdAt: c.created_at,
     })),
     askForPulse: !pulseAskedRecently && stage !== null,
+    // 0112
+    progressPercent: progress.percent,
+    clientNote: project.client_note,
+    clientNoteAt: project.client_note_at,
+    previewUrl: project.preview_url,
+    liveUrl: project.live_url,
+    launchedAt: project.launched_at,
   };
 
   return (

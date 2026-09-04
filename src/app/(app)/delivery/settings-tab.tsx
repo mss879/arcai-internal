@@ -33,6 +33,10 @@ export function SettingsTab({ settings }: { settings: DeliverySettings | null })
     milestone_notify_enabled: settings?.milestone_notify_enabled ?? true,
     milestone_messages: settings?.milestone_messages ?? {},
     google_review_url: settings?.google_review_url ?? "",
+    // 0112
+    portal_auto_send: settings?.portal_auto_send ?? true,
+    portal_template_name: settings?.portal_template_name ?? "",
+    portal_template_lang: settings?.portal_template_lang ?? "en",
   });
 
   function set<K extends keyof DeliverySettingsInput>(
@@ -98,6 +102,45 @@ export function SettingsTab({ settings }: { settings: DeliverySettings | null })
               />
             </Field>
           </div>
+        </div>
+      </section>
+
+      {/* Client tracking link (0112) */}
+      <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[var(--shadow-card)]">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <h3 className="text-sm font-semibold text-slate-900">Client tracking link</h3>
+            <p className="mt-0.5 text-xs text-slate-400">
+              When a project is created with a client who has a phone number, the portal
+              link goes out on WhatsApp straight away (a button message inside their 24h
+              window, otherwise the template below), and by SMS when WhatsApp can&apos;t.
+              The person creating the project can untick it for that one project. Sends
+              made from a form ignore quiet hours — a person pressed the button.
+            </p>
+          </div>
+          <Toggle
+            checked={form.portal_auto_send}
+            onChange={(v) => set("portal_auto_send", v)}
+          />
+        </div>
+        <div className="mt-4 grid gap-4 sm:grid-cols-2">
+          <Field
+            label="Portal template name (optional)"
+            hint="Used when their 24h window is closed. Create it in Meta WhatsApp Manager (Utility): body {{1}} = first name, {{2}} = project, {{3}} = passcode line; one URL button ending in /public/project/{{1}}. Blank = fall back to SMS."
+          >
+            <Input
+              value={form.portal_template_name ?? ""}
+              onChange={(e) => set("portal_template_name", e.target.value)}
+              placeholder="arc_project_portal"
+            />
+          </Field>
+          <Field label="Template language">
+            <Input
+              value={form.portal_template_lang}
+              onChange={(e) => set("portal_template_lang", e.target.value)}
+              placeholder="en"
+            />
+          </Field>
         </div>
       </section>
 

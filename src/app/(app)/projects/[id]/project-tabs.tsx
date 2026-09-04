@@ -27,6 +27,12 @@ import { cn } from "@/lib/utils";
 
 type Tab = "overview" | "plan" | "client" | "money" | "files" | "activity";
 
+const TABS: readonly Tab[] = ["overview", "plan", "client", "money", "files", "activity"];
+
+function isTab(value: string | null | undefined): value is Tab {
+  return typeof value === "string" && (TABS as readonly string[]).includes(value);
+}
+
 export function ProjectTabs({
   overview,
   plan,
@@ -40,6 +46,8 @@ export function ProjectTabs({
   planBadge,
   /** Anything the client is waiting on an answer to. */
   clientBadge,
+  /** 0112 — `?tab=client` opens that tab directly. */
+  initialTab,
 }: {
   overview: React.ReactNode;
   plan: React.ReactNode;
@@ -50,8 +58,9 @@ export function ProjectTabs({
   expenseBadge?: string;
   planBadge?: string;
   clientBadge?: string;
+  initialTab?: string;
 }) {
-  const [tab, setTab] = React.useState<Tab>("overview");
+  const [tab, setTab] = React.useState<Tab>(isTab(initialTab) ? initialTab : "overview");
 
   return (
     <div className="space-y-6">

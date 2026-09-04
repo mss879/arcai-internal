@@ -64,6 +64,8 @@ export type BoardProject = {
   team: { id: string; full_name: string; avatar_url: string | null }[];
   blocked: boolean;
   overdue: boolean;
+  /** 0112 — the client-facing build percentage (src/lib/project-progress.ts). */
+  progress: number;
 };
 
 const HEALTH_DOT: Record<ProjectHealth["tone"], string> = {
@@ -223,6 +225,7 @@ export function TableView({
             <th className="px-4 py-3">Project</th>
             <th className="px-4 py-3">Status</th>
             <th className="px-4 py-3">Stage</th>
+            <th className="px-4 py-3">Built</th>
             <th className="px-4 py-3">Due</th>
             <th className="px-4 py-3 text-right">Value</th>
             <th className="px-4 py-3 text-right">Received</th>
@@ -265,6 +268,20 @@ export function TableView({
                 ) : (
                   <span className="text-xs text-slate-300">—</span>
                 )}
+              </td>
+              <td className="px-4 py-3">
+                <div className="flex items-center gap-2">
+                  <div className="h-1.5 w-16 overflow-hidden rounded-full bg-slate-100">
+                    <div
+                      className={cn(
+                        "h-full rounded-full",
+                        p.progress >= 100 ? "bg-emerald-500" : "bg-primary-500",
+                      )}
+                      style={{ width: `${p.progress}%` }}
+                    />
+                  </div>
+                  <span className="text-xs tabular-nums text-slate-500">{p.progress}%</span>
+                </div>
               </td>
               <td className="px-4 py-3">
                 {p.dueDate ? (

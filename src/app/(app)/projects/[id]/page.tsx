@@ -16,7 +16,9 @@ import {
   ClientMessageCard,
   type SentClientMessage,
 } from "@/components/projects/client-message-card";
+import { ClientLinkChip } from "@/components/projects/client-link-chip";
 import { DepositConfirmCard } from "@/components/projects/deposit-confirm-card";
+import { SiteCard } from "@/components/projects/site-card";
 import {
   ClientDeskCard,
   type DeskApproval,
@@ -67,16 +69,20 @@ import {
   projectMargin,
   settledAmount,
 } from "@/lib/projects";
+import { computeProjectProgress } from "@/lib/project-progress";
 import { createClient } from "@/lib/supabase/server";
 import { cn, formatCurrency } from "@/lib/utils";
 import type { DeliveryEvent, ProjectMilestone, ProjectStatus } from "@/lib/types";
 
 export default async function ProjectDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ tab?: string }>;
 }) {
   const { id } = await params;
+  const { tab: initialTab } = await searchParams;
   const supabase = await createClient();
 
   // Run the auth check concurrently with the data queries (see dashboard).
@@ -630,6 +636,18 @@ export default async function ProjectDetailPage({
   // commissions (0006): admins only.
   const isAdmin = profile.role === "admin";
 
+  // 0112 — the number the client sees, computed exactly as the portal does.
+  const progress = computeProjectProgress({
+    status: project.status,
+    deliveryStage: project.delivery_stage,
+    milestones: (milestonesRes.data ?? []).map((m) => ({
+      status: m.status,
+      client_visible: m.client_visible,
+      kind: m.kind,
+    })),
+    override: project.progress_override,
+  });
+
   return (
     <div className="space-y-6">
       <Link
@@ -750,6 +768,7 @@ export default async function ProjectDetailPage({
       </div>
 
       <ProjectTabs
+        initialTab={initialTab}
         expenseBadge={
           unbilledExpenses.length > 0 ? String(unbilledExpenses.length) : undefined
         }
@@ -790,6 +809,18 @@ export default async function ProjectDetailPage({
              * client-facing surfaces need real width and live on their own
              * tab now. */}
             <div className="space-y-6">
+              {/* 0112 — the tracking link, one glance from the front page. */}
+              <ClientLinkChip
+                projectId={id}
+                shareToken={shareToken}
+                baseUrl={appUrl}
+                passcode={project.portal_passcode}
+                revokedAt={project.portal_revoked_at}
+                expiresAt={project.portal_expires_at}
+                lastSentAt={project.portal_last_sent_at}
+                clientName={client?.name ?? null}
+                clientPhone={client?.phone ?? null}
+              />
               <DepositConfirmCard
                 projectId={id}
                 currency={project.currency}
@@ -805,6 +836,17 @@ export default async function ProjectDetailPage({
                     : null
                 }
                 lastSentAt={depositInvoiceRes.data?.shared_at ?? null}
+              />
+              {/* 0112 — progress, preview/live links, the client's latest update. */}
+              <SiteCard
+                projectId={id}
+                progress={progress}
+                override={project.progress_override}
+                previewUrl={project.preview_url}
+                liveUrl={project.live_url}
+                launchedAt={project.launched_at}
+                clientNote={project.client_note}
+                clientNoteAt={project.client_note_at}
               />
               {siteRes.data && <WebsiteBuildCard site={siteRes.data} />}
             </div>

@@ -90,6 +90,10 @@ export type DeliverySettingsInput = {
   milestone_notify_enabled: boolean;
   milestone_messages: Record<string, string>;
   google_review_url: string | null;
+  // 0112 — the client tracking link
+  portal_auto_send: boolean;
+  portal_template_name: string | null;
+  portal_template_lang: string;
 };
 
 export async function saveDeliverySettings(
@@ -121,6 +125,10 @@ export async function saveDeliverySettings(
       milestone_notify_enabled: !!input.milestone_notify_enabled,
       milestone_messages: milestones,
       google_review_url: input.google_review_url?.trim() || null,
+      // 0112
+      portal_auto_send: !!input.portal_auto_send,
+      portal_template_name: input.portal_template_name?.trim() || null,
+      portal_template_lang: input.portal_template_lang?.trim() || "en",
     })
     .eq("id", 1);
   if (error) return { ok: false, error: error.message };

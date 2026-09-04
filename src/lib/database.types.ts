@@ -341,7 +341,10 @@ export type DeliveryEventKind =
   | "change_accepted"
   | "comment"
   | "pulse"
-  | "handover_sent";
+  | "handover_sent"
+  // 0112 — client tracking
+  | "client_note"
+  | "site_launched";
 /** Which brain the WhatsApp agent runs for a contact (0086). */
 export type WaContactMode = "sales" | "onboarding";
 /** WhatsApp system (0048). */
@@ -578,6 +581,8 @@ export type Database = {
           // 0099 — BIG-1: whether this client has ever used their portal.
           portal_last_login_at: Timestamp | null;
           portal_login_count: number;
+          /** 0112 — generated: `phone` normalised to 94XXXXXXXXX, or null. Never written. */
+          phone_norm: string | null;
           created_by: UUID | null;
           created_at: Timestamp;
         };
@@ -758,6 +763,16 @@ export type Database = {
           lead_id: UUID | null;
           quote_id: UUID | null;
           proposal_id: UUID | null;
+          // 0112 — client tracking: progress, the site itself, the latest note.
+          /** Manual 0–100; null = computed (src/lib/project-progress.ts). */
+          progress_override: number | null;
+          preview_url: string | null;
+          live_url: string | null;
+          launched_at: Timestamp | null;
+          client_note: string | null;
+          client_note_at: Timestamp | null;
+          /** Pricing-catalogue package key that was sold, e.g. web_smart_site. */
+          package_key: string | null;
         };
         Insert: {
           id?: UUID;
@@ -839,6 +854,14 @@ export type Database = {
           lead_id?: UUID | null;
           quote_id?: UUID | null;
           proposal_id?: UUID | null;
+          // 0112
+          progress_override?: number | null;
+          preview_url?: string | null;
+          live_url?: string | null;
+          launched_at?: Timestamp | null;
+          client_note?: string | null;
+          client_note_at?: Timestamp | null;
+          package_key?: string | null;
         };
         Update: Partial<Database["public"]["Tables"]["projects"]["Insert"]>;
         Relationships: [];
@@ -1490,6 +1513,11 @@ export type Database = {
           milestone_messages: Record<string, string>;
           review_ask_enabled: boolean;
           google_review_url: string | null;
+          // 0112 — the tracking link on creation
+          portal_auto_send: boolean;
+          /** Approved WhatsApp template for the link outside the 24h window; null = SMS. */
+          portal_template_name: string | null;
+          portal_template_lang: string;
           updated_at: Timestamp;
         };
         Insert: Partial<
@@ -1570,6 +1598,11 @@ export type Database = {
           share_token: UUID | null;
           /** 0093 — when the link was last sent to the client. */
           shared_at: Timestamp | null;
+          // 0112 — who this invoice bills, and in what
+          client_id: UUID | null;
+          lead_id: UUID | null;
+          /** ISO code; null = LKR. */
+          currency: string | null;
           created_by: UUID | null;
           created_at: Timestamp;
         };
@@ -1592,6 +1625,10 @@ export type Database = {
           // 0093
           share_token?: UUID | null;
           shared_at?: Timestamp | null;
+          // 0112
+          client_id?: UUID | null;
+          lead_id?: UUID | null;
+          currency?: string | null;
           created_by?: UUID | null;
           created_at?: Timestamp;
         };
@@ -2027,6 +2064,8 @@ export type Database = {
           start_time: string;
           end_time: string;
           status: BookingStatus;
+          /** 0112 — the client this booking was matched to, when one was. */
+          client_id: UUID | null;
           created_at: Timestamp;
         };
         Insert: {
@@ -2040,6 +2079,8 @@ export type Database = {
           start_time: string;
           end_time: string;
           status?: BookingStatus;
+          // 0112
+          client_id?: UUID | null;
           created_at?: Timestamp;
         };
         Update: Partial<

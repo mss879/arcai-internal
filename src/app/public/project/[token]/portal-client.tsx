@@ -2,11 +2,14 @@
 
 import * as React from "react";
 import { toast } from "sonner";
-import { format } from "date-fns";
+import { differenceInCalendarDays, format, startOfToday } from "date-fns";
 import {
   Check,
   CalendarDays,
   Clock,
+  ExternalLink,
+  Globe,
+  Rocket,
   FileText,
   Flag,
   FolderCheck,
@@ -104,6 +107,13 @@ export type PortalProject = {
     createdAt: string;
   }[];
   askForPulse: boolean;
+  /** 0112 — one number, computed server-side (src/lib/project-progress.ts). */
+  progressPercent: number;
+  clientNote: string | null;
+  clientNoteAt: string | null;
+  previewUrl: string | null;
+  liveUrl: string | null;
+  launchedAt: string | null;
 };
 
 export function PortalClient({
@@ -217,6 +227,9 @@ export function PortalClient({
             approval={pendingApproval}
           />
         )}
+
+        {/* ---- How far along (0112) ---- */}
+        <ProgressCard project={project} copy={copy} />
 
         {/* ---- Where your project is ---- */}
         <ProgressStepper project={project} copy={copy} />
@@ -849,6 +862,141 @@ function PulseButton({
 }
 
 /* ------------------------------------------------------------------ */
+
+/**
+ * How far along the build is, as one number (0112).
+ *
+ * The percentage comes from the server (src/lib/project-progress.ts) — the
+ * stage sets the range, the client-visible milestones move the needle within
+ * it — so this only draws it, alongside the latest update the team wrote for
+ * the client and the site itself once there is one to look at. Days-to-go is
+ * a calendar difference against today, which is fine during render.
+ */
+function ProgressCard({
+  project,
+  copy,
+}: {
+  project: PortalProject;
+  copy: PortalCopy;
+}) {
+  const percent = Math.max(0, Math.min(100, Math.round(project.progressPercent)));
+  const radius = 44;
+  const circumference = 2 * Math.PI * radius;
+  const dashOffset = circumference * (1 - percent / 100);
+  const done = percent >= 100;
+  const daysLeft = project.dueDate
+    ? differenceInCalendarDays(new Date(project.dueDate), startOfToday())
+    : null;
+  const stageLabel = project.stage ? copy.stages[project.stage] : copy.notStartedYet;
+  const siteUrl = project.liveUrl || project.previewUrl;
+
+  return (
+    <div className="rounded-3xl border border-white/30 bg-white/70 p-6 shadow-lg backdrop-blur-xl saturate-150">
+      <div className="flex flex-col gap-6 sm:flex-row sm:items-center">
+        <div className="relative mx-auto h-32 w-32 shrink-0 sm:mx-0">
+          <svg viewBox="0 0 100 100" className="h-32 w-32 -rotate-90">
+            <circle
+              cx="50"
+              cy="50"
+              r={radius}
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="8"
+              className="text-slate-100"
+            />
+            <circle
+              cx="50"
+              cy="50"
+              r={radius}
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="8"
+              strokeLinecap="round"
+              strokeDasharray={circumference}
+              strokeDashoffset={dashOffset}
+              className={cn(
+                "transition-[stroke-dashoffset] duration-700",
+                done ? "text-emerald-500" : "text-primary-500",
+              )}
+            />
+          </svg>
+          <div className="absolute inset-0 grid place-items-center">
+            <span className="text-2xl font-extrabold tabular-nums text-slate-800">
+              {percent}%
+            </span>
+          </div>
+        </div>
+
+        <div className="min-w-0 flex-1">
+          <h3 className="text-sm font-bold uppercase tracking-wider text-slate-400">
+            {copy.overallProgress}
+          </h3>
+          <p className="mt-1 text-lg font-semibold text-slate-800">
+            {copy.youAreHere}{" "}
+            <span className={done ? "text-emerald-600" : "text-primary-700"}>
+              {stageLabel}
+            </span>
+          </p>
+          {daysLeft !== null && !done && (
+            <p className="mt-1 inline-flex items-center gap-1.5 text-sm text-slate-500">
+              <Clock className="h-4 w-4 text-slate-400" />
+              {daysLeft > 0
+                ? copy.daysToGo(daysLeft)
+                : daysLeft === 0
+                  ? copy.dueToday
+                  : copy.pastTarget}
+            </p>
+          )}
+          {project.launchedAt && (
+            <p className="mt-1 inline-flex items-center gap-1.5 text-sm font-medium text-emerald-700">
+              <Rocket className="h-4 w-4" />
+              {copy.launchedOn} {format(new Date(project.launchedAt), "d MMMM yyyy")}
+            </p>
+          )}
+          {siteUrl && (
+            <div className="mt-3">
+              <a
+                href={siteUrl}
+                target="_blank"
+                rel="noreferrer"
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-sm font-semibold text-white shadow-sm transition",
+                  project.liveUrl
+                    ? "bg-emerald-600 hover:bg-emerald-700"
+                    : "bg-primary-600 hover:bg-primary-700",
+                )}
+              >
+                <Globe className="h-4 w-4" />
+                {project.liveUrl ? copy.visitLiveSite : copy.previewSite}
+                <ExternalLink className="h-3.5 w-3.5 opacity-70" />
+              </a>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="mt-5 border-t border-slate-100 pt-4">
+        <h4 className="flex flex-wrap items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-slate-400">
+          <Sparkles className="h-3.5 w-3.5 text-primary-500" />
+          {copy.latestUpdate}
+          {project.clientNoteAt && (
+            <span className="font-medium normal-case tracking-normal text-slate-400">
+              · {format(new Date(project.clientNoteAt), "d MMM yyyy")}
+            </span>
+          )}
+        </h4>
+        <p
+          className={cn(
+            "mt-1.5 whitespace-pre-wrap text-sm",
+            project.clientNote ? "text-slate-700" : "text-slate-400",
+          )}
+        >
+          {project.clientNote || copy.noUpdateYet}
+        </p>
+      </div>
+    </div>
+  );
+}
 
 /**
  * The six delivery stages, in the client's language.

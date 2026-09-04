@@ -216,25 +216,37 @@ export async function sendWhatsAppTemplate(opts: {
   template: string;
   language?: string;
   bodyParams?: string[];
+  /**
+   * Fills the dynamic suffix of the template's first URL button (index 0)
+   * — e.g. a share token for a template whose button opens
+   * `…/public/project/{{1}}`. Only for templates approved with such a button.
+   */
+  urlButtonParam?: string;
 }): Promise<WaSendResult> {
   const name = opts.template.trim();
   if (!name) return { ok: false, error: "Template name is empty." };
+  const components: Record<string, unknown>[] = [];
+  if (opts.bodyParams?.length) {
+    components.push({
+      type: "body",
+      parameters: opts.bodyParams.map((text) => ({ type: "text", text })),
+    });
+  }
+  if (opts.urlButtonParam?.trim()) {
+    components.push({
+      type: "button",
+      sub_type: "url",
+      index: "0",
+      parameters: [{ type: "text", text: opts.urlButtonParam.trim() }],
+    });
+  }
   return postMessages({
     to: opts.to,
     type: "template",
     template: {
       name,
       language: { code: opts.language?.trim() || "en" },
-      ...(opts.bodyParams?.length
-        ? {
-            components: [
-              {
-                type: "body",
-                parameters: opts.bodyParams.map((text) => ({ type: "text", text })),
-              },
-            ],
-          }
-        : {}),
+      ...(components.length ? { components } : {}),
     },
   });
 }

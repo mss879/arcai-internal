@@ -3673,8 +3673,39 @@ export async function executeTool(
       const { fireProjectCreated } = await import("@/lib/project-events");
       await fireProjectCreated(supabase, created.id, "assistant");
 
+      // 0112 — the tracking link goes out the same way it does from the
+      // form: WhatsApp first, SMS fallback, never failing the creation.
+      let trackingLink: string | null = null;
+      if (client?.id) {
+        try {
+          const { getDeliverySettings } = await import("@/lib/delivery");
+          const settings = await getDeliverySettings(supabase);
+          if (settings.portal_auto_send) {
+            const { sendPortalLink } = await import("@/lib/portal-send");
+            const sent = await sendPortalLink(supabase, created.id, {
+              channel: "auto",
+              actor: "assistant",
+              actorId: ctx.userId,
+              onlyIfNeverSent: true,
+            });
+            trackingLink = sent.ok
+              ? `sent to ${client.name} on ${sent.channel === "sms" ? "SMS" : "WhatsApp"}`
+              : `not sent — ${sent.error}`;
+          } else {
+            trackingLink = "not sent — automatic sending is off in Client Delivery → Settings";
+          }
+        } catch (e) {
+          trackingLink = `not sent — ${e instanceof Error ? e.message : "unknown error"}`;
+        }
+      }
+
       return {
-        content: { ok: true, project: created.name, client: client?.name ?? null },
+        content: {
+          ok: true,
+          project: created.name,
+          client: client?.name ?? null,
+          tracking_link: trackingLink,
+        },
         event: {
           kind: "created",
           label: `Project: ${created.name}`,

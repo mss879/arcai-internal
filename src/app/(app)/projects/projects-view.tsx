@@ -16,6 +16,7 @@ import {
   FileText,
   FolderKanban,
   History,
+  Link2,
   MoreVertical,
   OctagonPause,
   Pencil,
@@ -36,7 +37,10 @@ import { Dropdown, DropdownItem } from "@/components/ui/dropdown";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input, Select } from "@/components/ui/input";
 import { PageHeader } from "@/components/ui/page-header";
-import { ProjectFormModal } from "@/components/projects/project-form-modal";
+import {
+  ProjectFormModal,
+  type ProjectPrefill,
+} from "@/components/projects/project-form-modal";
 import {
   DELIVERY_STAGE_META,
   PROJECT_SORTS,
@@ -66,6 +70,7 @@ import {
   type SavedViewRow,
 } from "@/components/projects/saved-views-bar";
 import { ProjectsSectionNav } from "@/components/projects/section-nav";
+import { computeProjectProgress } from "@/lib/project-progress";
 import {
   commissionEarned,
   daysSince,
@@ -91,6 +96,21 @@ const OPEN_STATUSES = new Set(["planning", "active", "on_hold"]);
 
 /** Where the per-user board preferences live (VIEW-1). */
 const PREFS_KEY = "arc:projects:prefs";
+
+/** "website" (0112) covers both website service types; anything else is exact. */
+function serviceMatches(serviceType: string | null, filter: string): boolean {
+  if (filter === "website")
+    return serviceType === "business_website" || serviceType === "ecommerce_website";
+  return serviceType === filter;
+}
+
+const STATUS_VALUES: readonly string[] = [
+  "planning",
+  "active",
+  "on_hold",
+  "completed",
+  "cancelled",
+];
 
 export type ProjectCard = Project & {
   client?: Pick<Client, "id" | "name" | "company"> | null;
@@ -126,6 +146,8 @@ type MilestoneRow = {
   status: string;
   due_date: string | null;
   kind: string;
+  /** 0112 — only client-visible milestones move the client's progress. */
+  client_visible?: boolean | null;
 };
 type CommissionRow = {
   project_id: string | null;
@@ -139,6 +161,8 @@ type Derived = {
   received: number;
   balance: number;
   paidPercent: number;
+  /** 0112 — the client-facing build percentage. */
+  progress: number;
   profit: number;
   marginPercent: number | null;
   health: ProjectHealth;
@@ -169,9 +193,14 @@ export function ProjectsView({
   savedViews,
   isAdmin,
   showArchived,
+  prefill = null,
+  openNew = false,
+  portalAutoSend = true,
+  baseUrl,
+  initialFilters,
 }: {
   projects: ProjectCard[];
-  clients: Pick<Client, "id" | "name" | "company">[];
+  clients: (Pick<Client, "id" | "name" | "company"> & { phone?: string | null })[];
   expenses: ExpenseRow[];
   team: TeamRow[];
   tasks: TaskRow[];
@@ -181,21 +210,33 @@ export function ProjectsView({
   savedViews: SavedViewRow[];
   isAdmin: boolean;
   showArchived: boolean;
+  /** 0112 — a quote/proposal to start the create dialog from. */
+  prefill?: ProjectPrefill | null;
+  /** 0112 — open the create dialog on arrival (`?new=1`). */
+  openNew?: boolean;
+  portalAutoSend?: boolean;
+  baseUrl?: string;
+  /** Filters set by the URL, so other pages can link to a slice of the board. */
+  initialFilters?: { service?: string; status?: string; mode?: string };
 }) {
   useRealtimeSyncTables(["projects", "payments", "company_payments"]);
 
   const router = useRouter();
-  const [creating, setCreating] = React.useState(false);
+  const [creating, setCreating] = React.useState(openNew);
   const [editing, setEditing] = React.useState<Project | null>(null);
   const [toDelete, setToDelete] = React.useState<Project | null>(null);
   const [toArchive, setToArchive] = React.useState<Project | null>(null);
 
   // ---- Filters (LOOP-7) --------------------------------------------------
   const [query, setQuery] = React.useState("");
-  const [status, setStatus] = React.useState<ProjectStatus | "">("");
+  const [status, setStatus] = React.useState<ProjectStatus | "">(
+    initialFilters?.status && STATUS_VALUES.includes(initialFilters.status)
+      ? (initialFilters.status as ProjectStatus)
+      : "",
+  );
   const [stage, setStage] = React.useState<DeliveryStage | "">("");
   const [clientId, setClientId] = React.useState("");
-  const [service, setService] = React.useState("");
+  const [service, setService] = React.useState(initialFilters?.service ?? "");
   const [owing, setOwing] = React.useState(false);
   const [sort, setSort] = React.useState<ProjectSort>("recent");
 
@@ -203,7 +244,11 @@ export function ProjectsView({
   // Remembered per user in localStorage rather than a column: it is a device
   // preference, not workspace data, and it must not cost a round-trip on
   // every board load. Same pattern the todos board already uses.
-  const [mode, setMode] = React.useState<ProjectViewMode>("board");
+  const [mode, setMode] = React.useState<ProjectViewMode>(
+    PROJECT_VIEW_MODES.some((m) => m.value === initialFilters?.mode)
+      ? (initialFilters!.mode as ProjectViewMode)
+      : "board",
+  );
   const prefsLoaded = React.useRef(false);
 
   React.useEffect(() => {
@@ -211,7 +256,8 @@ export function ProjectsView({
       const raw = localStorage.getItem(PREFS_KEY);
       if (raw) {
         const p = JSON.parse(raw) as { mode?: string; sort?: string };
-        if (PROJECT_VIEW_MODES.some((m) => m.value === p.mode))
+        // A mode named in the URL wins over the remembered one.
+        if (!initialFilters?.mode && PROJECT_VIEW_MODES.some((m) => m.value === p.mode))
           setMode(p.mode as ProjectViewMode);
         if (PROJECT_SORTS.some((sOpt) => sOpt.value === p.sort))
           setSort(p.sort as ProjectSort);
@@ -220,6 +266,7 @@ export function ProjectsView({
       // storage may be unavailable
     }
     prefsLoaded.current = true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   React.useEffect(() => {
@@ -364,6 +411,16 @@ export function ProjectsView({
         paidPercent: totalValue
           ? Math.min(100, Math.round((received / totalValue) * 100))
           : 0,
+        progress: computeProjectProgress({
+          status: p.status,
+          deliveryStage: p.delivery_stage,
+          milestones: projectMilestones.map((m) => ({
+            status: m.status,
+            client_visible: m.client_visible ?? true,
+            kind: m.kind,
+          })),
+          override: p.progress_override,
+        }).percent,
         profit: margin.profit,
         marginPercent: shownMargin,
         team: teamBy.get(p.id) ?? [],
@@ -410,6 +467,7 @@ export function ProjectsView({
         received: 0,
         balance: 0,
         paidPercent: 0,
+        progress: 0,
         profit: 0,
         marginPercent: null,
         health: { score: 100, tone: "good", reasons: [] },
@@ -426,7 +484,7 @@ export function ProjectsView({
       if (status && p.status !== status) return false;
       if (stage && p.delivery_stage !== stage) return false;
       if (clientId && p.client_id !== clientId) return false;
-      if (service && p.service_type !== service) return false;
+      if (service && !serviceMatches(p.service_type, service)) return false;
       if (owing && derive(p).balance <= 0) return false;
       if (!q) return true;
       return [p.name, p.description, p.client?.name, p.client?.company]
@@ -533,6 +591,7 @@ export function ProjectsView({
         health: d.health,
         dueDate: p.due_date,
         daysInStage: d.daysInStage,
+        progress: d.progress,
         team: d.team
           .map((t) => t.profile)
           .filter((x): x is NonNullable<typeof x> => !!x),
@@ -567,7 +626,9 @@ export function ProjectsView({
       parts.push(clients.find((c) => c.id === clientId)?.name ?? "one client");
     if (service)
       parts.push(
-        SERVICE_TYPE_LABELS[service as keyof typeof SERVICE_TYPE_LABELS] ?? service,
+        service === "website"
+          ? "All websites"
+          : (SERVICE_TYPE_LABELS[service as keyof typeof SERVICE_TYPE_LABELS] ?? service),
       );
     if (owing) parts.push("with a balance due");
     return parts.length ? parts.join(" · ") : "All projects";
@@ -846,6 +907,22 @@ export function ProjectsView({
                 >
                   Edit
                 </DropdownItem>
+                {p.share_token && (
+                  <DropdownItem
+                    icon={<Link2 className="h-4 w-4" />}
+                    onClick={() => {
+                      const origin =
+                        baseUrl ||
+                        (typeof window !== "undefined" ? window.location.origin : "");
+                      navigator.clipboard.writeText(
+                        `${origin}/public/project/${p.share_token}`,
+                      );
+                      toast.success("Client link copied");
+                    }}
+                  >
+                    Copy client link
+                  </DropdownItem>
+                )}
                 {item.candidate && (
                   <DropdownItem
                     icon={
@@ -979,6 +1056,19 @@ export function ProjectsView({
               </p>
             </>
           ) : null}
+          {/* 0112 — what the client's portal shows as progress. */}
+          <div className="mt-2 flex items-center gap-2">
+            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-100">
+              <div
+                className={cn(
+                  "h-full rounded-full transition-all",
+                  d.progress >= 100 ? "bg-emerald-500" : "bg-sky-500",
+                )}
+                style={{ width: `${d.progress}%` }}
+              />
+            </div>
+            <span className="text-xs tabular-nums text-slate-400">{d.progress}% built</span>
+          </div>
         </div>
 
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3">
@@ -1212,6 +1302,7 @@ export function ProjectsView({
               className="w-auto"
             >
               <option value="">Any service</option>
+              <option value="website">All websites</option>
               {Object.entries(SERVICE_TYPE_LABELS).map(([value, label]) => (
                 <option key={value} value={value}>
                   {label}
@@ -1357,6 +1448,9 @@ export function ProjectsView({
         }}
         project={editing}
         clients={clients}
+        prefill={editing ? null : prefill}
+        portalAutoSend={portalAutoSend}
+        baseUrl={baseUrl}
       />
 
       <ConfirmDialog

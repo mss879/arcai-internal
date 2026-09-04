@@ -272,7 +272,7 @@ export const STEP_META: Record<
   send_portal_link: {
     label: "Send portal link",
     description:
-      "Text the client their portal link and passcode in one message \u2014 the same send as the button on the project.",
+      "Send the client their portal link and passcode \u2014 WhatsApp first (button message, or the portal template outside their 24h window), SMS when WhatsApp can\u2019t. The same send as the button on the project.",
     tone: "bg-sky-600",
   },
   seed_task_template: {

@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { Database } from "@/lib/database.types";
+import { packageKeyForPriceKey } from "@/lib/package-match";
 import {
   applyOverrides,
   type PricingGroup,
@@ -75,6 +76,14 @@ function baseKey(sel: ProposalSelection): string | null {
     default:
       return null;
   }
+}
+
+/**
+ * 0112 — the catalogue PACKAGE a selection was sold as (web_smart_site …),
+ * for `projects.package_key`. Legacy tiers resolve to null, like baseKey().
+ */
+export function packageKeyForSelection(sel: ProposalSelection): string | null {
+  return packageKeyForPriceKey(baseKey(sel));
 }
 
 async function loadOverrides(supabase: DB): Promise<PricingOverrides> {

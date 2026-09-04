@@ -144,6 +144,17 @@ const KIND_META: Record<
     icon: <PackageCheck className="h-3.5 w-3.5" />,
     tone: "bg-emerald-50 text-emerald-600",
   },
+  // 0112 — client tracking
+  client_note: {
+    label: "Client update",
+    icon: <MessageSquare className="h-3.5 w-3.5" />,
+    tone: "bg-sky-50 text-sky-600",
+  },
+  site_launched: {
+    label: "Site launched",
+    icon: <Rocket className="h-3.5 w-3.5" />,
+    tone: "bg-emerald-50 text-emerald-600",
+  },
 };
 
 export function ActivitySection({ events }: { events: DeliveryEvent[] }) {

@@ -1251,6 +1251,15 @@ function StepNode({
 
         {draft.kind === "send_portal_link" && (
           <>
+            <Select
+              value={String(cfg.channel ?? "auto")}
+              onChange={(e) => onChange({ channel: e.target.value })}
+              className="max-w-sm"
+            >
+              <option value="auto">WhatsApp first, SMS if it can&apos;t</option>
+              <option value="whatsapp">WhatsApp only</option>
+              <option value="sms">SMS only</option>
+            </Select>
             <Input
               value={String(cfg.note ?? "")}
               onChange={(e) => onChange({ note: e.target.value })}
@@ -1258,8 +1267,10 @@ function StepNode({
               className="max-w-lg"
             />
             <p className="text-xs text-slate-400">
-              One text with the link and the passcode together. Refuses to send if
-              the portal has been revoked.
+              One message with the link and the passcode together. On WhatsApp the
+              link rides a button inside their 24h window, or the portal template
+              outside it (Client Delivery → Settings). Refuses to send if the portal
+              has been revoked.
             </p>
           </>
         )}

@@ -4,16 +4,17 @@
  * Handing a client their portal, and asking for a review (0094).
  *
  * Two outbound moments the team actually has: "here's where your project is,
- * go and look" and "we're done — would you say something nice?". Both go out
- * by SMS, both carry a link, and neither gives the client anything beyond the
- * one page it names.
+ * go and look" and "we're done — would you say something nice?". The portal
+ * link goes WhatsApp-first with an SMS fallback (0112, src/lib/portal-send);
+ * the review ask goes by SMS. Both carry a link, and neither gives the client
+ * anything beyond the one page it names.
  */
 
 import { revalidatePath } from "next/cache";
 
 import { appLink } from "@/lib/app-url";
 import { generatePasscode } from "@/lib/portal-access";
-import { portalMessage } from "@/lib/portal-copy";
+import { sendPortalLink, type PortalSendChannel } from "@/lib/portal-send";
 import {
   firstName,
   projectClientContact,
@@ -148,85 +149,38 @@ export async function setPortalRevoked(
 // Send the portal to the client
 // ---------------------------------------------------------------------------
 
-export type SendPortalResult = ActionResult & { preview?: string };
+export type SendPortalResult = ActionResult & {
+  preview?: string;
+  channel?: PortalSendChannel | "whatsapp_template";
+  to?: string;
+};
 
 /**
- * Text the client their portal link, and the passcode with it.
+ * Hand the client their portal link (0112: WhatsApp first, SMS fallback).
  *
- * Deliberately one message, not two: a client who gets a link in one text and
- * a code in another will lose one of them. Anyone able to read the text can
- * open the portal — which is the same person the link was addressed to.
+ * Everything about HOW it goes out lives in `sendPortalLink` — the same
+ * ladder the automation step, project creation and the assistant use — so
+ * this is only the auth and the revalidation around it.
  */
 export async function sendPortalToClient(
   projectId: string,
-  opts?: { note?: string },
+  opts?: { note?: string; channel?: PortalSendChannel },
 ): Promise<SendPortalResult> {
   const { supabase, user } = await authed();
   if (!user) return { ok: false, error: "Not authenticated." };
 
-  const { data: project } = await supabase
-    .from("projects")
-    .select("id, name, share_token, portal_passcode, portal_revoked_at")
-    .eq("id", projectId)
-    .maybeSingle();
-  if (!project) return { ok: false, error: "Project not found." };
-  if (!project.share_token) {
-    return { ok: false, error: "This project has no portal link yet." };
-  }
-  if (project.portal_revoked_at) {
-    return {
-      ok: false,
-      error: "The portal link is revoked — re-open it before sending.",
-    };
-  }
-
-  const link = appLink(`/public/project/${project.share_token}`);
-  if (!link) {
-    return {
-      ok: false,
-      error: "NEXT_PUBLIC_APP_URL isn't set, so there's no link to send.",
-    };
-  }
-
-  const contact = await projectClientContact(supabase, projectId);
-  if ("error" in contact) return { ok: false, error: contact.error };
-
-  const message = portalMessage({
-    name: firstName(contact.clientName),
-    projectName: contact.projectName,
-    link,
-    passcode: project.portal_passcode,
-    note: opts?.note,
-  });
-
-  const res = await sendClientSms(supabase, {
-    contact,
-    message,
-    kind: "custom",
+  const res = await sendPortalLink(supabase, projectId, {
+    channel: opts?.channel ?? "auto",
+    actor: "team",
     actorId: user.id,
-    eventDetail: project.portal_passcode
-      ? "Portal link + passcode texted to the client"
-      : "Portal link texted to the client",
+    note: opts?.note,
   });
   if (!res.ok) return { ok: false, error: res.error };
 
-  await supabase
-    .from("projects")
-    .update({ portal_last_sent_at: new Date().toISOString() })
-    .eq("id", projectId);
-
-  const { logDeliveryEvent } = await import("@/lib/delivery");
-  await logDeliveryEvent(
-    supabase,
-    projectId,
-    "portal_sent",
-    `Portal sent to ${contact.clientName}`,
-    "team",
-  );
-
   revalidatePath(`/projects/${projectId}`);
   revalidatePath("/sms");
-  return { ok: true, preview: message };
+  revalidatePath("/whatsapp");
+  return { ok: true, preview: res.preview, channel: res.channel, to: res.to };
 }
 
 // ---------------------------------------------------------------------------

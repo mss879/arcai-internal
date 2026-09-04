@@ -39,6 +39,7 @@ export async function GET(request: Request) {
       { data: quotes, error: quotesErr },
       { data: invoices, error: invoicesErr },
       { data: proposals, error: proposalsErr },
+      { data: emails, error: emailsErr },
     ] = await Promise.all([
       supabase
         .from("clients")
@@ -87,6 +88,14 @@ export async function GET(request: Request) {
         .select("id, client_name, project_name, grand_total, proposal_date")
         .or(`client_name.ilike.${term},project_name.ilike.${term}`)
         .limit(5),
+      // 0115 — "what did we send them about the deposit?" is a search, not a
+      // scroll. Subject only: bodies are long and mostly boilerplate.
+      supabase
+        .from("email_messages")
+        .select("id, subject, thread_key, to_emails, client_id, created_at")
+        .ilike("subject", term)
+        .order("created_at", { ascending: false })
+        .limit(5),
     ]);
 
     // Log errors if any, but don't fail the whole search if one table fails
@@ -99,6 +108,7 @@ export async function GET(request: Request) {
     if (quotesErr) console.error("Search quotes error:", quotesErr);
     if (invoicesErr) console.error("Search invoices error:", invoicesErr);
     if (proposalsErr) console.error("Search proposals error:", proposalsErr);
+    if (emailsErr) console.error("Search emails error:", emailsErr);
 
     const results = [
       ...(clients || []).map((c) => ({
@@ -149,6 +159,15 @@ export async function GET(request: Request) {
         subtitle: `${pr.client_name} · ${Number(pr.grand_total).toLocaleString()} · ${pr.proposal_date}`,
         category: "Proposals",
         href: `/proposals`,
+      })),
+      ...(emails || []).map((e) => ({
+        id: e.id,
+        title: e.subject || "(no subject)",
+        subtitle: `${e.to_emails.join(", ")} · ${e.created_at.slice(0, 10)}`,
+        category: "Email",
+        href: e.thread_key
+          ? `/inbox?channel=email&thread=email:${e.thread_key}`
+          : `/inbox?channel=email&thread=email:message:${e.id}`,
       })),
       ...(meetings || []).map((m) => ({
         id: m.id,

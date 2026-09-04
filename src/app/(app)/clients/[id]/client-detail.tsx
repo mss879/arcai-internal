@@ -27,6 +27,8 @@ import {
   TrendingUp,
   Users,
   Wallet,
+  AlertTriangle,
+  MonitorSmartphone,
 } from "lucide-react";
 
 import { Avatar } from "@/components/ui/avatar";
@@ -212,6 +214,10 @@ const TIMELINE_ICON: Record<TimelineKind, React.ReactNode> = {
   payment: <Wallet className="h-3.5 w-3.5" />,
   meeting: <CalendarClock className="h-3.5 w-3.5" />,
   booking: <CalendarClock className="h-3.5 w-3.5" />,
+  // 0115
+  email: <Mail className="h-3.5 w-3.5" />,
+  comment: <MonitorSmartphone className="h-3.5 w-3.5" />,
+  change_request: <AlertTriangle className="h-3.5 w-3.5" />,
 };
 
 const TIMELINE_TONE: Record<TimelineKind, string> = {
@@ -225,6 +231,9 @@ const TIMELINE_TONE: Record<TimelineKind, string> = {
   payment: "bg-emerald-600",
   meeting: "bg-orange-400",
   booking: "bg-orange-400",
+  email: "bg-amber-400",
+  comment: "bg-violet-400",
+  change_request: "bg-rose-500",
 };
 
 function when(iso: string | null | undefined, pattern = "d MMM yyyy"): string {
@@ -677,15 +686,95 @@ function MoneyTab({ view }: { view: ClientView }) {
 }
 
 function ConversationsTab({ view }: { view: ClientView }) {
-  if (view.conversations.length === 0) {
+  // Email and portal messages are already in the timeline (0115), so they are
+  // read back from it rather than queried a second time here.
+  const emails = view.timeline.filter((i) => i.kind === "email");
+  const portal = view.timeline.filter(
+    (i) => i.kind === "comment" || i.kind === "change_request",
+  );
+
+  if (view.conversations.length === 0 && emails.length === 0 && portal.length === 0) {
     return (
       <EmptyState
         icon={<MessageCircle className="h-6 w-6" />}
         title="No messages yet"
-        description="WhatsApp and SMS messages with this client will show here as they happen."
+        description="WhatsApp, texts, portal messages and email with this client all show here."
       />
     );
   }
+
+  return (
+    <div className="space-y-4">
+      {view.conversations.length > 0 && <ChatThread view={view} />}
+      {emails.length > 0 && (
+        <ReadOnlyMessages
+          title="Email"
+          hint="Sent from the CRM. Write another from the header, or reply in the inbox."
+          items={emails}
+        />
+      )}
+      {portal.length > 0 && (
+        <ReadOnlyMessages
+          title="Portal"
+          hint="What the client wrote on their project page. Reply in the inbox."
+          items={portal}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Email and portal history, read-only.
+ *
+ * Deliberately not a composer: a reply belongs in one place — /inbox — where
+ * the thread has an owner and a channel. Two places to answer from is how two
+ * people answer the same message.
+ */
+function ReadOnlyMessages({
+  title,
+  hint,
+  items,
+}: {
+  title: string;
+  hint: string;
+  items: TimelineItem[];
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[var(--shadow-card)]">
+      <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+        <h2 className="text-sm font-semibold text-slate-900">{title}</h2>
+        <p className="text-xs text-slate-400">{hint}</p>
+      </div>
+      <ol className="space-y-2">
+        {items.slice(0, 20).map((i) => (
+          <li
+            key={i.id}
+            className={cn(
+              "max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm",
+              i.actor === "client"
+                ? "mr-auto bg-slate-100 text-slate-800"
+                : "ml-auto bg-primary-50 text-slate-800",
+            )}
+          >
+            <p className="font-medium text-slate-900">{i.title}</p>
+            {i.body && <p className="mt-0.5 whitespace-pre-wrap text-slate-600">{i.body}</p>}
+            <p className="mt-1 flex items-center gap-2 text-[11px] text-slate-400">
+              {when(i.at, "d MMM, HH:mm")}
+              {i.href && (
+                <Link href={i.href} className="text-primary-600 hover:underline">
+                  Open
+                </Link>
+              )}
+            </p>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+function ChatThread({ view }: { view: ClientView }) {
   return (
     <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[var(--shadow-card)]">
       <div className="mb-4 flex flex-wrap items-center gap-2 text-xs text-slate-400">

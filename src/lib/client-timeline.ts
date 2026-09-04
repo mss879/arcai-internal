@@ -27,7 +27,11 @@ export type TimelineKind =
   | "invoice"
   | "payment"
   | "meeting"
-  | "booking";
+  | "booking"
+  // 0115 — the half of the relationship that used to happen off-system.
+  | "email"
+  | "comment"
+  | "change_request";
 
 export type TimelineItem = {
   id: string;
@@ -76,6 +80,9 @@ export async function clientTimeline(
     linkedRes,
     meetingsRes,
     bookingsRes,
+    emailsRes,
+    commentsRes,
+    changesRes,
   ] = await Promise.all([
     leadIds.length
       ? supabase
@@ -173,6 +180,33 @@ export async function clientTimeline(
       .eq("client_id", clientId)
       .order("booking_date", { ascending: false })
       .limit(40),
+    // 0115 — every email we sent them, by client or by one of their projects.
+    supabase
+      .from("email_messages")
+      .select("id, subject, body_text, to_emails, kind, status, actor, sent_at, created_at")
+      .or(
+        projectIds.length
+          ? `client_id.eq.${clientId},project_id.in.(${projectIds.join(",")})`
+          : `client_id.eq.${clientId}`,
+      )
+      .order("created_at", { ascending: false })
+      .limit(PER_SOURCE),
+    projectIds.length
+      ? supabase
+          .from("project_comments")
+          .select("id, project_id, author_type, author_name, body, created_at")
+          .in("project_id", projectIds)
+          .order("created_at", { ascending: false })
+          .limit(PER_SOURCE)
+      : Promise.resolve({ data: [] }),
+    projectIds.length
+      ? supabase
+          .from("project_change_requests")
+          .select("id, project_id, body, status, client_name, created_at")
+          .in("project_id", projectIds)
+          .order("created_at", { ascending: false })
+          .limit(40)
+      : Promise.resolve({ data: [] }),
   ]);
 
   for (const a of activitiesRes.data ?? []) {
@@ -310,6 +344,47 @@ export async function clientTimeline(
       title: `Booked a call (${b.status})`,
       body: clip(b.notes),
       href: "/meetings",
+      actor: "client",
+    });
+  }
+
+  for (const e of emailsRes.data ?? []) {
+    const failed =
+      e.status === "failed" || e.status === "bounced" || e.status === "complained";
+    items.push({
+      id: `email:${e.id}`,
+      kind: "email",
+      at: e.sent_at ?? e.created_at,
+      title: failed
+        ? `Email didn't arrive — ${e.subject || "(no subject)"}`
+        : `Emailed — ${e.subject || "(no subject)"}`,
+      body: clip(e.body_text) ?? e.to_emails.join(", "),
+      href: `/inbox?channel=email&thread=email:client:${clientId}`,
+      actor: e.actor,
+    });
+  }
+  for (const c of commentsRes.data ?? []) {
+    items.push({
+      id: `comment:${c.id}`,
+      kind: "comment",
+      at: c.created_at,
+      title:
+        c.author_type === "client"
+          ? `${c.author_name} wrote on the portal`
+          : `${c.author_name} replied on the portal`,
+      body: clip(c.body),
+      href: `/inbox?channel=portal&thread=portal:${c.project_id}`,
+      actor: c.author_type,
+    });
+  }
+  for (const r of changesRes.data ?? []) {
+    items.push({
+      id: `change:${r.id}`,
+      kind: "change_request",
+      at: r.created_at,
+      title: `Change requested (${r.status})`,
+      body: clip(r.body),
+      href: `/projects/${r.project_id}`,
       actor: "client",
     });
   }

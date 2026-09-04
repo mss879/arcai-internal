@@ -4,7 +4,7 @@ import {
   packageFromLineItems,
   serviceTypeForPackage,
 } from "@/lib/package-match";
-import { allFinanceProjectCosts } from "@/lib/project-costs";
+import { costRowsFromRollup } from "@/lib/project-costs";
 import type { ProposalSelection } from "@/lib/proposal";
 import { packageKeyForSelection } from "@/lib/proposal-pricing";
 import { createClient } from "@/lib/supabase/server";
@@ -60,12 +60,8 @@ export default async function ProjectsPage({
     profile,
     projectsRes,
     clientsRes,
-    expensesRes,
-    financeCosts,
-    membersRes,
-    tasksRes,
-    assetsRes,
-    milestonesRes,
+    rollupsRes,
+    profilesRes,
     commissionsRes,
     savedViewsRes,
     settingsRes,
@@ -76,24 +72,10 @@ export default async function ProjectsPage({
     projectQuery.order("created_at", { ascending: false }),
     // 0112 — the phone decides whether the create dialog can send the link.
     supabase.from("clients").select("id, name, company, phone").order("name"),
-    supabase.from("project_expenses").select("project_id, amount, billable"),
-    // 0100 — Finance costs tagged to a project count against its margin too.
-    allFinanceProjectCosts(supabase),
-    supabase
-      .from("project_members")
-      .select(
-        "project_id, user_id, is_owner, profile:profiles!project_members_user_id_fkey(id, full_name, avatar_url)",
-      ),
-    supabase
-      .from("todos")
-      .select("project_id, status, due_date")
-      .not("project_id", "is", null),
-    supabase
-      .from("project_document_requests")
-      .select("project_id, status, required"),
-    supabase
-      .from("project_milestones")
-      .select("project_id, status, due_date, kind, client_visible"),
+    // 0114 — per-project counts and cost totals from one view, in place of
+    // five whole-table reads (expenses, members, tasks, assets, milestones).
+    supabase.from("project_rollups").select("*"),
+    supabase.from("profiles").select("id, full_name, avatar_url"),
     supabase
       .from("commissions")
       .select("project_id, amount, percentage, basis"),
@@ -135,6 +117,71 @@ export default async function ProjectsPage({
   const savedViews = (savedViewsRes.data ?? []).filter(
     (v) => v.shared || !v.owner_id || v.owner_id === profile.id,
   );
+
+  // ---- 0114: the board's rows, from counts --------------------------------
+  // The board component only ever COUNTED the expense, task, asset and
+  // milestone rows it was handed (overdue tasks, pending assets, milestones
+  // done, margin), so the rollup's totals are handed back to it in the row
+  // shape it expects rather than re-plumbing a 1,400-line client component.
+  // A placeholder due date in the past stands in for "overdue".
+  const OVERDUE = "2000-01-01";
+  const rollups = rollupsRes.data ?? [];
+  const profileById = new Map((profilesRes.data ?? []).map((p) => [p.id, p]));
+  const expenses = rollups.flatMap(costRowsFromRollup);
+  const team = rollups.flatMap((r) =>
+    (r.member_ids ?? []).map((userId) => ({
+      project_id: r.project_id,
+      user_id: userId,
+      is_owner: r.owner_id === userId,
+      profile: profileById.get(userId) ?? null,
+    })),
+  );
+  const tasks = rollups.flatMap((r) => [
+    ...Array.from({ length: Math.max(0, r.overdue_tasks) }, () => ({
+      project_id: r.project_id,
+      status: "open",
+      due_date: OVERDUE,
+    })),
+    ...Array.from({ length: Math.max(0, r.open_tasks - r.overdue_tasks) }, () => ({
+      project_id: r.project_id,
+      status: "open",
+      due_date: null as string | null,
+    })),
+  ]);
+  const assets = rollups.flatMap((r) =>
+    Array.from({ length: Math.max(0, r.pending_assets) }, () => ({
+      project_id: r.project_id,
+      status: "pending",
+      required: true,
+    })),
+  );
+  const milestones = rollups.flatMap((r) => {
+    const visibleDone = Math.max(0, r.visible_milestones_done);
+    const visiblePending = Math.max(0, r.visible_milestones_total - visibleDone);
+    const hiddenDone = Math.max(0, r.milestones_done - visibleDone);
+    const hiddenPending = Math.max(
+      0,
+      r.milestones_total - r.visible_milestones_total - hiddenDone,
+    );
+    let overdue = Math.max(0, r.overdue_milestones);
+    const row = (status: string, client_visible: boolean, pending: boolean) => {
+      const late = pending && overdue > 0;
+      if (late) overdue--;
+      return {
+        project_id: r.project_id,
+        status,
+        due_date: late ? OVERDUE : null,
+        kind: "milestone",
+        client_visible,
+      };
+    };
+    return [
+      ...Array.from({ length: visibleDone }, () => row("done", true, false)),
+      ...Array.from({ length: hiddenDone }, () => row("done", false, false)),
+      ...Array.from({ length: visiblePending }, () => row("pending", true, true)),
+      ...Array.from({ length: hiddenPending }, () => row("pending", false, true)),
+    ];
+  });
 
   // ---- 0112: start a project from the sale --------------------------------
   // "Start project" on an accepted quote or a proposal lands here with the
@@ -197,16 +244,11 @@ export default async function ProjectsPage({
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       projects={(projectsRes.data ?? []) as any as ProjectCard[]}
       clients={clientsRes.data ?? []}
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      expenses={[...(expensesRes.data ?? []), ...financeCosts] as any}
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      team={(membersRes.data ?? []) as any}
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      tasks={(tasksRes.data ?? []) as any}
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      assets={(assetsRes.data ?? []) as any}
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      milestones={(milestonesRes.data ?? []) as any}
+      expenses={expenses}
+      team={team}
+      tasks={tasks}
+      assets={assets}
+      milestones={milestones}
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       commissions={(commissionsRes.data ?? []) as any}
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

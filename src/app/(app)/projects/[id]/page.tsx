@@ -111,6 +111,7 @@ export default async function ProjectDetailPage({
     clientSmsRes,
     planRes,
     automationRunsRes,
+    allStepsRes,
   ] = await Promise.all([
     requireProfile(),
     (supabase as any)
@@ -252,6 +253,9 @@ export default async function ProjectDetailPage({
       .eq("project_id", id)
       .order("created_at", { ascending: false })
       .limit(25),
+    // 0114 — step counts for the runs above, read in the same batch rather
+    // than a second round-trip after it (the table is small).
+    supabase.from("automation_steps").select("automation_id"),
   ]);
 
   const project = projectRes.data;
@@ -392,11 +396,9 @@ export default async function ProjectDetailPage({
 
   const stepCounts = new Map<string, number>();
   if (rawRuns.length) {
-    const { data: allSteps } = await supabase
-      .from("automation_steps")
-      .select("automation_id")
-      .in("automation_id", Array.from(new Set(rawRuns.map((r) => r.automation_id))));
-    for (const step of allSteps ?? []) {
+    const wanted = new Set(rawRuns.map((r) => r.automation_id));
+    for (const step of allStepsRes.data ?? []) {
+      if (!wanted.has(step.automation_id)) continue;
       stepCounts.set(
         step.automation_id,
         (stepCounts.get(step.automation_id) ?? 0) + 1,
@@ -426,26 +428,31 @@ export default async function ProjectDetailPage({
     };
   });
 
-  const payments = await Promise.all(
-    (paymentsRes.data ?? []).map(async (p) => {
-      if (!p.receipt_path) return p;
-      const { data } = await supabase.storage
-        .from(STORAGE_BUCKETS.receipts)
-        .createSignedUrl(p.receipt_path, 3600);
-      return { ...p, receiptUrl: data?.signedUrl ?? null };
-    }),
+  // 0114 — one Storage round-trip for every receipt on the page (payment
+  // and supplier receipts share the same private bucket), not one per row.
+  const expenseRows = (expensesRes.data ?? []) as ProjectExpenseRow[];
+  const receiptPaths = Array.from(
+    new Set(
+      [
+        ...(paymentsRes.data ?? []).map((p) => p.receipt_path),
+        ...expenseRows.map((e) => e.receipt_path),
+      ].filter((path): path is string => Boolean(path)),
+    ),
   );
-
-  // Supplier receipts on expenses live in the same private bucket as payment
-  // receipts, so they need the same short-lived signed link.
-  const expenses: ProjectExpenseRow[] = await Promise.all(
-    ((expensesRes.data ?? []) as ProjectExpenseRow[]).map(async (e) => {
-      if (!e.receipt_path) return e;
-      const { data } = await supabase.storage
-        .from(STORAGE_BUCKETS.receipts)
-        .createSignedUrl(e.receipt_path, 3600);
-      return { ...e, receiptUrl: data?.signedUrl ?? null };
-    }),
+  const signedByPath = new Map<string, string>();
+  if (receiptPaths.length) {
+    const { data: signed } = await supabase.storage
+      .from(STORAGE_BUCKETS.receipts)
+      .createSignedUrls(receiptPaths, 3600);
+    for (const s of signed ?? []) {
+      if (s.path && s.signedUrl) signedByPath.set(s.path, s.signedUrl);
+    }
+  }
+  const payments = (paymentsRes.data ?? []).map((p) =>
+    p.receipt_path ? { ...p, receiptUrl: signedByPath.get(p.receipt_path) ?? null } : p,
+  );
+  const expenses: ProjectExpenseRow[] = expenseRows.map((e) =>
+    e.receipt_path ? { ...e, receiptUrl: signedByPath.get(e.receipt_path) ?? null } : e,
   );
 
   /** Billable extras still waiting to go on an invoice — the tab's badge. */

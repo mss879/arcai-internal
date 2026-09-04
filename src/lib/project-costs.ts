@@ -156,3 +156,29 @@ export async function allFinanceProjectCosts(
       billable: false,
     }));
 }
+
+/**
+ * 0114 — the board reads per-project cost TOTALS from the project_rollups
+ * view instead of every expense row. This turns those totals back into the
+ * row shape projectMargin() consumes, merged the same way as everything
+ * above: project-ledger rows keep their billable flag, Finance costs are
+ * always absorbed.
+ */
+export function costRowsFromRollup(r: {
+  project_id: string;
+  billable_expenses_total: number | string | null;
+  absorbed_expenses_total: number | string | null;
+  finance_costs_total: number | string | null;
+}): Pick<ProjectCostRow, "project_id" | "amount" | "billable" | "source">[] {
+  const rows: Pick<ProjectCostRow, "project_id" | "amount" | "billable" | "source">[] = [];
+  const billable = Number(r.billable_expenses_total) || 0;
+  const absorbed = Number(r.absorbed_expenses_total) || 0;
+  const finance = Number(r.finance_costs_total) || 0;
+  if (billable > 0)
+    rows.push({ project_id: r.project_id, amount: billable, billable: true, source: "project" });
+  if (absorbed > 0)
+    rows.push({ project_id: r.project_id, amount: absorbed, billable: false, source: "project" });
+  if (finance > 0)
+    rows.push({ project_id: r.project_id, amount: finance, billable: false, source: "finance" });
+  return rows;
+}

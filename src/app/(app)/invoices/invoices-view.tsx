@@ -21,6 +21,10 @@ export function InvoicesView({
   clients,
   leads,
   projectsByQuote,
+  existingNumbers,
+  pastTotal,
+  page = 1,
+  pageCount = 1,
   initialTab = "create",
 }: {
   pastInvoices: SavedInvoice[];
@@ -29,6 +33,11 @@ export function InvoicesView({
   leads: LeadLite[];
   /** 0112 — quote id → project id, for the Start project / Open project button. */
   projectsByQuote?: Record<string, string>;
+  /** 0114 — every invoice number (for the next number); `pastInvoices` is one page. */
+  existingNumbers?: string[];
+  pastTotal?: number;
+  page?: number;
+  pageCount?: number;
   initialTab?: Tab;
 }) {
   const [tab, setTab] = React.useState<Tab>(initialTab);
@@ -57,14 +66,18 @@ export function InvoicesView({
           icon={<History className="h-4 w-4" />}
         >
           Past invoices
-          {pastInvoices.length > 0 && (
-            <TabCount active={tab === "past"} count={pastInvoices.length} />
+          {(pastTotal ?? pastInvoices.length) > 0 && (
+            <TabCount active={tab === "past"} count={pastTotal ?? pastInvoices.length} />
           )}
         </TabButton>
       </div>
 
       {tab === "create" ? (
-        <InvoiceGenerator pastInvoices={pastInvoices} quotes={quotes} />
+        <InvoiceGenerator
+          pastInvoices={pastInvoices}
+          existingNumbers={existingNumbers}
+          quotes={quotes}
+        />
       ) : tab === "quotes" ? (
         <QuotesSection
           quotes={quotes}
@@ -73,7 +86,7 @@ export function InvoicesView({
           projectsByQuote={projectsByQuote}
         />
       ) : (
-        <PastInvoices invoices={pastInvoices} />
+        <PastInvoices invoices={pastInvoices} page={page} pageCount={pageCount} />
       )}
     </div>
   );

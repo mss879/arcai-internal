@@ -32,10 +32,38 @@ import type { Client, ClientStatus } from "@/lib/types";
 
 import { deleteClient, saveClient, type ClientInput } from "./actions";
 
-export function ClientsView({ clients }: { clients: Client[] }) {
+export function ClientsView({
+  clients,
+  initialQuery = "",
+  page = 1,
+  pageSize = 100,
+  total = clients.length,
+}: {
+  clients: Client[];
+  /** 0114 — the server filtered on this; the box is seeded with it. */
+  initialQuery?: string;
+  page?: number;
+  pageSize?: number;
+  total?: number;
+}) {
   useRealtimeSync("clients");
   const router = useRouter();
-  const [query, setQuery] = React.useState("");
+  const [query, setQuery] = React.useState(initialQuery);
+
+  // 0114 — typing filters the loaded page instantly and, a beat later, asks
+  // the server for the same search across every page.
+  const debounce = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  function onQueryChange(value: string) {
+    setQuery(value);
+    if (debounce.current) clearTimeout(debounce.current);
+    debounce.current = setTimeout(() => {
+      const term = value.trim();
+      router.replace(term ? `/clients?q=${encodeURIComponent(term)}` : "/clients");
+    }, 350);
+  }
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const pageHref = (n: number) =>
+    `/clients?${initialQuery ? `q=${encodeURIComponent(initialQuery)}&` : ""}page=${n}`;
   const [editing, setEditing] = React.useState<Client | null>(null);
   const [creating, setCreating] = React.useState(false);
   const [toDelete, setToDelete] = React.useState<Client | null>(null);
@@ -67,7 +95,7 @@ export function ClientsView({ clients }: { clients: Client[] }) {
         <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
         <Input
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => onQueryChange(e.target.value)}
           placeholder="Search clients…"
           className="pl-9"
         />
@@ -187,6 +215,28 @@ export function ClientsView({ clients }: { clients: Client[] }) {
               ))}
             </tbody>
           </table>
+          {pageCount > 1 && (
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 px-5 py-3 text-xs text-slate-500">
+              <span>
+                Showing {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, total)} of {total}
+              </span>
+              <span className="flex items-center gap-2">
+                {page > 1 && (
+                  <Link href={pageHref(page - 1)} className="font-medium text-primary-600 hover:underline">
+                    ← Previous
+                  </Link>
+                )}
+                <span>
+                  Page {page} of {pageCount}
+                </span>
+                {page < pageCount && (
+                  <Link href={pageHref(page + 1)} className="font-medium text-primary-600 hover:underline">
+                    Next →
+                  </Link>
+                )}
+              </span>
+            </div>
+          )}
         </div>
       )}
 

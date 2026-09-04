@@ -508,6 +508,30 @@ export type InvoiceItem = {
   total: number;
 };
 
+/** 0114 — what public.dashboard_summary() returns. */
+export type DashboardSummary = {
+  revenue_this_month: number;
+  revenue_last_month: number;
+  trend: { month: string; value: number }[];
+  unpaid: { count: number; total: number };
+  awaiting_quotes: { count: number; total: number };
+  accepted_uninvoiced_count: number;
+  pipeline: { value: number; open_count: number; overdue_count: number };
+  clients_count: number;
+  cash_outstanding: number;
+  open_projects: {
+    id: string;
+    status: string;
+    delivery_stage: string | null;
+    delivery_stage_changed_at: string | null;
+    updated_at: string | null;
+    due_date: string | null;
+    blocked_since: string | null;
+    blocked_reason: string | null;
+    balance: number;
+  }[];
+};
+
 export type Database = {
   public: {
     Tables: {
@@ -5138,11 +5162,38 @@ export type Database = {
         Relationships: [];
       };
     };
-    Views: Record<never, never>;
+    Views: {
+      // 0114 — per-project counts and cost totals for the board.
+      project_rollups: {
+        Row: {
+          project_id: UUID;
+          billable_expenses_total: number;
+          absorbed_expenses_total: number;
+          unbilled_expense_count: number;
+          finance_costs_total: number;
+          open_tasks: number;
+          overdue_tasks: number;
+          pending_assets: number;
+          milestones_total: number;
+          milestones_done: number;
+          visible_milestones_total: number;
+          visible_milestones_done: number;
+          overdue_milestones: number;
+          member_ids: UUID[];
+          owner_id: UUID | null;
+        };
+        Relationships: [];
+      };
+    };
     Functions: {
       is_admin: {
         Args: { uid: UUID };
         Returns: boolean;
+      };
+      // 0114 — the dashboard's numbers in one round-trip.
+      dashboard_summary: {
+        Args: Record<string, never>;
+        Returns: DashboardSummary;
       };
       // 0074 — Analytics tab aggregates
       wa_funnel_stats: {

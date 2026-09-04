@@ -6,15 +6,28 @@ import type { ClientLite, LeadLite } from "./quotes-section";
 
 export const metadata = { title: "Invoices & Quotes" };
 
+const PAGE_SIZE = 50;
+
 export default async function InvoicesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ tab?: string }>;
+  searchParams: Promise<{ tab?: string; page?: string }>;
 }) {
-  const [supabase, { tab }] = await Promise.all([createClient(), searchParams]);
+  const [supabase, { tab, page: pageParam }] = await Promise.all([
+    createClient(),
+    searchParams,
+  ]);
+  const page = Math.max(1, Number(pageParam) || 1);
 
-  const [invoicesRes, quotesRes, clientsRes, leadsRes, projectsRes] = await Promise.all([
-    supabase.from("invoices").select("*").order("created_at", { ascending: false }),
+  const [invoicesRes, numbersRes, quotesRes, clientsRes, leadsRes, projectsRes] = await Promise.all([
+    // 0114 — one page of full rows for the Past tab and the "copy from" list…
+    supabase
+      .from("invoices")
+      .select("*", { count: "exact" })
+      .order("created_at", { ascending: false })
+      .range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1),
+    // …and every number, one column wide, so the next number is still right.
+    supabase.from("invoices").select("invoice_number"),
     supabase.from("quotes").select("*").order("created_at", { ascending: false }),
     supabase.from("clients").select("id, name, company, email, phone").order("name"),
     supabase
@@ -43,6 +56,10 @@ export default async function InvoicesPage({
   return (
     <InvoicesView
       pastInvoices={invoicesRes.data ?? []}
+      existingNumbers={(numbersRes.data ?? []).map((n) => n.invoice_number)}
+      pastTotal={invoicesRes.count ?? 0}
+      page={page}
+      pageCount={Math.max(1, Math.ceil((invoicesRes.count ?? 0) / PAGE_SIZE))}
       quotes={(quotesRes.data ?? []) as Quote[]}
       clients={(clientsRes.data ?? []) as ClientLite[]}
       leads={(leadsRes.data ?? []) as LeadLite[]}

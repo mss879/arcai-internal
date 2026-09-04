@@ -1,13 +1,6 @@
 import Link from "next/link";
 import type { CSSProperties } from "react";
-import {
-  addDays,
-  format,
-  isPast,
-  isToday,
-  startOfMonth,
-  subMonths,
-} from "date-fns";
+import { addDays, format, isPast, isToday } from "date-fns";
 import {
   AlertTriangle,
   ArrowDownRight,
@@ -34,10 +27,25 @@ import { QuickAddTask } from "@/components/dashboard/quick-add-task";
 import { PRIORITY_META } from "@/lib/constants";
 import { requireProfile } from "@/lib/auth";
 import { getMembers } from "@/lib/data";
-import { balanceDue, projectHealth } from "@/lib/projects";
+import { projectHealth } from "@/lib/projects";
 import { createClient } from "@/lib/supabase/server";
 import { cn, formatCurrency, formatTime12 } from "@/lib/utils";
+import type { DashboardSummary } from "@/lib/database.types";
 import type { Meeting, MeetingWithAttendees, NotificationLite, Todo } from "@/lib/types";
+
+/** What the page renders when dashboard_summary() isn't there yet (0114). */
+const EMPTY_SUMMARY: DashboardSummary = {
+  revenue_this_month: 0,
+  revenue_last_month: 0,
+  trend: [],
+  unpaid: { count: 0, total: 0 },
+  awaiting_quotes: { count: 0, total: 0 },
+  accepted_uninvoiced_count: 0,
+  pipeline: { value: 0, open_count: 0, overdue_count: 0 },
+  clients_count: 0,
+  cash_outstanding: 0,
+  open_projects: [],
+};
 
 export const metadata = { title: "Dashboard" };
 
@@ -68,55 +76,55 @@ export default async function DashboardPage() {
   const supabase = await createClient();
   const today = format(new Date(), "yyyy-MM-dd");
 
-  const [
-    todosRes,
-    members,
-    projectsRes,
-    clientsCount,
-    bookingsRes,
-    meetingsRes,
-    invoicesRes,
-    quotesRes,
-    leadsRes,
-    notificationsRes,
-  ] = await Promise.all([
-    supabase.from("todos").select("*").order("due_date", { ascending: true }),
-    getMembers(),
-    // VIEW-6 — an active-project COUNT told you nothing you could act on.
-    // These are the rows behind the four tiles that replaced it: health needs
-    // the money and the dates, "awaiting client" needs the blocked flag.
-    supabase
-      .from("projects")
-      .select(
-        "id, status, delivery_stage, delivery_stage_changed_at, updated_at, due_date, blocked_since, blocked_reason, total_value, deposit_paid, currency, payments(amount, status), company_payments(price_lkr, is_paid)",
-      )
-      // 0090 — archived projects are out of every count and board.
-      .is("deleted_at", null),
-    supabase.from("clients").select("*", { count: "exact", head: true }),
-    supabase
-      .from("meeting_bookings")
-      .select("*, link:meeting_links(title)")
-      .eq("status", "confirmed")
-      .order("booking_date", { ascending: true })
-      .order("start_time", { ascending: true }),
-    supabase
-      .from("meetings")
-      .select("*, attendees:meeting_attendees(user_id, attendance)")
-      .order("meeting_at", { ascending: true }),
-    supabase.from("invoices").select("invoice_date, grand_total, stamp"),
-    supabase.from("quotes").select("status, grand_total, invoice_id"),
-    supabase
-      .from("leads")
-      .select("value, expected_close_date")
-      .is("deleted_at", null)
-      .eq("status", "open"),
-    supabase
-      .from("notifications")
-      .select("id, type, title, body, link, read, created_at")
-      .eq("user_id", profile.id)
-      .order("created_at", { ascending: false })
-      .limit(6),
-  ]);
+  // 0114 — the calendar navigates by month, so it is fed a window around
+  // today rather than every task, booking and meeting ever recorded.
+  const windowStart = format(addDays(new Date(), -31), "yyyy-MM-dd");
+  const windowEnd = format(addDays(new Date(), 62), "yyyy-MM-dd");
+
+  const [todosRes, members, summaryRes, bookingsRes, meetingsRes, notificationsRes] =
+    await Promise.all([
+      // Every open task, plus finished ones due inside the calendar's window.
+      supabase
+        .from("todos")
+        .select("*")
+        .or(
+          `status.neq.done,and(due_date.gte.${windowStart},due_date.lte.${windowEnd})`,
+        )
+        .order("due_date", { ascending: true }),
+      getMembers(),
+      // 0114 — every KPI tile in one round-trip (public.dashboard_summary),
+      // instead of reading every invoice, quote, lead and project to add
+      // them up in the page. The project tiles still score health in TS
+      // below, with the same projectHealth() the board uses.
+      supabase.rpc("dashboard_summary", {}),
+      supabase
+        .from("meeting_bookings")
+        .select("*, link:meeting_links(title)")
+        .eq("status", "confirmed")
+        .gte("booking_date", windowStart)
+        .lte("booking_date", windowEnd)
+        .order("booking_date", { ascending: true })
+        .order("start_time", { ascending: true }),
+      supabase
+        .from("meetings")
+        .select("*, attendees:meeting_attendees(user_id, attendance)")
+        .gte("meeting_at", `${windowStart}T00:00:00`)
+        .lte("meeting_at", `${windowEnd}T23:59:59`)
+        .order("meeting_at", { ascending: true }),
+      supabase
+        .from("notifications")
+        .select("id, type, title, body, link, read, created_at")
+        .eq("user_id", profile.id)
+        .order("created_at", { ascending: false })
+        .limit(6),
+    ]);
+
+  if (summaryRes.error) {
+    // Migration 0114 not applied yet: the tiles read zero rather than the
+    // page failing. The error is logged so it isn't mistaken for quiet.
+    console.error("[dashboard] dashboard_summary() unavailable:", summaryRes.error.message);
+  }
+  const summary: DashboardSummary = summaryRes.data ?? EMPTY_SUMMARY;
 
   const todos = (todosRes.data ?? []) as Todo[];
   const openTasks = todos.filter((t) => t.status !== "done");
@@ -170,71 +178,31 @@ export default async function DashboardPage() {
     })
     .map(toWithAttendees);
 
-  // ---- Money & pipeline analytics --------------------------------
-  const invoices = (invoicesRes.data ?? []) as {
-    invoice_date: string;
-    grand_total: number;
-    stamp: string | null;
-  }[];
-  const quotes = (quotesRes.data ?? []) as {
-    status: string;
-    grand_total: number;
-    invoice_id: string | null;
-  }[];
-  const leads = (leadsRes.data ?? []) as {
-    value: number | null;
-    expected_close_date: string | null;
-  }[];
+  // ---- Money & pipeline analytics (0114: from dashboard_summary) ----
   const notifications = (notificationsRes.data ?? []) as NotificationLite[];
 
-  const thisMonthStart = startOfMonth(new Date());
-  const lastMonthStart = startOfMonth(subMonths(new Date(), 1));
-  const sumInvoices = (from: Date, to?: Date) =>
-    invoices
-      .filter((i) => {
-        if (!i.invoice_date) return false;
-        const d = new Date(i.invoice_date);
-        return d >= from && (!to || d < to);
-      })
-      .reduce((s, i) => s + Number(i.grand_total), 0);
-
-  const revenueThisMonth = sumInvoices(thisMonthStart);
-  const revenueLastMonth = sumInvoices(lastMonthStart, thisMonthStart);
+  const revenueThisMonth = Number(summary.revenue_this_month) || 0;
+  const revenueLastMonth = Number(summary.revenue_last_month) || 0;
   const revenueDelta =
     revenueLastMonth > 0
       ? Math.round(((revenueThisMonth - revenueLastMonth) / revenueLastMonth) * 100)
       : null;
 
   // Invoiced value per month for the last 6 months (oldest first).
-  const trend = Array.from({ length: 6 }, (_, i) => {
-    const from = startOfMonth(subMonths(new Date(), 5 - i));
-    const to = startOfMonth(subMonths(new Date(), 4 - i));
-    return { label: format(from, "MMM"), value: sumInvoices(from, to) };
-  });
+  const trend = (summary.trend ?? []).map((m) => ({
+    label: format(new Date(`${m.month}-01T00:00:00`), "MMM"),
+    value: Number(m.value) || 0,
+  }));
   const trendMax = Math.max(...trend.map((t) => t.value), 1);
 
-  const awaitingQuotes = quotes.filter((q) =>
-    ["sent", "viewed"].includes(q.status),
-  );
-  const awaitingQuotesValue = awaitingQuotes.reduce(
-    (s, q) => s + Number(q.grand_total),
-    0,
-  );
-  const acceptedUninvoiced = quotes.filter(
-    (q) => q.status === "accepted" && !q.invoice_id,
-  );
-  const unpaidInvoices = invoices.filter((i) => i.stamp !== "payment_received");
-  const unpaidValue = unpaidInvoices.reduce(
-    (s, i) => s + Number(i.grand_total),
-    0,
-  );
-  const pipelineValue = leads.reduce((s, l) => s + Number(l.value ?? 0), 0);
-  const overdueLeads = leads.filter(
-    (l) =>
-      l.expected_close_date &&
-      isPast(new Date(l.expected_close_date)) &&
-      !isToday(new Date(l.expected_close_date)),
-  );
+  const awaitingQuotesCount = summary.awaiting_quotes?.count ?? 0;
+  const awaitingQuotesValue = Number(summary.awaiting_quotes?.total) || 0;
+  const acceptedUninvoicedCount = summary.accepted_uninvoiced_count ?? 0;
+  const unpaidCount = summary.unpaid?.count ?? 0;
+  const unpaidValue = Number(summary.unpaid?.total) || 0;
+  const pipelineValue = Number(summary.pipeline?.value) || 0;
+  const openLeadsCount = summary.pipeline?.open_count ?? 0;
+  const overdueLeadsCount = summary.pipeline?.overdue_count ?? 0;
 
   const attention: {
     label: string;
@@ -250,33 +218,33 @@ export default async function DashboardPage() {
       tone: "rose",
     });
   }
-  if (awaitingQuotes.length > 0) {
+  if (awaitingQuotesCount > 0) {
     attention.push({
-      label: `${awaitingQuotes.length} quote${awaitingQuotes.length === 1 ? "" : "s"} awaiting response`,
+      label: `${awaitingQuotesCount} quote${awaitingQuotesCount === 1 ? "" : "s"} awaiting response`,
       detail: `${formatCurrency(awaitingQuotesValue)} on the table`,
       href: "/invoices?tab=quotes",
       tone: "amber",
     });
   }
-  if (acceptedUninvoiced.length > 0) {
+  if (acceptedUninvoicedCount > 0) {
     attention.push({
-      label: `${acceptedUninvoiced.length} accepted quote${acceptedUninvoiced.length === 1 ? "" : "s"} not invoiced yet`,
+      label: `${acceptedUninvoicedCount} accepted quote${acceptedUninvoicedCount === 1 ? "" : "s"} not invoiced yet`,
       detail: "Convert them to invoices in one click",
       href: "/invoices?tab=quotes",
       tone: "primary",
     });
   }
-  if (unpaidInvoices.length > 0) {
+  if (unpaidCount > 0) {
     attention.push({
-      label: `${unpaidInvoices.length} invoice${unpaidInvoices.length === 1 ? "" : "s"} not marked paid`,
+      label: `${unpaidCount} invoice${unpaidCount === 1 ? "" : "s"} not marked paid`,
       detail: `${formatCurrency(unpaidValue)} outstanding`,
       href: "/invoices?tab=past",
       tone: "amber",
     });
   }
-  if (overdueLeads.length > 0) {
+  if (overdueLeadsCount > 0) {
     attention.push({
-      label: `${overdueLeads.length} deal${overdueLeads.length === 1 ? "" : "s"} past expected close date`,
+      label: `${overdueLeadsCount} deal${overdueLeadsCount === 1 ? "" : "s"} past expected close date`,
       detail: "Update or follow up in the CRM",
       href: "/crm",
       tone: "rose",
@@ -293,28 +261,17 @@ export default async function DashboardPage() {
    * more full-table reads on the busiest page in the app, and their absence
    * makes the score conservative — it can under-report risk, never invent it.
    */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const dashProjects = (projectsRes.data ?? []) as any[];
+  // 0114 — the open projects come back from dashboard_summary() with their
+  // balance already computed by the same rule as settledAmount(); health is
+  // still scored here so the formula lives in exactly one place.
   const weekAhead = format(addDays(new Date(), 7), "yyyy-MM-dd");
 
   let atRisk = 0;
   let awaitingClient = 0;
   let deliveringThisWeek = 0;
-  let cashOutstanding = 0;
+  const cashOutstanding = Number(summary.cash_outstanding) || 0;
 
-  for (const p of dashProjects) {
-    const open = ["planning", "active", "on_hold"].includes(p.status);
-
-    const balance = balanceDue({
-      total_value: p.total_value,
-      deposit_paid: p.deposit_paid,
-      payments: p.payments ?? [],
-      company_payments: p.company_payments ?? [],
-    });
-    cashOutstanding += balance;
-
-    if (!open) continue;
-
+  for (const p of summary.open_projects ?? []) {
     if (p.blocked_reason) awaitingClient++;
     if (p.due_date && p.due_date >= today && p.due_date <= weekAhead)
       deliveringThisWeek++;
@@ -329,7 +286,7 @@ export default async function DashboardPage() {
       assetsOutstanding: 0,
       overdueTasks: 0,
       overdueMilestones: 0,
-      balance,
+      balance: Number(p.balance) || 0,
       daysSinceDelivered: null,
       budget: null,
       spend: 0,
@@ -378,7 +335,7 @@ export default async function DashboardPage() {
     },
     {
       label: "Clients",
-      value: String(clientsCount.count ?? 0),
+      value: String(summary.clients_count ?? 0),
       icon: Users,
       href: "/clients",
       tint: "bg-emerald-500/10 text-emerald-600 border border-emerald-500/10",
@@ -408,7 +365,7 @@ export default async function DashboardPage() {
     {
       label: "Pipeline value",
       value: formatCurrency(pipelineValue),
-      sub: `${leads.length} open lead${leads.length === 1 ? "" : "s"}`,
+      sub: `${openLeadsCount} open lead${openLeadsCount === 1 ? "" : "s"}`,
       delta: null,
       icon: KanbanSquare,
       href: "/crm",
@@ -417,7 +374,7 @@ export default async function DashboardPage() {
     {
       label: "Quotes awaiting",
       value: formatCurrency(awaitingQuotesValue),
-      sub: `${awaitingQuotes.length} sent, not yet signed`,
+      sub: `${awaitingQuotesCount} sent, not yet signed`,
       delta: null,
       icon: FileSignature,
       href: "/invoices?tab=quotes",
@@ -426,7 +383,7 @@ export default async function DashboardPage() {
     {
       label: "Unpaid invoices",
       value: formatCurrency(unpaidValue),
-      sub: `${unpaidInvoices.length} without a Paid stamp`,
+      sub: `${unpaidCount} without a Paid stamp`,
       delta: null,
       icon: FileText,
       href: "/invoices?tab=past",

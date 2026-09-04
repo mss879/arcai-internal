@@ -17,10 +17,19 @@ export const metadata = { title: "Project reports" };
 export default async function ProjectReportsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ tab?: string }>;
+  searchParams: Promise<{ tab?: string; months?: string }>;
 }) {
   const supabase = await createClient();
-  const { tab } = await searchParams;
+  const { tab, months: monthsParam } = await searchParams;
+
+  // 0114 — cycle-time and workload read a window (default six months), not
+  // every event and time entry since the workspace began. `?months=24`
+  // widens it; the projects, costs and commissions are read in full.
+  const months = Math.min(60, Math.max(1, Number(monthsParam) || 6));
+  const since = new Date();
+  since.setMonth(since.getMonth() - months);
+  const sinceIso = since.toISOString();
+  const sinceDate = sinceIso.slice(0, 10);
 
   const [
     profile,
@@ -51,7 +60,10 @@ export default async function ProjectReportsPage({
     supabase
       .from("commissions")
       .select("project_id, amount, percentage, basis"),
-    supabase.from("time_entries").select("project_id, user_id, minutes"),
+    supabase
+      .from("time_entries")
+      .select("project_id, user_id, minutes")
+      .gte("worked_on", sinceDate),
     supabase.from("project_members").select("project_id, user_id, is_owner"),
     supabase
       .from("todos")
@@ -64,6 +76,7 @@ export default async function ProjectReportsPage({
       .from("delivery_events")
       .select("project_id, kind, meta, created_at")
       .eq("kind", "stage_changed")
+      .gte("created_at", sinceIso)
       .order("created_at", { ascending: true }),
     // AI-2 — medians per service type. Arithmetic, so it loads with the page.
     allEstimates(supabase),

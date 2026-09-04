@@ -39,15 +39,18 @@ const labelCls = "block text-xs font-semibold text-slate-600 mb-1";
 
 export function InvoiceGenerator({
   pastInvoices = [],
+  existingNumbers,
   quotes = [],
 }: {
   pastInvoices?: SavedInvoice[];
+  /** 0114 — every number on file; `pastInvoices` may be just one page. */
+  existingNumbers?: string[];
   quotes?: Quote[];
 }) {
   // The invoice number is filled in automatically: highest past number + 1.
-  // `suggestNumber()` reads the freshest list of past invoices every time it's
+  // `suggestNumber()` reads the freshest list of numbers every time it's
   // called, so it stays right after a save refreshes the page data.
-  const pastNumbers = pastInvoices.map((p) => p.invoice_number);
+  const pastNumbers = existingNumbers ?? pastInvoices.map((p) => p.invoice_number);
   const suggestNumber = () => nextInvoiceNumber(pastNumbers);
 
   const [invoiceNumber, setInvoiceNumber] = React.useState(suggestNumber);

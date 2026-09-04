@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { format } from "date-fns";
 import { toast } from "sonner";
@@ -19,7 +20,16 @@ import { deleteInvoice } from "./actions";
 import { downloadInvoicePdf } from "./download-pdf";
 import type { SavedInvoice } from "./invoices-view";
 
-export function PastInvoices({ invoices }: { invoices: SavedInvoice[] }) {
+export function PastInvoices({
+  invoices,
+  page = 1,
+  pageCount = 1,
+}: {
+  invoices: SavedInvoice[];
+  /** 0114 — the list is one page of 50; older invoices are a click away. */
+  page?: number;
+  pageCount?: number;
+}) {
   useRealtimeSync("invoices");
   const router = useRouter();
   const [viewing, setViewing] = React.useState<SavedInvoice | null>(null);
@@ -146,6 +156,31 @@ export function PastInvoices({ invoices }: { invoices: SavedInvoice[] }) {
             ))}
           </tbody>
         </table>
+        {pageCount > 1 && (
+          <div className="flex items-center justify-between gap-2 border-t border-slate-100 px-4 py-3 text-xs text-slate-500">
+            <span>
+              Page {page} of {pageCount}
+            </span>
+            <span className="flex items-center gap-3">
+              {page > 1 && (
+                <Link
+                  href={`/invoices?tab=past&page=${page - 1}`}
+                  className="font-medium text-primary-600 hover:underline"
+                >
+                  ← Newer
+                </Link>
+              )}
+              {page < pageCount && (
+                <Link
+                  href={`/invoices?tab=past&page=${page + 1}`}
+                  className="font-medium text-primary-600 hover:underline"
+                >
+                  Older →
+                </Link>
+              )}
+            </span>
+          </div>
+        )}
       </div>
 
       {/* View + re-download a saved invoice */}

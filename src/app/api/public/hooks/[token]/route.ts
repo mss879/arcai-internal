@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { createAdminClient } from "@/lib/supabase/admin";
+import { enforceRateLimit } from "@/lib/rate-limit";
 import { enrollAutomationRun, fireAutomationTrigger } from "@/lib/automation";
 import { topLeadPosition } from "@/lib/crm";
 
@@ -102,10 +103,24 @@ export async function POST(
   { params }: { params: Promise<{ token: string }> },
 ) {
   const { token } = await params;
+
+  // 0116 — bucketed by the endpoint's own token, so a misconfigured or
+  // hostile caller on one webhook cannot silence everyone else's.
+  const supabase = createAdminClient();
+  const limit = await enforceRateLimit(supabase, `hook:${token}`, {
+    limit: 300,
+    windowSec: 60,
+  });
+  if (!limit.ok) {
+    return NextResponse.json(
+      { error: "Too many requests." },
+      { status: 429, headers: { ...CORS, "Retry-After": String(limit.retryAfter) } },
+    );
+  }
+
   const payload = await readPayload(request);
 
   try {
-    const supabase = createAdminClient();
     const { data: endpoint } = await supabase
       .from("webhook_endpoints")
       .select("*")

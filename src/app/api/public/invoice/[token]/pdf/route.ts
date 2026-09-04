@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { renderInvoicePdf, type InvoiceEmailData } from "@/lib/invoice-pdf";
+import { clientIp, enforceRateLimit } from "@/lib/rate-limit";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
@@ -17,7 +18,7 @@ export const runtime = "nodejs";
  * GET so it works from a plain link in a text message.
  */
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ token: string }> },
 ) {
   const { token } = await params;
@@ -26,6 +27,22 @@ export async function GET(
   }
 
   const supabase = createAdminClient();
+
+  // 0116 — rendering a PDF is the most expensive thing an unauthenticated
+  // caller can ask this app to do, and it is billed per invocation. Bucketed
+  // by IP rather than token, so token enumeration is capped too.
+  const limit = await enforceRateLimit(
+    supabase,
+    `invoice-pdf:${clientIp(request.headers)}`,
+    { limit: 30, windowSec: 300 },
+  );
+  if (!limit.ok) {
+    return NextResponse.json(
+      { error: "Too many requests." },
+      { status: 429, headers: { "Retry-After": String(limit.retryAfter) } },
+    );
+  }
+
   const { data: row } = await supabase
     .from("invoices")
     .select(

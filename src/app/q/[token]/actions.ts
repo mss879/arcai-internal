@@ -7,12 +7,26 @@ import { fireAutomationTrigger } from "@/lib/automation";
 import { resolveOrCreateClient } from "@/lib/contacts";
 import { markLeadWon } from "@/lib/leads";
 import { notifyUsers } from "@/lib/notify";
+import { enforceRateLimit } from "@/lib/rate-limit";
 import type { ActionResult } from "@/lib/types";
 
 /**
  * Public quote actions (no auth — the share token is the credential).
  * Uses the admin client because the visitor has no Supabase session.
  */
+
+/**
+ * 0116 — signing is a once-per-quote act, so a stream of attempts against one
+ * token is either a bug or somebody probing. Bucketed by token: a real signer
+ * never sees this.
+ */
+async function quoteLimit(token: string): Promise<string | null> {
+  const res = await enforceRateLimit(createAdminClient(), `quote:${token}`, {
+    limit: 20,
+    windowSec: 600,
+  });
+  return res.ok ? null : "Too many attempts. Give it a minute.";
+}
 
 export async function acceptQuote(input: {
   token: string;
@@ -23,6 +37,9 @@ export async function acceptQuote(input: {
     return { ok: false, error: "Please type your full name." };
   if (!input.signatureData)
     return { ok: false, error: "Please draw your signature." };
+
+  const busy = await quoteLimit(input.token);
+  if (busy) return { ok: false, error: busy };
 
   const supabase = createAdminClient();
   const { data: quote } = await supabase
@@ -129,6 +146,9 @@ export async function declineQuote(input: {
   token: string;
   reason?: string;
 }): Promise<ActionResult> {
+  const busy = await quoteLimit(input.token);
+  if (busy) return { ok: false, error: busy };
+
   const supabase = createAdminClient();
   const { data: quote } = await supabase
     .from("quotes")

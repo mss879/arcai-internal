@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { STORAGE_BUCKETS } from "@/lib/constants";
+import { enforceRateLimit } from "@/lib/rate-limit";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { ActionResult } from "@/lib/types";
 
@@ -9,11 +10,36 @@ import type { ActionResult } from "@/lib/types";
  * serverActions.bodySizeLimit (12mb) with multipart overhead to spare. */
 const MAX_PORTAL_FILE_BYTES = 10 * 1024 * 1024;
 
+/**
+ * 0116 — cap what one portal link can do.
+ *
+ * A server action is a public POST endpoint, so these are as reachable as any
+ * route. Bucketed by the share token rather than by IP: the token IS the
+ * identity here, one client on a flaky mobile connection shouldn't be
+ * throttled by another behind the same NAT, and a leaked token can't be used
+ * to flood the project it belongs to.
+ */
+async function portalLimit(
+  token: string,
+  bucket: string,
+  limit: number,
+  windowSec: number,
+): Promise<string | null> {
+  const res = await enforceRateLimit(createAdminClient(), `${bucket}:${token}`, {
+    limit,
+    windowSec,
+  });
+  return res.ok ? null : "That's a lot at once — give it a minute and try again.";
+}
+
 export async function uploadPortalFile(
   token: string,
   requestId: string,
   formData: FormData
 ): Promise<ActionResult> {
+  const busy = await portalLimit(token, "portal-upload", 20, 600);
+  if (busy) return { ok: false, error: busy };
+
   try {
     const supabase = createAdminClient();
 
@@ -303,6 +329,9 @@ export async function submitChangeRequest(
   const opened = await openPortal(token);
   if ("error" in opened) return { ok: false, error: opened.error };
 
+  const busy = await portalLimit(token, "portal-change", 10, 600);
+  if (busy) return { ok: false, error: busy };
+
   const text = body.trim();
   if (!text) return { ok: false, error: "Tell us what you'd like changed." };
   if (text.length > 2000) {
@@ -422,6 +451,9 @@ export async function postClientComment(
   const opened = await openPortal(token);
   if ("error" in opened) return { ok: false, error: opened.error };
 
+  const busy = await portalLimit(token, "portal-comment", 30, 600);
+  if (busy) return { ok: false, error: busy };
+
   const text = body.trim();
   if (!text) return { ok: false, error: "Write something first." };
   if (text.length > 2000) return { ok: false, error: "That's too long to send." };
@@ -478,6 +510,9 @@ export async function sendPulse(
 ): Promise<ActionResult> {
   const opened = await openPortal(token);
   if ("error" in opened) return { ok: false, error: opened.error };
+
+  const busy = await portalLimit(token, "portal-pulse", 10, 600);
+  if (busy) return { ok: false, error: busy };
   if (![1, 2, 3].includes(score)) return { ok: false, error: "Pick one." };
 
   const supabase = createAdminClient();

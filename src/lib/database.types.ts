@@ -5405,6 +5405,20 @@ export type Database = {
         Update: Partial<Database["public"]["Tables"]["notification_prefs"]["Insert"]>;
         Relationships: [];
       };
+      // 0116 — disposable counters behind the public rate limiter
+      rate_limit_hits: {
+        Row: {
+          /** `<bucket>:<subject>`, e.g. `lead-form:203.0.113.7`. */
+          key: string;
+          at: Timestamp;
+        };
+        Insert: {
+          key: string;
+          at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["rate_limit_hits"]["Insert"]>;
+        Relationships: [];
+      };
     };
     Views: {
       // 0114 — per-project counts and cost totals for the board.
@@ -5432,6 +5446,13 @@ export type Database = {
     Functions: {
       is_admin: {
         Args: { uid: UUID };
+        Returns: boolean;
+      };
+      // 0116 — true when the caller is within the limit, and the hit is
+      // recorded. security definer, so an anon caller can count without
+      // being able to read the table.
+      rate_limit_check: {
+        Args: { p_key: string; p_limit: number; p_window_seconds: number };
         Returns: boolean;
       };
       // 0114 — the dashboard's numbers in one round-trip.

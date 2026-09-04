@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 
+import { enforceRateLimit } from "@/lib/rate-limit";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { ActionResult } from "@/lib/types";
 
@@ -31,6 +32,15 @@ export async function submitReview(
   }
 
   const supabase = createAdminClient();
+
+  // 0116 — one review per token, so repeated posts are a probe, not a client.
+  const limit = await enforceRateLimit(supabase, `review:${token}`, {
+    limit: 10,
+    windowSec: 600,
+  });
+  if (!limit.ok) {
+    return { ok: false, error: "Too many attempts. Give it a minute." };
+  }
 
   const { data: review } = await supabase
     .from("project_reviews")

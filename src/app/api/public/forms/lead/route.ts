@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { fireAutomationTrigger } from "@/lib/automation";
 import { topLeadPosition } from "@/lib/crm";
+import { clientIp, enforceRateLimit } from "@/lib/rate-limit";
 
 /**
  * Public inquiry-form endpoint. Point any website form at it:
@@ -29,6 +30,21 @@ export async function OPTIONS() {
 }
 
 export async function POST(request: Request) {
+  // 0116 — anyone on the internet can post here. Generous enough for a busy
+  // client site's real traffic, tight enough that a loop can't fill the CRM.
+  const supabaseForLimit = createAdminClient();
+  const limit = await enforceRateLimit(
+    supabaseForLimit,
+    `lead-form:${clientIp(request.headers)}`,
+    { limit: 20, windowSec: 300 },
+  );
+  if (!limit.ok) {
+    return NextResponse.json(
+      { error: "Too many submissions. Try again shortly." },
+      { status: 429, headers: { ...CORS, "Retry-After": String(limit.retryAfter) } },
+    );
+  }
+
   let body: Record<string, unknown>;
   try {
     body = await request.json();

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { createAdminClient } from "@/lib/supabase/admin";
+import { clientIp, enforceRateLimit } from "@/lib/rate-limit";
 
 /**
  * Website visitor intelligence.
@@ -98,6 +99,20 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  // 0116 — a real reading session fires a steady trickle of events; a script
+  // using this endpoint as free storage does not look like that.
+  const limit = await enforceRateLimit(
+    createAdminClient(),
+    `track:${clientIp(request.headers)}`,
+    { limit: 120, windowSec: 60 },
+  );
+  if (!limit.ok) {
+    return NextResponse.json(
+      { error: "Too many events." },
+      { status: 429, headers: { ...CORS, "Retry-After": String(limit.retryAfter) } },
+    );
+  }
+
   let body: Record<string, unknown>;
   try {
     body = await request.json();

@@ -34,6 +34,9 @@ export default defineConfig({
       // Calendar invites — a malformed .ics is silently rejected by the
       // calendar, so the format is pinned rather than eyeballed.
       "src/lib/ics.test.ts",
+      // 0116 — the gate in front of every public endpoint. Getting the
+      // fail-open direction wrong takes the whole public surface down.
+      "src/lib/rate-limit.test.ts",
     ],
   },
 });

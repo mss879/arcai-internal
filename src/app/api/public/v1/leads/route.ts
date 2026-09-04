@@ -5,6 +5,7 @@ import type { Database } from "@/lib/database.types";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { fireAutomationTrigger } from "@/lib/automation";
 import { topLeadPosition } from "@/lib/crm";
+import { clientIp, enforceRateLimit } from "@/lib/rate-limit";
 
 /**
  * Open API — leads. Authenticate with an API key from the Automation page:
@@ -26,7 +27,21 @@ async function authenticate(
   if (!key) {
     return NextResponse.json({ error: "Missing API key." }, { status: 401 });
   }
+  // 0116 — the key is the bucket, so one integration looping cannot spend
+  // another's allowance; an unauthenticated spray is bucketed by IP instead,
+  // which also caps key guessing.
   const supabase = createAdminClient();
+  const limit = await enforceRateLimit(
+    supabase,
+    key ? `api:${key.slice(0, 24)}` : `api-anon:${clientIp(request.headers)}`,
+    { limit: 120, windowSec: 60 },
+  );
+  if (!limit.ok) {
+    return NextResponse.json(
+      { error: "Too many requests." },
+      { status: 429, headers: { "Retry-After": String(limit.retryAfter) } },
+    );
+  }
   const { data: apiKey } = await supabase
     .from("api_keys")
     .select("*")

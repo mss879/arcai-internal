@@ -202,3 +202,73 @@ export async function dismissInsightTask(id: string): Promise<ActionResult> {
   revalidatePath("/web-analytics");
   return { ok: true };
 }
+
+/**
+ * 0117 — send web-insight items to To-Dos.
+ *
+ * The AI scan produced a good checklist that lived on its own page, so it was
+ * read once and forgotten while the actual work queue sat somewhere else.
+ * These become real to-dos, and the two stay in step: finishing either one
+ * finishes the other (see setTodoStatus).
+ */
+/** Insight priority → to-do priority. */
+const TODO_PRIORITY: Record<string, "low" | "medium" | "high" | "urgent"> = {
+  critical: "urgent",
+  high: "high",
+  medium: "medium",
+  low: "low",
+};
+
+export async function sendInsightToTodos(
+  ids: string[],
+): Promise<ActionResult<{ created: number }>> {
+  await requireAdmin();
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  const wanted = [...new Set(ids.filter(Boolean))].slice(0, 50);
+  if (!wanted.length) return { ok: false, error: "Nothing selected." };
+
+  const { data: tasks } = await supabase
+    .from("web_insight_tasks")
+    .select("id, title, detail, area, priority, todo_id, done")
+    .in("id", wanted);
+  if (!tasks?.length) return { ok: false, error: "Those items no longer exist." };
+
+  let created = 0;
+  for (const task of tasks) {
+    // Already sent, or already done — sending it again would just make a
+    // duplicate for somebody to close.
+    if (task.todo_id || task.done) continue;
+
+    const { data: todo, error } = await supabase
+      .from("todos")
+      .insert({
+        title: task.title,
+        description: [task.detail, `From the website scan · ${task.area}`]
+          .filter(Boolean)
+          .join("\n\n"),
+        // The two scales don't line up: an insight can be "critical", a
+        // to-do's top rung is "urgent". Mapped rather than cast, so a
+        // critical finding doesn't quietly become a medium one.
+        priority: TODO_PRIORITY[task.priority] ?? "medium",
+        status: "todo" as const,
+        created_by: user?.id ?? null,
+      })
+      .select("id")
+      .single();
+    if (error || !todo) continue;
+
+    await supabase
+      .from("web_insight_tasks")
+      .update({ todo_id: todo.id })
+      .eq("id", task.id);
+    created += 1;
+  }
+
+  revalidatePath("/web-analytics");
+  revalidatePath("/todos");
+  return { ok: true, created };
+}

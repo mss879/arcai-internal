@@ -248,6 +248,29 @@ export async function setTodoStatus(
     })
     .eq("id", id);
   if (error) return { ok: false, error: error.message };
+
+  // 0117 — a to-do raised from the website scan closes its insight too, so
+  // the checklist on /web-analytics doesn't keep asking for work that's done.
+  try {
+    const { data: insight } = await supabase
+      .from("web_insight_tasks")
+      .select("id")
+      .eq("todo_id", id)
+      .maybeSingle();
+    if (insight) {
+      await supabase
+        .from("web_insight_tasks")
+        .update({
+          done: status === "done",
+          done_at: status === "done" ? new Date().toISOString() : null,
+        })
+        .eq("id", insight.id);
+      revalidatePath("/web-analytics");
+    }
+  } catch {
+    // 0117 not applied yet — the to-do is still done.
+  }
+
   revalidatePath("/todos");
   revalidatePath("/dashboard");
   return { ok: true };

@@ -7,6 +7,7 @@ import {
   Paperclip,
   Settings2,
   Sparkles,
+  Quote,
 } from "lucide-react";
 
 import { PageHeader } from "@/components/ui/page-header";
@@ -21,11 +22,18 @@ import type {
 import { ActivityTab } from "./activity-tab";
 import { AssetsTab } from "./assets-tab";
 import { AutomationsTab } from "./automations-tab";
+import { TestimonialsTab, type TestimonialRow } from "./testimonials-tab";
 import { BoardTab } from "./board-tab";
 import { SettingsTab } from "./settings-tab";
 import type { DeliveryProject, WaMediaRow } from "./types";
 
-type Tab = "board" | "assets" | "automations" | "settings" | "activity";
+type Tab =
+  | "board"
+  | "assets"
+  | "testimonials"
+  | "automations"
+  | "settings"
+  | "activity";
 
 export function DeliveryView({
   projects,
@@ -34,6 +42,7 @@ export function DeliveryView({
   events,
   automations,
   waMedia,
+  reviews,
 }: {
   projects: DeliveryProject[];
   requests: ProjectDocumentRequest[];
@@ -41,6 +50,8 @@ export function DeliveryView({
   events: DeliveryEvent[];
   automations: { id: string; name: string; is_active: boolean }[];
   waMedia: WaMediaRow[];
+  /** 0117 — what clients said, and whether it is on the website. */
+  reviews: TestimonialRow[];
 }) {
   const [tab, setTab] = React.useState<Tab>("board");
   useRealtimeSyncTables([
@@ -90,6 +101,14 @@ export function DeliveryView({
           Assets
         </TabButton>
         <TabButton
+          active={tab === "testimonials"}
+          onClick={() => setTab("testimonials")}
+          icon={<Quote className="h-4 w-4" />}
+          count={reviews.filter((r) => r.publishStatus !== "published").length}
+        >
+          Testimonials
+        </TabButton>
+        <TabButton
           active={tab === "automations"}
           onClick={() => setTab("automations")}
           icon={<Sparkles className="h-4 w-4" />}
@@ -122,6 +141,7 @@ export function DeliveryView({
           unfiledMedia={unfiledMedia}
         />
       )}
+      {tab === "testimonials" && <TestimonialsTab reviews={reviews} />}
       {tab === "automations" && <AutomationsTab automations={automations} />}
       {tab === "settings" && <SettingsTab settings={settings} />}
       {tab === "activity" && <ActivityTab events={events} projects={projects} />}

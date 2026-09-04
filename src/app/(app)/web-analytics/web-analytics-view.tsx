@@ -42,6 +42,7 @@ import {
   analyseChats,
   deleteReport,
   dismissInsightTask,
+  sendInsightToTodos,
   generateReport,
   rebuildNow,
   scanInsights,
@@ -164,6 +165,16 @@ export function WebAnalyticsView({
     const result = await dismissInsightTask(id);
     if (!result.ok) toast.error(result.error);
     else router.refresh();
+  };
+
+  const onSendTaskToTodos = async (id: string) => {
+    const result = await sendInsightToTodos([id]);
+    if (!result.ok) {
+      toast.error(result.error);
+      return;
+    }
+    toast.success("Added to To-Dos — finishing it there ticks it off here.");
+    router.refresh();
   };
 
   const runScan = async () => {
@@ -333,6 +344,7 @@ export function WebAnalyticsView({
             tasks={insightTasks}
             onToggleTask={onToggleTask}
             onDismissTask={onDismissTask}
+            onSendTaskToTodos={onSendTaskToTodos}
             scanning={scanning}
             onScan={runScan}
             aiReady={aiReady}

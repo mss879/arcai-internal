@@ -13,6 +13,7 @@ export default async function DeliveryPage() {
     eventsRes,
     automationsRes,
     mediaRes,
+    reviewsRes,
   ] = await Promise.all([
     supabase
       .from("projects")
@@ -41,6 +42,16 @@ export default async function DeliveryPage() {
       .in("message_type", ["image", "document"])
       .order("created_at", { ascending: false })
       .limit(30),
+    // 0117 — reviews the client has actually sent back, for the
+    // Testimonials tab. Only submitted ones; the rest are still out there.
+    supabase
+      .from("project_reviews")
+      .select(
+        "id, project_id, client_name, rating, headline, body, publishable, status, publish_status, publish_error, submitted_at",
+      )
+      .eq("status", "submitted")
+      .order("submitted_at", { ascending: false })
+      .limit(200),
   ]);
 
   return (
@@ -53,6 +64,26 @@ export default async function DeliveryPage() {
       automations={automationsRes.data ?? []}
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       waMedia={(mediaRes.data ?? []) as any}
+      reviews={(reviewsRes.data ?? []).map((r) => {
+        const project = (projectsRes.data ?? []).find((p) => p.id === r.project_id);
+        return {
+          id: r.id,
+          projectId: r.project_id,
+          projectName: project?.name ?? "A project",
+          clientName: r.client_name,
+          clientCompany:
+            (project as { client?: { company?: string | null } } | undefined)?.client
+              ?.company ?? null,
+          rating: r.rating,
+          headline: r.headline,
+          body: r.body,
+          publishable: r.publishable,
+          status: r.status,
+          publishStatus: r.publish_status,
+          publishError: r.publish_error,
+          submittedAt: r.submitted_at,
+        };
+      })}
     />
   );
 }

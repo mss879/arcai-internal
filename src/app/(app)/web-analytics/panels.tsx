@@ -942,6 +942,7 @@ export function InsightsPanel({
   tasks,
   onToggleTask,
   onDismissTask,
+  onSendTaskToTodos,
   scanning,
   onScan,
   aiReady,
@@ -952,6 +953,7 @@ export function InsightsPanel({
   tasks: WebInsightTask[];
   onToggleTask: (id: string, done: boolean) => void;
   onDismissTask: (id: string) => void;
+  onSendTaskToTodos: (id: string) => void;
   scanning: boolean;
   onScan: () => void;
   aiReady: boolean;
@@ -1066,6 +1068,7 @@ export function InsightsPanel({
               tasks={tasks}
               onToggle={onToggleTask}
               onDismiss={onDismissTask}
+              onSendToTodos={onSendTaskToTodos}
             />
 
             {/* Findings */}
@@ -1181,10 +1184,13 @@ function ChecklistBlock({
   tasks,
   onToggle,
   onDismiss,
+  onSendToTodos,
 }: {
   tasks: WebInsightTask[];
   onToggle: (id: string, done: boolean) => void;
   onDismiss: (id: string) => void;
+  /** 0117 — turn this item into a real to-do. */
+  onSendToTodos: (id: string) => void;
 }) {
   if (!tasks.length) return null;
   const done = tasks.filter((t) => t.done).length;
@@ -1276,15 +1282,37 @@ function ChecklistBlock({
             </div>
 
             {!task.done && (
-              <button
-                type="button"
-                onClick={() => onDismiss(task.id)}
-                aria-label="Not doing this"
-                title="Not doing this"
-                className="mt-0.5 h-5 w-5 shrink-0 rounded text-slate-300 transition hover:text-slate-500"
-              >
-                <X className="h-4 w-4" />
-              </button>
+              <div className="flex shrink-0 items-start gap-1">
+                {/* Sent once and only once: the insight keeps the to-do id,
+                    so pressing this again can't make a second copy for
+                    somebody to close. */}
+                {task.todo_id ? (
+                  <span
+                    title="Already on the to-do list"
+                    className="mt-0.5 text-[11px] font-medium text-emerald-600"
+                  >
+                    On To-Dos
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => onSendToTodos(task.id)}
+                    title="Add this to To-Dos"
+                    className="mt-0.5 rounded px-1.5 text-[11px] font-medium text-primary-600 transition hover:bg-primary-50"
+                  >
+                    To-Dos
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => onDismiss(task.id)}
+                  aria-label="Not doing this"
+                  title="Not doing this"
+                  className="mt-0.5 h-5 w-5 rounded text-slate-300 transition hover:text-slate-500"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
             )}
           </li>
         ))}

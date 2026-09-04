@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 
 import { logDeliveryEvent, setProjectDeliveryStage, waContactForClient, withinWaWindow, renderDeliveryMessage, getDeliverySettings } from "@/lib/delivery";
 import { appLink } from "@/lib/app-url";
+import { requireAdmin } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import type { ActionResult, DeliveryStage } from "@/lib/types";
 import { DELIVERY_STAGES } from "@/lib/constants";
@@ -328,6 +329,38 @@ export async function toggleChaserPaused(
     .update({ chaser_paused: paused })
     .eq("id", projectId);
   if (error) return { ok: false, error: error.message };
+  revalidatePath("/delivery");
+  return { ok: true };
+}
+
+// ---- Testimonials → the website (0117) -----------------------------------
+
+/**
+ * Put a client's review on arcai.agency.
+ *
+ * The write itself lives in src/lib/reviews/publish.ts, which is one of
+ * exactly two modules allowed to touch the website's database. Admin-only:
+ * this changes a public page.
+ */
+export async function publishTestimonial(
+  reviewId: string,
+  company: string | null,
+): Promise<ActionResult> {
+  await requireAdmin();
+  const supabase = await createClient();
+  const { publishReview } = await import("@/lib/reviews/publish");
+  const res = await publishReview(supabase, reviewId, { company });
+  if (!res.ok) return { ok: false, error: res.error };
+  revalidatePath("/delivery");
+  return { ok: true };
+}
+
+export async function unpublishTestimonial(reviewId: string): Promise<ActionResult> {
+  await requireAdmin();
+  const supabase = await createClient();
+  const { unpublishReview } = await import("@/lib/reviews/publish");
+  const res = await unpublishReview(supabase, reviewId);
+  if (!res.ok) return { ok: false, error: res.error };
   revalidatePath("/delivery");
   return { ok: true };
 }

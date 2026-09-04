@@ -12,6 +12,7 @@ import {
 } from "@/lib/device-trust";
 import { normalizePhone } from "@/lib/sms-utils";
 import type { Database } from "@/lib/database.types";
+import type { NotificationPrefsInput } from "@/lib/notification-prefs";
 import type { ActionResult } from "@/lib/types";
 
 type ProfileUpdate = Database["public"]["Tables"]["profiles"]["Update"];
@@ -159,5 +160,70 @@ export async function deletePushSubscription(
     .delete()
     .eq("endpoint", endpoint);
   if (error) return { ok: false, error: error.message };
+  return { ok: true };
+}
+
+// ---- Notification preferences (0115) -------------------------------------
+
+export async function saveNotificationPrefs(
+  input: NotificationPrefsInput,
+): Promise<ActionResult> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+
+  const hour = (v: number, fallback: number) =>
+    Math.min(23, Math.max(0, Math.round(Number(v) || fallback)));
+
+  const { error } = await supabase.from("notification_prefs").upsert(
+    {
+      user_id: user.id,
+      channels: input.channels ?? {},
+      quiet_hours_enabled: Boolean(input.quietHoursEnabled),
+      quiet_hours_start: hour(input.quietHoursStart, 21),
+      quiet_hours_end: hour(input.quietHoursEnd, 8),
+      timezone: input.timezone?.trim() || "Asia/Colombo",
+      digest_daily: Boolean(input.digestDaily),
+      digest_weekly: Boolean(input.digestWeekly),
+      muted_links: (input.mutedLinks ?? []).filter(Boolean).slice(0, 200),
+    },
+    { onConflict: "user_id" },
+  );
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath("/profile");
+  return { ok: true };
+}
+
+/**
+ * Silence one thread, from the bell.
+ *
+ * Muting is by link prefix so that muting a conversation mutes everything
+ * about it, not just the one notification kind that happened to arrive first.
+ */
+export async function muteNotificationLink(link: string): Promise<ActionResult> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const clean = link.trim();
+  if (!clean) return { ok: false, error: "Nothing to mute." };
+
+  const { data: existing } = await supabase
+    .from("notification_prefs")
+    .select("muted_links")
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  const next = [...new Set([...(existing?.muted_links ?? []), clean])].slice(0, 200);
+  const { error } = await supabase
+    .from("notification_prefs")
+    .upsert({ user_id: user.id, muted_links: next }, { onConflict: "user_id" });
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath("/profile");
   return { ok: true };
 }

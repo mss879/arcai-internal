@@ -1,4 +1,8 @@
 import { requireProfile } from "@/lib/auth";
+import {
+  DEFAULT_NOTIFICATION_PREFS,
+  type NotificationPrefsInput,
+} from "@/lib/notification-prefs";
 import { getDeviceStatus, maskPhone } from "@/lib/device-trust";
 import { attachRepayments } from "@/lib/loans";
 import { createClient } from "@/lib/supabase/server";
@@ -11,7 +15,7 @@ export default async function ProfilePage() {
   const profile = await requireProfile();
   const supabase = await createClient();
 
-  const [{ data: commissions }, deviceStatus, loansRes, repaymentsRes] =
+  const [{ data: commissions }, deviceStatus, loansRes, repaymentsRes, prefsRes] =
     await Promise.all([
       supabase
         .from("commissions")
@@ -32,7 +36,27 @@ export default async function ProfilePage() {
         .select("*")
         .eq("user_id", profile.id)
         .order("paid_on", { ascending: false }),
+      // 0115 — may not exist yet; the defaults are what no row means anyway.
+      supabase
+        .from("notification_prefs")
+        .select("*")
+        .eq("user_id", profile.id)
+        .maybeSingle(),
     ]);
+
+  const saved = prefsRes.data;
+  const notificationPrefs: NotificationPrefsInput = saved
+    ? {
+        channels: saved.channels,
+        quietHoursEnabled: saved.quiet_hours_enabled,
+        quietHoursStart: saved.quiet_hours_start,
+        quietHoursEnd: saved.quiet_hours_end,
+        timezone: saved.timezone,
+        digestDaily: saved.digest_daily,
+        digestWeekly: saved.digest_weekly,
+        mutedLinks: saved.muted_links,
+      }
+    : DEFAULT_NOTIFICATION_PREFS;
 
   const trustedDevices = deviceStatus
     ? deviceStatus.devices.map((d) => ({
@@ -52,6 +76,7 @@ export default async function ProfilePage() {
       loans={attachRepayments(loansRes.data ?? [], repaymentsRes.data ?? [])}
       trustedDevices={trustedDevices}
       phoneMask={profile.phone ? maskPhone(profile.phone) : null}
+      notificationPrefs={notificationPrefs}
     />
   );
 }

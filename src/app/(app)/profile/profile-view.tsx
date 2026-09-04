@@ -26,6 +26,9 @@ import { useRealtimeSyncTables } from "@/hooks/use-realtime-sync";
 import type { Commission, Profile } from "@/lib/types";
 
 import { changePassword, updateProfile } from "./actions";
+import type { NotificationPrefsInput } from "@/lib/notification-prefs";
+
+import { NotificationPrefsCard } from "./notification-prefs";
 import { PushToggle } from "./push-toggle";
 import {
   TrustedDevicesCard,
@@ -42,6 +45,7 @@ export function ProfileView({
   loans,
   trustedDevices,
   phoneMask,
+  notificationPrefs,
 }: {
   profile: Profile;
   commissions: CommissionRow[];
@@ -50,6 +54,8 @@ export function ProfileView({
   /** null for admins — they're exempt from the device lock. */
   trustedDevices: TrustedDeviceInfo[] | null;
   phoneMask: string | null;
+  /** 0115 — what reaches this person, and when. */
+  notificationPrefs: NotificationPrefsInput;
 }) {
   // A loan recorded (or a repayment logged) by an admin should show up here
   // without the person having to reload the page to find out.
@@ -356,6 +362,8 @@ export function ProfileView({
           )}
 
           <PushToggle />
+
+          <NotificationPrefsCard initial={notificationPrefs} />
         </div>
 
         {/* Commissions list */}

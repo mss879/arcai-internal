@@ -8,6 +8,9 @@ import {
   MAX_MEETING_REMINDER_HOURS,
   MIN_MEETING_REMINDER_HOURS,
 } from "@/lib/constants";
+import { sendAndLogEmail } from "@/lib/email-outbox";
+import { buildIcs, icsFilename, type IcsMethod } from "@/lib/ics";
+import { INVOICE_COMPANY } from "@/lib/invoice";
 import { createClient } from "@/lib/supabase/server";
 import { sendPushToUser } from "@/lib/push";
 import { sendSmsToUser } from "@/lib/sms-alerts";
@@ -70,6 +73,128 @@ function normalizeUrl(raw: string): string {
  * Changing the start time — or the reminder lead time — clears
  * reminder_sent_at so the reminder (lib/meeting-reminders.ts) re-arms.
  */
+/**
+ * Email the meeting as a calendar invite.
+ *
+ * Best-effort by design and called after the meeting is already saved: an
+ * unreachable mail server must never lose a meeting somebody just scheduled.
+ * The UID is the meeting row's id and never changes, so a reschedule (with a
+ * bumped SEQUENCE) updates the entry the client already has rather than
+ * putting a second one beside it — which is the whole reason to send an .ics
+ * instead of a time written out in a text.
+ */
+async function sendMeetingInvite(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  meetingId: string,
+  method: IcsMethod,
+): Promise<void> {
+  try {
+    const { data: meeting } = await supabase
+      .from("meetings")
+      .select(
+        "id, title, description, meeting_at, duration_minutes, location, meeting_url, client_id, sequence",
+      )
+      .eq("id", meetingId)
+      .maybeSingle();
+    if (!meeting) return;
+
+    const [clientRes, attendeeRes] = await Promise.all([
+      meeting.client_id
+        ? supabase
+            .from("clients")
+            .select("id, name, email")
+            .eq("id", meeting.client_id)
+            .maybeSingle()
+        : Promise.resolve({ data: null }),
+      supabase
+        .from("meeting_attendees")
+        .select("user_id")
+        .eq("meeting_id", meetingId),
+    ]);
+
+    const client = clientRes.data;
+    // Two queries rather than an embed: this schema declares no PostgREST
+    // relationships, so `profiles(...)` isn't typed.
+    const attendeeIds = (attendeeRes.data ?? []).map((a) => a.user_id);
+    const { data: attendees } = attendeeIds.length
+      ? await supabase
+          .from("profiles")
+          .select("full_name, email")
+          .in("id", attendeeIds)
+      : { data: [] as { full_name: string; email: string }[] };
+
+    // Everyone who should end up with the entry in their calendar.
+    const recipients = [
+      ...(client?.email ? [client.email] : []),
+      ...(attendees ?? []).map((a) => a.email).filter(Boolean),
+    ];
+    if (recipients.length === 0) return;
+
+    const ics = buildIcs({
+      uid: `meeting-${meeting.id}@arcai`,
+      sequence: meeting.sequence ?? 0,
+      method,
+      title: meeting.title,
+      description: meeting.description,
+      location: meeting.meeting_url || meeting.location,
+      url: meeting.meeting_url,
+      startsAt: meeting.meeting_at,
+      durationMinutes: meeting.duration_minutes,
+      organizer: { name: INVOICE_COMPANY.name, email: INVOICE_COMPANY.email },
+      attendees: [
+        ...(client?.email ? [{ name: client.name, email: client.email }] : []),
+        ...(attendees ?? []).map((a) => ({ name: a.full_name, email: a.email })),
+      ],
+      stampedAt: new Date().toISOString(),
+    });
+
+    const when = formatWhen(meeting.meeting_at);
+    const cancelled = method === "CANCEL";
+
+    await sendAndLogEmail(supabase, {
+      to: recipients,
+      kind: "meeting_invite",
+      actor: "team",
+      meetingId: meeting.id,
+      clientId: meeting.client_id,
+      message: {
+        transport: "generic",
+        subject: cancelled
+          ? `Cancelled: ${meeting.title}`
+          : `${meeting.title} — ${when}`,
+        body: cancelled
+          ? `This meeting has been cancelled.\n${meeting.title}, ${when}.\nOpening the attachment removes it from your calendar.`
+          : [
+              `${meeting.title}`,
+              `${when} (Sri Lanka time)`,
+              meeting.meeting_url ? `Join: ${meeting.meeting_url}` : null,
+              meeting.location ? `Where: ${meeting.location}` : null,
+              meeting.description ?? null,
+              "Open the attachment to add it to your calendar.",
+            ]
+              .filter(Boolean)
+              .join("\n"),
+        attachments: [
+          {
+            filename: icsFilename(meeting.title),
+            content: Buffer.from(ics, "utf8"),
+          },
+        ],
+      },
+    });
+
+    if (!cancelled) {
+      await supabase
+        .from("meetings")
+        .update({ invite_sent_at: new Date().toISOString() })
+        .eq("id", meetingId);
+    }
+  } catch {
+    // The meeting is saved either way; an invite that didn't send is not a
+    // reason to fail the action.
+  }
+}
+
 export async function saveMeeting(input: MeetingInput): Promise<ActionResult> {
   const supabase = await createClient();
   const {
@@ -118,21 +243,25 @@ export async function saveMeeting(input: MeetingInput): Promise<ActionResult> {
   let prevAttendees = new Set<string>();
   let prevMeetingAt: string | null = null;
   let prevReminderHours: number | null = null;
+  let prevSequence = 0;
   if (input.id) {
     const [meetingRes, attendeesRes] = await Promise.all([
       supabase
         .from("meetings")
-        .select("meeting_at, reminder_hours")
+        .select("meeting_at, reminder_hours, sequence")
         .eq("id", input.id)
         .maybeSingle(),
       supabase.from("meeting_attendees").select("user_id").eq("meeting_id", input.id),
     ]);
     prevMeetingAt = meetingRes.data?.meeting_at ?? null;
     prevReminderHours = meetingRes.data?.reminder_hours ?? null;
+    prevSequence = meetingRes.data?.sequence ?? 0;
     prevAttendees = new Set((attendeesRes.data ?? []).map((a) => a.user_id));
   }
 
   let meetingId = input.id;
+  // A new meeting always invites; an edit only when the time actually moved.
+  let shouldInvite = !input.id;
   if (input.id) {
     const startMoved =
       (prevMeetingAt ? new Date(prevMeetingAt).getTime() : null) !==
@@ -141,11 +270,18 @@ export async function saveMeeting(input: MeetingInput): Promise<ActionResult> {
     // too, or going 1h → 5h on a meeting 4h out would never fire. It is NOT
     // a reschedule though — attendance answers stay put.
     const rearmReminder = startMoved || prevReminderHours !== reminderHours;
+    // iCalendar SEQUENCE only advances on a real reschedule: bumping it for a
+    // typo fix would re-prompt everyone who already accepted.
+    const sequenced = startMoved
+      ? { ...payload, sequence: prevSequence + 1 }
+      : payload;
     const { error } = await supabase
       .from("meetings")
-      .update(rearmReminder ? { ...payload, reminder_sent_at: null } : payload)
+      .update(rearmReminder ? { ...sequenced, reminder_sent_at: null } : sequenced)
       .eq("id", input.id);
     if (error) return { ok: false, error: error.message };
+
+    shouldInvite = startMoved;
 
     // Rescheduled to a new time → wipe everyone's "did you attend?" answers
     // so they're asked again for the new slot.
@@ -240,6 +376,9 @@ export async function saveMeeting(input: MeetingInput): Promise<ActionResult> {
       ...notify.map((uid) => sendSmsToUser({ userId: uid, message: smsMessage })),
     ]);
   }
+
+  // After the attendee sync, so everyone invited is actually on the invite.
+  if (shouldInvite) await sendMeetingInvite(supabase, meetingId, "REQUEST");
 
   revalidatePath("/dashboard");
   revalidatePath("/meetings");
@@ -343,6 +482,10 @@ export async function deleteMeeting(id: string): Promise<ActionResult> {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return { ok: false, error: "Not authenticated." };
+
+  // The CANCEL invite is built from the row, so it must go out before the
+  // delete. Without it the meeting simply stays in everyone's calendar.
+  await sendMeetingInvite(supabase, id, "CANCEL");
 
   // meeting_attendees rows cascade on delete (see 0042).
   const { error } = await supabase.from("meetings").delete().eq("id", id);

@@ -31,6 +31,9 @@ export default defineConfig({
       "src/lib/portal-send-core.test.ts",
       // Templates render the same on the server and in the compose preview.
       "src/lib/email-templates.test.ts",
+      // Calendar invites — a malformed .ics is silently rejected by the
+      // calendar, so the format is pinned rather than eyeballed.
+      "src/lib/ics.test.ts",
     ],
   },
 });

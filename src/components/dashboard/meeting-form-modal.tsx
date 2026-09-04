@@ -3,7 +3,7 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Check, MapPin, Trash2, UserPlus, Video, X } from "lucide-react";
+import { CalendarPlus, Check, MapPin, Trash2, UserPlus, Video, X } from "lucide-react";
 
 import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -199,7 +199,7 @@ export function MeetingFormModal({
       open={open}
       onClose={onClose}
       title={meeting ? "Edit meeting" : "New meeting"}
-      description="Set a time, pick online or in person, and assign your team. They're texted now and again before it starts."
+      description="Set a time, pick online or in person, and assign your team. They're texted now and again before it starts, and everyone — the client included — gets a calendar invite."
       size="lg"
       footer={
         <>
@@ -213,6 +213,13 @@ export function MeetingFormModal({
             >
               <Trash2 className="h-4 w-4" /> Delete
             </Button>
+          )}
+          {meeting && (
+            <a href={`/api/meetings/${meeting.id}/ics`} download>
+              <Button variant="ghost" disabled={pending || deleting}>
+                <CalendarPlus className="h-4 w-4" /> Add to calendar
+              </Button>
+            </a>
           )}
           <Button variant="outline" onClick={onClose} disabled={pending || deleting}>
             Cancel

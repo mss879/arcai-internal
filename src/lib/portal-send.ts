@@ -17,6 +17,10 @@ import {
   sendClientSms,
   type ProjectClientContact,
 } from "@/lib/project-sms";
+import {
+  choosePortalChannel,
+  type PortalSendChannel,
+} from "@/lib/portal-send-core";
 import { isSmsConfigured } from "@/lib/sms";
 import {
   isWhatsAppConfigured,
@@ -48,7 +52,8 @@ type DB = SupabaseClient<Database>;
  * it. A revoked link never goes out.
  */
 
-export type PortalSendChannel = "auto" | "whatsapp" | "sms";
+// Re-exported: the ladder's channel type lives with the ladder's decision.
+export type { PortalSendChannel };
 export type PortalSendActor = "team" | "automation" | "creation" | "assistant";
 
 export type PortalSendFailure =
@@ -148,76 +153,86 @@ export async function sendPortalLink(
   const passcode = project.portal_passcode;
 
   // ---- 1 + 2: WhatsApp ------------------------------------------------
-  let whatsappProblem: string | null = null;
-  if (channel !== "sms" && isWhatsAppConfigured()) {
-    const wa = await resolveWaContact(supabase, contact);
-    if (!wa) {
-      whatsappProblem = `${contact.clientName}'s phone number isn't a usable WhatsApp number.`;
-    } else if (wa.do_not_contact) {
-      whatsappProblem = `${contact.clientName} has opted out of WhatsApp messages.`;
-    } else if (withinWaWindow(wa.last_inbound_at)) {
-      const body = portalCtaBody({ name, projectName: contact.projectName, passcode, note });
-      const sent = await sendWhatsAppCtaUrl({
+  // Which rung to try is decided by choosePortalChannel() in
+  // portal-send-core.ts, so the ladder can be tested without Meta or
+  // Notify.lk. Everything below is the sending.
+  const waConfigured = isWhatsAppConfigured();
+  const wa =
+    channel !== "sms" && waConfigured
+      ? await resolveWaContact(supabase, contact)
+      : null;
+  const windowOpen = wa ? withinWaWindow(wa.last_inbound_at) : false;
+  // The template only matters once the window has shut, so the common path
+  // doesn't pay for the settings read.
+  const settings =
+    wa && !wa.do_not_contact && !windowOpen
+      ? await getDeliverySettings(supabase)
+      : null;
+
+  const choice = choosePortalChannel({
+    requested: channel,
+    whatsappConfigured: waConfigured,
+    wa: wa ? { doNotContact: Boolean(wa.do_not_contact), windowOpen } : null,
+    portalTemplate: settings?.portal_template_name?.trim() || null,
+    smsConfigured: isSmsConfigured(),
+    clientName: contact.clientName,
+  });
+  let whatsappProblem = choice.whatsappProblem;
+
+  if (choice.rung === "whatsapp_cta" && wa) {
+    const body = portalCtaBody({ name, projectName: contact.projectName, passcode, note });
+    const sent = await sendWhatsAppCtaUrl({
+      to: wa.wa_id,
+      bodyText: body,
+      buttonText: BUTTON_TEXT,
+      url: link,
+    });
+    const preview = `${body}\n${link}`;
+    await logOutboundWa(
+      supabase,
+      wa.id,
+      preview,
+      sent.ok ? sent.waMessageId : null,
+      sent.ok,
+      sent.ok ? undefined : sent.error,
+    );
+    if (sent.ok) {
+      return recordSuccess(supabase, project.id, opts, {
+        channel: "whatsapp",
         to: wa.wa_id,
-        bodyText: body,
-        buttonText: BUTTON_TEXT,
-        url: link,
-      });
-      const preview = `${body}\n${link}`;
-      await logOutboundWa(
-        supabase,
-        wa.id,
         preview,
-        sent.ok ? sent.waMessageId : null,
-        sent.ok,
-        sent.ok ? undefined : sent.error,
-      );
-      if (sent.ok) {
-        return recordSuccess(supabase, project.id, opts, {
-          channel: "whatsapp",
-          to: wa.wa_id,
-          preview,
-          clientName: contact.clientName,
-        });
-      }
-      whatsappProblem = sent.error;
-    } else {
-      const settings = await getDeliverySettings(supabase);
-      const template = settings.portal_template_name?.trim();
-      if (template) {
-        const passcodeLine = passcode ? `Passcode: ${passcode}` : "No passcode needed";
-        const sent = await sendWhatsAppTemplate({
-          to: wa.wa_id,
-          template,
-          language: settings.portal_template_lang || "en",
-          bodyParams: [name, contact.projectName, passcodeLine],
-          urlButtonParam: project.share_token,
-        });
-        const preview = `[template: ${template}] ${name} · ${contact.projectName} · ${passcodeLine}\n${link}`;
-        await logOutboundWa(
-          supabase,
-          wa.id,
-          preview,
-          sent.ok ? sent.waMessageId : null,
-          sent.ok,
-          sent.ok ? undefined : sent.error,
-        );
-        if (sent.ok) {
-          return recordSuccess(supabase, project.id, opts, {
-            channel: "whatsapp_template",
-            to: wa.wa_id,
-            preview,
-            clientName: contact.clientName,
-          });
-        }
-        whatsappProblem = sent.error;
-      } else {
-        whatsappProblem =
-          "their 24h WhatsApp window is closed and no portal template is set (Client Delivery → Settings)";
-      }
+        clientName: contact.clientName,
+      });
     }
-  } else if (channel !== "sms") {
-    whatsappProblem = "WhatsApp isn't configured.";
+    whatsappProblem = sent.error;
+  } else if (choice.rung === "whatsapp_template" && wa && settings) {
+    const template = settings.portal_template_name!.trim();
+    const passcodeLine = passcode ? `Passcode: ${passcode}` : "No passcode needed";
+    const sent = await sendWhatsAppTemplate({
+      to: wa.wa_id,
+      template,
+      language: settings.portal_template_lang || "en",
+      bodyParams: [name, contact.projectName, passcodeLine],
+      urlButtonParam: project.share_token,
+    });
+    const preview = `[template: ${template}] ${name} · ${contact.projectName} · ${passcodeLine}\n${link}`;
+    await logOutboundWa(
+      supabase,
+      wa.id,
+      preview,
+      sent.ok ? sent.waMessageId : null,
+      sent.ok,
+      sent.ok ? undefined : sent.error,
+    );
+    if (sent.ok) {
+      return recordSuccess(supabase, project.id, opts, {
+        channel: "whatsapp_template",
+        to: wa.wa_id,
+        preview,
+        clientName: contact.clientName,
+      });
+    }
+    whatsappProblem = sent.error;
   }
 
   if (channel === "whatsapp") {

@@ -1398,6 +1398,36 @@ export const ASSISTANT_TOOLS: ToolSchema[] = [
   {
     type: "function",
     function: {
+      name: "create_agreement",
+      description:
+        "Draft a contract, scope of work or NDA and save it as a DRAFT for a person to review and send. Use for 'draft a contract for…', 'write an NDA for…'. It is never sent and never signed by this tool — a person opens Agreements, reads it, and sends the signing link.",
+      parameters: {
+        type: "object",
+        properties: {
+          kind: {
+            type: "string",
+            enum: ["contract", "sow", "nda", "custom"],
+            description: "What sort of document this is.",
+          },
+          title: { type: "string", description: "e.g. 'Website build — services agreement'." },
+          client_query: {
+            type: "string",
+            description: "Client or company name to link it to, if known.",
+          },
+          body: {
+            type: "string",
+            description:
+              "The agreement itself, in Markdown: # headings, numbered clauses, - bullets, **bold**. Write it in full, in plain English, covering scope, price, timeline, payment terms and termination unless told otherwise.",
+          },
+        },
+        required: ["title", "body"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "assign_conversation",
       description:
         "Give a conversation in the inbox an owner, so one named person answers it. Use for 'assign the Aarah chat to Musa', 'I'll take that conversation'. This is a plain change — no confirmation card — and the assignee is notified.",
@@ -3954,6 +3984,54 @@ export async function executeTool(
           note: "Shown to the user for confirmation. Nothing is sent until the user taps Send, and sending pauses the AI for that chat. Do not say it has been sent.",
         },
         card: { type: "confirm_send_whatsapp", whatsapp },
+      };
+    }
+
+    case "create_agreement": {
+      const title = String(args.title ?? "").trim();
+      const body = String(args.body ?? "").trim();
+      if (!title || !body)
+        return { content: { ok: false, error: "Need a title and the wording." } };
+
+      const client = args.client_query
+        ? await findClient(supabase, args.client_query)
+        : null;
+
+      const kind =
+        args.kind === "sow" || args.kind === "nda" || args.kind === "custom"
+          ? args.kind
+          : "contract";
+
+      const { data, error } = await supabase
+        .from("agreements")
+        .insert({
+          kind,
+          title,
+          body_md: body,
+          client_id: client?.id ?? null,
+          created_by: ctx.userId,
+        })
+        .select("id")
+        .single();
+      if (error || !data)
+        return {
+          content: { ok: false, error: error?.message ?? "Could not save it." },
+        };
+
+      return {
+        content: {
+          ok: true,
+          agreement_id: data.id,
+          title,
+          kind,
+          client: client?.name ?? null,
+          note: "Saved as a DRAFT. Nothing has been sent — open Agreements to read it through and send the signing link.",
+        },
+        event: {
+          kind: "created" as const,
+          label: `Drafted ${kind}: ${title}`,
+          href: "/agreements",
+        },
       };
     }
 

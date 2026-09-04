@@ -37,6 +37,9 @@ export default defineConfig({
       // 0116 — the gate in front of every public endpoint. Getting the
       // fail-open direction wrong takes the whole public surface down.
       "src/lib/rate-limit.test.ts",
+      // 0117 — a document somebody signs must not be able to carry a
+      // script, so escaping is pinned rather than assumed.
+      "src/lib/markdown.test.ts",
     ],
   },
 });

@@ -5,6 +5,7 @@ import {
   BrainCircuit,
   CalendarClock,
   CreditCard,
+  FileSignature,
   FileText,
   FolderKanban,
   FolderOpen,
@@ -77,6 +78,8 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { label: "CRM Pipeline", href: "/crm", icon: KanbanSquare },
       { label: "Proposals", href: "/proposals", icon: ScrollText },
+      // 0117 — contracts, SOWs and NDAs, signed on a link.
+      { label: "Agreements", href: "/agreements", icon: FileSignature },
       { label: "Pricing", href: "/pricing", icon: BadgeDollarSign },
     ],
   },

@@ -12,6 +12,8 @@ const PUBLIC_PREFIXES = [
   // 0117 — the same model for a proposal: an unguessable token IS the
   // credential, and the page is worthless without it.
   "/p",
+  // 0117 — and for a contract, SOW or NDA.
+  "/a",
   // Public APIs: inquiry forms, inbound webhooks, visitor tracking, open API.
   "/api/public",
   // Cron tick endpoints (optionally guarded by SMS_CRON_SECRET themselves).

@@ -60,6 +60,11 @@ export const TRIGGER_META: Record<
     label: "Proposal signed",
     description: "A client e-signs a proposal via its share link (0117).",
   },
+  agreement_signed: {
+    label: "Agreement signed",
+    description:
+      "A client e-signs a contract, SOW or NDA via its share link (0117).",
+  },
   quote_viewed: {
     label: "Quote opened",
     description: "A client opens a quotation's share link for the first time.",

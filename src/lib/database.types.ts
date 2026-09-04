@@ -233,8 +233,9 @@ export type AutomationTrigger =
   | "installment_due"
   | "cheque_due"
   | "quote_accepted"
-  // 0117 — a proposal can be signed too.
+  // 0117 — a proposal and an agreement can be signed too.
   | "proposal_accepted"
+  | "agreement_signed"
   | "client_created"
   | "webhook"
   | "wa_message_received"

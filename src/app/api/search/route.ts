@@ -2,6 +2,15 @@ import { NextResponse } from "next/server";
 import { getProfile } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 
+/**
+ * Global search (Cmd/Ctrl+K).
+ *
+ * Six tables became nine in 0112 — quotes, invoices and proposals are the
+ * documents people actually hunt for by number or name — and every result
+ * now opens its RECORD: a client opens the client page, a lead its detail
+ * page (the old `/crm?p=` was the pipeline parameter, so a lead result
+ * silently dropped you on the default board).
+ */
 export async function GET(request: Request) {
   try {
     const profile = await getProfile();
@@ -27,6 +36,9 @@ export async function GET(request: Request) {
       { data: leads, error: leadsErr },
       { data: meetings, error: meetingsErr },
       { data: resources, error: resourcesErr },
+      { data: quotes, error: quotesErr },
+      { data: invoices, error: invoicesErr },
+      { data: proposals, error: proposalsErr },
     ] = await Promise.all([
       supabase
         .from("clients")
@@ -48,6 +60,7 @@ export async function GET(request: Request) {
         .from("leads")
         .select("id, title, company, contact_name, notes")
         .or(`title.ilike.${term},company.ilike.${term},contact_name.ilike.${term},notes.ilike.${term}`)
+        .is("deleted_at", null)
         .limit(5),
       supabase
         .from("meeting_bookings")
@@ -59,6 +72,21 @@ export async function GET(request: Request) {
         .select("id, name, description, kind, link_url")
         .or(`name.ilike.${term},description.ilike.${term}`)
         .limit(5),
+      supabase
+        .from("quotes")
+        .select("id, quote_number, title, customer_name, status, grand_total, currency")
+        .or(`quote_number.ilike.${term},title.ilike.${term},customer_name.ilike.${term}`)
+        .limit(5),
+      supabase
+        .from("invoices")
+        .select("id, invoice_number, bill_to_name, grand_total, stamp, invoice_date")
+        .or(`invoice_number.ilike.${term},bill_to_name.ilike.${term}`)
+        .limit(5),
+      supabase
+        .from("proposals")
+        .select("id, client_name, project_name, grand_total, proposal_date")
+        .or(`client_name.ilike.${term},project_name.ilike.${term}`)
+        .limit(5),
     ]);
 
     // Log errors if any, but don't fail the whole search if one table fails
@@ -68,6 +96,9 @@ export async function GET(request: Request) {
     if (leadsErr) console.error("Search leads error:", leadsErr);
     if (meetingsErr) console.error("Search meetings error:", meetingsErr);
     if (resourcesErr) console.error("Search resources error:", resourcesErr);
+    if (quotesErr) console.error("Search quotes error:", quotesErr);
+    if (invoicesErr) console.error("Search invoices error:", invoicesErr);
+    if (proposalsErr) console.error("Search proposals error:", proposalsErr);
 
     const results = [
       ...(clients || []).map((c) => ({
@@ -75,7 +106,7 @@ export async function GET(request: Request) {
         title: c.name,
         subtitle: c.company || c.email || c.city || "Client",
         category: "Clients",
-        href: `/clients`,
+        href: `/clients/${c.id}`,
       })),
       ...(todos || []).map((t) => ({
         id: t.id,
@@ -96,7 +127,28 @@ export async function GET(request: Request) {
         title: l.title,
         subtitle: l.company || l.contact_name || "CRM Lead",
         category: "CRM Pipeline",
-        href: `/crm?p=${l.id}`,
+        href: `/crm/lead/${l.id}`,
+      })),
+      ...(quotes || []).map((qt) => ({
+        id: qt.id,
+        title: `${qt.quote_number}${qt.title ? ` — ${qt.title}` : ""}`,
+        subtitle: `${qt.customer_name} · ${qt.currency} ${Number(qt.grand_total).toLocaleString()} · ${qt.status}`,
+        category: "Quotes",
+        href: `/invoices?tab=quotes`,
+      })),
+      ...(invoices || []).map((inv) => ({
+        id: inv.id,
+        title: `Invoice ${inv.invoice_number}`,
+        subtitle: `${inv.bill_to_name} · ${Number(inv.grand_total).toLocaleString()}${inv.stamp === "payment_received" ? " · paid" : ""} · ${inv.invoice_date}`,
+        category: "Invoices",
+        href: `/invoices?tab=past`,
+      })),
+      ...(proposals || []).map((pr) => ({
+        id: pr.id,
+        title: pr.project_name || `Proposal for ${pr.client_name}`,
+        subtitle: `${pr.client_name} · ${Number(pr.grand_total).toLocaleString()} · ${pr.proposal_date}`,
+        category: "Proposals",
+        href: `/proposals`,
       })),
       ...(meetings || []).map((m) => ({
         id: m.id,

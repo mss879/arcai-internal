@@ -180,6 +180,25 @@ async function handleMessages(supabase: DB, value: WaWebhookValue): Promise<void
         .select("*")
         .single();
       contact = created;
+
+      // 0112 — a number we already know as a CLIENT is linked on first
+      // contact, so their messages land on the client's page rather than on
+      // a thread that never met the record. Best-effort.
+      if (contact && !contact.client_id) {
+        try {
+          const { findClientByPhoneOrEmail } = await import("@/lib/contacts");
+          const match = await findClientByPhoneOrEmail(supabase, { phone: waId });
+          if (match) {
+            await supabase
+              .from("wa_contacts")
+              .update({ client_id: match.id })
+              .eq("id", contact.id);
+            contact = { ...contact, client_id: match.id };
+          }
+        } catch (e) {
+          console.error("[whatsapp] client match failed:", e);
+        }
+      }
     }
     if (!contact) continue;
 

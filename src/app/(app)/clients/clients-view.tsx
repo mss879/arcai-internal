@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
@@ -110,7 +111,12 @@ export function ClientsView({ clients }: { clients: Client[] }) {
                     <div className="flex items-center gap-3">
                       <Avatar name={c.name} size="sm" />
                       <div>
-                        <p className="font-medium text-slate-900">{c.name}</p>
+                        <Link
+                          href={`/clients/${c.id}`}
+                          className="font-medium text-slate-900 hover:text-primary-700 hover:underline"
+                        >
+                          {c.name}
+                        </Link>
                         {c.company && (
                           <p className="flex items-center gap-1 text-xs text-slate-400">
                             <Building2 className="h-3 w-3" />

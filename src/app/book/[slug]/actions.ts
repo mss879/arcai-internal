@@ -3,7 +3,6 @@
 import { revalidatePath } from "next/cache";
 
 import { createAdminClient } from "@/lib/supabase/admin";
-import { sendPushToUser } from "@/lib/push";
 import { generateTimeSlots } from "@/lib/utils";
 
 export type BookingResult = { ok: true } | { ok: false; error: string };
@@ -61,6 +60,19 @@ export async function submitBooking(input: {
   ).find((s) => s.start === input.start_time);
   if (!slot) return { ok: false, error: "That time slot is not valid." };
 
+  // 0112 — a booking from a number or email we know is the client's booking.
+  let clientId: string | null = null;
+  try {
+    const { findClientByPhoneOrEmail } = await import("@/lib/contacts");
+    const match = await findClientByPhoneOrEmail(admin, {
+      phone: input.client_phone,
+      email: input.client_email,
+    });
+    clientId = match?.id ?? null;
+  } catch {
+    clientId = null;
+  }
+
   const { error } = await admin.from("meeting_bookings").insert({
     meeting_link_id: link.id,
     client_name: input.client_name.trim(),
@@ -70,6 +82,7 @@ export async function submitBooking(input: {
     booking_date: input.date,
     start_time: slot.start,
     end_time: slot.end,
+    client_id: clientId,
   });
 
   if (error) {
@@ -82,15 +95,9 @@ export async function submitBooking(input: {
   if (link.created_by) {
     const title = "New meeting booked";
     const body = `${input.client_name.trim()} booked ${input.date} at ${slot.start}`;
-    await admin.from("notifications").insert({
-      user_id: link.created_by,
-      type: "system",
-      title,
-      body,
-      link: `/meetings/${link.id}`,
-    });
-    await sendPushToUser({
-      userId: link.created_by,
+    const { notifyUsers } = await import("@/lib/notify");
+    await notifyUsers(admin, {
+      userIds: [link.created_by],
       title,
       body,
       link: `/meetings/${link.id}`,

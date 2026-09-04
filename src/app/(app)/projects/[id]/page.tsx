@@ -687,7 +687,16 @@ export default async function ProjectDetailPage({
               </div>
               {client && (
                 <p className="mt-1 text-sm text-slate-500">
-                  {client.name}
+                  {project.client_id ? (
+                    <Link
+                      href={`/clients/${project.client_id}`}
+                      className="hover:text-primary-700 hover:underline"
+                    >
+                      {client.name}
+                    </Link>
+                  ) : (
+                    client.name
+                  )}
                   {client.company ? ` · ${client.company}` : ""}
                 </p>
               )}

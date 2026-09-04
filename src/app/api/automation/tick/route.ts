@@ -25,6 +25,7 @@ import {
 } from "@/lib/prospecting";
 import { processAutoSendQueue, processDueOutreach } from "@/lib/lead-outreach";
 import { processPendingCarousels } from "@/lib/carousels";
+import { processIntelligenceJobs } from "@/lib/intelligence-jobs";
 import { processPendingWaShowcases } from "@/lib/wa-showcase";
 import { processColdDigest, processColdOutreach } from "@/lib/wa-cold-outreach";
 import { processWaRevival } from "@/lib/wa-revival";
@@ -127,6 +128,10 @@ const PASSES: ReadonlyArray<readonly [string, (db: DB) => Promise<unknown>]> = [
   // campaigns, bounded by the campaign's daily cap. Pausing stops it here.
   ["autoSend", processAutoSendQueue],
   ["carousels", processPendingCarousels],
+  // Lead scoring (hourly, unscored only), the churn scan (daily from 06:00)
+  // and the Monday digest — each self-gated by its own app_settings stamp.
+  // /api/intelligence/digest stays for a manual run.
+  ["intelligence", processIntelligenceJobs],
   ["showcases", processPendingWaShowcases],
   // NOTE: live WhatsApp replies, promises and the follow-up cadence have
   // their own scheduled function (/api/whatsapp/agent-tick) so a customer

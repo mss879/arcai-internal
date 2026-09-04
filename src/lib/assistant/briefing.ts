@@ -42,6 +42,7 @@ import {
 import { briefingArtifact } from "@/lib/assistant-artifacts";
 import type { Database } from "@/lib/database.types";
 import { collectDigestStats } from "@/lib/intelligence";
+import { sendDigestEmails } from "@/lib/digests";
 import { sendPushToUser } from "@/lib/push";
 import { localDateInTimezone } from "@/lib/wa-coaching";
 import { localMinutesOfDay } from "@/lib/wa-cold-outreach";
@@ -574,6 +575,20 @@ async function deliver(
     body: body.headline,
     link,
   });
+
+  // 0115 — and by email, for a member who reads mail before they open the
+  // CRM. Only for this one person, and only if they asked: the briefing is
+  // already written, so this costs nothing extra.
+  await sendDigestEmails(
+    supabase,
+    "daily",
+    {
+      subject: "Your morning briefing",
+      body: [body.headline, "", body.spoken_script].filter(Boolean).join("\n"),
+      link,
+    },
+    [userId],
+  );
 
   // Anything the briefing covered should not also buzz as a nudge later.
   await supabase

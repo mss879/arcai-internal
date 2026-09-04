@@ -29,8 +29,15 @@ export type ColdEmailAnalytics = {
   skipped: number;
   failed: number;
   rows: ColdEmailRow[];
-  /** Open/click tracking isn't wired up — say so rather than implying 0%. */
-  opensTracked: false;
+  /**
+   * 0117 — opens and clicks come from the Resend webhook now. Still a flag
+   * rather than an assumption: tracking has to be switched on for the sending
+   * domain in Resend, and until it is, every count is a truthful zero that
+   * would read as a lie.
+   */
+  opensTracked: boolean;
+  opened: number;
+  clicked: number;
 };
 
 const MAX_ROWS = 500;
@@ -41,8 +48,9 @@ const MAX_ROWS = 500;
  * Deliberately reports only what's actually known: a row is `sent` because
  * Resend accepted it and we stored a sent_at, and `bounced`/`complained`
  * because the Resend webhook told us so and suppressed the address. Opens and
- * clicks are NOT tracked (the webhook ignores those events), so they're absent
- * rather than displayed as zero.
+ * clicks (0117) are read from the email log, which the webhook stamps — and
+ * are shown only once at least one has actually arrived, because a column of
+ * zeros reads as "nobody opened it" rather than "we aren't measuring".
  */
 export async function coldEmailAnalytics(): Promise<
   ActionResult<{ analytics: ColdEmailAnalytics }>
@@ -129,6 +137,22 @@ export async function coldEmailAnalytics(): Promise<
 
   const count = (s: string) => all.filter((r) => r.status === s).length;
 
+  // 0117 — engagement, from the email log the webhook stamps.
+  let opened = 0;
+  let clicked = 0;
+  try {
+    const { data: engagement } = await supabase
+      .from("email_messages")
+      .select("opened_at, clicked_at")
+      .eq("kind", "outreach")
+      .not("opened_at", "is", null)
+      .limit(1000);
+    opened = (engagement ?? []).length;
+    clicked = (engagement ?? []).filter((e) => e.clicked_at).length;
+  } catch {
+    // 0115 not applied — the rest of the numbers still stand.
+  }
+
   return {
     ok: true,
     analytics: {
@@ -142,7 +166,9 @@ export async function coldEmailAnalytics(): Promise<
       skipped: count("skipped"),
       failed: count("failed"),
       rows,
-      opensTracked: false,
+      opened,
+      clicked,
+      opensTracked: opened > 0 || clicked > 0,
     },
   };
 }

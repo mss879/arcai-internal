@@ -1191,3 +1191,260 @@ function domainOf(url: string | null | undefined): string {
 function lowerFirst(s: string): string {
   return s ? s.charAt(0).toLowerCase() + s.slice(1) : s;
 }
+
+// ---------------------------------------------------------------------------
+// Follow-up sequences (0117)
+// ---------------------------------------------------------------------------
+
+/**
+ * Cold outreach was one email.
+ *
+ * One email is the version of outreach that doesn't work: most replies to a
+ * cold approach come from the second or third touch, and this system sent the
+ * first and then waited forever. A sequence schedules the rest — and, more
+ * importantly, knows when to stop.
+ *
+ * It stops on any sign the conversation has started or ended: a reply, a
+ * bounce, an unsubscribe, a suppression, or the lead moving out of an open
+ * state. Continuing to send after any of those is the behaviour that gets a
+ * sending domain blocked, so the checks run immediately before each send
+ * rather than when the step was scheduled.
+ */
+
+/** Steps sent per tick, across the whole workspace. Same restraint as sends. */
+const MAX_SEQUENCE_STEPS_PER_TICK = 2;
+
+export type SequenceTickResult = { sent: number; stopped: number; failed: number };
+
+/**
+ * Schedule the remaining steps of a sequence for an outreach row that has
+ * just had its first email sent. Idempotent — the unique index on
+ * (outreach_id, step_no) means a retry cannot double-book a step.
+ */
+export async function scheduleSequence(
+  supabase: DB,
+  outreachId: string,
+  sequenceId: string,
+  from = new Date(),
+): Promise<number> {
+  const { data: sequence } = await supabase
+    .from("outreach_sequences")
+    .select("id, enabled, steps")
+    .eq("id", sequenceId)
+    .maybeSingle();
+  if (!sequence?.enabled) return 0;
+
+  const steps = Array.isArray(sequence.steps) ? sequence.steps : [];
+  if (!steps.length) return 0;
+
+  const rows = steps.map((step, i) => ({
+    outreach_id: outreachId,
+    sequence_id: sequence.id,
+    // Step 1 was the email that has just gone out; the configured steps are
+    // the follow-ups, so they start at 2.
+    step_no: i + 2,
+    due_at: new Date(
+      from.getTime() + Math.max(1, Number(step.delay_days) || 3) * 86_400_000,
+    ).toISOString(),
+  }));
+
+  const { error } = await supabase
+    .from("lead_outreach_steps")
+    .upsert(rows, { onConflict: "outreach_id,step_no", ignoreDuplicates: true });
+  if (error) return 0;
+
+  await supabase
+    .from("lead_outreach")
+    .update({ sequence_id: sequence.id })
+    .eq("id", outreachId);
+
+  return rows.length;
+}
+
+/**
+ * Has anything happened that means we should stop writing to this lead?
+ *
+ * Checked immediately before each send, never at scheduling time — the whole
+ * point is to catch what happened in between.
+ */
+async function shouldStopSequence(
+  supabase: DB,
+  leadId: string,
+): Promise<string | null> {
+  const { data: lead } = await supabase
+    .from("leads")
+    .select("id, status, contact_email, contact_phone_norm, deleted_at")
+    .eq("id", leadId)
+    .maybeSingle();
+  if (!lead || lead.deleted_at) return "the lead is gone";
+  if (lead.status !== "open") return `the lead is ${lead.status}`;
+
+  if (lead.contact_email) {
+    const email = lead.contact_email.trim().toLowerCase();
+    const { data: suppressed } = await supabase
+      .from("outreach_suppressions")
+      .select("reason")
+      .eq("email", email)
+      .maybeSingle();
+    if (suppressed) return `they ${suppressed.reason === "unsubscribe" ? "unsubscribed" : `had a ${suppressed.reason}`}`;
+
+    // A reply is the best possible outcome and the clearest stop signal.
+    const { data: replied } = await supabase
+      .from("email_messages")
+      .select("id")
+      .eq("direction", "inbound")
+      .contains("to_emails", [email])
+      .limit(1)
+      .maybeSingle();
+    if (replied) return "they replied";
+  }
+
+  // They wrote to us on WhatsApp instead — also a reply, on another channel.
+  if (lead.contact_phone_norm) {
+    const { data: contact } = await supabase
+      .from("wa_contacts")
+      .select("last_inbound_at")
+      .eq("wa_id", lead.contact_phone_norm)
+      .maybeSingle();
+    if (contact?.last_inbound_at) return "they wrote on WhatsApp";
+  }
+
+  return null;
+}
+
+export async function processOutreachSequences(
+  supabase: DB,
+): Promise<SequenceTickResult> {
+  const result: SequenceTickResult = { sent: 0, stopped: 0, failed: 0 };
+  if (!isEmailOutreachConfigured()) return result;
+
+  const { enabled, fromEmail } = await outreachSettings(supabase);
+  if (!enabled) return result;
+
+  // Sequence sends share the workspace's daily cap with first touches — one
+  // mailbox, one reputation.
+  const { data: campaigns } = await supabase
+    .from("outreach_campaigns")
+    .select("daily_cap")
+    .eq("status", "running");
+  const cap = campaigns?.length
+    ? Math.min(...campaigns.map((c) => c.daily_cap))
+    : 20;
+  if (cap - (await sentToday(supabase)) <= 0) return result;
+
+  const { data: due } = await supabase
+    .from("lead_outreach_steps")
+    .select("id, outreach_id, sequence_id, step_no")
+    .eq("status", "pending")
+    .lte("due_at", new Date().toISOString())
+    .order("due_at", { ascending: true })
+    .limit(MAX_SEQUENCE_STEPS_PER_TICK);
+  if (!due?.length) return result;
+
+  for (const step of due) {
+    const { data: outreach } = await supabase
+      .from("lead_outreach")
+      .select("id, lead_id, sent_to, subject")
+      .eq("id", step.outreach_id)
+      .maybeSingle();
+    if (!outreach) {
+      await supabase
+        .from("lead_outreach_steps")
+        .update({ status: "skipped", error: "The outreach row is gone." })
+        .eq("id", step.id);
+      continue;
+    }
+
+    const stop = await shouldStopSequence(supabase, outreach.lead_id);
+    if (stop) {
+      // Stop the WHOLE sequence, not just this step.
+      await supabase
+        .from("lead_outreach_steps")
+        .update({ status: "stopped", error: `Stopped — ${stop}.` })
+        .eq("outreach_id", outreach.id)
+        .eq("status", "pending");
+      result.stopped += 1;
+      continue;
+    }
+
+    const { data: sequence } = step.sequence_id
+      ? await supabase
+          .from("outreach_sequences")
+          .select("steps, enabled")
+          .eq("id", step.sequence_id)
+          .maybeSingle()
+      : { data: null };
+    const config = Array.isArray(sequence?.steps)
+      ? sequence.steps[step.step_no - 2]
+      : null;
+    if (!sequence?.enabled || !config?.body) {
+      await supabase
+        .from("lead_outreach_steps")
+        .update({ status: "skipped", error: "The sequence step no longer exists." })
+        .eq("id", step.id);
+      continue;
+    }
+
+    const recipients = await dropSuppressed(supabase, outreach.sent_to ?? []);
+    if (!recipients.length) {
+      await supabase
+        .from("lead_outreach_steps")
+        .update({ status: "skipped", error: "No deliverable address left." })
+        .eq("id", step.id);
+      continue;
+    }
+
+    // One send per address, so each keeps its own unsubscribe token.
+    let ok = false;
+    let lastError = "";
+    let messageId: string | undefined;
+    for (const email of recipients) {
+      const res = await sendAndLogEmail(supabase, {
+        to: email,
+        kind: "outreach",
+        leadId: outreach.lead_id,
+        from: fromEmail,
+        replyTo: fromEmail,
+        message: {
+          transport: "generic",
+          // A follow-up with a fresh subject reads as a new cold email; one
+          // that keeps the thread's subject reads as a nudge.
+          subject: String(config.subject || `Re: ${outreach.subject}`),
+          body: String(config.body),
+          footer: coldFooter(email),
+        },
+      });
+      if (res.sent) {
+        ok = true;
+        messageId ??= res.logId;
+      } else if (!lastError) {
+        lastError = res.error ?? "send failed";
+      }
+    }
+
+    await supabase
+      .from("lead_outreach_steps")
+      .update({
+        status: ok ? "sent" : "failed",
+        sent_at: ok ? new Date().toISOString() : null,
+        email_message_id: messageId ?? null,
+        error: ok ? null : lastError || "send failed",
+      })
+      .eq("id", step.id);
+
+    if (ok) {
+      result.sent += 1;
+      await supabase.from("lead_activities").insert({
+        lead_id: outreach.lead_id,
+        kind: "email",
+        title: `Follow-up ${step.step_no} sent`,
+        body: String(config.body),
+        actor_id: null,
+      });
+    } else {
+      result.failed += 1;
+    }
+  }
+
+  return result;
+}

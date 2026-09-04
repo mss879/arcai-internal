@@ -74,7 +74,30 @@ export async function POST(request: Request) {
   }
 
   const type = String(event.type ?? "");
-  // Only care about hard-negative signals; ack everything else so Resend stops.
+  const providerId = String(
+    (event.data as Record<string, unknown> | undefined)?.email_id ?? "",
+  ).trim();
+
+  // 0117 — the positive signals. They aren't alerts and nobody needs telling;
+  // they just make the email log truthful about what happened after the send,
+  // which is what "did they even open it?" is asked from.
+  if (
+    type === "email.delivered" ||
+    type === "email.opened" ||
+    type === "email.clicked"
+  ) {
+    if (providerId) {
+      try {
+        await recordEngagement(providerId, type);
+      } catch (e) {
+        console.error("[resend-webhook] engagement update failed:", e);
+      }
+    }
+    return NextResponse.json({ ok: true });
+  }
+
+  // Only care about hard-negative signals beyond that; ack everything else so
+  // Resend stops retrying.
   if (type !== "email.bounced" && type !== "email.complained") {
     return NextResponse.json({ ok: true, ignored: type || "unknown" });
   }
@@ -94,9 +117,6 @@ export async function POST(request: Request) {
     // 0115 — mark the send itself. Resend's `email_id` is the message id
     // sendAndLogEmail() stored as provider_id, so this is an exact join
     // rather than the address guess the rest of this handler has to make.
-    const providerId = String(
-      (event.data as Record<string, unknown> | undefined)?.email_id ?? "",
-    ).trim();
     if (providerId) {
       const now = new Date().toISOString();
       await supabase
@@ -155,4 +175,59 @@ export async function POST(request: Request) {
   }
 
   return NextResponse.json({ ok: true });
+}
+
+/**
+ * Stamp a delivery, an open or a click onto the send it belongs to.
+ *
+ * Counts rather than flags: "opened 4 times" is a different signal from
+ * "opened", and the first timestamp is the one worth keeping, so a later open
+ * never overwrites it.
+ */
+async function recordEngagement(
+  providerId: string,
+  type: "email.delivered" | "email.opened" | "email.clicked",
+): Promise<void> {
+  const supabase = createAdminClient();
+  const { data: row } = await supabase
+    .from("email_messages")
+    .select("id, status, opened_at, open_count, clicked_at, click_count")
+    .eq("provider_id", providerId)
+    .maybeSingle();
+  if (!row) return;
+
+  const now = new Date().toISOString();
+
+  if (type === "email.delivered") {
+    await supabase
+      .from("email_messages")
+      .update({
+        // A bounce can arrive after a delivery event; never walk that back.
+        status: row.status === "sent" ? "delivered" : row.status,
+        delivered_at: now,
+      })
+      .eq("id", row.id);
+    return;
+  }
+
+  if (type === "email.opened") {
+    await supabase
+      .from("email_messages")
+      .update({
+        opened_at: row.opened_at ?? now,
+        open_count: (row.open_count ?? 0) + 1,
+      })
+      .eq("id", row.id);
+    return;
+  }
+
+  await supabase
+    .from("email_messages")
+    .update({
+      // A click implies an open, even if the open pixel was blocked.
+      opened_at: row.opened_at ?? now,
+      clicked_at: row.clicked_at ?? now,
+      click_count: (row.click_count ?? 0) + 1,
+    })
+    .eq("id", row.id);
 }

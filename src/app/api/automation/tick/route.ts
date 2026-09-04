@@ -23,7 +23,11 @@ import {
   processDueProspectSchedules,
   processPendingProspectScans,
 } from "@/lib/prospecting";
-import { processAutoSendQueue, processDueOutreach } from "@/lib/lead-outreach";
+import {
+  processAutoSendQueue,
+  processDueOutreach,
+  processOutreachSequences,
+} from "@/lib/lead-outreach";
 import { processPendingCarousels } from "@/lib/carousels";
 import { processIntelligenceJobs } from "@/lib/intelligence-jobs";
 import { processPendingWaShowcases } from "@/lib/wa-showcase";
@@ -127,6 +131,9 @@ const PASSES: ReadonlyArray<readonly [string, (db: DB) => Promise<unknown>]> = [
   // The no-approval leg: sends drafts belonging to RUNNING auto-send
   // campaigns, bounded by the campaign's daily cap. Pausing stops it here.
   ["autoSend", processAutoSendQueue],
+  // 0117 — the follow-ups. One email is the version of outreach that doesn't
+  // work; this sends the rest and, more importantly, knows when to stop.
+  ["sequences", processOutreachSequences],
   ["carousels", processPendingCarousels],
   // Lead scoring (hourly, unscored only), the churn scan (daily from 06:00)
   // and the Monday digest — each self-gated by its own app_settings stamp.

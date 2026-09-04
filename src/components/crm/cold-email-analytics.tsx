@@ -85,6 +85,14 @@ function AnalyticsModal({ onClose }: { onClose: () => void }) {
           <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
             <Stat label="Delivered" value={data.sent} tone="emerald" icon={<Send className="h-3.5 w-3.5" />} />
             <Stat label="Sent today" value={data.sentToday} tone="slate" />
+            {/* Shown only once something has actually been measured — a column
+                of zeros reads as "nobody opened it", not "we aren't looking". */}
+            {data.opensTracked && (
+              <>
+                <Stat label="Opened" value={data.opened} tone="primary" />
+                <Stat label="Clicked" value={data.clicked} tone="emerald" />
+              </>
+            )}
             <Stat label="Awaiting approval" value={data.awaitingApproval} tone="primary" />
             <Stat
               label="Bounced / spam"
@@ -156,9 +164,10 @@ function AnalyticsModal({ onClose }: { onClose: () => void }) {
           {/* Never imply we know something we don't. */}
           {!data.opensTracked && data.rows.length > 0 && (
             <p className="text-xs text-slate-400">
-              Open and click tracking isn&apos;t enabled, so replies are the only
-              response signal here. Delivered means Resend accepted it and it
-              didn&apos;t bounce.
+              No opens or clicks recorded yet. Turn tracking on for the sending
+              domain in Resend and they appear here; until then replies are the
+              only response signal, and Delivered means Resend accepted it and
+              it didn&apos;t bounce.
             </p>
           )}
         </div>

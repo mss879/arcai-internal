@@ -590,6 +590,54 @@ export type NotificationChannelPrefs = Partial<
   Record<NotificationType, { inapp?: boolean; push?: boolean; email?: boolean }>
 >;
 
+// 0117 — a proposal can be signed on a link, like a quote
+export type ProposalStatus =
+  | "draft"
+  | "sent"
+  | "viewed"
+  | "accepted"
+  | "declined";
+
+// 0117 — contracts, SOWs and NDAs
+export type AgreementKind = "contract" | "sow" | "nda" | "custom";
+export type AgreementStatus =
+  | "draft"
+  | "sent"
+  | "viewed"
+  | "signed"
+  | "declined"
+  | "void";
+
+// 0117 — where a lead came from. Every key optional: a walk-in has none.
+export type LeadUtm = {
+  utm_source?: string;
+  utm_medium?: string;
+  utm_campaign?: string;
+  utm_term?: string;
+  utm_content?: string;
+  gclid?: string;
+  fbclid?: string;
+};
+
+export type ReferralStatus = "pending" | "won" | "rewarded" | "void";
+export type ReviewPublishStatus = "unpublished" | "published" | "failed";
+export type OutreachStepStatus =
+  | "pending"
+  | "sent"
+  | "skipped"
+  | "stopped"
+  | "failed";
+export type SiteAuditStatus = "queued" | "running" | "sent" | "failed";
+
+/** One step of an outreach sequence, as stored on `outreach_sequences.steps`. */
+export type OutreachSequenceStep = {
+  delay_days: number;
+  subject: string;
+  body: string;
+  /** Stop the whole sequence if they reply before this step is due. */
+  stop_on_reply?: boolean;
+};
+
 export type Database = {
   public: {
     Tables: {
@@ -665,6 +713,9 @@ export type Database = {
           portal_login_count: number;
           /** 0112 — generated: `phone` normalised to 94XXXXXXXXX, or null. Never written. */
           phone_norm: string | null;
+          // 0117 — their statement link, and the code they share.
+          statement_token: UUID;
+          referral_code: string | null;
           created_by: UUID | null;
           created_at: Timestamp;
         };
@@ -680,6 +731,9 @@ export type Database = {
           // 0099
           portal_last_login_at?: Timestamp | null;
           portal_login_count?: number;
+          // 0117
+          statement_token?: UUID;
+          referral_code?: string | null;
           created_by?: UUID | null;
           created_at?: Timestamp;
         };
@@ -855,6 +909,8 @@ export type Database = {
           client_note_at: Timestamp | null;
           /** Pricing-catalogue package key that was sold, e.g. web_smart_site. */
           package_key: string | null;
+          // 0117 — overrides the workspace booking link for this project.
+          booking_slug: string | null;
         };
         Insert: {
           id?: UUID;
@@ -944,6 +1000,7 @@ export type Database = {
           client_note?: string | null;
           client_note_at?: Timestamp | null;
           package_key?: string | null;
+          booking_slug?: string | null;
         };
         Update: Partial<Database["public"]["Tables"]["projects"]["Insert"]>;
         Relationships: [];
@@ -1388,6 +1445,13 @@ export type Database = {
           requested_by: UUID | null;
           reminded_at: Timestamp | null;
           submitted_at: Timestamp | null;
+          // 0117 — mirrored onto the website's client_reviews. The far side is
+          // a separate Supabase project, so this records its id rather than
+          // referencing it, and a failed publish stays visible.
+          publish_status: ReviewPublishStatus;
+          published_at: Timestamp | null;
+          website_review_id: UUID | null;
+          publish_error: string | null;
           created_at: Timestamp;
         };
         Insert: {
@@ -1404,6 +1468,11 @@ export type Database = {
           requested_by?: UUID | null;
           reminded_at?: Timestamp | null;
           submitted_at?: Timestamp | null;
+          // 0117
+          publish_status?: ReviewPublishStatus;
+          published_at?: Timestamp | null;
+          website_review_id?: UUID | null;
+          publish_error?: string | null;
           created_at?: Timestamp;
         };
         Update: Partial<Database["public"]["Tables"]["project_reviews"]["Insert"]>;
@@ -1763,6 +1832,19 @@ export type Database = {
           client_id: UUID | null;
           quote_id: UUID | null;
           project_id: UUID | null;
+          // 0117 — a proposal can now be signed on a link, like a quote.
+          share_token: UUID;
+          status: ProposalStatus;
+          sent_at: Timestamp | null;
+          viewed_at: Timestamp | null;
+          accepted_at: Timestamp | null;
+          declined_at: Timestamp | null;
+          declined_reason: string | null;
+          signed_name: string | null;
+          signature_data: string | null;
+          signed_ip: string | null;
+          invoice_id: UUID | null;
+          currency: string;
           created_by: UUID | null;
           created_at: Timestamp;
         };
@@ -1779,6 +1861,19 @@ export type Database = {
           client_id?: UUID | null;
           quote_id?: UUID | null;
           project_id?: UUID | null;
+          // 0117
+          share_token?: UUID;
+          status?: ProposalStatus;
+          sent_at?: Timestamp | null;
+          viewed_at?: Timestamp | null;
+          accepted_at?: Timestamp | null;
+          declined_at?: Timestamp | null;
+          declined_reason?: string | null;
+          signed_name?: string | null;
+          signature_data?: string | null;
+          signed_ip?: string | null;
+          invoice_id?: UUID | null;
+          currency?: string;
           created_by?: UUID | null;
           created_at?: Timestamp;
         };
@@ -2406,6 +2501,14 @@ export type Database = {
           position: number;
           assigned_to: UUID | null;
           client_id: UUID | null;
+          // 0117 — where they actually came from.
+          utm: LeadUtm;
+          referrer: string | null;
+          landing_url: string | null;
+          referral_code: string | null;
+          referred_by_client_id: UUID | null;
+          /** Generated, same expression as clients.phone_norm (0112). */
+          contact_phone_norm: string | null;
           created_by: UUID | null;
           created_at: Timestamp;
           updated_at: Timestamp;
@@ -2445,6 +2548,12 @@ export type Database = {
           position?: number;
           assigned_to?: UUID | null;
           client_id?: UUID | null;
+          // 0117 — contact_phone_norm is generated; never written.
+          utm?: LeadUtm;
+          referrer?: string | null;
+          landing_url?: string | null;
+          referral_code?: string | null;
+          referred_by_client_id?: UUID | null;
           created_by?: UUID | null;
           created_at?: Timestamp;
           updated_at?: Timestamp;
@@ -2867,6 +2976,8 @@ export type Database = {
           locked_at: Timestamp | null;
           /** 0111 — consecutive claims without committed progress. */
           claims: number;
+          // 0117 — the follow-up sequence this send belongs to.
+          sequence_id: UUID | null;
           requested_by: UUID | null;
           created_by: UUID | null;
           created_at: Timestamp;
@@ -2895,6 +3006,7 @@ export type Database = {
           error?: string | null;
           locked_at?: Timestamp | null;
           claims?: number;
+          sequence_id?: UUID | null;
           requested_by?: UUID | null;
           created_by?: UUID | null;
           created_at?: Timestamp;
@@ -4225,6 +4337,8 @@ export type Database = {
           first_seen_at: Timestamp;
           last_seen_at: Timestamp;
           seen_count: number;
+          // 0117 — the to-do this insight was sent to, if any.
+          todo_id: UUID | null;
           created_at: Timestamp;
           updated_at: Timestamp;
         };
@@ -4249,6 +4363,7 @@ export type Database = {
           first_seen_at?: Timestamp;
           last_seen_at?: Timestamp;
           seen_count?: number;
+          todo_id?: UUID | null;
           created_at?: Timestamp;
           updated_at?: Timestamp;
         };
@@ -5417,6 +5532,235 @@ export type Database = {
           at?: Timestamp;
         };
         Update: Partial<Database["public"]["Tables"]["rate_limit_hits"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0117 — a contract, SOW or NDA, signed on a link
+      agreements: {
+        Row: {
+          id: UUID;
+          kind: AgreementKind;
+          title: string;
+          /** Markdown, never HTML — it ends up in a PDF and on a public page. */
+          body_md: string;
+          client_id: UUID | null;
+          lead_id: UUID | null;
+          project_id: UUID | null;
+          proposal_id: UUID | null;
+          quote_id: UUID | null;
+          status: AgreementStatus;
+          share_token: UUID;
+          sent_at: Timestamp | null;
+          viewed_at: Timestamp | null;
+          signed_at: Timestamp | null;
+          signed_name: string | null;
+          signature_data: string | null;
+          signed_ip: string | null;
+          signer_email: string | null;
+          declined_at: Timestamp | null;
+          declined_reason: string | null;
+          pdf_path: string | null;
+          created_by: UUID | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          kind?: AgreementKind;
+          title: string;
+          body_md?: string;
+          client_id?: UUID | null;
+          lead_id?: UUID | null;
+          project_id?: UUID | null;
+          proposal_id?: UUID | null;
+          quote_id?: UUID | null;
+          status?: AgreementStatus;
+          share_token?: UUID;
+          sent_at?: Timestamp | null;
+          viewed_at?: Timestamp | null;
+          signed_at?: Timestamp | null;
+          signed_name?: string | null;
+          signature_data?: string | null;
+          signed_ip?: string | null;
+          signer_email?: string | null;
+          declined_at?: Timestamp | null;
+          declined_reason?: string | null;
+          pdf_path?: string | null;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["agreements"]["Insert"]>;
+        Relationships: [];
+      };
+      agreement_templates: {
+        Row: {
+          id: UUID;
+          name: string;
+          kind: string;
+          body_md: string;
+          created_by: UUID | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          name: string;
+          kind?: string;
+          body_md?: string;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["agreement_templates"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0117 — a file the client is meant to receive
+      project_deliverables: {
+        Row: {
+          id: UUID;
+          project_id: UUID;
+          title: string;
+          file_path: string;
+          mime: string | null;
+          size_bytes: number | null;
+          version: number;
+          /** Off by default: a file is shared on purpose, not by being uploaded. */
+          visible_to_client: boolean;
+          uploaded_by: UUID | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          project_id: UUID;
+          title: string;
+          file_path: string;
+          mime?: string | null;
+          size_bytes?: number | null;
+          version?: number;
+          visible_to_client?: boolean;
+          uploaded_by?: UUID | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["project_deliverables"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0117 — who introduced whom, and what they are owed for it
+      referrals: {
+        Row: {
+          id: UUID;
+          code: string;
+          referrer_client_id: UUID | null;
+          referred_lead_id: UUID | null;
+          referred_client_id: UUID | null;
+          status: ReferralStatus;
+          reward_kind: string | null;
+          reward_amount: number | null;
+          reward_note: string | null;
+          won_at: Timestamp | null;
+          rewarded_at: Timestamp | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          code: string;
+          referrer_client_id?: UUID | null;
+          referred_lead_id?: UUID | null;
+          referred_client_id?: UUID | null;
+          status?: ReferralStatus;
+          reward_kind?: string | null;
+          reward_amount?: number | null;
+          reward_note?: string | null;
+          won_at?: Timestamp | null;
+          rewarded_at?: Timestamp | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["referrals"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0117 — a multi-step cold email follow-up
+      outreach_sequences: {
+        Row: {
+          id: UUID;
+          name: string;
+          enabled: boolean;
+          steps: OutreachSequenceStep[];
+          created_by: UUID | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          name: string;
+          enabled?: boolean;
+          steps?: OutreachSequenceStep[];
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["outreach_sequences"]["Insert"]>;
+        Relationships: [];
+      };
+      lead_outreach_steps: {
+        Row: {
+          id: UUID;
+          outreach_id: UUID;
+          sequence_id: UUID | null;
+          step_no: number;
+          due_at: Timestamp;
+          status: OutreachStepStatus;
+          email_message_id: UUID | null;
+          error: string | null;
+          sent_at: Timestamp | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          outreach_id: UUID;
+          sequence_id?: UUID | null;
+          step_no: number;
+          due_at: Timestamp;
+          status?: OutreachStepStatus;
+          email_message_id?: UUID | null;
+          error?: string | null;
+          sent_at?: Timestamp | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["lead_outreach_steps"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0117 — the free site-audit lead magnet
+      site_audit_requests: {
+        Row: {
+          id: UUID;
+          url: string;
+          email: string;
+          name: string | null;
+          phone: string | null;
+          lead_id: UUID | null;
+          status: SiteAuditStatus;
+          verdict: Record<string, unknown> | null;
+          report: Record<string, unknown> | null;
+          error: string | null;
+          ip: string | null;
+          emailed_at: Timestamp | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          url: string;
+          email: string;
+          name?: string | null;
+          phone?: string | null;
+          lead_id?: UUID | null;
+          status?: SiteAuditStatus;
+          verdict?: Record<string, unknown> | null;
+          report?: Record<string, unknown> | null;
+          error?: string | null;
+          ip?: string | null;
+          emailed_at?: Timestamp | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["site_audit_requests"]["Insert"]>;
         Relationships: [];
       };
     };

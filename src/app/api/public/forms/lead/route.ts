@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { createAdminClient } from "@/lib/supabase/admin";
-import { fireAutomationTrigger } from "@/lib/automation";
-import { topLeadPosition } from "@/lib/crm";
+import { createInboundLead } from "@/lib/lead-intake";
 import { clientIp, enforceRateLimit } from "@/lib/rate-limit";
 
 /**
@@ -10,11 +9,18 @@ import { clientIp, enforceRateLimit } from "@/lib/rate-limit";
  *
  *   POST /api/public/forms/lead
  *   { "name": "...", "phone": "...", "email": "...", "message": "...",
- *     "service": "...", "source": "website" }
+ *     "service": "...", "source": "website",
+ *     "utm_source": "...", "referrer": "...", "landing_url": "...",
+ *     "ref": "ARC-XXXXXX" }
  *
- * Creates a CRM lead in the default pipeline's first stage and fires the
- * `form_submitted` + `lead_created` automation triggers — which is what
- * runs the "keep warm" welcome SMS flow.
+ * The lead itself is created by createInboundLead() (0117), which is also
+ * what the inbound webhooks use — so where it lands, whether it is a
+ * duplicate, and which triggers fire are decided in ONE place. This route
+ * only parses the request.
+ *
+ * Attribution is accepted flat (utm_source) or nested ({ utm: { ... } }),
+ * because the website's own form sends it the second way and third-party
+ * forms send it the first.
  *
  * CORS is open so the snippet works from any of the agency's client sites.
  */
@@ -55,100 +61,52 @@ export async function POST(request: Request) {
     );
   }
 
-  const name = String(body.name ?? "").trim();
-  const phone = String(body.phone ?? "").trim();
-  const email = String(body.email ?? "").trim();
-  const message = String(body.message ?? "").trim();
-  const service = String(body.service ?? "").trim();
-  const source = String(body.source ?? "form").trim() || "form";
-
-  if (!name && !phone && !email) {
-    return NextResponse.json(
-      { error: "Provide at least a name, phone or email." },
-      { status: 400, headers: CORS },
-    );
+  const utm: Record<string, string> = {};
+  for (const key of [
+    "utm_source",
+    "utm_medium",
+    "utm_campaign",
+    "utm_term",
+    "utm_content",
+    "gclid",
+    "fbclid",
+  ]) {
+    const value = String((body as Record<string, unknown>)[key] ?? "").trim();
+    if (value) utm[key] = value.slice(0, 200);
+  }
+  // Also accept them nested, which is how the website's own form sends them.
+  if (body.utm && typeof body.utm === "object") {
+    for (const [k, v] of Object.entries(body.utm as Record<string, unknown>)) {
+      const value = String(v ?? "").trim();
+      if (value) utm[k] = value.slice(0, 200);
+    }
   }
 
   try {
     const supabase = createAdminClient();
-
-    // Where new form leads land: app_settings.lead_form or the first
-    // pipeline's first stage.
-    const { data: setting } = await supabase
-      .from("app_settings")
-      .select("value")
-      .eq("key", "lead_form")
-      .maybeSingle();
-    const cfg = (setting?.value ?? {}) as { pipeline_id?: string; stage_id?: string };
-
-    let pipelineId = cfg.pipeline_id ?? null;
-    let stageId = cfg.stage_id ?? null;
-    if (!pipelineId) {
-      const { data: pipe } = await supabase
-        .from("pipelines")
-        .select("id")
-        .order("position")
-        .order("created_at")
-        .limit(1)
-        .maybeSingle();
-      pipelineId = pipe?.id ?? null;
-    }
-    if (!pipelineId) {
-      return NextResponse.json(
-        { error: "No CRM pipeline exists yet." },
-        { status: 409, headers: CORS },
-      );
-    }
-    if (!stageId) {
-      const { data: stage } = await supabase
-        .from("pipeline_stages")
-        .select("id")
-        .eq("pipeline_id", pipelineId)
-        .order("position")
-        .limit(1)
-        .maybeSingle();
-      stageId = stage?.id ?? null;
-    }
-
-    const { data: lead, error } = await supabase
-      .from("leads")
-      .insert({
-        pipeline_id: pipelineId,
-        stage_id: stageId,
-        title: service ? `${name || "Inquiry"} — ${service}` : name || "Website inquiry",
-        contact_name: name || null,
-        contact_phone: phone || null,
-        contact_email: email || null,
-        notes: message || null,
-        source,
-        tags: ["inbound"],
-        // Land at the top of the stage column, above existing cards.
-        position: await topLeadPosition(supabase, stageId),
-        created_by: null,
-      })
-      .select("*")
-      .single();
-    if (error || !lead) {
-      return NextResponse.json(
-        { error: error?.message ?? "Could not create the lead." },
-        { status: 500, headers: CORS },
-      );
-    }
-
-    // Kick off the keep-warm automations.
-    await fireAutomationTrigger(supabase, {
-      trigger: "form_submitted",
-      lead,
-      payload: { message, service, source },
-    });
-    await fireAutomationTrigger(supabase, {
-      trigger: "lead_created",
-      lead,
-      payload: { message, service, source },
-      triggerKey: `${lead.id}:created`,
+    const result = await createInboundLead(supabase, {
+      name: String(body.name ?? ""),
+      phone: String(body.phone ?? ""),
+      email: String(body.email ?? ""),
+      message: String(body.message ?? ""),
+      service: String(body.service ?? ""),
+      source: String(body.source ?? "form").trim() || "form",
+      company: String(body.company ?? "") || null,
+      utm,
+      referrer: String(body.referrer ?? "") || null,
+      landingUrl: String(body.landing_url ?? "") || null,
+      referralCode: String(body.ref ?? body.referral_code ?? "") || null,
     });
 
-    return NextResponse.json({ ok: true, lead_id: lead.id }, { headers: CORS });
+    if (!result.ok) {
+      const status = result.error.includes("pipeline") ? 409 : 400;
+      return NextResponse.json({ error: result.error }, { status, headers: CORS });
+    }
+
+    return NextResponse.json(
+      { ok: true, lead_id: result.lead.id, duplicate: result.duplicate },
+      { headers: CORS },
+    );
   } catch (e) {
     return NextResponse.json(
       { error: e instanceof Error ? e.message : "Something went wrong." },

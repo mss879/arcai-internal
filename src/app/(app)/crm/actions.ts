@@ -18,7 +18,7 @@ import { sendPushToUser } from "@/lib/push";
 import { sendSmsToUser } from "@/lib/sms-alerts";
 import { DEFAULT_PIPELINE_STAGES } from "@/lib/constants";
 import type { ActionResult, Lead } from "@/lib/types";
-import type { CrmFieldKind, LeadScore } from "@/lib/database.types";
+import type { CrmFieldKind, Database, LeadScore } from "@/lib/database.types";
 
 // --- Pipelines -------------------------------------------------
 export async function createPipeline(
@@ -844,9 +844,12 @@ export async function mergeLeads(
   patch.tags = Array.from(tags);
   patch.custom = custom;
 
+  // Not `as Lead`: `patch` is a partial of the WRITABLE columns, and the row
+  // type now carries a generated one (contact_phone_norm, 0117) that Postgres
+  // refuses on an update. The cast was hiding that.
   const { error: updateError } = await supabase
     .from("leads")
-    .update(patch as Lead)
+    .update(patch as Database["public"]["Tables"]["leads"]["Update"])
     .eq("id", keepId);
   if (updateError) return { ok: false, error: updateError.message };
 

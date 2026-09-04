@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { enrollAutomationRun, fireAutomationTrigger } from "@/lib/automation";
-import { topLeadPosition } from "@/lib/crm";
+import { createInboundLead } from "@/lib/lead-intake";
 
 /**
  * Inbound webhooks: POST /api/public/hooks/<token>
@@ -72,6 +72,30 @@ function pick(payload: Record<string, unknown>, keys: string[]): string {
     }
   }
   return "";
+}
+
+/**
+ * 0117 — the attribution a form or ad platform sends along.
+ *
+ * Read with the same normalising rule as `pick`, because a webhook payload
+ * spells these `utm_source`, `utmSource` or `UTM Source` depending on who
+ * built the form.
+ */
+function utmFrom(payload: Record<string, unknown>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const key of [
+    "utm_source",
+    "utm_medium",
+    "utm_campaign",
+    "utm_term",
+    "utm_content",
+    "gclid",
+    "fbclid",
+  ]) {
+    const value = pick(payload, [key.replace(/_/g, "")]);
+    if (value) out[key] = value.slice(0, 200);
+  }
+  return out;
 }
 
 // Common form-field names, normalised (letters/digits only).
@@ -197,35 +221,36 @@ export async function POST(
         stageId = stage?.id ?? null;
       }
 
-      // Drop the lead at the top of its stage, above existing cards.
-      const position = await topLeadPosition(supabase, stageId);
-
-      const { data: lead, error } = await supabase
-        .from("leads")
-        .insert({
-          pipeline_id: pipelineId,
-          stage_id: stageId,
-          title: name || company || website || email || `Website lead (${endpoint.name})`,
-          company: company || null,
-          company_website: website || null,
-          contact_name: name || null,
-          contact_phone: phone || null,
-          contact_email: email || null,
-          value,
-          notes,
-          position,
-          source: cfg.source || (typeof payload.source === "string" ? payload.source : "") || "website",
-          tags: cfg.tags ?? ["inbound"],
-          created_by: null,
-        })
-        .select("*")
-        .single();
-      if (error || !lead) {
+      const created = await createInboundLead(supabase, {
+        name,
+        phone,
+        email,
+        message: notes,
+        company,
+        companyWebsite: website,
+        value,
+        title: name || company || website || email || `Website lead (${endpoint.name})`,
+        source:
+          cfg.source ||
+          (typeof payload.source === "string" ? payload.source : "") ||
+          "website",
+        tags: cfg.tags ?? [],
+        // This endpoint's own destination beats the workspace default.
+        pipelineId,
+        stageId,
+        utm: utmFrom(payload),
+        referrer: pick(payload, ["referrer", "referer"]) || null,
+        landingUrl: pick(payload, ["landingurl", "landingpage", "pageurl"]) || null,
+        referralCode: pick(payload, ["ref", "referralcode"]) || null,
+        meta: { endpoint_id: endpoint.id, endpoint: endpoint.name },
+      });
+      if (!created.ok) {
         return NextResponse.json(
-          { error: error?.message ?? "Could not create the lead." },
+          { error: created.error },
           { status: 500, headers: CORS },
         );
       }
+      const lead = created.lead;
 
       await fireAutomationTrigger(supabase, {
         trigger: "webhook",

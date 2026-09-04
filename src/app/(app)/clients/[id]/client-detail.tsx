@@ -272,6 +272,9 @@ export function ClientDetail({ view }: { view: ClientView }) {
     portal_last_login_at: client.portalLastLoginAt,
     portal_login_count: client.portalLoginCount,
     phone_norm: null,
+    // 0117 — present on the row type; the edit form never touches them.
+    statement_token: "",
+    referral_code: null,
     created_by: null,
     created_at: client.createdAt,
   };

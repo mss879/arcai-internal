@@ -385,6 +385,7 @@ export function LeadDetail({
           <ResearchCard lead={lead} research={research} />
           <DetailsCard lead={lead} customFields={customFields} />
           <TasksCard leadId={lead.id} tasks={tasks} members={members} />
+          <AttributionCard lead={lead} />
           <QuotesCard quotes={quotes} />
         </div>
       </div>
@@ -1057,6 +1058,53 @@ function ResearchCard({
 }
 
 // ---- Details card ---------------------------------------------------------------
+
+/**
+ * 0117 — where this lead actually came from.
+ *
+ * `source` has always been free text somebody typed. This is what the form,
+ * the ad or the referral link said, recorded at the moment they arrived, so
+ * "what is working" is answered from the data rather than from memory.
+ * Rendered only when there is something to show: a walk-in has none of it.
+ */
+function AttributionCard({ lead }: { lead: LeadWithAssignee }) {
+  const utm = (lead.utm ?? {}) as Record<string, string>;
+  const entries = Object.entries(utm).filter(([, v]) => v);
+  const hasAny =
+    entries.length > 0 ||
+    lead.referrer ||
+    lead.landing_url ||
+    lead.referral_code;
+  if (!hasAny) return null;
+
+  return (
+    <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-[var(--shadow-card)]">
+      <h3 className="text-sm font-semibold text-slate-900">Where they came from</h3>
+      <dl className="mt-3 space-y-2 text-sm">
+        {entries.map(([k, v]) => (
+          <Row key={k} label={k.replace(/^utm_/, "")}>
+            <span className="break-all">{v}</span>
+          </Row>
+        ))}
+        {lead.referral_code && (
+          <Row label="Referral">
+            <span className="font-mono text-xs">{lead.referral_code}</span>
+          </Row>
+        )}
+        {lead.landing_url && (
+          <Row label="Landed on">
+            <span className="break-all text-xs text-slate-500">{lead.landing_url}</span>
+          </Row>
+        )}
+        {lead.referrer && (
+          <Row label="Referrer">
+            <span className="break-all text-xs text-slate-500">{lead.referrer}</span>
+          </Row>
+        )}
+      </dl>
+    </div>
+  );
+}
 
 function DetailsCard({
   lead,

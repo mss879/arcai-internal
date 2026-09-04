@@ -8,6 +8,7 @@ import {
   FileText,
   FolderKanban,
   FolderOpen,
+  Inbox,
   KanbanSquare,
   Landmark,
   LayoutDashboard,
@@ -39,7 +40,7 @@ export type NavGroup = {
 };
 
 /**
- * The three pages opened many times a day.
+ * The four pages opened many times a day.
  *
  * Ungrouped, above everything, never collapsible. A menu is a tool for
  * finding what you do NOT visit often; what you visit constantly should
@@ -47,6 +48,9 @@ export type NavGroup = {
  */
 export const PINNED_NAV: NavItem[] = [
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
+  // 0115 — every conversation with a client, whichever way they said it.
+  // Pinned because answering people is not an occasional errand.
+  { label: "Inbox", href: "/inbox", icon: Inbox },
   { label: "To-Dos", href: "/todos", icon: ListChecks },
   { label: "Projects", href: "/projects", icon: FolderKanban },
 ];

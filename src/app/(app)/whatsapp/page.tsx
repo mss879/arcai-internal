@@ -96,6 +96,7 @@ export default async function WhatsappPage() {
     lessonsRes,
     promisesRes,
     campaignsRes,
+    teamRes,
   ] = await Promise.all([
     supabase
       .from("wa_contacts")
@@ -138,6 +139,8 @@ export default async function WhatsappPage() {
       .from("wa_campaigns")
       .select("*")
       .order("created_at", { ascending: false }),
+    // 0115 — for the "hand-offs go to" picker on the Agent tab.
+    supabase.from("profiles").select("id, full_name").order("full_name"),
   ]);
 
   // Per-campaign funnel. Contacts are stamped with whichever campaign was
@@ -244,6 +247,7 @@ export default async function WhatsappPage() {
       aiReady={isOpenAIConfigured()}
       appBaseUrl={process.env.NEXT_PUBLIC_APP_URL ?? ""}
       isAdmin={profile.role === "admin"}
+      team={(teamRes.data ?? []) as { id: string; full_name: string | null }[]}
     />
   );
 }

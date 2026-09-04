@@ -8,7 +8,9 @@ import {
   AtSign,
   Bell,
   CheckCheck,
+  CheckCircle2,
   DollarSign,
+  Inbox,
   Sparkles,
   UserPlus,
 } from "lucide-react";
@@ -25,6 +27,9 @@ const ICONS: Record<string, React.ElementType> = {
   system: Bell,
   // 0102 — a briefing or a nudge from Arcus.
   assistant: Sparkles,
+  // 0115 — a conversation needs you, and something wants a decision.
+  inbox: Inbox,
+  approval: CheckCircle2,
 };
 
 export function NotificationsBell({

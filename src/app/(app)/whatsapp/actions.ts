@@ -144,6 +144,8 @@ export type WaConfigInput = {
   quiet_hours_end?: number;
   timezone?: string;
   language_matching?: boolean;
+  /** 0115 — who a hand-off wakes. Null = everyone, as it was before. */
+  handoff_user_id?: string | null;
 };
 
 /** Cold-outreach settings — saved from their own tab, separate from the
@@ -253,6 +255,9 @@ export async function saveWaConfigAction(
                 Math.max(0, Math.round(Number(input.max_autonomous_discount_pct) || 0)),
               ),
             }
+          : {}),
+        ...(input.handoff_user_id !== undefined
+          ? { handoff_user_id: input.handoff_user_id || null }
           : {}),
         ...(input.quiet_hours_enabled != null
           ? { quiet_hours_enabled: Boolean(input.quiet_hours_enabled) }

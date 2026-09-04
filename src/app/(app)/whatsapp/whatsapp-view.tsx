@@ -185,6 +185,7 @@ export function WhatsappView({
   aiReady,
   appBaseUrl,
   isAdmin,
+  team,
 }: {
   contacts: WaContact[];
   messages: WaMessage[];
@@ -207,6 +208,8 @@ export function WhatsappView({
   appBaseUrl: string;
   /** Members see Inbox + Analytics; every other tab is admin-only. */
   isAdmin: boolean;
+  /** 0115 — for the Agent tab's "hand-offs go to" picker. */
+  team: { id: string; full_name: string | null }[];
 }) {
   useRealtimeSyncTables([
     "wa_contacts",
@@ -320,6 +323,7 @@ export function WhatsappView({
           waReady={waReady}
           aiReady={aiReady}
           appBaseUrl={appBaseUrl}
+          team={team}
         />
       )}
       {activeTab === "campaign" && isAdmin && (
@@ -848,6 +852,7 @@ function AgentTab({
   waReady,
   aiReady,
   appBaseUrl,
+  team,
 }: {
   config: WaAgentConfig | null;
   pipelines: Pipeline[];
@@ -856,6 +861,7 @@ function AgentTab({
   waReady: boolean;
   aiReady: boolean;
   appBaseUrl: string;
+  team: { id: string; full_name: string | null }[];
 }) {
   const [form, setForm] = React.useState(() => ({
     enabled: config?.enabled ?? true,
@@ -879,6 +885,7 @@ function AgentTab({
     quiet_hours_end: config?.quiet_hours_end ?? 9,
     timezone: config?.timezone ?? "Asia/Colombo",
     language_matching: config?.language_matching ?? true,
+    handoff_user_id: config?.handoff_user_id ?? "",
   }));
   const [saving, setSaving] = React.useState(false);
 
@@ -1097,6 +1104,30 @@ function AgentTab({
               Used at most once per deal, only on a real price objection, framed as a
               sign-this-week incentive. The send-quote tool enforces the cap.
             </p>
+
+            <div className="mt-6 border-t border-slate-100 pt-5">
+              <h3 className="text-xs font-semibold text-slate-900">Hand-offs go to</h3>
+              <p className="mt-1 text-[11px] leading-5 text-slate-400">
+                When the agent gives up on a chat, or a payment slip arrives, this
+                is who gets woken — in-app and by text. A conversation with an
+                owner in the inbox beats this; leave it on Everyone and the whole
+                team is alerted, which is what happened before.
+              </p>
+              <label className="mt-3 block max-w-sm space-y-1.5 text-xs font-medium text-slate-600">
+                Owner
+                <Select
+                  value={form.handoff_user_id}
+                  onChange={(e) => set("handoff_user_id", e.target.value)}
+                >
+                  <option value="">Everyone</option>
+                  {team.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.full_name ?? "Someone"}
+                    </option>
+                  ))}
+                </Select>
+              </label>
+            </div>
 
             <div className="mt-6 flex flex-wrap items-start justify-between gap-3 border-t border-slate-100 pt-5">
               <div className="max-w-xl">

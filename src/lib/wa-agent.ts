@@ -2,7 +2,12 @@ import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import type { Database, InvoiceItem, WaSentBy } from "@/lib/database.types";
+import type {
+  Database,
+  InvoiceItem,
+  NotificationType,
+  WaSentBy,
+} from "@/lib/database.types";
 import {
   isOpenAIConfigured,
   openaiChat,
@@ -1952,10 +1957,16 @@ async function executeWaTool(
             .reverse()
             .map((m) => `"${m.body.slice(0, 150)}"`)
             .join("\n");
+          // 0115 — to the thread's owner if it has one, otherwise the
+          // standing hand-off person, otherwise everyone as before. And it
+          // links to the conversation itself, not the WhatsApp screen.
+          const audience = await handoffAudience(supabase, contact.id);
           await notifyEveryone(supabase, {
             title: "WhatsApp — human takeover needed",
             body: `${who} — ${reason}${brief ? `\nTheir last messages:\n${brief}` : ""}`.slice(0, 450),
-            link: "/whatsapp",
+            link: `/inbox?thread=whatsapp:${contact.id}`,
+            type: "inbox",
+            userIds: audience,
             sms: `ARCON: WhatsApp customer ${who} (${formatWaPhone(contact.wa_id)}) needs a human${reason ? ` — ${reason}` : ""}. AI is paused — open the inbox to take over.`,
           });
         }
@@ -4723,10 +4734,14 @@ export async function handleInboundPaymentSlip(
       created_by: null,
     });
 
+    // 0115 — a slip is somebody's job, not an announcement. It goes to the
+    // thread's owner, or the standing hand-off person, or everyone.
     await notifyEveryone(supabase, {
       title: "💰 Payment slip received",
       body: `${name}${extracted ? ` — ${extracted}` : ""}${pending ? ` (installment ${pending.seq}: ${pending.currency} ${pending.amount.toLocaleString()})` : ""}`,
-      link: "/whatsapp",
+      link: `/inbox?thread=whatsapp:${contact.id}`,
+      type: "inbox",
+      userIds: await handoffAudience(supabase, contact.id),
     });
 
     if (contact.lead_id) {
@@ -4788,13 +4803,66 @@ export async function linkWaContactToCrm(
 
 // ---- shared ------------------------------------------------------------------
 
+/**
+ * Who should be woken about this WhatsApp thread.
+ *
+ * The thread's own owner first (0115 — set in /inbox), then the agent's
+ * standing hand-off person (Delivery → WhatsApp agent), then everyone. The
+ * last rung is the behaviour this had before there was anywhere to record an
+ * owner, so a workspace that has set neither is unaffected.
+ */
+export async function handoffAudience(
+  supabase: DB,
+  contactId: string,
+): Promise<string[] | undefined> {
+  try {
+    const { data: meta } = await supabase
+      .from("conversation_meta")
+      .select("assigned_to")
+      .eq("channel", "whatsapp")
+      .eq("ref_id", contactId)
+      .maybeSingle();
+    if (meta?.assigned_to) return [meta.assigned_to];
+
+    const { data: config } = await supabase
+      .from("wa_agent_config")
+      .select("handoff_user_id")
+      .limit(1)
+      .maybeSingle();
+    if (config?.handoff_user_id) return [config.handoff_user_id];
+  } catch {
+    // 0115 not applied yet — fall through to everyone, as before.
+  }
+  return undefined;
+}
+
+
 export async function notifyEveryone(
   supabase: DB,
-  opts: { title: string; body: string | null; link: string; sms?: string | null },
+  opts: {
+    title: string;
+    body: string | null;
+    link: string;
+    sms?: string | null;
+    /**
+     * 0115 — narrow the alert to specific people. Undefined means everyone,
+     * which is what this function did before and still does by default.
+     *
+     * A hand-off with an owner is a message TO that owner; waking six phones
+     * for it teaches the team to ignore the alert, which is how a real one
+     * gets missed.
+     */
+    userIds?: string[];
+    /** The kind of notification row to write. Defaults to 'system'. */
+    type?: NotificationType;
+  },
 ): Promise<number> {
-  const { data: profiles } = await supabase
-    .from("profiles")
-    .select("id, phone, full_name");
+  let query = supabase.from("profiles").select("id, phone, full_name");
+  if (opts.userIds) {
+    if (opts.userIds.length === 0) return 0;
+    query = query.in("id", opts.userIds);
+  }
+  const { data: profiles } = await query;
 
   // Urgent alerts (human takeover, notify_team) ALSO go out as SMS — an
   // in-app/push notification can sit unseen for hours, but a text lands on the
@@ -4828,7 +4896,7 @@ export async function notifyEveryone(
   for (const p of profiles ?? []) {
     await supabase.from("notifications").insert({
       user_id: p.id,
-      type: "system",
+      type: opts.type ?? "system",
       title: opts.title,
       body: opts.body,
       link: opts.link,
@@ -4842,7 +4910,7 @@ export async function notifyEveryone(
     if (smsReady && p.phone) await sendAlertSms(p.phone, p.full_name ?? "");
   }
 
-  if (smsReady) {
+  if (smsReady && !opts.userIds) {
     const extra = (process.env.TEAM_ALERT_PHONE ?? "")
       .split(/[,\s]+/)
       .map((s) => s.trim())

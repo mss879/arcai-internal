@@ -11,7 +11,7 @@ import {
   queueScanRecheck,
   requalifyCandidate,
 } from "@/lib/prospecting";
-import { sendGenericEmail } from "@/lib/email";
+import { sendAndLogEmail } from "@/lib/email-outbox";
 import { isEmailOutreachConfigured, processDueOutreach } from "@/lib/lead-outreach";
 import { launchScanCampaign } from "@/lib/outreach-campaign";
 import { isSmsConfigured, sendSms } from "@/lib/sms";
@@ -205,10 +205,16 @@ export async function sendProspectEmail(
   if (!c.draft_body) return { ok: false, error: "No draft to send yet." };
 
   try {
-    const sent = await sendGenericEmail({
+    const sent = await sendAndLogEmail(supabase, {
       to,
-      subject: c.draft_subject || `A website for ${c.name}?`,
-      body: c.draft_body,
+      kind: "outreach",
+      sentBy: user.id,
+      leadId: c.lead_id,
+      message: {
+        transport: "generic",
+        subject: c.draft_subject || `A website for ${c.name}?`,
+        body: c.draft_body,
+      },
     });
     if (!sent.sent) {
       return { ok: false, error: sent.error || "Email could not be sent." };

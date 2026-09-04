@@ -94,7 +94,10 @@ export type NotificationType =
   | "commission"
   | "system"
   // 0102 — a briefing or a nudge from Arcus.
-  | "assistant";
+  | "assistant"
+  // 0115 — a conversation needs you, and something is waiting for a decision.
+  | "inbox"
+  | "approval";
 export type SmsKind =
   | "custom"
   | "payment_reminder"
@@ -531,6 +534,53 @@ export type DashboardSummary = {
     balance: number;
   }[];
 };
+
+// 0115 — the email log
+export type EmailDirection = "outbound" | "inbound";
+export type EmailStatus =
+  | "queued"
+  | "sent"
+  | "failed"
+  | "delivered"
+  | "bounced"
+  | "complained";
+export type EmailKind =
+  | "compose"
+  | "invoice"
+  | "quote"
+  | "proposal"
+  | "statement"
+  | "meeting_invite"
+  | "digest"
+  | "automation"
+  | "outreach"
+  | "notice"
+  | "pricing"
+  | "system"
+  | "invite";
+/** Who decided to send: a person, Arcus, an automation, or a scheduled job. */
+export type EmailActor = "team" | "assistant" | "automation" | "system";
+
+/** One attachment, as recorded on `email_messages.attachments` — never bytes. */
+export type EmailAttachmentMeta = {
+  filename: string;
+  /** Bytes, when known. */
+  size?: number;
+  /** What it was, e.g. "invoice" — so the inbox can label it without parsing. */
+  of?: string;
+};
+
+// 0115 — thread ownership, for all four channels at once
+export type ConversationChannel = "whatsapp" | "sms" | "portal" | "email";
+
+/**
+ * 0115 — per-user notification channels, as stored on
+ * `notification_prefs.channels`. A type absent from the map takes the code's
+ * defaults, so an empty object behaves exactly like no row.
+ */
+export type NotificationChannelPrefs = Partial<
+  Record<NotificationType, { inapp?: boolean; push?: boolean; email?: boolean }>
+>;
 
 export type Database = {
   public: {
@@ -2127,6 +2177,10 @@ export type Database = {
           // client this meeting is with.
           reminder_hours: number;
           client_id: UUID | null;
+          // 0115 — the .ics invite. `sequence` is the iCalendar SEQUENCE,
+          // bumped on reschedule so calendars update rather than double-book.
+          invite_sent_at: Timestamp | null;
+          sequence: number;
           created_by: UUID | null;
           created_at: Timestamp;
           updated_at: Timestamp;
@@ -2144,6 +2198,8 @@ export type Database = {
           // 0067 — see the Row comment
           reminder_hours?: number;
           client_id?: UUID | null;
+          invite_sent_at?: Timestamp | null;
+          sequence?: number;
           created_by?: UUID | null;
           created_at?: Timestamp;
           updated_at?: Timestamp;
@@ -4404,6 +4460,8 @@ export type Database = {
           revival_min_age_days: number;
           // 0078 — morning agent digest claim stamp
           agent_digest_sent_for: string | null;
+          // 0115 — who handoff_human alerts. NULL = everyone, as before.
+          handoff_user_id: UUID | null;
         };
         Insert: {
           id?: number;
@@ -4459,6 +4517,7 @@ export type Database = {
           revival_min_age_days?: number;
           // 0078 — morning agent digest claim stamp
           agent_digest_sent_for?: string | null;
+          handoff_user_id?: UUID | null;
         };
         Update: Partial<
           Database["public"]["Tables"]["wa_agent_config"]["Insert"]
@@ -5159,6 +5218,183 @@ export type Database = {
           created_at?: Timestamp;
         };
         Update: Partial<Database["public"]["Tables"]["assistant_run_logs"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0115 — every email the CRM sends, written by sendAndLogEmail()
+      email_messages: {
+        Row: {
+          id: UUID;
+          direction: EmailDirection;
+          status: EmailStatus;
+          /** Resend's message id — the only key a webhook event arrives with. */
+          provider_id: string | null;
+          from_email: string;
+          /** One row per send CALL, so a three-recipient notice is one row. */
+          to_emails: string[];
+          cc_emails: string[];
+          reply_to: string | null;
+          subject: string;
+          body_text: string | null;
+          body_html: string | null;
+          attachments: EmailAttachmentMeta[];
+          kind: EmailKind;
+          client_id: UUID | null;
+          lead_id: UUID | null;
+          project_id: UUID | null;
+          invoice_id: UUID | null;
+          quote_id: UUID | null;
+          proposal_id: UUID | null;
+          meeting_id: UUID | null;
+          /** Groups a back-and-forth in the inbox, e.g. `client:<uuid>`. */
+          thread_key: string | null;
+          in_reply_to: string | null;
+          template_id: UUID | null;
+          sent_by: UUID | null;
+          actor: EmailActor;
+          opened_at: Timestamp | null;
+          open_count: number;
+          clicked_at: Timestamp | null;
+          click_count: number;
+          delivered_at: Timestamp | null;
+          bounced_at: Timestamp | null;
+          error: string | null;
+          sent_at: Timestamp | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          direction?: EmailDirection;
+          status?: EmailStatus;
+          provider_id?: string | null;
+          from_email: string;
+          to_emails?: string[];
+          cc_emails?: string[];
+          reply_to?: string | null;
+          subject?: string;
+          body_text?: string | null;
+          body_html?: string | null;
+          attachments?: EmailAttachmentMeta[];
+          kind?: EmailKind;
+          client_id?: UUID | null;
+          lead_id?: UUID | null;
+          project_id?: UUID | null;
+          invoice_id?: UUID | null;
+          quote_id?: UUID | null;
+          proposal_id?: UUID | null;
+          meeting_id?: UUID | null;
+          thread_key?: string | null;
+          in_reply_to?: string | null;
+          template_id?: UUID | null;
+          sent_by?: UUID | null;
+          actor?: EmailActor;
+          opened_at?: Timestamp | null;
+          open_count?: number;
+          clicked_at?: Timestamp | null;
+          click_count?: number;
+          delivered_at?: Timestamp | null;
+          bounced_at?: Timestamp | null;
+          error?: string | null;
+          sent_at?: Timestamp | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["email_messages"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0115 — saved subject/body for the compose box
+      email_templates: {
+        Row: {
+          id: UUID;
+          name: string;
+          kind: string;
+          subject: string;
+          body: string;
+          cta_label: string | null;
+          /** portal | quote | invoice | proposal | custom. */
+          cta_kind: string | null;
+          created_by: UUID | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          name: string;
+          kind?: string;
+          subject?: string;
+          body?: string;
+          cta_label?: string | null;
+          cta_kind?: string | null;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["email_templates"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0115 — who owns a thread. Ownership lives ONLY here.
+      conversation_meta: {
+        Row: {
+          id: UUID;
+          channel: ConversationChannel;
+          /**
+           * Text, not uuid: a WhatsApp thread keys on wa_contacts.id, an SMS
+           * thread on the phone number, a portal thread on the project id and
+           * an email thread on email_messages.thread_key.
+           */
+          ref_id: string;
+          assigned_to: UUID | null;
+          assigned_at: Timestamp | null;
+          tags: string[];
+          notes: string | null;
+          snoozed_until: Timestamp | null;
+          last_read_at: Timestamp | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          channel: ConversationChannel;
+          ref_id: string;
+          assigned_to?: UUID | null;
+          assigned_at?: Timestamp | null;
+          tags?: string[];
+          notes?: string | null;
+          snoozed_until?: Timestamp | null;
+          last_read_at?: Timestamp | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["conversation_meta"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0115 — per-user notification channels, quiet hours and mutes
+      notification_prefs: {
+        Row: {
+          user_id: UUID;
+          channels: NotificationChannelPrefs;
+          quiet_hours_enabled: boolean;
+          /** Whole hours; start > end means the window crosses midnight. */
+          quiet_hours_start: number;
+          quiet_hours_end: number;
+          timezone: string;
+          digest_daily: boolean;
+          digest_weekly: boolean;
+          /** Notification links to stay silent about. Matched by prefix. */
+          muted_links: string[];
+          updated_at: Timestamp;
+        };
+        Insert: {
+          user_id: UUID;
+          channels?: NotificationChannelPrefs;
+          quiet_hours_enabled?: boolean;
+          quiet_hours_start?: number;
+          quiet_hours_end?: number;
+          timezone?: string;
+          digest_daily?: boolean;
+          digest_weekly?: boolean;
+          muted_links?: string[];
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["notification_prefs"]["Insert"]>;
         Relationships: [];
       };
     };

@@ -91,6 +91,24 @@ export async function POST(request: Request) {
     const supabase = createAdminClient();
     const { data: profiles } = await supabase.from("profiles").select("id");
 
+    // 0115 — mark the send itself. Resend's `email_id` is the message id
+    // sendAndLogEmail() stored as provider_id, so this is an exact join
+    // rather than the address guess the rest of this handler has to make.
+    const providerId = String(
+      (event.data as Record<string, unknown> | undefined)?.email_id ?? "",
+    ).trim();
+    if (providerId) {
+      const now = new Date().toISOString();
+      await supabase
+        .from("email_messages")
+        .update({
+          status: type === "email.complained" ? "complained" : "bounced",
+          bounced_at: now,
+          error: `Recipient ${label}.`,
+        })
+        .eq("provider_id", providerId);
+    }
+
     for (const email of recipients) {
       // Never cold-email a bounced/complained address again.
       await suppressEmail(

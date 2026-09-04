@@ -6,7 +6,7 @@ import { createClient } from "@/lib/supabase/server";
 import type { ActionResult } from "@/lib/types";
 import { cleanNoticeBody } from "@/lib/notice";
 import { draftNotice, isNoticeAIConfigured } from "@/lib/ai/notice";
-import { sendNoticeEmail } from "@/lib/email";
+import { sendAndLogEmail } from "@/lib/email-outbox";
 
 export type SaveNoticeInput = {
   notice_number: string;
@@ -126,16 +126,21 @@ export async function sendNotice(input: {
     return { ok: false, error: "The notice has no message yet." };
   }
 
-  const result = await sendNoticeEmail({
+  const result = await sendAndLogEmail(supabase, {
     to: emails,
-    message: input.message?.trim() || undefined,
-    notice: {
-      notice_number: input.notice.notice_number,
-      notice_date: input.notice.notice_date,
-      to_name: input.notice.to_name,
-      to_details: input.notice.to_details,
-      subject: input.notice.subject,
-      body: input.notice.body,
+    kind: "notice",
+    sentBy: user.id,
+    message: {
+      transport: "notice",
+      note: input.message?.trim() || undefined,
+      notice: {
+        notice_number: input.notice.notice_number,
+        notice_date: input.notice.notice_date,
+        to_name: input.notice.to_name,
+        to_details: input.notice.to_details,
+        subject: input.notice.subject,
+        body: input.notice.body,
+      },
     },
   });
 

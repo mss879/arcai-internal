@@ -14,7 +14,21 @@ function getResend() {
   return new Resend(key);
 }
 
-type SendResult = { sent: boolean; error?: string; id?: string };
+/**
+ * What every sender returns. `id` is Resend's message id — the only key a
+ * webhook event arrives with — and `subject` is what actually went out, which
+ * for the PDF senders is composed in here rather than by the caller. Both are
+ * what src/lib/email-outbox.ts writes to the email log.
+ */
+type SendResult = {
+  sent: boolean;
+  error?: string;
+  id?: string;
+  subject?: string;
+};
+
+/** An attachment as Resend takes it. Metadata only is logged, never bytes. */
+export type MailAttachment = { filename: string; content: Buffer };
 
 function shell(title: string, body: string) {
   return `
@@ -155,6 +169,11 @@ export async function sendGenericEmail(opts: {
    * postal-address footer for CAN-SPAM). Server-built, not user input.
    */
   footer?: string;
+  /**
+   * PDFs to attach — a quote, a proposal, a statement. Rendered by the caller
+   * so this module stays transport and never pulls in react-pdf.
+   */
+  attachments?: MailAttachment[];
 }): Promise<SendResult> {
   const resend = getResend();
   if (!resend) return { sent: false, error: "RESEND_API_KEY not configured" };
@@ -181,9 +200,10 @@ export async function sendGenericEmail(opts: {
       ...(opts.replyTo ? { replyTo: opts.replyTo } : {}),
       subject: opts.subject,
       html: shell(opts.subject, body),
+      ...(opts.attachments?.length ? { attachments: opts.attachments } : {}),
     });
-    if (error) return { sent: false, error: error.message };
-    return { sent: true, id: data?.id };
+    if (error) return { sent: false, error: error.message, subject: opts.subject };
+    return { sent: true, id: data?.id, subject: opts.subject };
   } catch (e) {
     return { sent: false, error: e instanceof Error ? e.message : "send failed" };
   }
@@ -244,18 +264,20 @@ export async function sendInvoiceEmail(opts: {
     </p>
   `;
 
+  const subject = customMessage
+    ? `Payment reminder — Invoice ${opts.invoice.invoice_number} from ${INVOICE_COMPANY.name}`
+    : `Invoice ${opts.invoice.invoice_number} from ${INVOICE_COMPANY.name}`;
+
   try {
-    const { error } = await resend.emails.send({
+    const { data, error } = await resend.emails.send({
       from: FROM,
       to: opts.to,
-      subject: customMessage
-        ? `Payment reminder — Invoice ${opts.invoice.invoice_number} from ${INVOICE_COMPANY.name}`
-        : `Invoice ${opts.invoice.invoice_number} from ${INVOICE_COMPANY.name}`,
+      subject,
       html: shell(customMessage ? "Payment reminder" : "Your invoice", body),
       attachments: [{ filename: `Invoice-${safeNumber}.pdf`, content: pdf }],
     });
-    if (error) return { sent: false, error: error.message };
-    return { sent: true };
+    if (error) return { sent: false, error: error.message, subject };
+    return { sent: true, id: data?.id, subject };
   } catch (e) {
     return { sent: false, error: e instanceof Error ? e.message : "send failed" };
   }
@@ -318,18 +340,20 @@ export async function sendNoticeEmail(opts: {
     </p>
   `;
 
+  const emailSubject = subject
+    ? `${subject} — Notice ${opts.notice.notice_number} from ${INVOICE_COMPANY.name}`
+    : `Notice ${opts.notice.notice_number} from ${INVOICE_COMPANY.name}`;
+
   try {
-    const { error } = await resend.emails.send({
+    const { data, error } = await resend.emails.send({
       from: FROM,
       to: opts.to,
-      subject: subject
-        ? `${subject} — Notice ${opts.notice.notice_number} from ${INVOICE_COMPANY.name}`
-        : `Notice ${opts.notice.notice_number} from ${INVOICE_COMPANY.name}`,
+      subject: emailSubject,
       html: shell(subject || "A notice for you", body),
       attachments: [{ filename: `Notice-${safeNumber}.pdf`, content: pdf }],
     });
-    if (error) return { sent: false, error: error.message };
-    return { sent: true };
+    if (error) return { sent: false, error: error.message, subject: emailSubject };
+    return { sent: true, id: data?.id, subject: emailSubject };
   } catch (e) {
     return { sent: false, error: e instanceof Error ? e.message : "send failed" };
   }
@@ -388,16 +412,18 @@ export async function sendPricingEmail(opts: {
     </p>
   `;
 
+  const subject = "ARC AI — Services & Pricing";
+
   try {
-    const { error } = await resend.emails.send({
+    const { data, error } = await resend.emails.send({
       from: FROM,
       to: opts.to,
-      subject: "ARC AI — Services & Pricing",
+      subject,
       html: shell("Our pricing", body),
       attachments: [{ filename: "ARC-AI-Pricing.pdf", content: pdf }],
     });
-    if (error) return { sent: false, error: error.message };
-    return { sent: true };
+    if (error) return { sent: false, error: error.message, subject };
+    return { sent: true, id: data?.id, subject };
   } catch (e) {
     return { sent: false, error: e instanceof Error ? e.message : "send failed" };
   }

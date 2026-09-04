@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 
-import { sendGenericEmail } from "@/lib/email";
+import { sendAndLogEmail } from "@/lib/email-outbox";
 import { createClient } from "@/lib/supabase/server";
 import type { ActionResult, Quote } from "@/lib/types";
 import type { InvoiceItem } from "@/lib/database.types";
@@ -116,11 +116,19 @@ export async function sendQuote(
 
   let emailed = false;
   if (quote.customer_email) {
-    const res = await sendGenericEmail({
+    const res = await sendAndLogEmail(supabase, {
       to: quote.customer_email,
-      subject: `Quotation ${quote.quote_number} from ARC AI`,
-      body: `Hi ${quote.customer_name},\nHere is your quotation${quote.title ? ` for ${quote.title}` : ""} — total ${quote.currency} ${Number(quote.grand_total).toLocaleString()}.\nOpen the link below to review and accept it online. It only takes a minute.`,
-      cta: { href: shareUrl, label: "View & accept quotation" },
+      kind: "quote",
+      quoteId: quote.id,
+      clientId: quote.client_id,
+      leadId: quote.lead_id,
+      invoiceId: quote.invoice_id,
+      message: {
+        transport: "generic",
+        subject: `Quotation ${quote.quote_number} from ARC AI`,
+        body: `Hi ${quote.customer_name},\nHere is your quotation${quote.title ? ` for ${quote.title}` : ""} — total ${quote.currency} ${Number(quote.grand_total).toLocaleString()}.\nOpen the link below to review and accept it online. It only takes a minute.`,
+        cta: { href: shareUrl, label: "View & accept quotation" },
+      },
     });
     emailed = res.sent;
     if (!res.sent && res.error && !res.error.includes("not configured")) {

@@ -14,7 +14,7 @@ import { queueLeadResearch } from "@/lib/research";
 import { firecrawlScrape, isFirecrawlConfigured } from "@/lib/ai/firecrawl";
 import { openaiChatJSON, isOpenAIConfigured } from "@/lib/ai/openai";
 import { checkEmail } from "@/lib/email-check";
-import { sendGenericEmail } from "@/lib/email";
+import { sendAndLogEmail } from "@/lib/email-outbox";
 import { PRICING_CATALOG } from "@/lib/pricing-catalog";
 import type { ResearchAudit } from "@/lib/research-report";
 
@@ -969,17 +969,25 @@ export async function sendLeadOutreach(
     const messageIds: string[] = [];
     let firstError = "";
     for (const email of valid) {
-      const res = await sendGenericEmail({
+      // One call per address on purpose: each recipient gets their own
+      // unsubscribe token, so each also gets its own log row.
+      const res = await sendAndLogEmail(supabase, {
         to: email,
-        subject,
-        body: row.body,
+        kind: "outreach",
+        leadId,
         from: fromEmail,
         replyTo: fromEmail,
-        footer: coldFooter(email),
+        sentBy: opts?.actorId ?? null,
+        message: {
+          transport: "generic",
+          subject,
+          body: row.body,
+          footer: coldFooter(email),
+        },
       });
       if (res.sent) {
         sent.push(email);
-        if (res.id) messageIds.push(res.id);
+        if (res.providerId) messageIds.push(res.providerId);
       } else if (!firstError) {
         firstError = res.error ?? "send failed";
       }

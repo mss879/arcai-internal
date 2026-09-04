@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { getAssistantProfile } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
-import { sendInvoiceEmail } from "@/lib/email";
+import { sendAndLogEmail } from "@/lib/email-outbox";
 
 export const runtime = "nodejs";
 
@@ -66,20 +66,30 @@ export async function POST(request: Request) {
     );
   }
 
-  const result = await sendInvoiceEmail({
+  const result = await sendAndLogEmail(supabase, {
     to: emails,
-    message,
-    invoice: {
-      invoice_number: invoice.invoice_number,
-      invoice_date: invoice.invoice_date,
-      bill_to_name: invoice.bill_to_name,
-      bill_to_details: invoice.bill_to_details,
-      items: invoice.items ?? [],
-      grand_total: Number(invoice.grand_total),
-      due_today: Number(invoice.due_today),
-      amount_paid: Number(invoice.amount_paid ?? 0),
-      stamp: invoice.stamp ?? null,
-      bank_account: invoice.bank_account ?? null,
+    kind: "invoice",
+    actor: "assistant",
+    sentBy: profile.id,
+    invoiceId,
+    clientId: invoice.client_id,
+    leadId: invoice.lead_id,
+    projectId: invoice.project_id,
+    message: {
+      transport: "invoice",
+      note: message,
+      invoice: {
+        invoice_number: invoice.invoice_number,
+        invoice_date: invoice.invoice_date,
+        bill_to_name: invoice.bill_to_name,
+        bill_to_details: invoice.bill_to_details,
+        items: invoice.items ?? [],
+        grand_total: Number(invoice.grand_total),
+        due_today: Number(invoice.due_today),
+        amount_paid: Number(invoice.amount_paid ?? 0),
+        stamp: invoice.stamp ?? null,
+        bank_account: invoice.bank_account ?? null,
+      },
     },
   });
 

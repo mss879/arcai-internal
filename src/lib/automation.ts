@@ -16,7 +16,7 @@ import {
 } from "@/lib/package-match";
 import { notifyUsers } from "@/lib/notify";
 import { DELIVERY_STAGES } from "@/lib/constants";
-import { sendGenericEmail } from "@/lib/email";
+import { sendAndLogEmail } from "@/lib/email-outbox";
 import { sendPushToUser } from "@/lib/push";
 import { sendSmsToUser } from "@/lib/sms-alerts";
 import { sendSms } from "@/lib/sms";
@@ -746,7 +746,15 @@ async function executeStep(
       const subject = renderTokens(String(cfg.subject ?? ""), run, lead).trim();
       const body = renderTokens(String(cfg.body ?? ""), run, lead).trim();
       if (!subject || !body) return { ok: false, detail: "Email step needs a subject and body." };
-      const sent = await sendGenericEmail({ to, subject, body });
+      const sent = await sendAndLogEmail(supabase, {
+        to,
+        kind: "automation",
+        actor: "automation",
+        leadId: run.lead_id,
+        clientId: run.client_id,
+        projectId: run.project_id,
+        message: { transport: "generic", subject, body },
+      });
       if (run.lead_id) {
         await supabase.from("lead_activities").insert({
           lead_id: run.lead_id,

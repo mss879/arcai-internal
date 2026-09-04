@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import { getProfile } from "@/lib/auth";
-import { sendPricingEmail } from "@/lib/email";
+import { sendAndLogEmail } from "@/lib/email-outbox";
 import type { PricingOverrides } from "@/lib/pricing-catalog";
 import { createClient } from "@/lib/supabase/server";
 import { invalidateAgentKnowledge } from "@/lib/wa-knowledge";
@@ -57,10 +57,16 @@ export async function sendPricing(input: {
   const to = input.to.trim();
   if (!EMAIL_RE.test(to)) return { ok: false, error: "Enter a valid email address." };
 
-  const res = await sendPricingEmail({
+  const supabase = await createClient();
+  const res = await sendAndLogEmail(supabase, {
     to,
-    overrides: cleanOverrides(input.overrides),
-    message: input.message?.trim() || undefined,
+    kind: "pricing",
+    sentBy: profile.id,
+    message: {
+      transport: "pricing",
+      overrides: cleanOverrides(input.overrides),
+      note: input.message?.trim() || undefined,
+    },
   });
 
   if (!res.sent) return { ok: false, error: res.error || "Could not send the email." };

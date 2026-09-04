@@ -34,6 +34,7 @@ import {
 import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/ui/copy-button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ChainCard, type ChainLink } from "@/components/projects/chain-card";
 import type { TimelineItem, TimelineKind } from "@/lib/client-timeline";
@@ -199,6 +200,18 @@ export type ClientView = {
   }[];
   timeline: TimelineItem[];
   chain: ChainLink[];
+  /** 0117 — the code they share, and who they have introduced. */
+  referrals: {
+    code: string | null;
+    link: string | null;
+    introduced: {
+      id: string;
+      status: string;
+      leadTitle: string | null;
+      createdAt: string;
+      rewardNote: string | null;
+    }[];
+  };
 };
 
 type Tab = "overview" | "projects" | "money" | "conversations" | "meetings" | "timeline";
@@ -417,6 +430,7 @@ export function ClientDetail({ view }: { view: ClientView }) {
             <ChainCard links={view.chain} currency={summary.currency} quoted={null} delivered={summary.totalValue} />
           </div>
           <div className="space-y-6">
+            <ReferralsCard view={view} />
             <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[var(--shadow-card)]">
               <h2 className="text-sm font-semibold text-slate-900">What&apos;s next</h2>
               <ul className="mt-3 space-y-2 text-sm text-slate-600">
@@ -685,6 +699,61 @@ function MoneyTab({ view }: { view: ClientView }) {
         </ul>
       </Section>
     </div>
+  );
+}
+
+/**
+ * 0117 — what this client has brought us, and the link they can share.
+ *
+ * The code is minted the first time this card is rendered, so a client list
+ * doesn't fill up with codes nobody will ever use. Nothing here decides what
+ * a referrer is owed: that is a conversation, and winning a referred lead
+ * raises a task for it rather than paying out a formula.
+ */
+function ReferralsCard({ view }: { view: ClientView }) {
+  const { code, link, introduced } = view.referrals;
+  if (!code) return null;
+
+  return (
+    <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[var(--shadow-card)]">
+      <h2 className="text-sm font-semibold text-slate-900">Referrals</h2>
+      <p className="mt-1 text-xs text-slate-500">
+        {introduced.length === 0
+          ? "They haven't introduced anyone yet."
+          : `${introduced.length} introduction${introduced.length === 1 ? "" : "s"} so far.`}
+      </p>
+
+      <div className="mt-3 flex items-center gap-2">
+        <span className="rounded-lg bg-slate-100 px-2.5 py-1 font-mono text-xs text-slate-700">
+          {code}
+        </span>
+        {link && <CopyButton value={link} label="Copy their link" />}
+      </div>
+
+      {introduced.length > 0 && (
+        <ul className="mt-3 space-y-1.5 text-sm">
+          {introduced.map((r) => (
+            <li key={r.id} className="flex items-center justify-between gap-2">
+              <span className="truncate text-slate-600">
+                {r.leadTitle ?? "An introduction"}
+              </span>
+              <span
+                className={cn(
+                  "shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium",
+                  r.status === "rewarded"
+                    ? "bg-emerald-50 text-emerald-700"
+                    : r.status === "won"
+                      ? "bg-amber-50 text-amber-700"
+                      : "bg-slate-100 text-slate-500",
+                )}
+              >
+                {r.status}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 

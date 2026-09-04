@@ -3,6 +3,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { Database } from "@/lib/database.types";
+import { markReferralWon } from "@/lib/referrals";
 
 type DB = SupabaseClient<Database>;
 
@@ -50,5 +51,10 @@ export async function markLeadWon(
     })
     .eq("id", leadId);
   if (error) return { ok: false, error: error.message };
+
+  // 0117 — if somebody introduced them, credit the introduction now. Never
+  // throws: winning the lead is what matters, the credit is bookkeeping.
+  await markReferralWon(supabase, leadId);
+
   return { ok: true, movedToStage: Boolean(wonStageId && wonStageId !== lead.stage_id) };
 }

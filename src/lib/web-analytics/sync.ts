@@ -3,6 +3,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { Database } from "@/lib/database.types";
+import { createInboundLead } from "@/lib/lead-intake";
 
 import { SITE, createWebsiteClient, isWebsiteSourceConfigured } from "./source";
 
@@ -1041,7 +1042,7 @@ async function stitchIdentities(crm: DB): Promise<number> {
 
   const { data: chats } = await crm
     .from("web_chat_sessions")
-    .select("id, captured_email")
+    .select("id, captured_email, captured_phone, first_user_message, summary, topic")
     .not("captured_email", "is", null)
     .is("matched_lead_id", null)
     .limit(500);
@@ -1088,15 +1089,55 @@ async function stitchIdentities(crm: DB): Promise<number> {
       .eq("session_id", row.session_id);
     matched++;
   }
+  // Somebody who left an address in the chat and matches nothing in the CRM
+  // is a lead nobody has. Off by default — turning strangers into pipeline
+  // rows is a decision, not a default — and gated so it can be switched off
+  // again without a deploy.
+  const autoLead = await chatAutoLeadEnabled(crm);
+
   for (const row of chats ?? []) {
     const email = row.captured_email?.toLowerCase();
     if (!email) continue;
-    const leadId = leadByEmail.get(email) ?? null;
+    let leadId = leadByEmail.get(email) ?? null;
+
+    if (!leadId && autoLead && !clientByEmail.has(email)) {
+      const created = await createInboundLead(crm, {
+        email: row.captured_email,
+        phone: row.captured_phone,
+        name: null,
+        message: row.summary || row.first_user_message,
+        service: row.topic,
+        source: "website_chat",
+        tags: ["chat"],
+        meta: { chat_session_id: row.id },
+      }).catch(() => null);
+      // createInboundLead dedupes against open leads itself, so a visitor who
+      // chats on three days is one lead, not three.
+      if (created?.ok) {
+        leadId = created.lead.id;
+        leadByEmail.set(email, leadId);
+      }
+    }
+
     if (!leadId) continue;
     await crm.from("web_chat_sessions").update({ matched_lead_id: leadId }).eq("id", row.id);
     matched++;
   }
   return matched;
+}
+
+/** `app_settings.web_chat_auto_lead` — off unless somebody turned it on. */
+async function chatAutoLeadEnabled(crm: DB): Promise<boolean> {
+  try {
+    const { data } = await crm
+      .from("app_settings")
+      .select("value")
+      .eq("key", "web_chat_auto_lead")
+      .maybeSingle();
+    return (data?.value as { enabled?: boolean } | null)?.enabled === true;
+  } catch {
+    return false;
+  }
 }
 
 // ── orchestration ───────────────────────────────────────────────────────────

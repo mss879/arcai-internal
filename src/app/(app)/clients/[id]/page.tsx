@@ -7,6 +7,8 @@ import { computeProjectProgress } from "@/lib/project-progress";
 import { PROJECT_MONEY_SELECT, balanceDue, settledAmount } from "@/lib/projects";
 import { createClient } from "@/lib/supabase/server";
 
+import { referralCodeFor, referralLink } from "@/lib/referrals";
+
 import { ClientDetail, type ClientView } from "./client-detail";
 
 export const metadata = { title: "Client" };
@@ -298,6 +300,26 @@ export default async function ClientPage({
     })),
   ].sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
 
+  // 0117 — mint the code on first sight and read what they have introduced.
+  // Both degrade to "no referrals" rather than failing the page.
+  const referralCode = await referralCodeFor(supabase, client.id).catch(() => null);
+  const { data: referralRows } = await supabase
+    .from("referrals")
+    .select("id, status, reward_note, created_at, referred_lead_id")
+    .eq("referrer_client_id", client.id)
+    .order("created_at", { ascending: false })
+    .limit(20);
+
+  const referredLeadIds = (referralRows ?? [])
+    .map((r) => r.referred_lead_id)
+    .filter((id): id is string => Boolean(id));
+  const { data: referredLeads } = referredLeadIds.length
+    ? await supabase.from("leads").select("id, title").in("id", referredLeadIds)
+    : { data: [] as { id: string; title: string }[] };
+  const leadTitleById = new Map(
+    (referredLeads ?? []).map((l) => [l.id, l.title]),
+  );
+
   const view: ClientView = {
     client: {
       id: client.id,
@@ -409,6 +431,19 @@ export default async function ClientPage({
     })),
     timeline,
     chain,
+    referrals: {
+      code: referralCode,
+      link: referralCode ? referralLink(referralCode) : null,
+      introduced: (referralRows ?? []).map((r) => ({
+        id: r.id,
+        status: r.status,
+        leadTitle: r.referred_lead_id
+          ? (leadTitleById.get(r.referred_lead_id) ?? null)
+          : null,
+        createdAt: r.created_at,
+        rewardNote: r.reward_note,
+      })),
+    },
   };
 
   return <ClientDetail view={view} />;

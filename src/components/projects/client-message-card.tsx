@@ -15,7 +15,7 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { format } from "date-fns";
-import { MessageSquareText, Send } from "lucide-react";
+import { Mail, MessageSquareText, Send } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -24,6 +24,8 @@ import { SMS_MAX_LENGTH, countSmsSegments } from "@/lib/sms-utils";
 import { cn } from "@/lib/utils";
 
 import { messageClient } from "@/app/(app)/projects/client-sms-actions";
+import { ComposeEmailModal } from "@/components/email/compose-email-modal";
+import { firstNameOf } from "@/lib/email-templates";
 
 export type SentClientMessage = {
   id: string;
@@ -55,18 +57,24 @@ export function ClientMessageCard({
   projectName,
   clientName,
   clientPhone,
+  clientEmail,
+  clientId,
   sent,
 }: {
   projectId: string;
   projectName: string;
   clientName: string | null;
   clientPhone: string | null;
+  /** 0115 — so a note to the client can go by email as well as by text. */
+  clientEmail: string | null;
+  clientId: string | null;
   /** The last few texts this project has sent, newest first. */
   sent: SentClientMessage[];
 }) {
   const router = useRouter();
   const [message, setMessage] = React.useState("");
   const [busy, setBusy] = React.useState(false);
+  const [emailOpen, setEmailOpen] = React.useState(false);
 
   const canSend = Boolean(clientPhone) && message.trim().length > 0;
   const segments = message.trim() ? countSmsSegments(message) : 0;
@@ -137,11 +145,40 @@ export function ClientMessageCard({
             {message.length}/{SMS_MAX_LENGTH}
             {segments > 0 && ` · ${segments} segment${segments === 1 ? "" : "s"}`}
           </p>
-          <Button size="sm" onClick={send} disabled={!canSend || tooLong} loading={busy}>
-            <Send className="h-3.5 w-3.5" /> Send
-          </Button>
+          <div className="flex items-center gap-2">
+            {clientEmail && (
+              <Button size="sm" variant="outline" onClick={() => setEmailOpen(true)}>
+                <Mail className="h-3.5 w-3.5" /> Email instead
+              </Button>
+            )}
+            <Button size="sm" onClick={send} disabled={!canSend || tooLong} loading={busy}>
+              <Send className="h-3.5 w-3.5" /> Send
+            </Button>
+          </div>
         </div>
       </div>
+
+      {/* The same note, by email — no 160-character budget, and it lands on
+          the client's record either way. */}
+      <ComposeEmailModal
+        open={emailOpen}
+        onClose={() => setEmailOpen(false)}
+        title={`Email ${clientName ?? "the client"}`}
+        to={clientEmail ?? ""}
+        subject={`${projectName} — an update`}
+        body={message.trim() || `Hi ${firstNameOf(clientName) || "there"},\n`}
+        links={{ projectId, clientId }}
+        tokens={{
+          name: firstNameOf(clientName),
+          full_name: clientName ?? "",
+          project: projectName,
+          email: clientEmail ?? "",
+        }}
+        onSent={() => {
+          setMessage("");
+          router.refresh();
+        }}
+      />
 
       {sent.length > 0 && (
         <div className="border-t border-slate-100 px-5 py-3">

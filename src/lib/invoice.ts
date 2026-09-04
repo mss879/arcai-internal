@@ -1,4 +1,5 @@
 import type { InvoiceItem } from "@/lib/database.types";
+import type { InvoiceEmailData } from "@/lib/invoice-pdf";
 
 /**
  * Static details printed on every invoice. Edit here to update them
@@ -122,6 +123,40 @@ export const INVOICE_SIGNOFF = {
  * and once they settle in full with "payment_received". Stored as plain text on
  * `invoices.stamp` — `null`/absent means no stamp.
  */
+/**
+ * The fields the invoice PDF and its email need, from a saved `invoices` row.
+ *
+ * Two places email an invoice — the assistant's confirmed send and the compose
+ * box — and both must attach the SAME document. The mapping lives here so a
+ * column added to the PDF is added once. Type-only import: nothing pulls
+ * react-pdf into a client bundle.
+ */
+export function invoiceEmailData(row: {
+  invoice_number: string;
+  invoice_date: string;
+  bill_to_name: string;
+  bill_to_details: string;
+  items: InvoiceItem[] | null;
+  grand_total: number | string;
+  due_today: number | string;
+  amount_paid?: number | string | null;
+  stamp?: string | null;
+  bank_account?: string | null;
+}): InvoiceEmailData {
+  return {
+    invoice_number: row.invoice_number,
+    invoice_date: row.invoice_date,
+    bill_to_name: row.bill_to_name,
+    bill_to_details: row.bill_to_details,
+    items: row.items ?? [],
+    grand_total: Number(row.grand_total),
+    due_today: Number(row.due_today),
+    amount_paid: Number(row.amount_paid ?? 0),
+    stamp: row.stamp ?? null,
+    bank_account: row.bank_account ?? null,
+  };
+}
+
 export type InvoiceStamp = "deposit_paid" | "payment_received";
 
 /** Choices shown in the generator's stamp picker ("none" = no stamp). */

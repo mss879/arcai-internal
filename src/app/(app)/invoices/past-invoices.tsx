@@ -18,6 +18,8 @@ import { useRealtimeSync } from "@/hooks/use-realtime-sync";
 import { InvoiceDocument } from "./invoice-generator";
 import { deleteInvoice } from "./actions";
 import { downloadInvoicePdf } from "./download-pdf";
+import { ComposeEmailModal } from "@/components/email/compose-email-modal";
+import { firstNameOf } from "@/lib/email-templates";
 import type { SavedInvoice } from "./invoices-view";
 
 export function PastInvoices({
@@ -35,6 +37,7 @@ export function PastInvoices({
   const [viewing, setViewing] = React.useState<SavedInvoice | null>(null);
   const [toDelete, setToDelete] = React.useState<SavedInvoice | null>(null);
   const [downloading, setDownloading] = React.useState(false);
+  const [emailing, setEmailing] = React.useState<SavedInvoice | null>(null);
 
   if (invoices.length === 0) {
     return (
@@ -143,6 +146,14 @@ export function PastInvoices({
                       <Download className="h-4 w-4" />
                       View
                     </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setEmailing(inv)}
+                    >
+                      <Mail className="h-4 w-4" />
+                      Email
+                    </Button>
                     <button
                       onClick={() => setToDelete(inv)}
                       aria-label="Delete invoice"
@@ -182,6 +193,28 @@ export function PastInvoices({
           </div>
         )}
       </div>
+
+      {/* Email a saved invoice — the SAME PDF the assistant would attach. */}
+      <ComposeEmailModal
+        open={!!emailing}
+        onClose={() => setEmailing(null)}
+        title={emailing ? `Email invoice ${emailing.invoice_number}` : "Email invoice"}
+        to={emailing?.recipient_email ?? ""}
+        subject={emailing ? `Invoice ${emailing.invoice_number} from ARC AI` : ""}
+        body={
+          emailing
+            ? `Hi ${firstNameOf(emailing.bill_to_name) || "there"},\nYour invoice is attached.\nThank you.`
+            : ""
+        }
+        links={{
+          clientId: emailing?.client_id ?? null,
+          leadId: emailing?.lead_id ?? null,
+          projectId: emailing?.project_id ?? null,
+        }}
+        attachInvoiceId={emailing?.id ?? null}
+        attachmentLabel="Invoice attached as a PDF"
+        onSent={() => router.refresh()}
+      />
 
       {/* View + re-download a saved invoice */}
       <Modal

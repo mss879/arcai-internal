@@ -32,6 +32,8 @@ import {
 } from "lucide-react";
 
 import { Avatar } from "@/components/ui/avatar";
+import { ComposeEmailModal } from "@/components/email/compose-email-modal";
+import { firstNameOf } from "@/lib/email-templates";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -154,6 +156,7 @@ export function LeadDetail({
   ]);
   const router = useRouter();
   const [editOpen, setEditOpen] = React.useState(false);
+  const [emailOpen, setEmailOpen] = React.useState(false);
   const [confirmTrash, setConfirmTrash] = React.useState(false);
   const [lostOpen, setLostOpen] = React.useState(false);
 
@@ -265,6 +268,17 @@ export function LeadDetail({
               Convert to client
             </Button>
           )}
+          {lead.contact_email && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setEmailOpen(true)}
+              className="h-10 sm:h-9"
+            >
+              <Mail className="h-3.5 w-3.5" />
+              Email
+            </Button>
+          )}
           <Button
             variant="outline"
             size="sm"
@@ -374,6 +388,21 @@ export function LeadDetail({
           <QuotesCard quotes={quotes} />
         </div>
       </div>
+
+      <ComposeEmailModal
+        open={emailOpen}
+        onClose={() => setEmailOpen(false)}
+        to={lead.contact_email ?? ""}
+        links={{ leadId: lead.id, clientId: lead.client_id }}
+        tokens={{
+          name: firstNameOf(lead.contact_name),
+          full_name: lead.contact_name ?? "",
+          company: lead.company ?? "",
+          email: lead.contact_email ?? "",
+          phone: lead.contact_phone ?? "",
+        }}
+        onSent={() => router.refresh()}
+      />
 
       <LeadFormModal
         open={editOpen}

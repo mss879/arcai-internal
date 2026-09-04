@@ -908,6 +908,8 @@ export default async function ProjectDetailPage({
                 projectName={project.name}
                 clientName={client?.name ?? null}
                 clientPhone={client?.phone ?? null}
+                clientEmail={client?.email ?? null}
+                clientId={client?.id ?? null}
                 sent={(clientSmsRes.data ?? []) as SentClientMessage[]}
               />
             </div>

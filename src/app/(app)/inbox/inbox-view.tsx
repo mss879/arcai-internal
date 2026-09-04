@@ -38,9 +38,20 @@ import {
   setThreadTags,
   snoozeThread,
 } from "./actions";
+import { deleteEmailTemplate, saveEmailTemplate } from "./email-actions";
+import { ComposeEmailModal } from "@/components/email/compose-email-modal";
+import { Modal } from "@/components/ui/modal";
 import { toggleContactAgentAction } from "@/app/(app)/whatsapp/actions";
 
 type TeamMember = { id: string; full_name: string | null; avatar_url: string | null };
+
+type EmailTemplate = {
+  id: string;
+  name: string;
+  subject: string;
+  body: string;
+  cta_label: string | null;
+};
 
 const FILTERS: { key: InboxFilter; label: string }[] = [
   { key: "all", label: "All" },
@@ -83,6 +94,8 @@ export function InboxView({
   channel,
   team,
   me,
+  isAdmin,
+  templates,
 }: {
   threads: InboxThread[];
   detail: InboxThreadDetail | null;
@@ -90,9 +103,13 @@ export function InboxView({
   channel: ConversationChannel | "all";
   team: TeamMember[];
   me: string;
+  isAdmin: boolean;
+  templates: EmailTemplate[];
 }) {
   const router = useRouter();
   const [query, setQuery] = React.useState("");
+  const [composeOpen, setComposeOpen] = React.useState(false);
+  const [templatesOpen, setTemplatesOpen] = React.useState(false);
   const [draft, setDraft] = React.useState("");
   const [sending, setSending] = React.useState(false);
   const scrollRef = React.useRef<HTMLDivElement>(null);
@@ -175,6 +192,14 @@ export function InboxView({
         description="Every conversation with a client — WhatsApp, texts, portal messages and email — in one place."
         actions={
           <div className="flex items-center gap-2">
+            <Button size="sm" variant="outline" onClick={() => setComposeOpen(true)}>
+              <Mail className="h-3.5 w-3.5" /> Write an email
+            </Button>
+            {isAdmin && (
+              <Button size="sm" variant="ghost" onClick={() => setTemplatesOpen(true)}>
+                Templates
+              </Button>
+            )}
             {attentionCount > 0 && (
               <Badge className="bg-amber-50 text-amber-700 ring-amber-200" dot="bg-amber-500">
                 {attentionCount} waiting
@@ -448,7 +473,162 @@ export function InboxView({
           <ThreadRail key={selected.key} thread={selected} team={team} me={me} />
         )}
       </div>
+
+      <ComposeEmailModal
+        open={composeOpen}
+        onClose={() => setComposeOpen(false)}
+        // An email thread's title IS the address, so writing back is one click.
+        to={selected?.channel === "email" ? selected.title : ""}
+        links={{
+          clientId: selected?.clientId ?? null,
+          leadId: selected?.leadId ?? null,
+          projectId: selected?.projectId ?? null,
+        }}
+        tokens={{ name: selected?.title ?? "" }}
+        onSent={() => router.refresh()}
+      />
+
+      {isAdmin && (
+        <TemplatesModal
+          open={templatesOpen}
+          onClose={() => setTemplatesOpen(false)}
+          templates={templates}
+        />
+      )}
     </div>
+  );
+}
+
+/**
+ * Saved wording, so the third time somebody writes "here is your invoice" it
+ * is a pick rather than a retype. Admin-only: a template is what the whole
+ * team's mail sounds like.
+ */
+function TemplatesModal({
+  open,
+  onClose,
+  templates,
+}: {
+  open: boolean;
+  onClose: () => void;
+  templates: EmailTemplate[];
+}) {
+  const router = useRouter();
+  const [editing, setEditing] = React.useState<EmailTemplate | null>(null);
+  const [form, setForm] = React.useState({ name: "", subject: "", body: "" });
+  const [busy, setBusy] = React.useState(false);
+
+  function startNew() {
+    setEditing(null);
+    setForm({ name: "", subject: "", body: "" });
+  }
+
+  function startEdit(t: EmailTemplate) {
+    setEditing(t);
+    setForm({ name: t.name, subject: t.subject, body: t.body });
+  }
+
+  async function save() {
+    setBusy(true);
+    const res = await saveEmailTemplate({ id: editing?.id ?? null, ...form });
+    setBusy(false);
+    if (res.ok) {
+      toast.success("Saved.");
+      startNew();
+      router.refresh();
+    } else toast.error(res.error);
+  }
+
+  async function remove(id: string) {
+    setBusy(true);
+    const res = await deleteEmailTemplate(id);
+    setBusy(false);
+    if (res.ok) {
+      startNew();
+      router.refresh();
+    } else toast.error(res.error);
+  }
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Email templates"
+      description="Tokens like {{name}} and {{invoice_number}} are filled in when the template is used."
+      size="lg"
+      footer={
+        <div className="flex items-center justify-end gap-2">
+          <Button variant="ghost" onClick={onClose}>
+            Close
+          </Button>
+          <Button onClick={save} loading={busy} disabled={busy || !form.name.trim()}>
+            {editing ? "Save changes" : "Add template"}
+          </Button>
+        </div>
+      }
+    >
+      <div className="space-y-4">
+        {templates.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {templates.map((t) => (
+              <span
+                key={t.id}
+                className={cn(
+                  "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs",
+                  editing?.id === t.id
+                    ? "bg-primary-600 text-white"
+                    : "bg-slate-100 text-slate-700",
+                )}
+              >
+                <button onClick={() => startEdit(t)}>{t.name}</button>
+                <button
+                  onClick={() => remove(t.id)}
+                  aria-label={`Delete ${t.name}`}
+                  className="opacity-60 hover:opacity-100"
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+            {editing && (
+              <button
+                onClick={startNew}
+                className="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-600"
+              >
+                + New
+              </button>
+            )}
+          </div>
+        )}
+
+        <label className="block space-y-1.5 text-xs font-medium text-slate-600">
+          Name
+          <Input
+            value={form.name}
+            onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+            placeholder="Invoice reminder"
+          />
+        </label>
+        <label className="block space-y-1.5 text-xs font-medium text-slate-600">
+          Subject
+          <Input
+            value={form.subject}
+            onChange={(e) => setForm((f) => ({ ...f, subject: e.target.value }))}
+            placeholder="Invoice {{invoice_number}} from ARC AI"
+          />
+        </label>
+        <label className="block space-y-1.5 text-xs font-medium text-slate-600">
+          Message
+          <textarea
+            value={form.body}
+            onChange={(e) => setForm((f) => ({ ...f, body: e.target.value }))}
+            rows={10}
+            className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm leading-6 text-slate-700"
+            placeholder={"Hi {{name}},\nJust a note that invoice {{invoice_number}} is due."}
+          />
+        </label>
+      </div>
+    </Modal>
   );
 }
 

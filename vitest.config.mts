@@ -29,6 +29,8 @@ export default defineConfig({
       "src/lib/automation-core.test.ts",
       // Which channel a client's tracking link goes out on.
       "src/lib/portal-send-core.test.ts",
+      // Templates render the same on the server and in the compose preview.
+      "src/lib/email-templates.test.ts",
     ],
   },
 });

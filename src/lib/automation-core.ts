@@ -184,6 +184,25 @@ export function passesConditions(
 // Message tokens
 // ---------------------------------------------------------------------------
 
+/**
+ * Replace `{{key}}` with a value, everywhere it appears.
+ *
+ * A token with no entry in the map is left ALONE rather than blanked, so a
+ * two-pass render (an automation's context, then a template's own values)
+ * doesn't destroy the tokens the second pass was going to fill. Passing an
+ * explicit null or empty string is how you say "this one is genuinely blank".
+ */
+export function fillTokens(
+  text: string,
+  values: Record<string, string | null | undefined>,
+): string {
+  let out = text;
+  for (const [key, value] of Object.entries(values)) {
+    out = out.replaceAll(`{{${key}}}`, value == null ? "" : String(value));
+  }
+  return out;
+}
+
 /** Replace {{tokens}} with subject/context values. */
 export function renderTokens(
   text: string,
@@ -194,22 +213,23 @@ export function renderTokens(
   const firstName = fullName.split(/\s+/)[0] || "there";
   const ctx = (run.context ?? {}) as Record<string, unknown>;
 
-  let out = text
-    .replaceAll("{{name}}", firstName)
-    .replaceAll("{{full_name}}", fullName || "there")
-    .replaceAll("{{phone}}", run.subject_phone ?? "")
-    .replaceAll("{{email}}", run.subject_email ?? "");
-
+  const values: Record<string, string | null | undefined> = {
+    name: firstName,
+    full_name: fullName || "there",
+    phone: run.subject_phone ?? "",
+    email: run.subject_email ?? "",
+  };
+  // Lead tokens are added only when there IS a lead, so `{{company}}` on a
+  // run with no lead survives for a later pass instead of becoming blank.
   if (lead) {
-    out = out
-      .replaceAll("{{title}}", lead.title ?? "")
-      .replaceAll("{{company}}", lead.company ?? "")
-      .replaceAll("{{value}}", lead.value != null ? String(lead.value) : "");
+    values.title = lead.title ?? "";
+    values.company = lead.company ?? "";
+    values.value = lead.value != null ? String(lead.value) : "";
   }
   for (const [key, value] of Object.entries(ctx)) {
-    out = out.replaceAll(`{{${key}}}`, value == null ? "" : String(value));
+    values[key] = value == null ? "" : String(value);
   }
-  return out;
+  return fillTokens(text, values);
 }
 
 /** Nudge-class = the automation fires on a timer, not on a customer action.

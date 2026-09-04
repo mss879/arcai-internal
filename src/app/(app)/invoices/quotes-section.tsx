@@ -9,6 +9,7 @@ import {
   FileSignature,
   FolderKanban,
   Link2,
+  Mail,
   Plus,
   Send,
   Trash2,
@@ -25,6 +26,8 @@ import { useRealtimeSync } from "@/hooks/use-realtime-sync";
 import type { InvoiceItem } from "@/lib/database.types";
 import { cn, formatCurrency } from "@/lib/utils";
 import type { Quote, QuoteStatus } from "@/lib/types";
+import { ComposeEmailModal } from "@/components/email/compose-email-modal";
+import { firstNameOf } from "@/lib/email-templates";
 
 import {
   convertQuoteToInvoice,
@@ -172,6 +175,7 @@ function QuoteRow({
   const meta = STATUS_META[quote.status];
   const [sending, setSending] = React.useState(false);
   const [converting, setConverting] = React.useState(false);
+  const [emailOpen, setEmailOpen] = React.useState(false);
   const shareUrl =
     typeof window !== "undefined"
       ? `${window.location.origin}/q/${quote.share_token}`
@@ -234,6 +238,10 @@ function QuoteRow({
         >
           <Link2 className="h-4 w-4" />
         </a>
+        <Button variant="ghost" size="sm" onClick={() => setEmailOpen(true)}>
+          <Mail className="h-3.5 w-3.5" />
+          Email
+        </Button>
         {["draft", "sent", "viewed"].includes(quote.status) && (
           <Button variant="outline" size="sm" onClick={handleSend} loading={sending}>
             <Send className="h-3.5 w-3.5" />
@@ -274,6 +282,23 @@ function QuoteRow({
           <Trash2 className="h-4 w-4" />
         </button>
       </span>
+
+      {/* Send/Resend fires the standard wording; this is for saying something
+          of your own alongside the same accept link. */}
+      <ComposeEmailModal
+        open={emailOpen}
+        onClose={() => setEmailOpen(false)}
+        title={`Email quote ${quote.quote_number}`}
+        to={quote.customer_email ?? ""}
+        subject={`Quotation ${quote.quote_number} from ARC AI`}
+        body={`Hi ${firstNameOf(quote.customer_name) || "there"},\nHere is your quotation${quote.title ? ` for ${quote.title}` : ""}.\nOpen the link below to review and accept it online.`}
+        links={{
+          quoteId: quote.id,
+          clientId: quote.client_id,
+          leadId: quote.lead_id,
+        }}
+        cta={{ href: shareUrl, label: "View & accept quotation" }}
+      />
     </div>
   );
 }

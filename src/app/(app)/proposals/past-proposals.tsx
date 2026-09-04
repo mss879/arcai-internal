@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { format } from "date-fns";
 import { toast } from "sonner";
-import { Download, FolderKanban, Pencil, ScrollText, Trash2 } from "lucide-react";
+import { Download, FolderKanban, Mail, Pencil, ScrollText, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -18,6 +18,8 @@ import { useRealtimeSync } from "@/hooks/use-realtime-sync";
 import { deleteProposal } from "./actions";
 import { downloadProposalPdf } from "./download-pdf";
 import { ProposalPdfFrame } from "./proposal-pdf-frame";
+import { ComposeEmailModal } from "@/components/email/compose-email-modal";
+import { firstNameOf } from "@/lib/email-templates";
 
 export function PastProposals({
   proposals,
@@ -32,6 +34,7 @@ export function PastProposals({
   const [viewing, setViewing] = React.useState<Proposal | null>(null);
   const [toDelete, setToDelete] = React.useState<Proposal | null>(null);
   const [downloading, setDownloading] = React.useState(false);
+  const [emailing, setEmailing] = React.useState<Proposal | null>(null);
 
   if (proposals.length === 0) {
     return (
@@ -115,6 +118,10 @@ export function PastProposals({
                       <Download className="h-4 w-4" />
                       View
                     </Button>
+                    <Button size="sm" variant="ghost" onClick={() => setEmailing(p)}>
+                      <Mail className="h-4 w-4" />
+                      Email
+                    </Button>
                     <Button size="sm" variant="ghost" onClick={() => onEdit(p)}>
                       <Pencil className="h-4 w-4" />
                       Edit
@@ -149,6 +156,28 @@ export function PastProposals({
           </tbody>
         </table>
       </div>
+
+      {/* Email a saved proposal — the same PDF the Download button produces. */}
+      <ComposeEmailModal
+        open={!!emailing}
+        onClose={() => setEmailing(null)}
+        title={emailing ? `Email the ${emailing.project_name} proposal` : "Email proposal"}
+        subject={emailing ? `Proposal — ${emailing.project_name}` : ""}
+        body={
+          emailing
+            ? `Hi ${firstNameOf(emailing.client_name) || "there"},\nOur proposal for ${emailing.project_name} is attached.\nHappy to walk you through it whenever suits.`
+            : ""
+        }
+        links={{
+          clientId: emailing?.client_id ?? null,
+          leadId: emailing?.lead_id ?? null,
+          projectId: emailing?.project_id ?? null,
+          proposalId: emailing?.id ?? null,
+        }}
+        attachProposalId={emailing?.id ?? null}
+        attachmentLabel="Proposal attached as a PDF"
+        onSent={() => router.refresh()}
+      />
 
       <Modal
         open={!!viewing}

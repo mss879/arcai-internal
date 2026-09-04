@@ -30,9 +30,14 @@ export default async function InboxPage({
     ? (params.channel as ConversationChannel)
     : "all";
 
-  const [threads, teamRes] = await Promise.all([
+  const [threads, teamRes, templatesRes] = await Promise.all([
     listInboxThreads(supabase, { filter, channel, userId: profile.id }),
     supabase.from("profiles").select("id, full_name, avatar_url").order("full_name"),
+    // 0115 — may not exist yet; the page must still render without it.
+    supabase
+      .from("email_templates")
+      .select("id, name, subject, body, cta_label")
+      .order("name"),
   ]);
 
   // The selected thread is loaded server-side so a deep link opens straight
@@ -48,6 +53,8 @@ export default async function InboxPage({
       channel={channel}
       team={teamRes.data ?? []}
       me={profile.id}
+      isAdmin={profile.role === "admin"}
+      templates={templatesRes.data ?? []}
     />
   );
 }

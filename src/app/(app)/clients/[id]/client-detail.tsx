@@ -44,6 +44,8 @@ import type { Client, ClientStatus, DeliveryStage, ProjectStatus } from "@/lib/t
 import { cn, formatCurrency } from "@/lib/utils";
 import { useRealtimeSyncTables } from "@/hooks/use-realtime-sync";
 import { ClientFormModal } from "@/app/(app)/clients/clients-view";
+import { ComposeEmailModal } from "@/components/email/compose-email-modal";
+import { firstNameOf } from "@/lib/email-templates";
 
 /**
  * The client's page (0112) — every record about one client in one place.
@@ -236,6 +238,7 @@ export function ClientDetail({ view }: { view: ClientView }) {
   const router = useRouter();
   const [tab, setTab] = React.useState<Tab>("overview");
   const [editOpen, setEditOpen] = React.useState(false);
+  const [emailOpen, setEmailOpen] = React.useState(false);
 
   const { client, summary } = view;
   const statusMeta = CLIENT_STATUS_META[client.status];
@@ -339,6 +342,11 @@ export function ClientDetail({ view }: { view: ClientView }) {
                   <MessageSquareText className="h-3.5 w-3.5" /> SMS
                 </Button>
               </a>
+            )}
+            {client.email && (
+              <Button variant="outline" size="sm" onClick={() => setEmailOpen(true)}>
+                <Mail className="h-3.5 w-3.5" /> Email
+              </Button>
             )}
             <Link href={`/projects?new=1&client=${client.id}`}>
               <Button variant="outline" size="sm">
@@ -477,6 +485,21 @@ export function ClientDetail({ view }: { view: ClientView }) {
       <div className={tab === "timeline" ? undefined : "hidden"}>
         <TimelineTab items={view.timeline} />
       </div>
+
+      <ComposeEmailModal
+        open={emailOpen}
+        onClose={() => setEmailOpen(false)}
+        to={client.email ?? ""}
+        links={{ clientId: client.id }}
+        tokens={{
+          name: firstNameOf(client.name),
+          full_name: client.name,
+          company: client.company ?? "",
+          email: client.email ?? "",
+          phone: client.phone ?? "",
+        }}
+        onSent={() => router.refresh()}
+      />
 
       <ClientFormModal
         open={editOpen}

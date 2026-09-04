@@ -165,34 +165,16 @@ export async function convertQuoteToInvoice(
     .select("*", { count: "exact", head: true });
   const invoiceNumber = `${String((count ?? 0) + 1).padStart(4, "0")}`;
 
-  const billToDetails = [
-    quote.customer_name,
-    quote.customer_email,
-    quote.customer_phone,
-  ]
-    .filter(Boolean)
-    .join("\n");
-
-  const { data: invoice, error } = await supabase
-    .from("invoices")
-    .insert({
-      invoice_number: invoiceNumber,
-      invoice_date: new Date().toISOString().slice(0, 10),
-      bill_to_name: quote.customer_name,
-      bill_to_details: billToDetails,
-      items: quote.items,
-      grand_total: quote.grand_total,
-      due_today: quote.grand_total,
-      recipient_email: quote.customer_email,
-    })
-    .select("id")
-    .single();
-  if (error || !invoice) {
-    return { ok: false, error: error?.message ?? "Could not create the invoice." };
-  }
-
-  await supabase.from("quotes").update({ invoice_id: invoice.id }).eq("id", id);
+  // 0112 — the shared core carries the client, lead, currency and project
+  // onto the invoice; the automation step goes through the same code.
+  const { createInvoiceFromQuote } = await import("@/lib/quotes");
+  const created = await createInvoiceFromQuote(supabase, quote, {
+    invoiceNumber,
+    actorId: user.id,
+  });
+  if (!created.ok) return { ok: false, error: created.error };
 
   revalidatePath("/invoices");
-  return { ok: true, invoiceId: invoice.id };
+  if (created.projectId) revalidatePath(`/projects/${created.projectId}`);
+  return { ok: true, invoiceId: created.invoiceId };
 }

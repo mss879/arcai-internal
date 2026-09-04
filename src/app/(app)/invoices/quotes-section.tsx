@@ -1,11 +1,13 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { formatDistanceToNow } from "date-fns";
 import { toast } from "sonner";
 import {
   ArrowRight,
   FileSignature,
+  FolderKanban,
   Link2,
   Plus,
   Send,
@@ -54,10 +56,13 @@ export function QuotesSection({
   quotes,
   clients,
   leads,
+  projectsByQuote = {},
 }: {
   quotes: Quote[];
   clients: ClientLite[];
   leads: LeadLite[];
+  /** 0112 — quote id → the project it produced, when one exists. */
+  projectsByQuote?: Record<string, string>;
 }) {
   useRealtimeSync("quotes");
   const [editing, setEditing] = React.useState<Quote | null>(null);
@@ -115,6 +120,7 @@ export function QuotesSection({
             <QuoteRow
               key={quote.id}
               quote={quote}
+              projectId={projectsByQuote[quote.id] ?? null}
               onEdit={() => setEditing(quote)}
               onDelete={() => setToDelete(quote)}
             />
@@ -154,10 +160,12 @@ function StatCard({ label, value }: { label: string; value: string }) {
 
 function QuoteRow({
   quote,
+  projectId,
   onEdit,
   onDelete,
 }: {
   quote: Quote;
+  projectId: string | null;
   onEdit: () => void;
   onDelete: () => void;
 }) {
@@ -241,6 +249,23 @@ function QuoteRow({
         {quote.invoice_id && (
           <Badge className="bg-emerald-50 text-emerald-600 ring-emerald-200">Invoiced</Badge>
         )}
+        {/* 0112 — the signed quote starts the project, prefilled. */}
+        {quote.status === "accepted" &&
+          (projectId ? (
+            <Link href={`/projects/${projectId}`}>
+              <Button variant="outline" size="sm">
+                <FolderKanban className="h-3.5 w-3.5" />
+                Open project
+              </Button>
+            </Link>
+          ) : (
+            <Link href={`/projects?new=1&quote=${quote.id}`}>
+              <Button variant="outline" size="sm">
+                <FolderKanban className="h-3.5 w-3.5" />
+                Start project
+              </Button>
+            </Link>
+          ))}
         <button
           onClick={onDelete}
           className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-500"

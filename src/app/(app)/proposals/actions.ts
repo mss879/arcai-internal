@@ -81,7 +81,21 @@ export type SaveProposalInput = {
   selection: ProposalSelection;
   content: ProposalContent;
   grand_total: number;
+  /** 0112 — the chain (0099) the UI never wrote. Only written when passed. */
+  client_id?: string | null;
+  lead_id?: string | null;
+  quote_id?: string | null;
 };
+
+/** The FK columns, only when the form actually passed them (so an edit
+ * that doesn't touch them can never unlink a proposal). */
+function chainFields(input: SaveProposalInput) {
+  return {
+    ...(input.client_id !== undefined ? { client_id: input.client_id } : {}),
+    ...(input.lead_id !== undefined ? { lead_id: input.lead_id } : {}),
+    ...(input.quote_id !== undefined ? { quote_id: input.quote_id } : {}),
+  };
+}
 
 export async function saveProposal(
   input: SaveProposalInput,
@@ -106,6 +120,7 @@ export async function saveProposal(
     selection: input.selection,
     content: input.content,
     grand_total: input.grand_total,
+    ...chainFields(input),
   });
 
   if (error) return { ok: false, error: error.message };
@@ -150,6 +165,7 @@ export async function updateProposal(
       selection: input.selection,
       content: input.content,
       grand_total: input.grand_total,
+      ...chainFields(input),
     })
     .eq("id", input.id);
 

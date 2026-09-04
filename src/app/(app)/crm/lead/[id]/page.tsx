@@ -53,6 +53,8 @@ export default async function LeadPage({
     researchRes,
     outreachRes,
     members,
+    clientsRes,
+    linkedClientRes,
   ] = await Promise.all([
     supabase
       .from("lead_activities")
@@ -90,6 +92,12 @@ export default async function LeadPage({
       .eq("lead_id", id)
       .maybeSingle(),
     getMembers(),
+    // 0112 — the client picker was empty on this page, and the linked client
+    // had no name to show.
+    supabase.from("clients").select("id, name, company").order("name"),
+    lead.client_id
+      ? supabase.from("clients").select("id, name").eq("id", lead.client_id).maybeSingle()
+      : Promise.resolve({ data: null }),
   ]);
 
   return (
@@ -104,6 +112,8 @@ export default async function LeadPage({
       research={(researchRes.data ?? null) as LeadResearch | null}
       outreach={(outreachRes.data ?? null) as LeadOutreach | null}
       members={members}
+      clients={clientsRes.data ?? []}
+      client={linkedClientRes.data ?? null}
     />
   );
 }

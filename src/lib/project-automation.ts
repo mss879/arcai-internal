@@ -6,7 +6,6 @@ import { AFTERCARE_TASKS } from "@/lib/constants";
 import type { Database } from "@/lib/database.types";
 import { nextInvoiceNumber } from "@/lib/invoice";
 import { settledAmount } from "@/lib/projects";
-import { sendPushToUser } from "@/lib/push";
 import { isSmsConfigured, sendSms } from "@/lib/sms";
 import { countSmsSegments, normalizePhone } from "@/lib/sms-utils";
 
@@ -456,7 +455,7 @@ export async function generateProjectInvoice(
   const { data: project } = await db
     .from("projects")
     .select(
-      "id, name, currency, total_value, deposit_paid, service_type, description, client:clients(name, company, email, phone)",
+      "id, name, client_id, currency, total_value, deposit_paid, service_type, description, client:clients(name, company, email, phone)",
     )
     .eq("id", projectId)
     .maybeSingle();
@@ -537,6 +536,9 @@ export async function generateProjectInvoice(
       amount_paid: received,
       due_today: balance,
       project_id: projectId,
+      // 0112 — the invoice knows who it bills, not just a name.
+      client_id: project.client_id ?? null,
+      currency: project.currency || null,
       recipient_email: client?.email ?? null,
       created_by: null,
     })
@@ -578,26 +580,6 @@ async function notifyTeam(
   db: DB,
   n: { title: string; body: string; link: string },
 ): Promise<void> {
-  const { data: members } = await db.from("profiles").select("id");
-  if (!members?.length) return;
-
-  await db.from("notifications").insert(
-    members.map((m) => ({
-      user_id: m.id,
-      type: "system" as const,
-      title: n.title,
-      body: n.body,
-      link: n.link,
-    })),
-  );
-  await Promise.all(
-    members.map((m) =>
-      sendPushToUser({
-        userId: m.id,
-        title: n.title,
-        body: n.body,
-        link: n.link,
-      }).catch(() => undefined),
-    ),
-  );
+  const { notifyUsers } = await import("@/lib/notify");
+  await notifyUsers(db, { userIds: "all", title: n.title, body: n.body, link: n.link });
 }

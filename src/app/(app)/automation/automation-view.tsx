@@ -136,7 +136,9 @@ export function AutomationView({
         />
       )}
       {tab === "runs" && <RunsTab runs={runs} automations={automations} />}
-      {tab === "recipes" && <RecipesTab />}
+      {tab === "recipes" && (
+        <RecipesTab installedNames={automations.map((a) => a.name)} />
+      )}
       {tab === "connect" && (
         <ConnectTab
           webhooks={webhooks}

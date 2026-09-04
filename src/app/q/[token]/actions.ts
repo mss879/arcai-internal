@@ -4,7 +4,9 @@ import { headers } from "next/headers";
 
 import { createAdminClient } from "@/lib/supabase/admin";
 import { fireAutomationTrigger } from "@/lib/automation";
-import { sendPushToUser } from "@/lib/push";
+import { resolveOrCreateClient } from "@/lib/contacts";
+import { markLeadWon } from "@/lib/leads";
+import { notifyUsers } from "@/lib/notify";
 import type { ActionResult } from "@/lib/types";
 
 /**
@@ -52,30 +54,63 @@ export async function acceptQuote(input: {
     .eq("id", quote.id);
   if (error) return { ok: false, error: error.message };
 
-  // Tell the team + fire quote_accepted automations.
-  const { data: profiles } = await supabase.from("profiles").select("id");
-  for (const p of profiles ?? []) {
-    await supabase.from("notifications").insert({
-      user_id: p.id,
-      type: "system",
-      title: "Quote accepted 🎉",
-      body: `${quote.customer_name} signed ${quote.quote_number} — ${quote.currency} ${Number(quote.grand_total).toLocaleString()}`,
-      link: "/invoices?tab=quotes",
-    });
-    await sendPushToUser({
-      userId: p.id,
-      title: "Quote accepted 🎉",
-      body: `${quote.customer_name} signed ${quote.quote_number}`,
-      link: "/invoices?tab=quotes",
-    });
-  }
-
   const lead = quote.lead_id
     ? (await supabase.from("leads").select("*").eq("id", quote.lead_id).single()).data
     : null;
+
+  // 0112 — a signed quote is a client, whatever record it started as. Find
+  // them by phone or email, or create them from the quote, and write the
+  // link onto the quote AND the lead so the chain reads in every direction.
+  // Best-effort: a hiccup here must never un-accept a signed quote.
+  let client: { id: string; name: string; email?: string | null; phone?: string | null } | null =
+    null;
+  try {
+    const knownId = quote.client_id ?? lead?.client_id ?? null;
+    if (knownId) {
+      const { data } = await supabase
+        .from("clients")
+        .select("id, name, email, phone")
+        .eq("id", knownId)
+        .maybeSingle();
+      client = data ?? null;
+    }
+    if (!client) {
+      const resolved = await resolveOrCreateClient(supabase, {
+        name: quote.customer_name,
+        phone: quote.customer_phone,
+        email: quote.customer_email,
+        company: lead?.company ?? null,
+      });
+      if ("client" in resolved) client = resolved.client;
+    }
+    if (client) {
+      if (!quote.client_id)
+        await supabase.from("quotes").update({ client_id: client.id }).eq("id", quote.id);
+      if (lead && !lead.client_id)
+        await supabase.from("leads").update({ client_id: client.id }).eq("id", lead.id);
+    }
+    // The deal is won — say so on the pipeline, not just on the quote.
+    if (lead && lead.status !== "won") await markLeadWon(supabase, lead.id);
+  } catch (e) {
+    console.error("[quote] client/lead link after acceptance failed:", e);
+  }
+
+  // Tell the team + fire quote_accepted automations.
+  await notifyUsers(supabase, {
+    userIds: "all",
+    title: "Quote accepted 🎉",
+    body: `${quote.customer_name} signed ${quote.quote_number} — ${quote.currency} ${Number(quote.grand_total).toLocaleString()}`,
+    link: "/invoices?tab=quotes",
+  });
+
   await fireAutomationTrigger(supabase, {
     trigger: "quote_accepted",
     lead,
+    // The client rides the event so every recipe step that creates a project,
+    // an invoice or a payment plan lands it on the right record.
+    client: client
+      ? { id: client.id, name: client.name, email: client.email, phone: client.phone }
+      : null,
     payload: {
       name: quote.customer_name,
       phone: quote.customer_phone,
@@ -118,22 +153,12 @@ export async function declineQuote(input: {
   // A decline is a STRONGER signal than a view, and it used to vanish
   // silently: nobody was told, and the agent never knew. Tell the team —
   // the reason is the single most valuable line in the whole deal.
-  const { data: profiles } = await supabase.from("profiles").select("id");
-  for (const p of profiles ?? []) {
-    await supabase.from("notifications").insert({
-      user_id: p.id,
-      type: "system",
-      title: "Quote declined",
-      body: `${quote.customer_name} declined ${quote.quote_number} (${quote.currency} ${Number(quote.grand_total).toLocaleString()})${reason ? ` — "${reason}"` : ""}`,
-      link: "/invoices?tab=quotes",
-    });
-    await sendPushToUser({
-      userId: p.id,
-      title: "Quote declined",
-      body: `${quote.customer_name} declined ${quote.quote_number}${reason ? ` — "${reason}"` : ""}`,
-      link: "/invoices?tab=quotes",
-    });
-  }
+  await notifyUsers(supabase, {
+    userIds: "all",
+    title: "Quote declined",
+    body: `${quote.customer_name} declined ${quote.quote_number} (${quote.currency} ${Number(quote.grand_total).toLocaleString()})${reason ? ` — "${reason}"` : ""}`,
+    link: "/invoices?tab=quotes",
+  });
 
   // Arm the WhatsApp agent's rescue touch (~10 min): the declined DEAL
   // STATE line puts it in recovery mode — acknowledge, isolate the real

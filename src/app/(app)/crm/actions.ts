@@ -13,6 +13,7 @@ import {
   drainOutreachRow,
   sendLeadOutreach,
 } from "@/lib/lead-outreach";
+import { resolveOrCreateClient } from "@/lib/contacts";
 import { sendPushToUser } from "@/lib/push";
 import { sendSmsToUser } from "@/lib/sms-alerts";
 import { DEFAULT_PIPELINE_STAGES } from "@/lib/constants";
@@ -371,6 +372,51 @@ export async function setLeadStatus(
   if (error) return { ok: false, error: error.message };
   revalidatePath("/crm");
   return { ok: true };
+}
+
+/**
+ * 0112 — a lead becomes (or is linked to) a client.
+ *
+ * Finds the client by the lead's phone or email so a WhatsApp contact that
+ * was already captured as a client isn't duplicated, otherwise creates one
+ * from the lead's contact fields, and writes `leads.client_id` either way.
+ */
+export async function convertLeadToClient(
+  leadId: string,
+): Promise<ActionResult<{ clientId: string; created: boolean }>> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+
+  const { data: lead } = await supabase
+    .from("leads")
+    .select("id, title, company, contact_name, contact_email, contact_phone, client_id")
+    .eq("id", leadId)
+    .maybeSingle();
+  if (!lead) return { ok: false, error: "Lead not found." };
+  if (lead.client_id) return { ok: true, clientId: lead.client_id, created: false };
+
+  const resolved = await resolveOrCreateClient(supabase, {
+    name: lead.contact_name?.trim() || lead.company?.trim() || lead.title,
+    company: lead.company,
+    email: lead.contact_email,
+    phone: lead.contact_phone,
+    createdBy: user.id,
+  });
+  if ("error" in resolved) return { ok: false, error: resolved.error };
+
+  const { error } = await supabase
+    .from("leads")
+    .update({ client_id: resolved.client.id })
+    .eq("id", leadId);
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath(`/crm/lead/${leadId}`);
+  revalidatePath("/crm");
+  revalidatePath("/clients");
+  return { ok: true, clientId: resolved.client.id, created: resolved.created };
 }
 
 /** Persist new stage + ordering for affected leads after a drag. */

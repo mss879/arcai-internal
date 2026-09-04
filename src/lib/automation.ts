@@ -9,6 +9,13 @@ import type {
   ProjectStatus,
 } from "@/lib/database.types";
 import { appLink } from "@/lib/app-url";
+import {
+  includedLines,
+  packageFromLineItems,
+  serviceTypeForPackage,
+  type LineItemLike,
+} from "@/lib/package-match";
+import { notifyUsers } from "@/lib/notify";
 import { DELIVERY_STAGES } from "@/lib/constants";
 import { sendGenericEmail } from "@/lib/email";
 import { sendPushToUser } from "@/lib/push";
@@ -994,15 +1001,9 @@ async function executeStep(
         .update({ assigned_to: userId })
         .eq("id", lead.id);
       if (error) return { ok: false, detail: error.message };
-      await supabase.from("notifications").insert({
-        user_id: userId,
+      await notifyUsers(supabase, {
+        userIds: [userId],
         type: "assignment",
-        title: "Automation assigned you a lead",
-        body: lead.title,
-        link: `/crm/lead/${lead.id}`,
-      });
-      await sendPushToUser({
-        userId,
         title: "Automation assigned you a lead",
         body: lead.title,
         link: `/crm/lead/${lead.id}`,
@@ -1079,24 +1080,13 @@ async function executeStep(
         : run.lead_id
           ? `/crm/lead/${run.lead_id}`
           : "/automation";
-      let userIds: string[] = [];
-      if (cfg.user_id && cfg.user_id !== "all") {
-        userIds = [String(cfg.user_id)];
-      } else {
-        const { data: profiles } = await supabase.from("profiles").select("id");
-        userIds = (profiles ?? []).map((p) => p.id);
-      }
-      for (const userId of userIds) {
-        await supabase.from("notifications").insert({
-          user_id: userId,
-          type: "system",
-          title,
-          body: body || null,
-          link,
-        });
-        await sendPushToUser({ userId, title, body: body || title, link });
-      }
-      return { ok: true, detail: `Notified ${userIds.length} member(s)` };
+      const notified = await notifyUsers(supabase, {
+        userIds: cfg.user_id && cfg.user_id !== "all" ? [String(cfg.user_id)] : "all",
+        title,
+        body: body || null,
+        link,
+      });
+      return { ok: true, detail: `Notified ${notified} member(s)` };
     }
 
     case "webhook": {
@@ -1310,26 +1300,16 @@ async function executeStep(
       const deposit = Math.round(grandTotal / 2);
       const today = new Date().toISOString().slice(0, 10);
 
-      const { data: invoice, error } = await supabase
-        .from("invoices")
-        .insert({
-          invoice_number: invoiceNumber,
-          invoice_date: today,
-          bill_to_name: quote.customer_name,
-          bill_to_details: [quote.customer_phone, quote.customer_email]
-            .filter(Boolean)
-            .join("\n"),
-          items: quote.items,
-          grand_total: grandTotal,
-          due_today: deposit,
-          created_by: null,
-        })
-        .select("id")
-        .single();
-      if (error || !invoice)
-        return { ok: false, detail: error?.message ?? "Invoice insert failed." };
-
-      await supabase.from("quotes").update({ invoice_id: invoice.id }).eq("id", quoteId);
+      // 0112 — through the shared core, so the invoice knows its client,
+      // lead, currency and project like one raised from the Quotes tab.
+      const { createInvoiceFromQuote } = await import("@/lib/quotes");
+      const made = await createInvoiceFromQuote(supabase, quote, {
+        invoiceNumber,
+        actorId: null,
+        dueToday: deposit,
+      });
+      if (!made.ok) return { ok: false, detail: made.error };
+      const invoice = { id: made.invoiceId };
 
       // Payment plan (deposit + balance) so the money is trackable in
       // Finance — and marking the deposit paid fires `payment_received`.
@@ -1396,23 +1376,52 @@ async function executeStep(
         `${run.subject_name || "New client"} — Website project`;
       const budget = Number(String(ctx.total ?? "")) || lead?.value || null;
       const deliveryStage = String(cfg.delivery_stage ?? "");
+
+      // 0112 — what the quote said was included, and which package it was,
+      // so an automated project reads like one the team wrote by hand.
+      const quoteId = ctx.quote_id ? String(ctx.quote_id) : null;
+      let quoteItems: LineItemLike[] | null = null;
+      let quoteTotal: number | null = null;
+      if (quoteId) {
+        const { data: q } = await supabase
+          .from("quotes")
+          .select("items, grand_total")
+          .eq("id", quoteId)
+          .maybeSingle();
+        quoteItems = (q?.items as LineItemLike[] | undefined) ?? null;
+        quoteTotal = q ? Number(q.grand_total) || null : null;
+      }
+      const packageKey =
+        String(cfg.package_key ?? "").trim() ||
+        String(ctx.package_key ?? "").trim() ||
+        packageFromLineItems(quoteItems) ||
+        null;
+      const included = includedLines(quoteItems);
+      const proposalId =
+        String(cfg.proposal_id ?? "").trim() || String(ctx.proposal_id ?? "").trim() || null;
+
       const { data: project, error } = await supabase
         .from("projects")
         .insert({
           name,
-          description: `Created automatically when the deposit landed${run.subject_name ? ` — client: ${run.subject_name}` : ""}.`,
+          description:
+            included ||
+            `Created automatically${run.subject_name ? ` — client: ${run.subject_name}` : ""}.`,
           client_id: run.client_id,
           // BIG-2 (0099) — the run already knows where it came from, so record
           // it. A project created by automation is exactly the case where
           // nobody will ever go back and link it by hand.
           lead_id: run.lead_id,
-          quote_id: ctx.quote_id ? String(ctx.quote_id) : null,
+          quote_id: quoteId,
+          proposal_id: proposalId,
+          package_key: packageKey,
           status: "planning",
           budget,
-          total_value: Number(String(ctx.total ?? "")) || null,
+          total_value: Number(String(ctx.total ?? "")) || quoteTotal || null,
           service_type:
             String(cfg.service_type ?? "").trim() ||
             String(ctx.service_type ?? "").trim() ||
+            serviceTypeForPackage(packageKey) ||
             null,
           delivery_stage: (DELIVERY_STAGES as readonly string[]).includes(
             deliveryStage,
@@ -1658,15 +1667,9 @@ async function executeStep(
         (run.context as Record<string, unknown>)?.project_name ?? "a project",
       );
       const title = isOwner ? "You now own a project" : "You're on a project";
-      await supabase.from("notifications").insert({
-        user_id: userId,
+      await notifyUsers(supabase, {
+        userIds: [userId],
         type: "assignment",
-        title,
-        body: projectName,
-        link: `/projects/${projectId}`,
-      });
-      await sendPushToUser({
-        userId,
         title,
         body: projectName,
         link: `/projects/${projectId}`,

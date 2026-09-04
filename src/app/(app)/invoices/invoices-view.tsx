@@ -20,12 +20,15 @@ export function InvoicesView({
   quotes,
   clients,
   leads,
+  projectsByQuote,
   initialTab = "create",
 }: {
   pastInvoices: SavedInvoice[];
   quotes: Quote[];
   clients: ClientLite[];
   leads: LeadLite[];
+  /** 0112 — quote id → project id, for the Start project / Open project button. */
+  projectsByQuote?: Record<string, string>;
   initialTab?: Tab;
 }) {
   const [tab, setTab] = React.useState<Tab>(initialTab);
@@ -63,7 +66,12 @@ export function InvoicesView({
       {tab === "create" ? (
         <InvoiceGenerator pastInvoices={pastInvoices} quotes={quotes} />
       ) : tab === "quotes" ? (
-        <QuotesSection quotes={quotes} clients={clients} leads={leads} />
+        <QuotesSection
+          quotes={quotes}
+          clients={clients}
+          leads={leads}
+          projectsByQuote={projectsByQuote}
+        />
       ) : (
         <PastInvoices invoices={pastInvoices} />
       )}

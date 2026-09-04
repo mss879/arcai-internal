@@ -4,7 +4,6 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { appLink } from "@/lib/app-url";
 import type { Database } from "@/lib/database.types";
-import { sendPushToUser } from "@/lib/push";
 import { isSmsConfigured, sendSms } from "@/lib/sms";
 import { countSmsSegments, normalizePhone } from "@/lib/sms-utils";
 
@@ -98,21 +97,16 @@ export async function processTodoReminders(supabase: DB): Promise<TodoReminderRe
       ...new Set([todo.assigned_to, todo.created_by].filter((id): id is string => !!id)),
     ];
 
+    {
+      const { notifyUsers } = await import("@/lib/notify");
+      await notifyUsers(supabase, {
+        userIds: recipients,
+        title: notifTitle,
+        body: `"${todo.title}" is due ${when}.`,
+        link: "/todos",
+      });
+    }
     for (const userId of recipients) {
-      await supabase.from("notifications").insert({
-        user_id: userId,
-        type: "system",
-        title: notifTitle,
-        body: `"${todo.title}" is due ${when}.`,
-        link: "/todos",
-      });
-      await sendPushToUser({
-        userId,
-        title: notifTitle,
-        body: `"${todo.title}" is due ${when}.`,
-        link: "/todos",
-      });
-
       const profile = profileById.get(userId);
       if (!smsReady || !profile?.phone) continue;
       const phone = normalizePhone(profile.phone);

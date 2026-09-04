@@ -18,6 +18,8 @@ export type AutomationRecipe = {
   emoji: string;
   /** Which gallery shows it: sales (default) or the Client Delivery hub. */
   category?: "sales" | "delivery";
+  /** 0112 — shown first with a badge, and nudged when not installed. */
+  recommended?: boolean;
   trigger: AutomationTrigger;
   trigger_config: Record<string, unknown>;
   conditions: Record<string, unknown>[];
@@ -185,6 +187,43 @@ export const AUTOMATION_RECIPES: AutomationRecipe[] = [
     ],
   },
   {
+    id: "quote-signed-kickoff",
+    name: "Quote signed → project, invoice, portal 🚀",
+    description:
+      "The moment a client e-signs a quote, the whole job starts in one motion: the deposit invoice and payment plan are raised, the project is created (linked to the lead, the quote and its package, asset checklist seeded), the plan template is applied, the client gets their tracking link on WhatsApp (SMS if it can't), the bank details follow in the same chat, and the team is told. Supersedes \"WhatsApp deal close\" and \"Deposit received\" — install this one instead of those two.",
+    emoji: "🚀",
+    recommended: true,
+    trigger: "quote_accepted",
+    trigger_config: {},
+    conditions: [],
+    steps: [
+      { kind: "convert_quote_to_invoice", config: {} },
+      { kind: "create_project", config: { seed_checklist: true } },
+      { kind: "seed_task_template", config: {} },
+      {
+        kind: "send_portal_link",
+        config: {
+          channel: "auto",
+          note: "Your invoice {{invoice_number}} is on its way — the deposit {{deposit_amount}} gets us started.",
+        },
+      },
+      {
+        kind: "send_whatsapp",
+        config: {
+          message: `Thank you {{name}}! 🎉 That's confirmed — invoice {{invoice_number}} is ready.\nTo kick things off, the deposit is {{deposit_amount}}:\nBank: ${INVOICE_BANK.bankName}\nAccount name: ${INVOICE_BANK.accountName}\nAccount no: ${INVOICE_BANK.accountNumber}\nBranch: ${INVOICE_BANK.branch}\nSend the slip here once it's done and we'll get started right away 🚀`,
+        },
+      },
+      {
+        kind: "notify",
+        config: {
+          user_id: "all",
+          title: "Quote signed — project started 🚀",
+          body: "{{full_name}} signed {{quote_number}} ({{amount}}). Invoice {{invoice_number}} raised, {{project_name}} created, tracking link sent.",
+        },
+      },
+    ],
+  },
+  {
     id: "quote-accepted",
     name: "Quote accepted → next steps",
     description:
@@ -222,7 +261,7 @@ export const AUTOMATION_RECIPES: AutomationRecipe[] = [
     id: "whatsapp-deal-close",
     name: "WhatsApp deal close 💰",
     description:
-      "The agent's quote gets e-signed → it instantly becomes a real invoice + deposit/balance payment plan, the customer receives the bank transfer details on WhatsApp, the team celebrates and a deposit-chase task is created. The full money moment, zero humans needed.",
+      "The agent's quote gets e-signed → it instantly becomes a real invoice + deposit/balance payment plan, the customer receives the bank transfer details on WhatsApp, the team celebrates and a deposit-chase task is created. The full money moment, zero humans needed. Superseded by \"Quote signed → project, invoice, portal\" — install one or the other, not both.",
     emoji: "💰",
     trigger: "quote_accepted",
     trigger_config: {},
@@ -278,7 +317,7 @@ export const AUTOMATION_RECIPES: AutomationRecipe[] = [
     id: "deposit-kickoff",
     name: "Deposit received 🚀",
     description:
-      "The deposit installment is marked paid in Finance → the customer gets a warm kickoff message on WhatsApp, a project is created automatically and the team gets the kickoff task. Deal → cash → delivery, hands-free.",
+      "The deposit installment is marked paid in Finance → the customer gets a warm kickoff message on WhatsApp, a project is created automatically and the team gets the kickoff task. Deal → cash → delivery, hands-free. Superseded by \"Quote signed → project, invoice, portal\" (which creates the project at signing) — install one or the other, not both.",
     emoji: "🚀",
     trigger: "payment_received",
     trigger_config: { seq: 1 },

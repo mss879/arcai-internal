@@ -3,7 +3,6 @@ import { NextResponse } from "next/server";
 import { requireCronSecret } from "@/lib/cron-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { generateWeeklyDigest } from "@/lib/intelligence";
-import { sendPushToUser } from "@/lib/push";
 import { analyzeWaSalesWeek } from "@/lib/wa-coaching";
 
 /**
@@ -31,22 +30,13 @@ export async function GET(request: Request) {
     });
 
     const firstLine = content.split("\n").find((l) => l.trim()) ?? "Your weekly digest is ready.";
-    const { data: profiles } = await supabase.from("profiles").select("id");
-    for (const p of profiles ?? []) {
-      await supabase.from("notifications").insert({
-        user_id: p.id,
-        type: "system",
-        title: "📊 Your weekly business digest is ready",
-        body: firstLine,
-        link: "/intelligence",
-      });
-      await sendPushToUser({
-        userId: p.id,
-        title: "Weekly business digest",
-        body: firstLine,
-        link: "/intelligence",
-      });
-    }
+    const { notifyUsers } = await import("@/lib/notify");
+    await notifyUsers(supabase, {
+      userIds: "all",
+      title: "📊 Your weekly business digest is ready",
+      body: firstLine,
+      link: "/intelligence",
+    });
 
     return NextResponse.json({
       ok: true,

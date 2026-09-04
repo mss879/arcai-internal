@@ -11,7 +11,6 @@ import {
   MAX_MEETING_REMINDER_HOURS,
 } from "@/lib/constants";
 import type { Database } from "@/lib/database.types";
-import { sendPushToUser } from "@/lib/push";
 import { isSmsConfigured, sendSms } from "@/lib/sms";
 import { countSmsSegments, normalizePhone } from "@/lib/sms-utils";
 
@@ -142,21 +141,16 @@ export async function processMeetingReminders(
       ...new Set((meeting.attendees ?? []).map((a) => a.user_id)),
     ];
 
+    {
+      const { notifyUsers } = await import("@/lib/notify");
+      await notifyUsers(supabase, {
+        userIds: recipients,
+        title: notifTitle,
+        body: notifBody,
+        link: "/dashboard",
+      });
+    }
     for (const userId of recipients) {
-      await supabase.from("notifications").insert({
-        user_id: userId,
-        type: "system",
-        title: notifTitle,
-        body: notifBody,
-        link: "/dashboard",
-      });
-      await sendPushToUser({
-        userId,
-        title: notifTitle,
-        body: notifBody,
-        link: "/dashboard",
-      });
-
       const profile = profileById.get(userId);
       if (!smsReady || !profile?.phone) continue;
       const phone = normalizePhone(profile.phone);

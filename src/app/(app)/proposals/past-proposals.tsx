@@ -1,10 +1,11 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { format } from "date-fns";
 import { toast } from "sonner";
-import { Download, Pencil, ScrollText, Trash2 } from "lucide-react";
+import { Download, FolderKanban, Pencil, ScrollText, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -118,6 +119,22 @@ export function PastProposals({
                       <Pencil className="h-4 w-4" />
                       Edit
                     </Button>
+                    {/* 0112 — the proposal starts the project, prefilled. */}
+                    {p.project_id ? (
+                      <Link href={`/projects/${p.project_id}`}>
+                        <Button size="sm" variant="ghost">
+                          <FolderKanban className="h-4 w-4" />
+                          Open project
+                        </Button>
+                      </Link>
+                    ) : (
+                      <Link href={`/projects?new=1&proposal=${p.id}`}>
+                        <Button size="sm" variant="ghost">
+                          <FolderKanban className="h-4 w-4" />
+                          Start project
+                        </Button>
+                      </Link>
+                    )}
                     <button
                       onClick={() => setToDelete(p)}
                       aria-label="Delete proposal"

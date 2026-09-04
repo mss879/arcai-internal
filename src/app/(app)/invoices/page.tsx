@@ -13,7 +13,7 @@ export default async function InvoicesPage({
 }) {
   const [supabase, { tab }] = await Promise.all([createClient(), searchParams]);
 
-  const [invoicesRes, quotesRes, clientsRes, leadsRes] = await Promise.all([
+  const [invoicesRes, quotesRes, clientsRes, leadsRes, projectsRes] = await Promise.all([
     supabase.from("invoices").select("*").order("created_at", { ascending: false }),
     supabase.from("quotes").select("*").order("created_at", { ascending: false }),
     supabase.from("clients").select("id, name, company, email, phone").order("name"),
@@ -24,7 +24,18 @@ export default async function InvoicesPage({
       .eq("status", "open")
       .order("created_at", { ascending: false })
       .limit(200),
+    // 0112 — which accepted quotes already became a project.
+    supabase
+      .from("projects")
+      .select("id, quote_id")
+      .not("quote_id", "is", null)
+      .is("deleted_at", null),
   ]);
+
+  const projectsByQuote: Record<string, string> = {};
+  for (const p of projectsRes.data ?? []) {
+    if (p.quote_id && !projectsByQuote[p.quote_id]) projectsByQuote[p.quote_id] = p.id;
+  }
 
   const initialTab =
     tab === "quotes" || tab === "past" || tab === "create" ? tab : "create";
@@ -35,6 +46,7 @@ export default async function InvoicesPage({
       quotes={(quotesRes.data ?? []) as Quote[]}
       clients={(clientsRes.data ?? []) as ClientLite[]}
       leads={(leadsRes.data ?? []) as LeadLite[]}
+      projectsByQuote={projectsByQuote}
       initialTab={initialTab}
     />
   );

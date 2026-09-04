@@ -67,6 +67,7 @@ import {
   addLeadActivity,
   aiLeadAssist,
   approveLeadOutreach,
+  convertLeadToClient,
   deleteCrmTask,
   discardLeadOutreach,
   prepareLeadOutreach,
@@ -116,6 +117,8 @@ export function LeadDetail({
   research,
   outreach,
   members,
+  clients = [],
+  client = null,
 }: {
   lead: LeadWithAssignee;
   activities: LeadActivity[];
@@ -127,7 +130,21 @@ export function LeadDetail({
   research: LeadResearch | null;
   outreach: LeadOutreach | null;
   members: MemberLite[];
+  /** 0112 — for the client picker in the edit form. */
+  clients?: { id: string; name: string; company: string | null }[];
+  /** 0112 — the client this lead is linked to, when it is. */
+  client?: { id: string; name: string } | null;
 }) {
+  const [converting, setConverting] = React.useState(false);
+  async function handleConvertToClient() {
+    setConverting(true);
+    const res = await convertLeadToClient(lead.id);
+    setConverting(false);
+    if (res.ok) {
+      toast.success(res.created ? "Client created and linked" : "Linked to the existing client");
+      router.refresh();
+    } else toast.error(res.error);
+  }
   useRealtimeSyncTables([
     "leads",
     "lead_activities",
@@ -229,6 +246,24 @@ export function LeadDetail({
           )}
           {outreach?.status === "ready" && (
             <Badge className="bg-amber-50 text-amber-600 ring-amber-200">✍️ Draft Ready</Badge>
+          )}
+          {/* 0112 — a lead becomes a client without retyping them. */}
+          {client ? (
+            <Link href={`/clients/${client.id}`}>
+              <Badge className="bg-primary-50 text-primary-700 ring-primary-200">
+                Client: {client.name} →
+              </Badge>
+            </Link>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleConvertToClient}
+              loading={converting}
+              className="h-10 sm:h-9"
+            >
+              Convert to client
+            </Button>
           )}
           <Button
             variant="outline"
@@ -346,7 +381,7 @@ export function LeadDetail({
         pipelineId={lead.pipeline_id}
         stages={stages}
         members={members}
-        clients={[]}
+        clients={clients}
         customFields={customFields}
         lead={lead}
       />

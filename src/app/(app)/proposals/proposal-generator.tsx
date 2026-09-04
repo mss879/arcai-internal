@@ -238,6 +238,8 @@ export function ProposalGenerator({
   const savedShape: Shape | null = editing ? initial.shape : null;
 
   const [clientName, setClientName] = React.useState(editing?.client_name ?? "");
+  // 0112 — the client RECORD behind the name, so the chain (0099) is written.
+  const [clientId, setClientId] = React.useState<string | null>(editing?.client_id ?? null);
   const [projectName, setProjectName] = React.useState(
     editing?.project_name || suggestedProjectName(initial.sel),
   );
@@ -449,6 +451,7 @@ export function ProposalGenerator({
       selection: priced,
       content: cleaned,
       grand_total: pricing.oneTimeTotal,
+      client_id: clientId,
     };
     return editing
       ? updateProposal({ ...payload, id: editing.id })
@@ -597,6 +600,28 @@ export function ProposalGenerator({
                   </option>
                 ))}
               </datalist>
+            </Field>
+            <Field
+              label="Client record"
+              hint="Links the proposal to the client so it shows on their page and can start a project."
+            >
+              <Select
+                value={clientId ?? ""}
+                onChange={(e) => {
+                  const id = e.target.value || null;
+                  setClientId(id);
+                  const picked = clients.find((c) => c.id === id);
+                  if (picked && !clientName.trim()) setClientName(picked.name);
+                }}
+              >
+                <option value="">Not linked</option>
+                {clients.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                    {c.company ? ` · ${c.company}` : ""}
+                  </option>
+                ))}
+              </Select>
             </Field>
             <div className="grid grid-cols-2 gap-3">
               <Field label="Project name">

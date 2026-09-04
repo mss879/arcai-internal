@@ -56,6 +56,10 @@ export const TRIGGER_META: Record<
     label: "Quote accepted",
     description: "A client e-signs a quotation via its share link.",
   },
+  proposal_accepted: {
+    label: "Proposal signed",
+    description: "A client e-signs a proposal via its share link (0117).",
+  },
   quote_viewed: {
     label: "Quote opened",
     description: "A client opens a quotation's share link for the first time.",
@@ -236,6 +240,12 @@ export const STEP_META: Record<
     label: "Quote → invoice",
     description:
       "Turn the run's accepted quote into a real invoice plus a deposit/balance payment plan.",
+    tone: "bg-lime-600",
+  },
+  convert_proposal_to_quote: {
+    label: "Proposal → quote",
+    description:
+      "Turn the run's signed proposal into a quote, ready to become an invoice. Pair it with Quote → invoice to go all the way in one recipe.",
     tone: "bg-lime-600",
   },
   create_project: {

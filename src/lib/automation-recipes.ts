@@ -224,6 +224,38 @@ export const AUTOMATION_RECIPES: AutomationRecipe[] = [
     ],
   },
   {
+    id: "proposal-signed-kickoff",
+    name: "Proposal signed → quote, invoice, project 📄",
+    description:
+      "The proposal is the bigger document and now it can be signed on a link too. This turns a signed proposal into the same motion a signed quote starts: the proposal becomes a quote, the quote becomes the deposit invoice and payment plan, the project is created, and the client gets their tracking link. Install this one OR \"Quote signed\" depending on which document you close on.",
+    emoji: "📄",
+    recommended: true,
+    trigger: "proposal_accepted",
+    trigger_config: {},
+    conditions: [],
+    steps: [
+      { kind: "convert_proposal_to_quote", config: {} },
+      { kind: "convert_quote_to_invoice", config: {} },
+      { kind: "create_project", config: { seed_checklist: true } },
+      { kind: "seed_task_template", config: {} },
+      {
+        kind: "send_portal_link",
+        config: {
+          channel: "auto",
+          note: "Your invoice {{invoice_number}} is on its way — the deposit {{deposit_amount}} gets us started.",
+        },
+      },
+      {
+        kind: "notify",
+        config: {
+          user_id: "all",
+          title: "Proposal signed — project started 📄",
+          body: "{{full_name}} signed the {{project_name}} proposal ({{amount}}). Invoice {{invoice_number}} raised and the tracking link is on its way.",
+        },
+      },
+    ],
+  },
+  {
     id: "quote-accepted",
     name: "Quote accepted → next steps",
     description:

@@ -1088,6 +1088,32 @@ async function executeStep(
         : { ok: true, detail: "Enrolled in SMS workflow" };
     }
 
+    case "convert_proposal_to_quote": {
+      const ctx = (run.context ?? {}) as Record<string, unknown>;
+      const proposalId = String(ctx.proposal_id ?? "");
+      if (!proposalId)
+        return {
+          ok: false,
+          detail: "No proposal_id in the trigger context.",
+        };
+      const { createQuoteFromProposal } = await import("@/lib/quotes");
+      const made = await createQuoteFromProposal(supabase, proposalId, {
+        actorId: null,
+      });
+      if (!made.ok) return { ok: false, detail: made.error };
+      // Hand the quote id on, so a following convert_quote_to_invoice step
+      // finds it without another lookup. Written to the row AND to the run in
+      // memory: advanceRun keeps executing steps from this same object, so a
+      // database-only update would be invisible to the very next step.
+      const carried = { ...ctx, quote_id: made.quoteId };
+      run.context = carried;
+      await supabase
+        .from("automation_runs")
+        .update({ context: carried })
+        .eq("id", run.id);
+      return { ok: true, detail: `Quote created from the proposal.` };
+    }
+
     case "convert_quote_to_invoice": {
       const ctx = (run.context ?? {}) as Record<string, unknown>;
       const quoteId = String(ctx.quote_id ?? "");

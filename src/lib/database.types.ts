@@ -233,6 +233,8 @@ export type AutomationTrigger =
   | "installment_due"
   | "cheque_due"
   | "quote_accepted"
+  // 0117 — a proposal can be signed too.
+  | "proposal_accepted"
   | "client_created"
   | "webhook"
   | "wa_message_received"
@@ -271,6 +273,8 @@ export type AutomationStepKind =
   | "wait"
   | "send_whatsapp"
   | "convert_quote_to_invoice"
+  // 0117
+  | "convert_proposal_to_quote"
   | "create_project"
   // 0085 — Client Delivery
   | "start_wa_onboarding"

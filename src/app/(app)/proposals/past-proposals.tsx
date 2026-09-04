@@ -5,12 +5,22 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { format } from "date-fns";
 import { toast } from "sonner";
-import { Download, FolderKanban, Mail, Pencil, ScrollText, Trash2 } from "lucide-react";
+import {
+  Download,
+  FolderKanban,
+  Link2,
+  Mail,
+  Pencil,
+  ScrollText,
+  Trash2,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Modal } from "@/components/ui/modal";
+import { Badge } from "@/components/ui/badge";
+import { CopyButton } from "@/components/ui/copy-button";
 import { buildPricing, money } from "@/lib/proposal";
 import type { Proposal } from "@/lib/types";
 import { useRealtimeSync } from "@/hooks/use-realtime-sync";
@@ -20,6 +30,33 @@ import { downloadProposalPdf } from "./download-pdf";
 import { ProposalPdfFrame } from "./proposal-pdf-frame";
 import { ComposeEmailModal } from "@/components/email/compose-email-modal";
 import { firstNameOf } from "@/lib/email-templates";
+
+/** Where the client signs. Absolute, because it gets pasted into a message. */
+function shareUrl(token: string): string {
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  return `${origin}/p/${token}`;
+}
+
+/**
+ * 0117 — what the client has done with it.
+ *
+ * A proposal used to have no state at all: the list showed everything ever
+ * created, identically, whether it had been opened, signed or forgotten.
+ */
+function ProposalStatusBadge({ proposal }: { proposal: Proposal }) {
+  const meta: Record<string, { label: string; className: string }> = {
+    draft: { label: "Draft", className: "bg-slate-100 text-slate-600 ring-slate-200" },
+    sent: { label: "Sent", className: "bg-sky-50 text-sky-700 ring-sky-200" },
+    viewed: { label: "Opened", className: "bg-amber-50 text-amber-700 ring-amber-200" },
+    accepted: {
+      label: "Signed",
+      className: "bg-emerald-50 text-emerald-700 ring-emerald-200",
+    },
+    declined: { label: "Declined", className: "bg-rose-50 text-rose-600 ring-rose-200" },
+  };
+  const status = meta[proposal.status] ?? meta.draft;
+  return <Badge className={status.className}>{status.label}</Badge>;
+}
 
 export function PastProposals({
   proposals,
@@ -110,6 +147,13 @@ export function PastProposals({
                 </td>
                 <td className="px-4 py-3">
                   <div className="flex items-center justify-end gap-1">
+                    <ProposalStatusBadge proposal={p} />
+                    {p.share_token && (
+                      <CopyButton
+                        value={shareUrl(p.share_token)}
+                        label="Copy the signing link"
+                      />
+                    )}
                     <Button
                       size="sm"
                       variant="ghost"
@@ -176,6 +220,14 @@ export function PastProposals({
         }}
         attachProposalId={emailing?.id ?? null}
         attachmentLabel="Proposal attached as a PDF"
+        cta={
+          emailing?.share_token
+            ? {
+                href: shareUrl(emailing.share_token),
+                label: "Read & sign the proposal",
+              }
+            : null
+        }
         onSent={() => router.refresh()}
       />
 

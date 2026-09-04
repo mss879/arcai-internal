@@ -93,3 +93,89 @@ export async function createInvoiceFromQuote(
     projectId: project?.id ?? null,
   };
 }
+
+/**
+ * A signed proposal becomes a quote (0117).
+ *
+ * The chain used to stop at the proposal: somebody read the signed document
+ * and retyped its total into a quote, which is both a delay and a place for a
+ * figure to change. The proposal already carries a priced selection, so the
+ * quote is one line — the agreed total — with the proposal's own line items
+ * carried across where it has them.
+ *
+ * Idempotent: a proposal that already has a quote returns the existing one
+ * rather than making a second.
+ */
+export async function createQuoteFromProposal(
+  supabase: DB,
+  proposalId: string,
+  opts: { actorId?: string | null } = {},
+): Promise<{ ok: true; quoteId: string } | { ok: false; error: string }> {
+  const { data: proposal } = await supabase
+    .from("proposals")
+    .select("*")
+    .eq("id", proposalId)
+    .maybeSingle();
+  if (!proposal) return { ok: false, error: "Proposal not found." };
+  if (proposal.quote_id) {
+    return { ok: true, quoteId: proposal.quote_id };
+  }
+
+  const lead = proposal.lead_id
+    ? (
+        await supabase
+          .from("leads")
+          .select("contact_name, contact_email, contact_phone")
+          .eq("id", proposal.lead_id)
+          .maybeSingle()
+      ).data
+    : null;
+
+  const { count } = await supabase
+    .from("quotes")
+    .select("*", { count: "exact", head: true });
+  const quoteNumber = `Q-${new Date().getFullYear()}-${String((count ?? 0) + 1).padStart(3, "0")}`;
+
+  const grandTotal = Number(proposal.grand_total) || 0;
+  const { data: quote, error } = await supabase
+    .from("quotes")
+    .insert({
+      quote_number: quoteNumber,
+      title: proposal.project_name,
+      customer_name: proposal.client_name,
+      customer_email: lead?.contact_email ?? null,
+      customer_phone: lead?.contact_phone ?? null,
+      currency: proposal.currency || "LKR",
+      grand_total: grandTotal,
+      items: [
+        {
+          item: proposal.project_name,
+          description: "As set out in the signed proposal.",
+          qty: "1",
+          rate: String(grandTotal),
+          total: grandTotal,
+        },
+      ],
+      // The proposal was the thing that was signed, so the quote inherits
+      // that state rather than pretending to be a fresh draft awaiting an
+      // answer somebody has already given.
+      status: "accepted",
+      accepted_at: proposal.accepted_at ?? new Date().toISOString(),
+      signed_name: proposal.signed_name,
+      client_id: proposal.client_id,
+      lead_id: proposal.lead_id,
+      created_by: opts.actorId ?? null,
+    })
+    .select("id")
+    .single();
+  if (error || !quote) {
+    return { ok: false, error: error?.message ?? "Could not create the quote." };
+  }
+
+  await supabase
+    .from("proposals")
+    .update({ quote_id: quote.id })
+    .eq("id", proposal.id);
+
+  return { ok: true, quoteId: quote.id };
+}

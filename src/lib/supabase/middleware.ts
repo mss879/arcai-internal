@@ -9,6 +9,9 @@ const PUBLIC_PREFIXES = [
   "/auth",
   // Public quote acceptance page (share link).
   "/q",
+  // 0117 — the same model for a proposal: an unguessable token IS the
+  // credential, and the page is worthless without it.
+  "/p",
   // Public APIs: inquiry forms, inbound webhooks, visitor tracking, open API.
   "/api/public",
   // Cron tick endpoints (optionally guarded by SMS_CRON_SECRET themselves).

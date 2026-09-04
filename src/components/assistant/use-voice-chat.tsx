@@ -7,7 +7,9 @@ import { cn } from "@/lib/utils";
 import type {
   AssistantCard,
   CardResolution,
+  EmailCardData,
   SmsCardData,
+  WhatsAppCardData,
 } from "@/lib/assistant-cards";
 import {
   cardToArtifact,
@@ -173,10 +175,25 @@ type PendingConfirm = {
   cardIndex: number;
 };
 
+/** Every card that means "I wrote it, you send it". */
+const CONFIRM_CARD_TYPES = new Set<AssistantCard["type"]>([
+  "confirm_send",
+  "confirm_send_sms",
+  // 0115
+  "confirm_send_email",
+  "confirm_send_whatsapp",
+]);
+
+/** Narrows to the cards that carry a `resolution`. */
+type ConfirmCard = Extract<AssistantCard, { resolution?: CardResolution }>;
+
+function isConfirmCard(card: AssistantCard): card is ConfirmCard {
+  return CONFIRM_CARD_TYPES.has(card.type);
+}
+
 function lastConfirmCardIndex(cards: AssistantCard[]): number {
   for (let i = cards.length - 1; i >= 0; i--) {
-    const t = cards[i].type;
-    if (t === "confirm_send" || t === "confirm_send_sms") return i;
+    if (isConfirmCard(cards[i])) return i;
   }
   return -1;
 }
@@ -312,6 +329,13 @@ export type VoiceChat = {
   ) => Promise<SendInvoiceResult>;
   /** Actually send a prepared SMS — fired only by the user's Send tap. */
   sendSms: (sms: SmsCardData) => Promise<SendInvoiceResult>;
+  /**
+   * 0115 — the other two things a person can confirm. Optional on the type
+   * because the preview harness implements VoiceChat by hand and has nothing
+   * to send to; the real hook always provides them.
+   */
+  sendEmail?: (email: EmailCardData) => Promise<SendInvoiceResult>;
+  sendWhatsApp?: (whatsapp: WhatsAppCardData) => Promise<SendInvoiceResult>;
   /** Start a mission the user approved (0103). */
   approveMission: (missionId: string) => Promise<SendInvoiceResult>;
   /** True while the mic re-opens itself after every reply (0104). */
@@ -1259,6 +1283,59 @@ export function useVoiceChat(): VoiceChat {
     [],
   );
 
+  const sendEmail = React.useCallback(
+    async (email: EmailCardData): Promise<SendInvoiceResult> => {
+      pendingConfirmRef.current = null;
+      try {
+        const res = await fetch("/api/assistant/send-email", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            to: email.to,
+            subject: email.subject,
+            body: email.body,
+            clientId: email.client_id,
+            leadId: email.lead_id,
+            projectId: email.project_id,
+            cta: email.cta,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data?.ok) {
+          return { ok: false, error: data?.error || "Could not send the email." };
+        }
+        return { ok: true };
+      } catch {
+        return { ok: false, error: "Could not reach the server." };
+      }
+    },
+    [],
+  );
+
+  const sendWhatsApp = React.useCallback(
+    async (whatsapp: WhatsAppCardData): Promise<SendInvoiceResult> => {
+      pendingConfirmRef.current = null;
+      try {
+        const res = await fetch("/api/assistant/send-whatsapp", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contactId: whatsapp.contact_id,
+            message: whatsapp.message,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data?.ok) {
+          return { ok: false, error: data?.error || "Could not send the message." };
+        }
+        return { ok: true };
+      } catch {
+        return { ok: false, error: "Could not reach the server." };
+      }
+    },
+    [],
+  );
+
   /**
    * If a confirm card is pending and the user's words are a clear yes or no,
    * resolve it right here — the send still happens through the same
@@ -1276,11 +1353,7 @@ export function useVoiceChat(): VoiceChat {
       }
       const card =
         messagesRef.current[pending.msgIndex]?.cards?.[pending.cardIndex];
-      if (
-        !card ||
-        (card.type !== "confirm_send" && card.type !== "confirm_send_sms") ||
-        card.resolution
-      ) {
+      if (!card || !isConfirmCard(card) || card.resolution) {
         pendingConfirmRef.current = null;
         return false;
       }
@@ -1308,7 +1381,13 @@ export function useVoiceChat(): VoiceChat {
       const res =
         card.type === "confirm_send_sms"
           ? await sendSms(card.sms)
-          : await sendInvoice(card.invoice.id, card.emails, card.message);
+          : card.type === "confirm_send_email"
+            ? await sendEmail(card.email)
+            : card.type === "confirm_send_whatsapp"
+              ? await sendWhatsApp(card.whatsapp)
+              : card.type === "confirm_send"
+                ? await sendInvoice(card.invoice.id, card.emails, card.message)
+                : { ok: false as const, error: "Nothing to send." };
 
       let reply: string;
       if (res.ok) {
@@ -1316,7 +1395,13 @@ export function useVoiceChat(): VoiceChat {
         reply =
           card.type === "confirm_send_sms"
             ? `Done — the text is on its way to ${card.sms.to_display}.`
-            : `Done — the invoice is on its way to ${card.emails.join(", ")}.`;
+            : card.type === "confirm_send_email"
+              ? `Done — the email is on its way to ${card.email.to.join(", ")}.`
+              : card.type === "confirm_send_whatsapp"
+                ? `Done — sent to ${card.whatsapp.to_display}. I've stepped back from that chat.`
+                : card.type === "confirm_send"
+                  ? `Done — the invoice is on its way to ${card.emails.join(", ")}.`
+                  : "Done.";
       } else {
         updateCardResolution(pending, { state: "error", error: res.error });
         reply = `That didn't go through — ${res.error ?? "the send failed"}. You can tap Try again on the card.`;
@@ -1327,8 +1412,10 @@ export function useVoiceChat(): VoiceChat {
     },
     [
       appendThreadMessages,
+      sendEmail,
       sendInvoice,
       sendSms,
+      sendWhatsApp,
       speak,
       updateCardResolution,
     ],
@@ -2114,6 +2201,8 @@ export function useVoiceChat(): VoiceChat {
     sendText,
     sendInvoice,
     sendSms,
+    sendEmail,
+    sendWhatsApp,
     approveMission,
     handsFree,
     setHandsFree,

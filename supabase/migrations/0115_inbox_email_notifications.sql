@@ -251,6 +251,9 @@ alter table public.assistant_approvals
   check (kind in (
     -- 0103
     'invoice_email', 'sms',
+    -- 0104 — these two are already live; leaving them out here would revoke
+    -- them, because widening REPLACES the constraint rather than adding to it.
+    'campaign_launch', 'engine_start',
     -- 0115
     'email', 'whatsapp', 'portal_link', 'mark_paid', 'social_post', 'agreement'
   ));

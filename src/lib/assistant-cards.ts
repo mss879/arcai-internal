@@ -75,6 +75,37 @@ export type SmsCardData = {
   invoice_number: string | null;
 };
 
+/** A prepared email, exactly as it would go out. */
+export type EmailCardData = {
+  to: string[];
+  subject: string;
+  /** The body as it will be sent — the model's wording, not a template key. */
+  body: string;
+  client_id: string | null;
+  lead_id: string | null;
+  project_id: string | null;
+  /** Who it's to, in words, for the card's header. */
+  client_name: string;
+  /** An optional button under the body (a quote or portal link). */
+  cta: { href: string; label: string } | null;
+};
+
+/** A prepared WhatsApp message. */
+export type WhatsAppCardData = {
+  /** wa_contacts row — the thread this lands in. */
+  contact_id: string;
+  /** Meta's id for the number (94XXXXXXXXX). */
+  wa_id: string;
+  to_display: string;
+  client_name: string;
+  message: string;
+  /**
+   * False when their 24h window has closed, in which case free text may be
+   * rejected by Meta. The card says so rather than failing silently on send.
+   */
+  within_window: boolean;
+};
+
 export type CardSendState = "idle" | "sending" | "sent" | "error" | "cancelled";
 
 /**
@@ -105,6 +136,24 @@ export type AssistantCard =
    * confirm. Like emails, nothing is sent until the user taps Send or says yes.
    */
   | { type: "confirm_send_sms"; sms: SmsCardData; resolution?: CardResolution }
+  /**
+   * A pending email (0115). Same promise as the others: the model can write
+   * it, only a person can send it.
+   */
+  | {
+      type: "confirm_send_email";
+      email: EmailCardData;
+      resolution?: CardResolution;
+    }
+  /**
+   * A pending WhatsApp message (0115). Sending pauses the agent for that
+   * thread, exactly as a team reply from /whatsapp or /inbox does.
+   */
+  | {
+      type: "confirm_send_whatsapp";
+      whatsapp: WhatsAppCardData;
+      resolution?: CardResolution;
+    }
   /** A saved proposal shown for review, with a PDF download (no send action). */
   | { type: "proposal"; proposal: ProposalCardData }
   /**

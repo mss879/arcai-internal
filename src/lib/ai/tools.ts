@@ -12,9 +12,11 @@ import type {
 import type { ToolSchema } from "@/lib/ai/openai";
 import type {
   AssistantCard,
+  EmailCardData,
   InvoiceCardData,
   ProposalCardData,
   SmsCardData,
+  WhatsAppCardData,
 } from "@/lib/assistant-cards";
 import type {
   Artifact,
@@ -23,6 +25,8 @@ import type {
 } from "@/lib/assistant-artifacts";
 import { rowsToTable, tableArtifact } from "@/lib/assistant-artifacts";
 import { DELIVERY_STAGES } from "@/lib/constants";
+import { notifyUsers } from "@/lib/notify";
+import { isWhatsAppConfigured } from "@/lib/whatsapp";
 import { topLeadPosition } from "@/lib/crm";
 import { nextInvoiceNumber } from "@/lib/invoice";
 import { formatPriceField, type PricingGroup } from "@/lib/pricing-catalog";
@@ -1327,6 +1331,96 @@ export const ASSISTANT_TOOLS: ToolSchema[] = [
               "Additional things the client asked for, to weave into the rewritten narrative. Only used when rewrite is true.",
           },
         },
+        additionalProperties: false,
+      },
+    },
+  },
+  // ---- 0115: the other two ways to reach a client, and who owns a thread ---
+  {
+    type: "function",
+    function: {
+      name: "prepare_email",
+      description:
+        "Prepare a plain email to a client or lead and show the user a confirmation with the recipient, subject and exact wording. Use for 'email …', 'write to them', 'send them a note'. IMPORTANT: this does NOT send it — the user must tap Send on the confirmation card, so never say it has been sent. For emailing a SAVED INVOICE as a PDF, use prepare_invoice_email instead. Find the recipient by name; their saved email address is used automatically.",
+      parameters: {
+        type: "object",
+        properties: {
+          client_query: {
+            type: "string",
+            description:
+              "Client, CRM lead or company name, used to find their saved email address.",
+          },
+          email: {
+            type: "string",
+            description:
+              "Explicit address the user dictated. Overrides the saved one.",
+          },
+          subject: { type: "string", description: "The subject line." },
+          body: {
+            type: "string",
+            description:
+              "The email itself, in the user's voice. Blank lines become paragraphs. Write it in full — the user is going to read this exact text before sending.",
+          },
+        },
+        required: ["subject", "body"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "prepare_whatsapp",
+      description:
+        "Prepare a WhatsApp message to a client and show the user a confirmation with the recipient and exact wording. Use for 'WhatsApp them…', 'message them on WhatsApp'. IMPORTANT: this does NOT send it — the user must tap Send. Sending pauses the AI agent for that conversation, because a person has taken it over. Only works for someone who already has a WhatsApp thread with us.",
+      parameters: {
+        type: "object",
+        properties: {
+          client_query: {
+            type: "string",
+            description:
+              "Client, company or contact name to find their WhatsApp conversation.",
+          },
+          phone: {
+            type: "string",
+            description: "Explicit number, if the user dictated one.",
+          },
+          message: {
+            type: "string",
+            description: "The message text, in the user's voice.",
+          },
+        },
+        required: ["message"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "assign_conversation",
+      description:
+        "Give a conversation in the inbox an owner, so one named person answers it. Use for 'assign the Aarah chat to Musa', 'I'll take that conversation'. This is a plain change — no confirmation card — and the assignee is notified.",
+      parameters: {
+        type: "object",
+        properties: {
+          client_query: {
+            type: "string",
+            description: "Client, company or contact name whose conversation this is.",
+          },
+          channel: {
+            type: "string",
+            enum: ["whatsapp", "sms", "portal", "email"],
+            description:
+              "Which conversation. Defaults to whatsapp, the only two-way channel.",
+          },
+          member: {
+            type: "string",
+            description:
+              "Team member's name, or 'me' for the person speaking. Omit to unassign.",
+          },
+        },
+        required: ["client_query"],
         additionalProperties: false,
       },
     },
@@ -3638,6 +3732,310 @@ export async function executeTool(
           note: "Shown to the user for confirmation. The SMS is NOT sent until the user taps Send. Do not say it has been sent.",
         },
         card: { type: "confirm_send_sms", sms },
+      };
+    }
+
+    // ---- 0115: email, WhatsApp, and thread ownership ---------------------
+
+    case "prepare_email": {
+      const subject = String(args.subject ?? "").trim();
+      const emailBody = String(args.body ?? "").trim();
+      if (!subject || !emailBody)
+        return {
+          content: { ok: false, error: "Need a subject and a body." },
+        };
+
+      const query = String(args.client_query ?? "").trim();
+      const dictated = String(args.email ?? "").trim();
+      let client: { id: string; name: string; email: string | null } | null = null;
+      let lead: {
+        id: string;
+        title: string;
+        contact_name: string | null;
+        contact_email: string | null;
+        client_id: string | null;
+      } | null = null;
+
+      if (query) {
+        const term = `%${query}%`;
+        const { data: matches } = await supabase
+          .from("clients")
+          .select("id, name, email")
+          .or(`name.ilike.${term},company.ilike.${term}`)
+          .limit(2);
+        if ((matches?.length ?? 0) > 1)
+          return {
+            content: {
+              ok: false,
+              error: `More than one client matches "${query}". Be more specific.`,
+              candidates: matches!.map((m) => m.name),
+            },
+          };
+        client = matches?.[0] ?? null;
+
+        if (!client || (!client.email && !dictated)) {
+          const { data: leads } = await supabase
+            .from("leads")
+            .select("id, title, contact_name, contact_email, client_id")
+            .or(
+              `title.ilike.${term},company.ilike.${term},contact_name.ilike.${term}`,
+            )
+            .is("deleted_at", null)
+            .limit(2);
+          if ((leads?.length ?? 0) > 1)
+            return {
+              content: {
+                ok: false,
+                error: `More than one CRM lead matches "${query}". Be more specific.`,
+                candidates: leads!.map((l) => l.contact_name || l.title),
+              },
+            };
+          lead = leads?.[0] ?? null;
+        }
+        if (!client && !lead)
+          return {
+            content: {
+              ok: false,
+              error: `No client or CRM lead matching "${query}".`,
+            },
+          };
+      }
+
+      const name = client?.name || lead?.contact_name || lead?.title || "";
+      const address = dictated || client?.email || lead?.contact_email || "";
+      if (!address)
+        return {
+          content: {
+            ok: false,
+            error: name
+              ? `${name} has no email address saved. Ask the user for it.`
+              : "Need a name or an email address to write to.",
+          },
+        };
+
+      const email: EmailCardData = {
+        to: [address],
+        subject,
+        body: emailBody,
+        client_id: client?.id ?? lead?.client_id ?? null,
+        lead_id: lead?.id ?? null,
+        project_id: null,
+        client_name: name,
+        cta: null,
+      };
+
+      return {
+        content: {
+          ok: true,
+          awaiting_user_confirmation: true,
+          to: address,
+          client: name || null,
+          subject,
+          note: "Shown to the user for confirmation. The email is NOT sent until the user taps Send. Do not say it has been sent.",
+        },
+        card: { type: "confirm_send_email", email },
+      };
+    }
+
+    case "prepare_whatsapp": {
+      if (!isWhatsAppConfigured())
+        return {
+          content: {
+            ok: false,
+            error:
+              "WhatsApp isn't configured (WHATSAPP_ACCESS_TOKEN / WHATSAPP_PHONE_NUMBER_ID).",
+          },
+        };
+      const waMessage = String(args.message ?? "").trim();
+      if (!waMessage)
+        return { content: { ok: false, error: "Need the message text." } };
+
+      const query = String(args.client_query ?? "").trim();
+      const dictated = String(args.phone ?? "").trim();
+
+      // Resolve the THREAD, not just a number: a WhatsApp message from the
+      // team belongs in the conversation they already have with us.
+      let contact: {
+        id: string;
+        wa_id: string;
+        display_name: string | null;
+        profile_name: string | null;
+        do_not_contact: boolean;
+        last_inbound_at: string | null;
+      } | null = null;
+
+      if (dictated) {
+        const phone = normalizePhone(dictated);
+        if (!phone.ok) return { content: { ok: false, error: phone.error } };
+        const { data } = await supabase
+          .from("wa_contacts")
+          .select("id, wa_id, display_name, profile_name, do_not_contact, last_inbound_at")
+          .eq("wa_id", phone.value)
+          .maybeSingle();
+        contact = data ?? null;
+      } else if (query) {
+        const term = `%${query}%`;
+        const { data: byName } = await supabase
+          .from("wa_contacts")
+          .select("id, wa_id, display_name, profile_name, do_not_contact, last_inbound_at")
+          .or(`display_name.ilike.${term},profile_name.ilike.${term}`)
+          .order("last_message_at", { ascending: false, nullsFirst: false })
+          .limit(2);
+        if ((byName?.length ?? 0) > 1)
+          return {
+            content: {
+              ok: false,
+              error: `More than one WhatsApp conversation matches "${query}". Be more specific.`,
+              candidates: byName!.map(
+                (c) => c.display_name || c.profile_name || c.wa_id,
+              ),
+            },
+          };
+        contact = byName?.[0] ?? null;
+
+        // Fall back to the client record's number.
+        if (!contact) {
+          const { data: clients } = await supabase
+            .from("clients")
+            .select("id")
+            .or(`name.ilike.${term},company.ilike.${term}`)
+            .limit(1);
+          if (clients?.[0]) {
+            const { data } = await supabase
+              .from("wa_contacts")
+              .select(
+                "id, wa_id, display_name, profile_name, do_not_contact, last_inbound_at",
+              )
+              .eq("client_id", clients[0].id)
+              .order("last_message_at", { ascending: false, nullsFirst: false })
+              .limit(1)
+              .maybeSingle();
+            contact = data ?? null;
+          }
+        }
+      }
+
+      if (!contact)
+        return {
+          content: {
+            ok: false,
+            error: query
+              ? `No WhatsApp conversation with "${query}". They have to have written to us first.`
+              : "Need a name or a number.",
+          },
+        };
+      if (contact.do_not_contact)
+        return {
+          content: {
+            ok: false,
+            error: "They have opted out of WhatsApp messages.",
+          },
+        };
+
+      const whatsapp: WhatsAppCardData = {
+        contact_id: contact.id,
+        wa_id: contact.wa_id,
+        to_display: formatPhone(contact.wa_id),
+        client_name:
+          contact.display_name || contact.profile_name || formatPhone(contact.wa_id),
+        message: waMessage,
+        within_window: contact.last_inbound_at
+          ? Date.now() - new Date(contact.last_inbound_at).getTime() < 24 * 3600_000
+          : false,
+      };
+
+      return {
+        content: {
+          ok: true,
+          awaiting_user_confirmation: true,
+          to: whatsapp.to_display,
+          client: whatsapp.client_name,
+          within_24h_window: whatsapp.within_window,
+          note: "Shown to the user for confirmation. Nothing is sent until the user taps Send, and sending pauses the AI for that chat. Do not say it has been sent.",
+        },
+        card: { type: "confirm_send_whatsapp", whatsapp },
+      };
+    }
+
+    case "assign_conversation": {
+      const query = String(args.client_query ?? "").trim();
+      if (!query)
+        return { content: { ok: false, error: "Whose conversation?" } };
+
+      const channel =
+        args.channel === "sms" || args.channel === "portal" || args.channel === "email"
+          ? (args.channel as "sms" | "portal" | "email")
+          : "whatsapp";
+
+      // Only WhatsApp threads are resolvable by name today; the other three
+      // are keyed by a number, a project or an address.
+      if (channel !== "whatsapp")
+        return {
+          content: {
+            ok: false,
+            error:
+              "Only WhatsApp conversations can be assigned by name. Open /inbox and assign it there.",
+          },
+        };
+
+      const term = `%${query}%`;
+      const { data: matches } = await supabase
+        .from("wa_contacts")
+        .select("id, display_name, profile_name, wa_id")
+        .or(`display_name.ilike.${term},profile_name.ilike.${term}`)
+        .order("last_message_at", { ascending: false, nullsFirst: false })
+        .limit(2);
+      if (!matches?.length)
+        return {
+          content: { ok: false, error: `No WhatsApp conversation matching "${query}".` },
+        };
+      if (matches.length > 1)
+        return {
+          content: {
+            ok: false,
+            error: `More than one conversation matches "${query}".`,
+            candidates: matches.map((c) => c.display_name || c.profile_name || c.wa_id),
+          },
+        };
+      const thread = matches[0];
+
+      const memberName = String(args.member ?? "").trim();
+      const assignee = memberName ? await resolveMemberId(ctx, memberName) : null;
+      if (memberName && !assignee)
+        return { content: { ok: false, error: `No team member called "${memberName}".` } };
+
+      const { error } = await supabase.from("conversation_meta").upsert(
+        {
+          channel: "whatsapp",
+          ref_id: thread.id,
+          assigned_to: assignee,
+          assigned_at: assignee ? new Date().toISOString() : null,
+        },
+        { onConflict: "channel,ref_id" },
+      );
+      if (error) return { content: { ok: false, error: error.message } };
+
+      const who = thread.display_name || thread.profile_name || thread.wa_id;
+      if (assignee && assignee !== ctx.userId) {
+        await notifyUsers(supabase, {
+          userIds: [assignee],
+          type: "inbox",
+          title: "A conversation is yours",
+          body: `${who}'s conversation was assigned to you.`,
+          link: `/inbox?thread=whatsapp:${thread.id}`,
+          actorId: ctx.userId,
+        });
+      }
+
+      return {
+        content: {
+          ok: true,
+          conversation: who,
+          assigned: Boolean(assignee),
+          note: assignee
+            ? "Assigned, and they were told."
+            : "Unassigned — it is back in the unassigned queue.",
+        },
       };
     }
 

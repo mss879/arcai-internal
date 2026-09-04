@@ -155,6 +155,30 @@ export function ApprovalsTray({
                       );
                       return res;
                     }}
+                    onSendEmail={
+                      chat.sendEmail &&
+                      (async (email) => {
+                        const res = await chat.sendEmail!(email);
+                        await record(
+                          approval.id,
+                          res.ok ? "sent" : "failed",
+                          res.error,
+                        );
+                        return res;
+                      })
+                    }
+                    onSendWhatsApp={
+                      chat.sendWhatsApp &&
+                      (async (whatsapp) => {
+                        const res = await chat.sendWhatsApp!(whatsapp);
+                        await record(
+                          approval.id,
+                          res.ok ? "sent" : "failed",
+                          res.error,
+                        );
+                        return res;
+                      })
+                    }
                     onApproveMission={chat.approveMission}
                   />
                   <button

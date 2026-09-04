@@ -44,7 +44,11 @@ import { cn } from "@/lib/utils";
 import type { Artifact } from "@/lib/assistant-artifacts";
 import type { ToolStep } from "@/lib/assistant-stream";
 import type { AssistantMessage } from "@/lib/assistant-threads";
-import type { SmsCardData } from "@/lib/assistant-cards";
+import type {
+  EmailCardData,
+  SmsCardData,
+  WhatsAppCardData,
+} from "@/lib/assistant-cards";
 import { AssistantCardView } from "@/components/assistant/assistant-card";
 import { ActivityTrail } from "@/components/assistant/activity-trail";
 import { ApprovalsTray } from "@/components/assistant/approvals-tray";
@@ -147,6 +151,8 @@ type ConversationProps = {
     message?: string,
   ) => Promise<SendInvoiceResult>;
   onSendSms: (sms: SmsCardData) => Promise<SendInvoiceResult>;
+  onSendEmail?: (email: EmailCardData) => Promise<SendInvoiceResult>;
+  onSendWhatsApp?: (whatsapp: WhatsAppCardData) => Promise<SendInvoiceResult>;
   onApproveMission: (missionId: string) => Promise<SendInvoiceResult>;
   className?: string;
 };
@@ -165,6 +171,8 @@ function ConversationImpl({
   onNavigate,
   onSendInvoice,
   onSendSms,
+  onSendEmail,
+  onSendWhatsApp,
   onApproveMission,
   className,
 }: ConversationProps): React.ReactElement {
@@ -307,6 +315,8 @@ function ConversationImpl({
                         card={card}
                         onSend={onSendInvoice}
                         onSendSms={onSendSms}
+                        onSendEmail={onSendEmail}
+                        onSendWhatsApp={onSendWhatsApp}
                         onApproveMission={onApproveMission}
                         onOpenPreview={onOpenArtifact}
                       />
@@ -1147,6 +1157,8 @@ export function AssistantWorkspace({
                 onNavigate={onNavigate}
                 onSendInvoice={chat.sendInvoice}
                 onSendSms={chat.sendSms}
+                onSendEmail={chat.sendEmail}
+                onSendWhatsApp={chat.sendWhatsApp}
                 onApproveMission={chat.approveMission}
               />
               <div

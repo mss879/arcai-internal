@@ -446,8 +446,16 @@ export type MissionStep = {
 export type AssistantApprovalKind =
   | "invoice_email"
   | "sms"
+  // 0104
   | "campaign_launch"
-  | "engine_start";
+  | "engine_start"
+  // 0115 — the rest of this wave's confirm cards.
+  | "email"
+  | "whatsapp"
+  | "portal_link"
+  | "mark_paid"
+  | "social_post"
+  | "agreement";
 export type AssistantApprovalStatus =
   | "pending"
   | "sent"

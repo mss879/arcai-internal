@@ -217,7 +217,7 @@ async function runStep(
         `YOUR STEP RIGHT NOW: ${step.title}`,
         ``,
         `Do only this step. Use the tools — never state a figure a tool did not return.`,
-        `You CANNOT send anything. prepare_invoice_email and prepare_sms produce a draft that a person approves later; calling one completes your step, and you must describe it as prepared, never as sent.`,
+        `You CANNOT send anything. prepare_invoice_email, prepare_sms, prepare_email and prepare_whatsapp produce a draft that a person approves later; calling one completes your step, and you must describe it as prepared, never as sent.`,
         `When the step is done, reply with ONE short sentence saying what you found or did, in plain text. That sentence is handed to the next step, so put the facts in it — names, numbers, ids.`,
         `If the step turns out to be impossible or unnecessary, say so plainly in that sentence instead of inventing work.`,
         ...(memories.length
@@ -318,7 +318,13 @@ async function runStep(
 }
 
 function isConfirmCard(card: AssistantCard): boolean {
-  return card.type === "confirm_send" || card.type === "confirm_send_sms";
+  return (
+    card.type === "confirm_send" ||
+    card.type === "confirm_send_sms" ||
+    // 0115
+    card.type === "confirm_send_email" ||
+    card.type === "confirm_send_whatsapp"
+  );
 }
 
 /** Persist a prepared send for the approvals tray. */
@@ -328,7 +334,13 @@ async function parkApproval(
   card: AssistantCard,
 ): Promise<void> {
   const kind: AssistantApprovalKind =
-    card.type === "confirm_send_sms" ? "sms" : "invoice_email";
+    card.type === "confirm_send_sms"
+      ? "sms"
+      : card.type === "confirm_send_email"
+        ? "email"
+        : card.type === "confirm_send_whatsapp"
+          ? "whatsapp"
+          : "invoice_email";
   await supabase.from("assistant_approvals").insert({
     user_id: mission.user_id,
     mission_id: mission.id,

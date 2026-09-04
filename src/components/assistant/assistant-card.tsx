@@ -15,6 +15,7 @@ import {
   Play,
   ScrollText,
   Send,
+  MessageCircle,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -22,9 +23,11 @@ import type {
   AssistantCard,
   CardResolution,
   CardSendState,
+  EmailCardData,
   InvoiceCardData,
   ProposalCardData,
   SmsCardData,
+  WhatsAppCardData,
 } from "@/lib/assistant-cards";
 import { cardArtifactId } from "@/lib/assistant-artifacts";
 import { downloadProposalPdf } from "@/app/(app)/proposals/download-pdf";
@@ -459,6 +462,233 @@ function ConfirmSendSms({
 }
 
 /**
+ * The confirm/cancel machinery every "we wrote it, you send it" card shares.
+ *
+ * The rule this encodes is the whole point of the cards: the model can write
+ * something, and only a person can send it. Nothing here reaches a provider —
+ * it calls back into a route that requires a browser session.
+ */
+function ConfirmFooter({
+  state,
+  error,
+  sentLabel,
+  sendLabel,
+  hint,
+  onSend,
+  onCancel,
+}: {
+  state: SendState;
+  error: string | null;
+  sentLabel: string;
+  sendLabel: string;
+  hint: string;
+  onSend: () => void;
+  onCancel: () => void;
+}) {
+  if (state === "sent") {
+    return (
+      <div className="mt-2.5 flex items-start gap-2 rounded-xl bg-emerald-50 px-3 py-2.5 text-sm font-medium text-emerald-700">
+        <Check className="mt-0.5 h-4 w-4 shrink-0" />
+        {sentLabel}
+      </div>
+    );
+  }
+  if (state === "cancelled") {
+    return <p className="mt-2.5 text-sm text-slate-400">Cancelled — nothing was sent.</p>;
+  }
+  return (
+    <>
+      {state === "error" && error && (
+        <div className="mt-2.5 flex items-start gap-2 rounded-xl bg-rose-50 px-3 py-2 text-[13px] text-rose-600">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
+      <p className="mt-2.5 text-[13px] text-slate-500">{hint}</p>
+      <div className="mt-2 flex items-center gap-2">
+        <button
+          onClick={onSend}
+          disabled={state === "sending"}
+          className={cn(
+            "inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white transition",
+            "hover:bg-primary-700 active:scale-[0.98] disabled:opacity-60",
+          )}
+        >
+          {state === "sending" ? (
+            <>
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Sending…
+            </>
+          ) : (
+            <>
+              <Send className="h-4 w-4" />
+              {state === "error" ? "Try again" : sendLabel}
+            </>
+          )}
+        </button>
+        <button
+          onClick={onCancel}
+          disabled={state === "sending"}
+          className="rounded-xl px-4 py-2.5 text-sm font-semibold text-slate-500 transition hover:bg-slate-100 disabled:opacity-60"
+        >
+          Cancel
+        </button>
+      </div>
+    </>
+  );
+}
+
+/** A prepared email, shown in full before anyone can send it (0115). */
+function ConfirmSendEmail({
+  email,
+  resolution,
+  onSendEmail,
+}: {
+  email: EmailCardData;
+  resolution?: CardResolution;
+  onSendEmail?: (email: EmailCardData) => Promise<SendInvoiceResult>;
+}) {
+  const [localState, setLocalState] = React.useState<SendState>("idle");
+  const [localError, setLocalError] = React.useState<string | null>(null);
+  const state = resolution?.state ?? localState;
+  const error = resolution?.error ?? localError;
+
+  const send = async () => {
+    setLocalState("sending");
+    setLocalError(null);
+    if (!onSendEmail) return;
+    const res = await onSendEmail(email);
+    if (res.ok) setLocalState("sent");
+    else {
+      setLocalError(res.error || "Could not send.");
+      setLocalState("error");
+    }
+  };
+
+  return (
+    <>
+      <div className="flex items-center gap-2.5">
+        <div className="grid h-9 w-9 place-items-center rounded-xl bg-primary-50 text-primary-600">
+          <Mail className="h-4.5 w-4.5" />
+        </div>
+        <div className="leading-tight">
+          <p className="text-sm font-semibold text-slate-900">Email</p>
+          <p className="text-[11px] text-slate-400">
+            {email.client_name ? `${email.client_name} · ` : ""}
+            {email.to.join(", ")}
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-3 rounded-xl bg-slate-50 px-3 py-2.5">
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+          Subject
+        </p>
+        <p className="mt-0.5 text-[13px] font-medium text-slate-800">{email.subject}</p>
+        <p className="mt-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+          Message
+        </p>
+        <p className="mt-0.5 whitespace-pre-line text-[13px] leading-relaxed text-slate-800">
+          {email.body}
+        </p>
+      </div>
+
+      {onSendEmail ? (
+        <ConfirmFooter
+          state={state}
+          error={error ?? null}
+          sentLabel={`Sent to ${email.to.join(", ")}`}
+          sendLabel="Send email"
+          hint="Read it through, then confirm."
+          onSend={send}
+          onCancel={() => setLocalState("cancelled")}
+        />
+      ) : (
+        <p className="mt-2.5 text-[13px] text-slate-400">
+          Open Arcus to send this.
+        </p>
+      )}
+    </>
+  );
+}
+
+/** A prepared WhatsApp message (0115). Sending pauses the AI for that chat. */
+function ConfirmSendWhatsApp({
+  whatsapp,
+  resolution,
+  onSendWhatsApp,
+}: {
+  whatsapp: WhatsAppCardData;
+  resolution?: CardResolution;
+  onSendWhatsApp?: (whatsapp: WhatsAppCardData) => Promise<SendInvoiceResult>;
+}) {
+  const [localState, setLocalState] = React.useState<SendState>("idle");
+  const [localError, setLocalError] = React.useState<string | null>(null);
+  const state = resolution?.state ?? localState;
+  const error = resolution?.error ?? localError;
+
+  const send = async () => {
+    setLocalState("sending");
+    setLocalError(null);
+    if (!onSendWhatsApp) return;
+    const res = await onSendWhatsApp(whatsapp);
+    if (res.ok) setLocalState("sent");
+    else {
+      setLocalError(res.error || "Could not send.");
+      setLocalState("error");
+    }
+  };
+
+  return (
+    <>
+      <div className="flex items-center gap-2.5">
+        <div className="grid h-9 w-9 place-items-center rounded-xl bg-emerald-50 text-emerald-600">
+          <MessageCircle className="h-4.5 w-4.5" />
+        </div>
+        <div className="leading-tight">
+          <p className="text-sm font-semibold text-slate-900">WhatsApp</p>
+          <p className="text-[11px] text-slate-400">
+            {whatsapp.client_name} · {whatsapp.to_display}
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-3 rounded-xl bg-slate-50 px-3 py-2.5">
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+          Message
+        </p>
+        <p className="mt-0.5 whitespace-pre-line text-[13px] leading-relaxed text-slate-800">
+          {whatsapp.message}
+        </p>
+      </div>
+
+      {!whatsapp.within_window && state !== "sent" && (
+        <p className="mt-2 flex items-start gap-1.5 text-[11px] text-amber-600">
+          <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          They haven&apos;t written in 24h — WhatsApp may reject free text.
+        </p>
+      )}
+
+      {onSendWhatsApp ? (
+        <ConfirmFooter
+          state={state}
+          error={error ?? null}
+          sentLabel={`Sent to ${whatsapp.to_display}`}
+          sendLabel="Send on WhatsApp"
+          hint="Sending takes over the chat — the AI stops replying to them."
+          onSend={send}
+          onCancel={() => setLocalState("cancelled")}
+        />
+      ) : (
+        <p className="mt-2.5 text-[13px] text-slate-400">
+          Open Arcus to send this.
+        </p>
+      )}
+    </>
+  );
+}
+
+/**
  * A saved proposal, with the branded PDF a tap away. Nothing here sends
  * anything — the proposal is already stored under Proposals; this is the
  * review copy.
@@ -618,6 +848,8 @@ export function AssistantCardView({
   onSendSms,
   onOpenPreview,
   onApproveMission,
+  onSendEmail,
+  onSendWhatsApp,
 }: {
   card: AssistantCard;
   onSend: (
@@ -626,6 +858,13 @@ export function AssistantCardView({
     message?: string,
   ) => Promise<SendInvoiceResult>;
   onSendSms: (sms: SmsCardData) => Promise<SendInvoiceResult>;
+  /**
+   * 0115 — send a prepared email / WhatsApp message. Optional for the same
+   * reason as onApproveMission: a surface that cannot send shows the draft
+   * without a Send button, rather than a button that would do nothing.
+   */
+  onSendEmail?: (email: EmailCardData) => Promise<SendInvoiceResult>;
+  onSendWhatsApp?: (whatsapp: WhatsAppCardData) => Promise<SendInvoiceResult>;
   /**
    * Approve a planned mission. Omitted on surfaces that cannot start one —
    * the card then shows the plan without an Approve button rather than a
@@ -650,6 +889,20 @@ export function AssistantCardView({
           sms={card.sms}
           resolution={card.resolution}
           onSendSms={onSendSms}
+        />
+      )}
+      {card.type === "confirm_send_email" && (
+        <ConfirmSendEmail
+          email={card.email}
+          resolution={card.resolution}
+          onSendEmail={onSendEmail}
+        />
+      )}
+      {card.type === "confirm_send_whatsapp" && (
+        <ConfirmSendWhatsApp
+          whatsapp={card.whatsapp}
+          resolution={card.resolution}
+          onSendWhatsApp={onSendWhatsApp}
         />
       )}
       {card.type === "proposal" && (

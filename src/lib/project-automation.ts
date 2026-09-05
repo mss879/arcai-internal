@@ -182,6 +182,10 @@ async function runRetainers(db: DB, result: ProjectAutomationResult) {
       .update({ retainer_last_run_on: today.toISOString().slice(0, 10) })
       .eq("id", parent.id);
 
+    // 0120 — the retainer's money is a standing arrangement on the Finance
+    // page too, so the month can be invoiced and chased like hosting is.
+    await ensureRetainerIncome(db, parent);
+
     // 0096 — a retainer month is a real new project, so the kickoff flows
     // (seed the plan, staff it, send the portal) run for it too.
     const { fireProjectCreated } = await import("@/lib/project-events");
@@ -193,6 +197,59 @@ async function runRetainers(db: DB, result: ProjectAutomationResult) {
       link: `/projects/${child.id}`,
     });
     result.retainers_created++;
+  }
+}
+
+/**
+ * One active recurring_income row per retainer project (0120) — upserted,
+ * because the partial unique index (project, retainer, active) says there
+ * can only be one. Amount and day follow the project; auto-invoicing is left
+ * to the person who owns the arrangement to switch on.
+ */
+async function ensureRetainerIncome(
+  db: DB,
+  parent: {
+    id: string;
+    name: string;
+    client_id: string | null;
+    currency: string;
+    total_value: number | string | null;
+    retainer_day: number | null;
+  },
+): Promise<void> {
+  try {
+    const amount = Number(parent.total_value) || 0;
+    if (amount <= 0) return;
+    const day = Math.min(28, Math.max(1, Number(parent.retainer_day) || 1));
+    const { data: existing } = await db
+      .from("recurring_income")
+      .select("id")
+      .eq("project_id", parent.id)
+      .eq("category", "retainer")
+      .eq("is_active", true)
+      .limit(1)
+      .maybeSingle();
+    if (existing) {
+      await db
+        .from("recurring_income")
+        .update({ amount, currency: parent.currency, day_of_month: day, client_id: parent.client_id })
+        .eq("id", existing.id);
+      return;
+    }
+    await db.from("recurring_income").insert({
+      label: `${parent.name} — retainer`,
+      client_id: parent.client_id,
+      project_id: parent.id,
+      amount,
+      currency: parent.currency,
+      day_of_month: day,
+      category: "retainer",
+      is_active: true,
+      started_on: new Date().toISOString().slice(0, 10),
+      created_by: null,
+    });
+  } catch (e) {
+    console.error("[project-automation] retainer income upsert failed:", e);
   }
 }
 

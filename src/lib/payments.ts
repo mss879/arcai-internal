@@ -46,6 +46,8 @@ export type RecordPaymentInput = {
   installmentId?: string | null;
   /** The Payments-board row this money already is. Links it rather than inserting a second row. */
   companyPaymentId?: string | null;
+  /** A recurring month received: the entry IS the money, so no payments row is written. */
+  recurringEntryId?: string | null;
   slipId?: string | null;
   providerRef?: string | null;
   actorId: string | null;
@@ -71,7 +73,13 @@ export async function recordPayment(db: DB, input: RecordPaymentInput): Promise<
   if (!Number.isFinite(amount) || amount <= 0) {
     return { ok: false, error: "Enter a valid amount." };
   }
-  if (!input.projectId && !input.invoiceId && !input.installmentId && !input.companyPaymentId) {
+  if (
+    !input.projectId &&
+    !input.invoiceId &&
+    !input.installmentId &&
+    !input.companyPaymentId &&
+    !input.recurringEntryId
+  ) {
     return { ok: false, error: "A payment has to settle something — a project, an invoice or an instalment." };
   }
 
@@ -113,6 +121,44 @@ export async function recordPayment(db: DB, input: RecordPaymentInput): Promise<
     currency = currency ?? plan?.currency ?? null;
     const linkedInvoice = inst.invoice_id ?? plan?.invoice_id ?? null;
     if (linkedInvoice && !invoiceIds.length) invoiceIds = [linkedInvoice];
+  }
+
+  // --- A recurring month: mark it received and settle its invoice ---------
+  if (input.recurringEntryId) {
+    const { data: entry } = await db
+      .from("recurring_income_entries")
+      .select("id, invoice_id, currency, status")
+      .eq("id", input.recurringEntryId)
+      .maybeSingle();
+    if (!entry) return { ok: false, error: "That month no longer exists." };
+    await db
+      .from("recurring_income_entries")
+      .update({
+        status: "received",
+        amount,
+        received_on: paidAt,
+        received_by: input.actorId,
+        ...(input.notes !== undefined ? { note: input.notes?.trim() || null } : {}),
+      })
+      .eq("id", entry.id);
+    let status: InvoiceStatus | null = null;
+    if (entry.invoice_id) {
+      const r = await reconcileInvoice(db, entry.invoice_id);
+      status = r?.status ?? null;
+    }
+    await notifyFinance(db, {
+      title: `${entry.currency || currency || "LKR"} ${amount.toLocaleString()} received (recurring)`,
+      body: status ? `Invoice ${status === "paid" ? "settled" : "part-paid"}.` : "Marked received on the Recurring tab.",
+      link: "/finance",
+      actorId: input.actorId,
+    });
+    return {
+      ok: true,
+      paymentId: null,
+      invoiceIds: entry.invoice_id ? [entry.invoice_id] : [],
+      invoiceStatus: status,
+      firstPayment: false,
+    };
   }
 
   if (projectId && !currency) {

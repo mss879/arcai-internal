@@ -18,6 +18,7 @@ import {
   Trash2,
   TrendingDown,
   TrendingUp,
+  FileText,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -66,6 +67,7 @@ import {
   type ChequeInput,
   type ExpenseInput,
   type RecurringIncomeInput,
+  invoiceRecurringEntry,
 } from "./actions";
 
 type Tab =
@@ -1177,6 +1179,34 @@ function RecurringTab({
                   <span className="text-sm font-semibold tabular-nums text-slate-800">
                     {formatCurrency(Number(entry.amount), entry.currency)}
                   </span>
+                  {/* 0120 — the month's invoice, or the button that raises it */}
+                  {entry.invoice_id ? (
+                    <Link
+                      href="/invoices?tab=past"
+                      className="inline-flex items-center gap-1 rounded-md bg-emerald-50 px-1.5 py-0.5 text-[11px] font-medium text-emerald-700 transition hover:bg-emerald-100"
+                      title="An invoice was raised for this month"
+                    >
+                      <FileText className="h-3 w-3" /> Invoiced
+                    </Link>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      loading={busy === `inv:${entry.id}`}
+                      onClick={async () => {
+                        setBusy(`inv:${entry.id}`);
+                        const res = await invoiceRecurringEntry(entry.id);
+                        setBusy(null);
+                        if (res.ok)
+                          toast.success(
+                            `Invoice ${res.invoiceNumber} raised${res.emailed ? " and emailed" : ""}.`,
+                          );
+                        else toast.error(res.error);
+                      }}
+                    >
+                      <FileText className="h-4 w-4" /> Invoice now
+                    </Button>
+                  )}
                   <div className="flex gap-2">
                     <Button
                       size="sm"
@@ -1262,6 +1292,16 @@ function RecurringTab({
                 {thisMonthEntry?.status === "received" && (
                   <Badge className="bg-emerald-50 text-emerald-700 ring-emerald-200">
                     This month in
+                  </Badge>
+                )}
+                {r.auto_invoice && (
+                  <Badge className="bg-sky-50 text-sky-700 ring-sky-200" title="Each month raises its own invoice">
+                    Auto-invoice
+                  </Badge>
+                )}
+                {r.remind && (
+                  <Badge className="bg-amber-50 text-amber-700 ring-amber-200" title="Reminded 2 days before, chased 3 days after">
+                    Reminds
                   </Badge>
                 )}
                 {!r.is_active && (
@@ -1361,10 +1401,15 @@ function RecurringModal({
     React.useState<RecurringIncomeCategory>("retainer");
   const [endedOn, setEndedOn] = React.useState("");
   const [notes, setNotes] = React.useState("");
+  // 0120
+  const [autoInvoice, setAutoInvoice] = React.useState(false);
+  const [remind, setRemind] = React.useState(false);
   const [submitting, setSubmitting] = React.useState(false);
 
   React.useEffect(() => {
     if (!open) return;
+    setAutoInvoice(row?.auto_invoice ?? false);
+    setRemind(row?.remind ?? false);
     setLabel(row?.label ?? "");
     setClientId(row?.client_id ?? "");
     setProjectId(row?.project_id ?? "");
@@ -1387,6 +1432,8 @@ function RecurringModal({
       category,
       ended_on: endedOn || null,
       notes: notes || null,
+      auto_invoice: autoInvoice,
+      remind,
     };
     const res = await saveRecurringIncome(input);
     setSubmitting(false);
@@ -1487,6 +1534,40 @@ function RecurringModal({
           project&apos;s <span className="font-medium text-slate-500">received</span>{" "}
           figure — it is company income and it is counted as company income.
         </p>
+
+        {/* 0120 — the month becomes an invoice, and the client hears about it */}
+        <div className="grid gap-2 rounded-xl border border-slate-200 bg-slate-50/60 p-3 text-sm">
+          <label className="flex cursor-pointer items-start gap-2">
+            <input
+              type="checkbox"
+              checked={autoInvoice}
+              onChange={(e) => setAutoInvoice(e.target.checked)}
+              className="mt-0.5 h-4 w-4 rounded border-slate-300 text-primary-600"
+            />
+            <span>
+              <span className="font-medium text-slate-800">Raise an invoice each month</span>
+              <span className="block text-xs text-slate-500">
+                Numbered like every other invoice, due on the arrangement&apos;s day, emailed when the
+                client has an address. Marking the month received settles it.
+              </span>
+            </span>
+          </label>
+          <label className="flex cursor-pointer items-start gap-2">
+            <input
+              type="checkbox"
+              checked={remind}
+              onChange={(e) => setRemind(e.target.checked)}
+              className="mt-0.5 h-4 w-4 rounded border-slate-300 text-primary-600"
+            />
+            <span>
+              <span className="font-medium text-slate-800">Remind the client</span>
+              <span className="block text-xs text-slate-500">
+                Two days before it&apos;s due, and a chase three days after it hasn&apos;t landed — on
+                WhatsApp while their chat is open, by text otherwise. Needs a client with a number.
+              </span>
+            </span>
+          </label>
+        </div>
 
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Ends on (optional)">

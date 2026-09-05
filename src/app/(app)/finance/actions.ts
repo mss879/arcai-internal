@@ -268,6 +268,9 @@ export type RecurringIncomeInput = {
   ended_on?: string | null;
   notes?: string | null;
   is_active?: boolean;
+  /** 0120 — raise a numbered invoice for each month, and remind the client. */
+  auto_invoice?: boolean;
+  remind?: boolean;
 };
 
 export async function saveRecurringIncome(
@@ -299,6 +302,9 @@ export async function saveRecurringIncome(
     ended_on: input.ended_on || null,
     notes: input.notes?.trim() || null,
     ...(input.is_active !== undefined ? { is_active: input.is_active } : {}),
+    // 0120
+    ...(input.auto_invoice !== undefined ? { auto_invoice: input.auto_invoice } : {}),
+    ...(input.remind !== undefined ? { remind: input.remind } : {}),
   };
 
   const { error } = input.id
@@ -352,6 +358,36 @@ export async function setIncomeEntryStatus(
   if (!user) return { ok: false, error: "Not authenticated." };
 
   const received = status === "received";
+
+  // 0120 — money landing goes through recordPayment(): the entry is the
+  // money (no second row), and the month's invoice settles from it.
+  if (received) {
+    const { data: entry } = await supabase
+      .from("recurring_income_entries")
+      .select("id, amount, currency, status")
+      .eq("id", id)
+      .maybeSingle();
+    if (!entry) return { ok: false, error: "That month no longer exists." };
+    const { recordPayment } = await import("@/lib/payments");
+    const res = await recordPayment(supabase, {
+      source: "recurring",
+      recurringEntryId: id,
+      amount: opts?.amount !== undefined && opts.amount > 0 ? opts.amount : Number(entry.amount) || 0,
+      currency: entry.currency,
+      notes: opts?.note ?? undefined,
+      actorId: user.id,
+    });
+    if (!res.ok) return res;
+    revalidatePath("/finance");
+    revalidatePath("/invoices");
+    return { ok: true };
+  }
+
+  const { data: prior } = await supabase
+    .from("recurring_income_entries")
+    .select("invoice_id")
+    .eq("id", id)
+    .maybeSingle();
   const { error } = await supabase
     .from("recurring_income_entries")
     .update({
@@ -361,14 +397,36 @@ export async function setIncomeEntryStatus(
       ...(opts?.amount !== undefined && opts.amount > 0
         ? { amount: opts.amount }
         : {}),
-      received_on: received ? new Date().toISOString().slice(0, 10) : null,
-      received_by: received ? user.id : null,
+      received_on: null,
+      received_by: null,
       note: opts?.note?.trim() || null,
     })
     .eq("id", id);
   if (error) return { ok: false, error: error.message };
+  // Un-receiving takes the money back off the month's invoice.
+  if (prior?.invoice_id) {
+    const { reconcileInvoice } = await import("@/lib/invoices");
+    await reconcileInvoice(supabase, prior.invoice_id);
+  }
   revalidatePath("/finance");
   return { ok: true };
+}
+
+/** 0120 — raise (or fetch) the invoice for one recurring month, by hand. */
+export async function invoiceRecurringEntry(
+  entryId: string,
+): Promise<ActionResult<{ invoiceNumber: string; emailed: boolean }>> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const { createRecurringInvoice } = await import("@/lib/invoices");
+  const res = await createRecurringInvoice(supabase, entryId, { actorId: user.id });
+  if (!res.ok) return res;
+  revalidatePath("/finance");
+  revalidatePath("/invoices");
+  return { ok: true, invoiceNumber: res.invoiceNumber, emailed: res.emailed };
 }
 
 // --- 0120: bank slips ------------------------------------------------------

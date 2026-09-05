@@ -59,14 +59,24 @@ export async function reconcileInvoice(db: DB, invoiceId: string): Promise<Recon
     return { status: "void", paidAmount: Number(invoice.amount_paid) || 0, grandTotal, balance: 0 };
   }
 
-  const [ownRes, boardRes, instRes] = await Promise.all([
+  const [ownRes, boardRes, instRes, recurRes] = await Promise.all([
     db.from("payments").select("amount, status").eq("invoice_id", invoiceId),
     db.from("company_payments").select("price_lkr, is_paid").eq("invoice_id", invoiceId),
     db.from("payment_installments").select("amount, status").eq("invoice_id", invoiceId),
+    // A recurring month IS the money for monthlyInflows(); it settles its
+    // own invoice the same way an instalment does, with no payments row.
+    db
+      .from("recurring_income_entries")
+      .select("amount, status")
+      .eq("invoice_id", invoiceId)
+      .then((r) => r, () => ({ data: null })),
   ]);
 
   const linked =
-    (ownRes.data ?? []).length + (boardRes.data ?? []).length + (instRes.data ?? []).length;
+    (ownRes.data ?? []).length +
+    (boardRes.data ?? []).length +
+    (instRes.data ?? []).length +
+    (recurRes.data ?? []).length;
 
   let paid: number;
   if (linked > 0) {
@@ -79,7 +89,10 @@ export async function reconcileInvoice(db: DB, invoiceId: string): Promise<Recon
         .reduce((s, p) => s + (Number(p.price_lkr) || 0), 0) +
       (instRes.data ?? [])
         .filter((i) => i.status === "paid")
-        .reduce((s, i) => s + (Number(i.amount) || 0), 0);
+        .reduce((s, i) => s + (Number(i.amount) || 0), 0) +
+      (recurRes.data ?? [])
+        .filter((e) => e.status === "received")
+        .reduce((s, e) => s + (Number(e.amount) || 0), 0);
   } else if (invoice.stamp === "payment_received") {
     paid = grandTotal;
   } else {
@@ -288,4 +301,137 @@ export async function openInvoicesForProject(
     paid_amount: Number(i.paid_amount) || 0,
     invoice_date: i.invoice_date,
   }));
+}
+
+/**
+ * Raise the invoice for one recurring month (0120).
+ *
+ * A standing arrangement used to generate a row on the Recurring tab and
+ * nothing the client could pay against. With `auto_invoice` on, each month's
+ * entry raises its own numbered invoice — the label (or the arrangement's own
+ * line item), the month's amount, due on the entry's date — and emails it
+ * when the client has an address. Idempotent: an entry that already has an
+ * invoice returns it.
+ */
+export async function createRecurringInvoice(
+  db: DB,
+  entryId: string,
+  opts: { actorId?: string | null; email?: boolean } = {},
+): Promise<
+  | { ok: true; invoiceId: string; invoiceNumber: string; emailed: boolean; created: boolean }
+  | { ok: false; error: string }
+> {
+  const { data: entry } = await db
+    .from("recurring_income_entries")
+    .select("id, income_id, period, due_date, amount, currency, status, invoice_id")
+    .eq("id", entryId)
+    .maybeSingle();
+  if (!entry) return { ok: false, error: "That month no longer exists." };
+  if (entry.invoice_id) {
+    const { data: existing } = await db
+      .from("invoices")
+      .select("id, invoice_number")
+      .eq("id", entry.invoice_id)
+      .maybeSingle();
+    if (existing) {
+      return { ok: true, invoiceId: existing.id, invoiceNumber: existing.invoice_number, emailed: false, created: false };
+    }
+  }
+
+  const { data: income } = await db
+    .from("recurring_income")
+    .select("id, label, client_id, project_id, category, invoice_item, client:clients(name, company, email, phone)")
+    .eq("id", entry.income_id)
+    .maybeSingle();
+  if (!income) return { ok: false, error: "The arrangement no longer exists." };
+  const client = income.client as unknown as {
+    name: string;
+    company: string | null;
+    email: string | null;
+    phone: string | null;
+  } | null;
+
+  const monthLabel = new Date(`${entry.period}T00:00:00`).toLocaleDateString("en-US", {
+    month: "long",
+    year: "numeric",
+  });
+  const amount = Number(entry.amount) || 0;
+  const item = income.invoice_item;
+  const items: InvoiceItem[] = [
+    {
+      item: item?.item?.trim() || income.label,
+      description: item?.description?.trim() || `${monthLabel} — ${income.category}`,
+      qty: "1",
+      rate: String(amount),
+      total: amount,
+    },
+  ];
+
+  const number = await allocateDocumentNumber(db, "invoice", async () => {
+    const { data } = await db.from("invoices").select("invoice_number");
+    return nextInvoiceNumber((data ?? []).map((r) => r.invoice_number));
+  });
+
+  const { data: invoice, error } = await db
+    .from("invoices")
+    .insert({
+      invoice_number: number,
+      invoice_date: new Date().toISOString().slice(0, 10),
+      bill_to_name: client?.name ?? income.label,
+      bill_to_details: [client?.company, client?.email, client?.phone].filter(Boolean).join("\n"),
+      items,
+      grand_total: amount,
+      due_today: amount,
+      due_date: entry.due_date,
+      currency: entry.currency || null,
+      client_id: income.client_id,
+      // Attribution only, like the arrangement itself: the project's
+      // received figure never counts a hosting month.
+      project_id: null,
+      recipient_email: client?.email ?? null,
+      created_by: opts.actorId ?? null,
+    })
+    .select("id")
+    .single();
+  if (error || !invoice) return { ok: false, error: error?.message ?? "Could not raise the invoice." };
+
+  await db
+    .from("recurring_income_entries")
+    .update({ invoice_id: invoice.id })
+    .eq("id", entry.id);
+
+  let emailed = false;
+  if (opts.email !== false && client?.email) {
+    try {
+      const { sendAndLogEmail } = await import("@/lib/email-outbox");
+      const { invoiceEmailData } = await import("@/lib/invoice");
+      const { data: row } = await db.from("invoices").select("*").eq("id", invoice.id).single();
+      if (row) {
+        const res = await sendAndLogEmail(db, {
+          to: client.email,
+          kind: "invoice",
+          actor: opts.actorId ? "team" : "system",
+          sentBy: opts.actorId ?? null,
+          invoiceId: invoice.id,
+          clientId: income.client_id,
+          message: {
+            transport: "invoice",
+            note: `Your ${income.label} invoice for ${monthLabel} is attached. It's due on ${entry.due_date}.`,
+            invoice: invoiceEmailData(row),
+          },
+        });
+        emailed = res.sent;
+        if (res.sent) {
+          await db
+            .from("invoices")
+            .update({ recipient_email: client.email, sent_at: new Date().toISOString(), status: "sent" })
+            .eq("id", invoice.id);
+        }
+      }
+    } catch (e) {
+      console.error("[invoices] recurring invoice email failed:", e);
+    }
+  }
+
+  return { ok: true, invoiceId: invoice.id, invoiceNumber: number, emailed, created: true };
 }

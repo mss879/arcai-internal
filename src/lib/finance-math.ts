@@ -33,24 +33,92 @@ export function periodStart(date: Date): string {
 
 export type InflowSources = {
   /** `payments` rows already filtered to paid. */
-  payments: { amount: number | string; paid_at?: string | null; created_at: string }[];
+  payments: {
+    amount: number | string;
+    paid_at?: string | null;
+    created_at: string;
+    /** For the export's description column. */
+    notes?: string | null;
+  }[];
   /** `payment_installments` — every status; only paid ones count. */
   installments: {
     amount: number | string;
     status: string;
     paid_at?: string | null;
     due_date: string;
+    seq?: number;
+    plan_id?: string;
   }[];
   /** `recurring_income` with its entries. */
   recurring: {
+    id?: string;
+    label?: string;
     entries: {
       amount: number | string;
       status: string;
       received_on?: string | null;
       due_date: string;
+      period?: string;
     }[];
   }[];
 };
+
+/** One received amount with enough words to print on an export line. */
+export type InflowLine = CashRow & {
+  kind: "payment" | "installment" | "recurring";
+  description: string;
+  /** The plan (instalment) or arrangement (recurring) it came from. */
+  ref: string | null;
+};
+
+/** "September 2026" for any date in the month. UTC, so it never shifts. */
+export function monthLabel(date: string): string {
+  const d = new Date(`${date.slice(0, 7)}-01T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return date;
+  return d.toLocaleDateString("en-US", { month: "long", year: "numeric", timeZone: "UTC" });
+}
+
+/**
+ * Every rupee actually received, dated and described — one line per
+ * payment, per paid instalment, per received recurring month.
+ *
+ * This is what the Tax export prints. `monthlyInflows()` below is exactly
+ * these lines with the words dropped, which is how Finance Overview's total
+ * and the Tax tab's total are the same number by construction: the Tax tab
+ * used to build its own income list from payments and instalments only, and
+ * a received recurring month made the two tabs disagree.
+ */
+export function inflowLines(sources: InflowSources): InflowLine[] {
+  return [
+    ...sources.payments.map((p): InflowLine => ({
+      date: (p.paid_at ?? p.created_at).slice(0, 10),
+      amount: num(p.amount),
+      kind: "payment",
+      description: p.notes?.trim() || "Project payment",
+      ref: null,
+    })),
+    ...sources.installments
+      .filter((i) => i.status === "paid")
+      .map((i): InflowLine => ({
+        date: (i.paid_at ?? i.due_date).slice(0, 10),
+        amount: num(i.amount),
+        kind: "installment",
+        description: i.seq ? `Installment #${i.seq}` : "Installment",
+        ref: i.plan_id ?? null,
+      })),
+    ...sources.recurring.flatMap((r) =>
+      (r.entries ?? [])
+        .filter((e) => e.status === "received")
+        .map((e): InflowLine => ({
+          date: (e.received_on ?? e.due_date).slice(0, 10),
+          amount: num(e.amount),
+          kind: "recurring",
+          description: `${r.label?.trim() || "Recurring"} — ${monthLabel(e.period ?? e.due_date)}`,
+          ref: r.id ?? null,
+        })),
+    ),
+  ];
+}
 
 /**
  * Every rupee actually received, dated.
@@ -60,26 +128,7 @@ export type InflowSources = {
  * up until payroll. Forecasting is a separate function, and says so.
  */
 export function monthlyInflows(sources: InflowSources): CashRow[] {
-  return [
-    ...sources.payments.map((p) => ({
-      date: (p.paid_at ?? p.created_at).slice(0, 10),
-      amount: num(p.amount),
-    })),
-    ...sources.installments
-      .filter((i) => i.status === "paid")
-      .map((i) => ({
-        date: (i.paid_at ?? i.due_date).slice(0, 10),
-        amount: num(i.amount),
-      })),
-    ...sources.recurring.flatMap((r) =>
-      (r.entries ?? [])
-        .filter((e) => e.status === "received")
-        .map((e) => ({
-          date: (e.received_on ?? e.due_date).slice(0, 10),
-          amount: num(e.amount),
-        })),
-    ),
-  ];
+  return inflowLines(sources).map(({ date, amount }) => ({ date, amount }));
 }
 
 /** Money out. Expenses are already "spent" by the time they are a row. */
@@ -105,6 +154,42 @@ export function seriesByMonth(
   months: string[],
 ): { month: string; total: number }[] {
   return months.map((month) => ({ month, total: totalForMonth(rows, month) }));
+}
+
+export type ProfitAndLossRow = {
+  month: string;
+  inflow: number;
+  outflow: number;
+  /** Commission payout runs in the month — INSIDE `outflow`, not on top of it. */
+  payouts: number;
+  net: number;
+};
+
+/**
+ * The month as one line: in, out, net (T4.9).
+ *
+ * A payout run writes its own `expenses` row (category `commission`), so the
+ * money is already in `outflows`. The payouts column is shown so the owner
+ * can see how much of the month's spend was the team's commission; it is
+ * never subtracted a second time. Net is inflow − outflow, full stop.
+ */
+export function profitAndLoss(input: {
+  months: string[];
+  inflows: CashRow[];
+  outflows: CashRow[];
+  payouts: CashRow[];
+}): ProfitAndLossRow[] {
+  return input.months.map((month) => {
+    const inflow = totalForMonth(input.inflows, month);
+    const outflow = totalForMonth(input.outflows, month);
+    return {
+      month,
+      inflow,
+      outflow,
+      payouts: totalForMonth(input.payouts, month),
+      net: Math.round((inflow - outflow) * 100) / 100,
+    };
+  });
 }
 
 /** The last N month keys, oldest first, ending with the month `now` is in. */

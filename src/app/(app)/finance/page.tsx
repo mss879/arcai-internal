@@ -35,6 +35,7 @@ export default async function FinancePage({
     forecast,
     targetProgress,
     slips,
+    payoutsRes,
   ] = await Promise.all([
       supabase.from("payment_plans").select("*").order("created_at", { ascending: false }),
       supabase.from("payment_installments").select("*").order("due_date"),
@@ -65,6 +66,13 @@ export default async function FinancePage({
       targetsProgress(supabase, periodFor(new Date())).catch(() => []),
       // 0120 — slips waiting to be confirmed.
       listSlips(supabase),
+      // 0120 — payout runs, for the P&L strip. Absent until the migration.
+      supabase
+        .from("commission_payouts")
+        .select("id, period, net_paid, paid_at")
+        .order("paid_at", { ascending: false })
+        .limit(500)
+        .then((r) => r, () => ({ data: null })),
     ]);
 
   const projects = (projectsRes.data ?? []).map((p) => ({
@@ -88,6 +96,12 @@ export default async function FinancePage({
       forecast={forecast}
       targetProgress={targetProgress}
       slips={slips}
+      payouts={(payoutsRes.data ?? []).map((p) => ({
+        id: p.id,
+        period: p.period,
+        net_paid: Number(p.net_paid) || 0,
+        paid_at: p.paid_at,
+      }))}
       initialTab={params.tab === "slips" ? "slips" : undefined}
     />
   );

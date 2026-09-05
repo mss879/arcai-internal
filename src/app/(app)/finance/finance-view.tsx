@@ -29,10 +29,16 @@ import { Field, Input, Select, Textarea } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { PageHeader } from "@/components/ui/page-header";
 import { ForecastCard } from "@/components/finance/forecast-card";
+import { ReceiptReader } from "@/components/finance/receipt-reader";
 import { TargetsTile } from "@/components/dashboard/targets-tile";
 import { useRealtimeSync } from "@/hooks/use-realtime-sync";
 import type { CashForecast } from "@/lib/finance-forecast";
-import { monthlyInflows, monthlyOutflows } from "@/lib/finance-math";
+import {
+  inflowLines,
+  monthlyInflows,
+  monthlyOutflows,
+  profitAndLoss,
+} from "@/lib/finance-math";
 import type { SlipQueueRow } from "@/lib/slips";
 import type { TargetProgress } from "@/lib/targets";
 
@@ -87,6 +93,25 @@ export type RecurringRow = RecurringIncome & {
   entries: RecurringIncomeEntry[];
 };
 
+/** 0120 — a payout run, as much of it as the P&L strip needs. */
+export type PayoutLite = { id: string; period: string; net_paid: number; paid_at: string };
+
+/**
+ * A receipt's category is one of the PROJECT expense categories (the reader
+ * was written for the project form); the company ledger has its own list.
+ */
+const RECEIPT_TO_EXPENSE_CATEGORY: Record<string, ExpenseCategory> = {
+  hosting: "hosting",
+  licence: "software",
+  ads: "ads",
+  travel: "transport",
+  stock: "other",
+  content: "other",
+  design: "other",
+  subcontract: "other",
+  other: "other",
+};
+
 const INCOME_CATEGORIES: { value: RecurringIncomeCategory; label: string }[] = [
   { value: "retainer", label: "Retainer" },
   { value: "hosting", label: "Hosting & domains" },
@@ -131,6 +156,7 @@ export function FinanceView({
   forecast = null,
   targetProgress = [],
   slips = [],
+  payouts = [],
   initialTab,
 }: {
   plans: PaymentPlan[];
@@ -146,6 +172,8 @@ export function FinanceView({
   targetProgress?: TargetProgress[];
   /** 0120 — bank slips waiting to be confirmed. */
   slips?: SlipQueueRow[];
+  /** 0120 — commission payout runs, for the P&L strip. */
+  payouts?: PayoutLite[];
   initialTab?: Tab;
 }) {
   useRealtimeSync("payment_plans");
@@ -227,6 +255,7 @@ export function FinanceView({
           recurring={recurring}
           forecast={forecast}
           targetProgress={targetProgress}
+          payouts={payouts}
         />
       )}
       {tab === "recurring" && (
@@ -245,7 +274,13 @@ export function FinanceView({
         <ExpensesTab expenses={expenses} projects={projects} />
       )}
       {tab === "tax" && (
-        <TaxTab installments={installments} plans={plans} expenses={expenses} paidPayments={paidPayments} />
+        <TaxTab
+          installments={installments}
+          plans={plans}
+          expenses={expenses}
+          paidPayments={paidPayments}
+          recurring={recurring}
+        />
       )}
     </div>
   );
@@ -302,6 +337,7 @@ function OverviewTab({
   recurring,
   forecast,
   targetProgress,
+  payouts,
 }: {
   installments: PaymentInstallment[];
   cheques: Cheque[];
@@ -310,6 +346,7 @@ function OverviewTab({
   recurring: RecurringRow[];
   forecast: CashForecast | null;
   targetProgress: TargetProgress[];
+  payouts: PayoutLite[];
 }) {
   const now = new Date();
   const thisMonth = now.toISOString().slice(0, 7);
@@ -353,6 +390,15 @@ function OverviewTab({
     outflow: outflows.filter((f) => monthKey(f.date) === m).reduce((s, f) => s + f.amount, 0),
   }));
   const maxVal = Math.max(1, ...series.flatMap((s) => [s.inflow, s.outflow]));
+
+  // T4.9 — the same six months as one line each. A payout run's expense row
+  // is already in `outflows`; its column is there to be seen, not summed.
+  const pnl = profitAndLoss({
+    months,
+    inflows,
+    outflows,
+    payouts: payouts.map((p) => ({ date: p.paid_at.slice(0, 10), amount: Number(p.net_paid) || 0 })),
+  });
 
   // Expenses by category (this month).
   const byCategory = new Map<string, number>();
@@ -420,6 +466,51 @@ function OverviewTab({
           compact
         />
       )}
+
+      {/* T4.9 — profit & loss, one line per month */}
+      <div className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-[var(--shadow-card)]">
+        <div className="flex flex-wrap items-baseline justify-between gap-2 px-5 pt-4">
+          <h3 className="text-sm font-semibold text-slate-900">Profit &amp; loss — last 6 months</h3>
+          <p className="text-[11px] text-slate-400">
+            Commission payouts are part of &ldquo;out&rdquo; — shown so you can see them, never counted twice.
+          </p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="mt-3 w-full min-w-[560px] text-sm">
+            <thead>
+              <tr className="border-t border-slate-100 bg-slate-50 text-[11px] uppercase tracking-wider text-slate-400">
+                <th className="px-5 py-2 text-left font-semibold">Month</th>
+                <th className="px-3 py-2 text-right font-semibold">In</th>
+                <th className="px-3 py-2 text-right font-semibold">Out</th>
+                <th className="px-3 py-2 text-right font-semibold">of which payouts</th>
+                <th className="px-5 py-2 text-right font-semibold">Net</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {pnl.map((row) => (
+                <tr key={row.month} className={row.month === thisMonth ? "bg-primary-50/40" : undefined}>
+                  <td className="px-5 py-2 font-medium text-slate-700">
+                    {new Date(`${row.month}-01T00:00:00`).toLocaleDateString("en-US", { month: "short", year: "numeric" })}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums text-emerald-600">{formatCurrency(row.inflow)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums text-rose-500">{formatCurrency(row.outflow)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums text-slate-400">
+                    {row.payouts > 0 ? formatCurrency(row.payouts) : "—"}
+                  </td>
+                  <td
+                    className={cn(
+                      "px-5 py-2 text-right font-semibold tabular-nums",
+                      row.net >= 0 ? "text-emerald-700" : "text-rose-600",
+                    )}
+                  >
+                    {formatCurrency(row.net)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
         <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[var(--shadow-card)]">
@@ -1735,6 +1826,23 @@ function ExpenseModal({
     setProjectId(expense?.project_id ?? "");
   }, [open, expense]);
 
+  // T4.9 — a photographed bill fills the blanks; anything typed is kept.
+  function applyReceipt(p: {
+    vendor: string | null;
+    description: string | null;
+    amount: number | null;
+    date: string | null;
+    category: string | null;
+  }) {
+    if (p.vendor && !vendor) setVendor(p.vendor);
+    if (p.description && !description) setDescription(p.description);
+    if (p.amount && !(Number(amount) > 0)) setAmount(String(p.amount));
+    if (p.date && !expense) setExpenseDate(p.date);
+    if (p.category && category === "other") {
+      setCategory(RECEIPT_TO_EXPENSE_CATEGORY[p.category] ?? "other");
+    }
+  }
+
   async function handleSave() {
     setSubmitting(true);
     const input: ExpenseInput = {
@@ -1777,6 +1885,7 @@ function ExpenseModal({
       }
     >
       <div className="space-y-4">
+        {!expense && <ReceiptReader onParsed={applyReceipt} />}
         <Field label="Description" required>
           <Input
             value={description}
@@ -1844,11 +1953,13 @@ function TaxTab({
   plans,
   expenses,
   paidPayments,
+  recurring,
 }: {
   installments: PaymentInstallment[];
   plans: PaymentPlan[];
   expenses: Expense[];
   paidPayments: Payment[];
+  recurring: RecurringRow[];
 }) {
   const year = new Date().getFullYear();
   const [from, setFrom] = React.useState(`${year}-01-01`);
@@ -1867,28 +1978,19 @@ function TaxTab({
       tax: number;
     }[] = [];
 
-    for (const p of paidPayments) {
-      const date = (p.paid_at ?? p.created_at).slice(0, 10);
-      if (!inRange(date)) continue;
+    // T4.9 — the SAME lines Overview totals (finance-math.ts), so the two
+    // tabs cannot disagree. Recurring months used to be missing from here.
+    for (const line of inflowLines({ payments: paidPayments, installments, recurring })) {
+      if (!inRange(line.date)) continue;
       out.push({
-        date,
+        date: line.date,
         type: "income",
-        description: p.notes || "Project payment",
-        category: "project",
-        amount: Number(p.amount),
-        tax: 0,
-      });
-    }
-    for (const i of installments) {
-      if (i.status !== "paid") continue;
-      const date = (i.paid_at ?? i.due_date).slice(0, 10);
-      if (!inRange(date)) continue;
-      out.push({
-        date,
-        type: "income",
-        description: `Installment #${i.seq} — ${planTitle.get(i.plan_id) ?? "plan"}`,
-        category: "installment",
-        amount: Number(i.amount),
+        description:
+          line.kind === "installment"
+            ? `${line.description} — ${planTitle.get(line.ref ?? "") ?? "plan"}`
+            : line.description,
+        category: line.kind === "payment" ? "project" : line.kind,
+        amount: line.amount,
         tax: 0,
       });
     }
@@ -1905,7 +2007,7 @@ function TaxTab({
     }
     return out.sort((a, b) => a.date.localeCompare(b.date));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [from, to, paidPayments, installments, expenses]);
+  }, [from, to, paidPayments, installments, recurring, expenses]);
 
   const income = rows.filter((r) => r.type === "income").reduce((s, r) => s + r.amount, 0);
   const spend = rows.filter((r) => r.type === "expense").reduce((s, r) => s + r.amount, 0);

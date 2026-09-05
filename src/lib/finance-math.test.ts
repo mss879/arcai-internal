@@ -3,9 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   detectStandingCosts,
   forecastCash,
+  inflowLines,
   monthlyInflows,
   monthlyOutflows,
   monthKey,
+  profitAndLoss,
   projectStandingCosts,
   recentMonths,
   seriesByMonth,
@@ -58,6 +60,94 @@ describe("monthlyInflows", () => {
       recurring: [],
     });
     expect(rows[0].amount).toBe(0);
+  });
+});
+
+describe("inflowLines — Finance Overview and the Tax tab are the same number", () => {
+  // The Tax tab used to build its own income list from payments and
+  // instalments only. A received recurring month then showed on Overview
+  // and not on the export, and the two totals disagreed.
+  const sources = {
+    payments: [
+      { amount: 10_000, paid_at: "2026-09-03", created_at: "2026-09-01T00:00:00Z", notes: "Deposit" },
+      { amount: 5_000, paid_at: null, created_at: "2026-09-20T00:00:00Z", notes: null },
+    ],
+    installments: [
+      { amount: 20_000, status: "paid", paid_at: "2026-09-10", due_date: "2026-09-01", seq: 2, plan_id: "plan-1" },
+      { amount: 99_000, status: "pending", paid_at: null, due_date: "2026-09-15", seq: 3, plan_id: "plan-1" },
+    ],
+    recurring: [
+      {
+        id: "r1",
+        label: "Hosting",
+        entries: [
+          { amount: 7_000, status: "received", received_on: "2026-09-05", due_date: "2026-09-01", period: "2026-09-01" },
+          { amount: 7_000, status: "pending", received_on: null, due_date: "2026-10-01", period: "2026-10-01" },
+        ],
+      },
+    ],
+  };
+  const sum = (rows: { amount: number }[]) => rows.reduce((s, r) => s + r.amount, 0);
+
+  it("totals exactly what monthlyInflows totals", () => {
+    expect(sum(inflowLines(sources))).toBe(sum(monthlyInflows(sources)));
+    expect(sum(inflowLines(sources))).toBe(42_000);
+  });
+
+  it("is monthlyInflows with the words dropped — line for line", () => {
+    expect(inflowLines(sources).map(({ date, amount }) => ({ date, amount }))).toEqual(
+      monthlyInflows(sources),
+    );
+  });
+
+  it("agrees for one month, which is what Overview shows", () => {
+    const month = "2026-09";
+    const taxTotal = inflowLines(sources)
+      .filter((l) => monthKey(l.date) === month)
+      .reduce((s, l) => s + l.amount, 0);
+    expect(taxTotal).toBe(totalForMonth(monthlyInflows(sources), month));
+  });
+
+  it("keeps the recurring month the Tax tab used to drop", () => {
+    const recurring = inflowLines(sources).filter((l) => l.kind === "recurring");
+    expect(recurring).toEqual([
+      { date: "2026-09-05", amount: 7_000, kind: "recurring", description: "Hosting — September 2026", ref: "r1" },
+    ]);
+  });
+
+  it("describes each line for the export", () => {
+    const lines = inflowLines(sources);
+    expect(lines[0]).toMatchObject({ kind: "payment", description: "Deposit", ref: null });
+    expect(lines[1]).toMatchObject({ kind: "payment", description: "Project payment" });
+    expect(lines[2]).toMatchObject({ kind: "installment", description: "Installment #2", ref: "plan-1" });
+  });
+});
+
+describe("profitAndLoss", () => {
+  it("nets in against out per month, and shows payouts without subtracting them twice", () => {
+    const rows = profitAndLoss({
+      months: ["2026-08", "2026-09"],
+      inflows: [
+        { date: "2026-08-10", amount: 100_000 },
+        { date: "2026-09-10", amount: 80_000 },
+      ],
+      // The payout run's own expenses row is already in here.
+      outflows: [
+        { date: "2026-09-01", amount: 30_000 },
+        { date: "2026-09-28", amount: 25_000 },
+      ],
+      payouts: [{ date: "2026-09-28", amount: 25_000 }],
+    });
+    expect(rows).toEqual([
+      { month: "2026-08", inflow: 100_000, outflow: 0, payouts: 0, net: 100_000 },
+      { month: "2026-09", inflow: 80_000, outflow: 55_000, payouts: 25_000, net: 25_000 },
+    ]);
+  });
+
+  it("returns a zero line for a month with nothing in it", () => {
+    expect(profitAndLoss({ months: ["2026-01"], inflows: [], outflows: [], payouts: [] })).toEqual([
+      { month: "2026-01", inflow: 0, outflow: 0, payouts: 0, net: 0 },
+    ]);
   });
 });
 

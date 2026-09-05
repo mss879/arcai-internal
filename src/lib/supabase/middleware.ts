@@ -14,6 +14,8 @@ const PUBLIC_PREFIXES = [
   "/p",
   // 0117 — and for a contract, SOW or NDA.
   "/a",
+  // 0117 — the free website audit lead magnet. Rate-limited by IP.
+  "/audit",
   // Public APIs: inquiry forms, inbound webhooks, visitor tracking, open API.
   "/api/public",
   // Cron tick endpoints (optionally guarded by SMS_CRON_SECRET themselves).

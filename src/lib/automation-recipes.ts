@@ -224,6 +224,38 @@ export const AUTOMATION_RECIPES: AutomationRecipe[] = [
     ],
   },
   {
+    id: "audit-lead-nurture",
+    name: "Free audit asked for → follow it up 🔍",
+    description:
+      "Somebody asked for the free website audit. The report emails itself; this is what happens after. A task two days later to actually read their site, and a WhatsApp nudge on day five if they haven't come back — because the audit is the opener, not the sale.",
+    emoji: "🔍",
+    trigger: "lead_created",
+    // lead_created has no trigger-level filter, so the narrowing is a
+    // condition — which is checked against the lead itself and does work.
+    trigger_config: {},
+    conditions: [{ field: "source", op: "eq", value: "audit_magnet" }],
+    steps: [
+      { kind: "wait", config: { minutes: 2880 } },
+      {
+        kind: "create_task",
+        config: {
+          title: "Read {{full_name}}'s audit and find the one thing worth saying",
+          notes:
+            "They asked for the free audit. Skim the report we sent, pick the single most costly finding, and message them about that one thing — not the whole PDF.",
+          due_in_days: 1,
+        },
+      },
+      { kind: "wait", config: { minutes: 4320 } },
+      {
+        kind: "send_whatsapp",
+        config: {
+          message:
+            "Hi {{name}} — did the website audit we sent land okay? Happy to walk you through the one or two things that would make the biggest difference, no charge. 🙂",
+        },
+      },
+    ],
+  },
+  {
     id: "proposal-signed-kickoff",
     name: "Proposal signed → quote, invoice, project 📄",
     description:

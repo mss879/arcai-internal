@@ -28,6 +28,7 @@ import {
   processDueOutreach,
   processOutreachSequences,
 } from "@/lib/lead-outreach";
+import { processSiteAudits } from "@/lib/site-audit-magnet";
 import { processPendingCarousels } from "@/lib/carousels";
 import { processIntelligenceJobs } from "@/lib/intelligence-jobs";
 import { processPendingWaShowcases } from "@/lib/wa-showcase";
@@ -134,6 +135,9 @@ const PASSES: ReadonlyArray<readonly [string, (db: DB) => Promise<unknown>]> = [
   // 0117 — the follow-ups. One email is the version of outreach that doesn't
   // work; this sends the rest and, more importantly, knows when to stop.
   ["sequences", processOutreachSequences],
+  // 0117 — the free audits people asked for. One per tick: a Lighthouse run
+  // is slow, metered, and the tick is shared.
+  ["siteAudits", processSiteAudits],
   ["carousels", processPendingCarousels],
   // Lead scoring (hourly, unscored only), the churn scan (daily from 06:00)
   // and the Monday digest — each self-gated by its own app_settings stamp.

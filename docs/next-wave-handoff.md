@@ -1,9 +1,9 @@
 # Next Wave — handoff (third edition)
 
 **Read this first, then `AGENTS.md` and `docs/projects-roadmap-handoff.md` §2/§4.**
-Updated 2026-09-06 at commit `76c63f9` ("the Tax tab reads the same money-in
-as Overview"). Paste this into a new chat, or say:
-*"Read `docs/next-wave-handoff.md` and continue from step 41."*
+Updated 2026-09-06 at commit `HEAD` (see `git log -1`; last feature commit:
+"one front door to every setting"). Paste this into a new chat, or say:
+*"Read `docs/next-wave-handoff.md` and continue from step 42."*
 
 This file is refreshed after EVERY committed step, so it is always the
 current handover — if a chat is cut off, the previous step's entry here is
@@ -13,8 +13,8 @@ complete and the next step has not started.
 
 ## 1. Where things stand
 
-**40 of 46 build steps are done (Track 4 is complete), plus an audit-and-fix
-pass over the first 26. 44 commits on `arc_ai_crm_system` `main` ahead of
+**41 of 46 build steps are done (Track 4 is complete), plus an audit-and-fix
+pass over the first 26. 46 commits on `arc_ai_crm_system` `main` ahead of
 `origin/main`, plus 2 on `arc_ai_website`. Nothing is pushed to either
 remote.**
 
@@ -129,6 +129,12 @@ client-login link) and needs no migration.
 
 ---
 
+### Track 5 — platform foundation (1 of 6)
+
+| Commit | Feature |
+| --- | --- |
+| `(step 41)` | **T5.1** `/settings` hub (`src/app/(app)/settings/`): cards to every module's settings, forms for `app_settings.lead_form` / `outreach` / `web_chat_auto_lead`, the social-accounts connect form (first writer of `social_accounts`; `encryptToken()`, refuses without `SOCIAL_TOKEN_KEY`), `document_counters` read-only + forward-only "set next number" (service-role client behind `requireAdmin()` — the table has no RLS policies). Nav item (adminOnly), topbar gear, app-map entry. Delivery / WhatsApp / Content / Automation / Intelligence views take `?tab=` (`initialTab` prop, validated against `TAB_KEYS`). |
+
 ## 3. The audit of steps 0–26
 
 The previous chat's handoff said 26 steps were done. Against the plan's "How"
@@ -156,30 +162,18 @@ UI — the plan puts it under `/settings` (step 41).
 
 ---
 
-## 4. What remains — steps 41 to 46
+## 4. What remains — steps 42 to 46
 
 Numbers are the original plan's sequencing table.
 
 ### Track 5 — platform foundation (migration **0121** exists — add sections to it)
 
-**41 · T5.1 `/settings` hub** — S. Cards to every settings surface (CRM
-settings `/crm/settings`, Delivery settings tab, pricing, WhatsApp
-agent/keywords, Studio settings, Automation Connect, profile, team, email
-templates on `/inbox`, **social accounts** (nothing exists — `social_accounts`
-rows are inserted nowhere yet; build a connect form: platform, name,
-external_id, page_id, token → `encryptToken()` in `src/lib/social/crypto.ts`,
-needs `SOCIAL_TOKEN_KEY`), targets, numbering counters
-(`document_counters`, read-only view + "set next number"), API keys/webhooks +
-`docs/api.md`), plus forms for `app_settings.lead_form`, `outreach`
-(`src/lib/lead-outreach.ts:117`), `web_chat_auto_lead`
-(`web-analytics/sync.ts chatAutoLeadEnabled`), and the WhatsApp
-`handoff_user_id` (already on the Agent tab; link to it). Nav: Workspace →
-Settings (`adminOnly`) in `src/components/layout/nav.ts`; a gear in
-`topbar.tsx`.
-
 **42 · T5.2 Permissions v2** — M. `profiles.capabilities text[]`
 (`finance, delivery, sales, marketing`) backfilled with all four for members.
 `src/lib/auth.ts`: `hasCapability`, `requireCapability` (redirect),
+(the `capabilities_enforced` toggle goes on `/settings` — add the key to
+`SETTING_KEYS` in `settings/actions.ts` and a Permissions panel to
+`settings-view.tsx`; the Errors panel of step 44 goes there too)
 `assertCapability` (ActionResult). `NavItem.capability?` in `nav.ts`;
 `sidebar.tsx` filter (**`sidebar.tsx` is one of the uncommitted hand-tracking
 files — stage only your hunks; see §6**). Page guards: `/finance`, `/payments`,

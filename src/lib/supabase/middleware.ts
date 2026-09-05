@@ -24,6 +24,8 @@ const PUBLIC_PREFIXES = [
   // which looks like a working endpoint from the outside.
   "/api/automation/tick",
   "/api/sms/automation/tick",
+  // 0121 — the uptime check. Booleans and timestamps only; rate-limited.
+  "/api/health",
   // Live WhatsApp replies, promise touches and the follow-up cadence.
   "/api/whatsapp/agent-tick",
   // Arcus's own heartbeat (0103): the memory miner, the pulse, nudges, the
@@ -79,6 +81,7 @@ function isPublicPath(pathname: string) {
 // auth call back in front of every cron tick.
 const MACHINE_PREFIXES = [
   "/api/automation/tick",
+  "/api/health",
   "/api/assistant/tick",
   "/api/whatsapp/agent-tick",
   "/api/whatsapp/webhook",

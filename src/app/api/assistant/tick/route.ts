@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { requireCronSecret } from "@/lib/cron-auth";
+import { captureError } from "@/lib/errors";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { processAssistantBriefing } from "@/lib/assistant/briefing";
 import { processAssistantJanitor } from "@/lib/assistant/janitor";
@@ -62,6 +63,7 @@ export async function GET(request: Request) {
       janitor,
     });
   } catch (e) {
+    await captureError(e, { source: "assistant-tick", path: "route" });
     return NextResponse.json(
       { error: e instanceof Error ? e.message : "Assistant tick failed." },
       { status: 500 },

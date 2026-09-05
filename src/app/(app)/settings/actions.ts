@@ -128,6 +128,21 @@ export async function deleteSocialAccount(id: string): Promise<ActionResult> {
   return { ok: true };
 }
 
+// ---- Errors (T5.5) ----------------------------------------------------------
+
+/** Mark a fault dealt with. It reopens itself if it is seen again. */
+export async function resolveErrorEvent(id: string, resolved: boolean): Promise<ActionResult> {
+  await requireAdmin();
+  const admin = createAdminClient();
+  const { error } = await admin
+    .from("error_events")
+    .update({ resolved_at: resolved ? new Date().toISOString() : null })
+    .eq("id", id);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath("/settings");
+  return { ok: true };
+}
+
 // ---- Document numbering (0120) ----------------------------------------------
 
 /**

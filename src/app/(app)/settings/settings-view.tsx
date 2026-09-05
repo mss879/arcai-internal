@@ -22,6 +22,7 @@ import {
   Sparkles,
   Target,
   Trash2,
+  TriangleAlert,
   UserRound,
   Users,
 } from "lucide-react";
@@ -33,11 +34,13 @@ import { Field, Input, Select } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { PageHeader } from "@/components/ui/page-header";
 import type { SocialPlatform } from "@/lib/database.types";
+import type { ErrorEventRow } from "@/lib/errors";
 import { cn } from "@/lib/utils";
 
 import {
   connectSocialAccount,
   deleteSocialAccount,
+  resolveErrorEvent,
   saveAppSetting,
   setNextDocumentNumber,
   setSocialAccountActive,
@@ -77,6 +80,9 @@ export type SettingsData = {
   handoff: { userId: string | null; name: string | null };
   counts: { emailTemplates: number; apiKeys: number; webhooks: number; members: number };
   clients: { id: string; name: string }[];
+  /** T5.5 — what captureError() has counted, open first. */
+  errors: ErrorEventRow[];
+  sentry: boolean;
 };
 
 /**
@@ -200,6 +206,7 @@ export function SettingsView({ data }: { data: SettingsData }) {
         </div>
         <SocialAccountsCard data={data} />
         <NumberingCard data={data} />
+        <ErrorsCard data={data} />
       </section>
     </div>
   );
@@ -680,6 +687,75 @@ function ConnectSocialModal({
         </div>
       </div>
     </Modal>
+  );
+}
+
+/* ---- Errors (T5.5) ------------------------------------------------------ */
+
+function ErrorsCard({ data }: { data: SettingsData }) {
+  const router = useRouter();
+  const [showResolved, setShowResolved] = React.useState(false);
+  const [openStack, setOpenStack] = React.useState<string | null>(null);
+  const rows = data.errors.filter((e) => showResolved || !e.resolvedAt);
+  const open = data.errors.filter((e) => !e.resolvedAt).length;
+
+  async function resolve(id: string, resolved: boolean) {
+    const res = await resolveErrorEvent(id, resolved);
+    if (res.ok) {
+      toast.success(resolved ? "Marked dealt with — it reopens if it comes back." : "Reopened.");
+      router.refresh();
+    } else toast.error(res.error);
+  }
+
+  return (
+    <div id="errors">
+      <Panel
+        icon={<TriangleAlert className="h-4 w-4" />}
+        title="Errors"
+        description={`One line per distinct fault, counted. ${open} open. ${data.sentry ? "Also mirrored to Sentry." : "Set SENTRY_DSN to mirror them to Sentry."} /api/health reports the same numbers.`}
+        actions={
+          <label className="flex items-center gap-2 text-xs text-slate-500">
+            <input type="checkbox" checked={showResolved} onChange={(e) => setShowResolved(e.target.checked)} />
+            Show resolved
+          </label>
+        }
+      >
+        {rows.length === 0 ? (
+          <p className="text-sm text-slate-400">
+            {data.errors.length === 0 ? "Nothing captured. Faults appear here once migration 0121 has run and something fails." : "Nothing open."}
+          </p>
+        ) : (
+          <ul className="divide-y divide-slate-100">
+            {rows.map((e) => (
+              <li key={e.id} className="py-2.5 text-sm">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge className="bg-slate-100 font-mono text-[11px] text-slate-600 ring-slate-200">{e.source}</Badge>
+                  {e.path && <span className="font-mono text-[11px] text-slate-400">{e.path}</span>}
+                  <span className="min-w-0 flex-1 truncate font-medium text-slate-800" title={e.message}>
+                    {e.message}
+                  </span>
+                  <span className="text-xs tabular-nums text-slate-400">×{e.count}</span>
+                  <span className="text-xs text-slate-400">last {e.lastSeenAt.slice(0, 16).replace("T", " ")}</span>
+                  {e.stack && (
+                    <Button size="sm" variant="ghost" onClick={() => setOpenStack(openStack === e.id ? null : e.id)}>
+                      {openStack === e.id ? "Hide" : "Stack"}
+                    </Button>
+                  )}
+                  <Button size="sm" variant={e.resolvedAt ? "ghost" : "outline"} onClick={() => void resolve(e.id, !e.resolvedAt)}>
+                    {e.resolvedAt ? "Reopen" : "Resolve"}
+                  </Button>
+                </div>
+                {openStack === e.id && e.stack && (
+                  <pre className="mt-2 max-h-56 overflow-auto rounded-xl bg-slate-900 p-3 text-[11px] leading-relaxed text-slate-100">
+                    {e.stack}
+                  </pre>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </Panel>
+    </div>
   );
 }
 

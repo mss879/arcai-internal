@@ -107,3 +107,51 @@ begin
 exception
   when duplicate_object then null;
 end $$;
+
+-- 4. Error tracking (T5.5) ---------------------------------------------------
+-- One row per DISTINCT failure (fingerprint = source + normalised message +
+-- first stack frame), counted up rather than logged again, so a tick that
+-- fails every five minutes is one row with a count, not 288 rows a day.
+-- Written by src/lib/errors.ts captureError(); read on /settings.
+
+create table if not exists public.error_events (
+  id               uuid primary key default gen_random_uuid(),
+  fingerprint      text not null unique,
+  -- tick | assistant-tick | wa-tick | route | client | server
+  source           text not null,
+  message          text not null,
+  stack            text,
+  path             text,
+  count            int  not null default 1,
+  first_seen_at    timestamptz not null default now(),
+  last_seen_at     timestamptz not null default now(),
+  last_notified_at timestamptz,
+  resolved_at      timestamptz,
+  meta             jsonb not null default '{}'::jsonb,
+  created_at       timestamptz not null default now()
+);
+
+create index if not exists error_events_last_seen_idx
+  on public.error_events (last_seen_at desc);
+create index if not exists error_events_open_idx
+  on public.error_events (resolved_at) where resolved_at is null;
+
+alter table public.error_events enable row level security;
+
+-- Admins read and resolve; the writer is captureError() through the
+-- service role (a tick has no session), so no insert policy is needed.
+do $$
+begin
+  create policy error_events_admin_read on public.error_events
+    for select using (public.is_admin(auth.uid()));
+exception
+  when duplicate_object then null;
+end $$;
+
+do $$
+begin
+  create policy error_events_admin_resolve on public.error_events
+    for update using (public.is_admin(auth.uid()));
+exception
+  when duplicate_object then null;
+end $$;

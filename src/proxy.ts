@@ -24,6 +24,6 @@ export const config = {
      *   guard itself (cron secret, webhook signature, or unguessable token).
      * - image/font assets
      */
-    "/((?!_next/static|_next/image|favicon.ico|sitemap.xml|robots.txt|sw.js|manifest.webmanifest|arcus/hand/|api/automation/tick|api/assistant/tick|api/whatsapp/agent-tick|api/whatsapp/webhook|api/webhooks|api/sms/automation/tick|api/web-analytics/sync|api/intelligence/digest|api/public|api/outreach/unsubscribe|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|woff2?)$).*)",
+    "/((?!_next/static|_next/image|favicon.ico|sitemap.xml|robots.txt|sw.js|manifest.webmanifest|arcus/hand/|api/automation/tick|api/health|api/assistant/tick|api/whatsapp/agent-tick|api/whatsapp/webhook|api/webhooks|api/sms/automation/tick|api/web-analytics/sync|api/intelligence/digest|api/public|api/outreach/unsubscribe|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|woff2?)$).*)",
   ],
 };

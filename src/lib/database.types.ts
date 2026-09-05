@@ -565,6 +565,8 @@ export type EmailStatus =
   | "delivered"
   | "bounced"
   | "complained";
+/** 0121 — where a captured error came from. */
+export type ErrorSource = "tick" | "assistant-tick" | "wa-tick" | "route" | "client" | "server";
 /** 0121 — what a system write did. */
 export type SystemEventAction =
   | "created"
@@ -6304,6 +6306,41 @@ export type Database = {
           created_at?: Timestamp;
         };
         Update: Partial<Database["public"]["Tables"]["system_events"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0121 — one row per distinct failure, counted (src/lib/errors.ts)
+      error_events: {
+        Row: {
+          id: UUID;
+          fingerprint: string;
+          source: ErrorSource;
+          message: string;
+          stack: string | null;
+          path: string | null;
+          count: number;
+          first_seen_at: Timestamp;
+          last_seen_at: Timestamp;
+          last_notified_at: Timestamp | null;
+          resolved_at: Timestamp | null;
+          meta: Record<string, unknown>;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          fingerprint: string;
+          source: ErrorSource;
+          message: string;
+          stack?: string | null;
+          path?: string | null;
+          count?: number;
+          first_seen_at?: Timestamp;
+          last_seen_at?: Timestamp;
+          last_notified_at?: Timestamp | null;
+          resolved_at?: Timestamp | null;
+          meta?: Record<string, unknown>;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["error_events"]["Insert"]>;
         Relationships: [];
       };
     };

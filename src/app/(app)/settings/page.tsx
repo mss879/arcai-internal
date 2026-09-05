@@ -1,4 +1,5 @@
 import { requireAdmin } from "@/lib/auth";
+import { listErrorEvents } from "@/lib/errors";
 import { isSocialCryptoConfigured } from "@/lib/social/crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
@@ -37,6 +38,7 @@ export default async function SettingsPage() {
     apiKeysRes,
     webhooksRes,
     clientsRes,
+    errorEvents,
   ] = await Promise.all([
     admin
       .from("app_settings")
@@ -75,6 +77,8 @@ export default async function SettingsPage() {
       .select("id", { count: "exact", head: true })
       .then((r) => r, () => ({ count: 0 })),
     supabase.from("clients").select("id, name").order("name").limit(500),
+    // T5.5 — the faults captureError() has counted.
+    listErrorEvents(50),
   ]);
 
   const settings = new Map<string, Record<string, unknown>>();
@@ -133,6 +137,8 @@ export default async function SettingsPage() {
       members: profiles.length,
     },
     clients: (clientsRes.data ?? []).map((c) => ({ id: c.id, name: c.name })),
+    errors: errorEvents,
+    sentry: Boolean(process.env.SENTRY_DSN),
   };
 
   return <SettingsView data={data} />;

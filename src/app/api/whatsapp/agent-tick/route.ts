@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { requireCronSecret } from "@/lib/cron-auth";
+import { captureError } from "@/lib/errors";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
   processDueWaAgentRuns,
@@ -37,6 +38,15 @@ export async function GET(request: Request) {
     const promises = await processDueWaPromises(supabase);
     const followups = await processDueWaFollowups(supabase);
 
+    // 0121 — the stamp /api/health reads: "the WhatsApp tick ran at…".
+    await supabase
+      .from("app_settings")
+      .upsert(
+        { key: "wa_agent_tick", value: { at: new Date().toISOString() }, updated_at: new Date().toISOString() },
+        { onConflict: "key" },
+      )
+      .then(() => undefined, () => undefined);
+
     return NextResponse.json({
       ok: true,
       agentRuns,
@@ -45,7 +55,7 @@ export async function GET(request: Request) {
       at: new Date().toISOString(),
     });
   } catch (e) {
-    console.error("[wa-agent-tick] failed:", e);
+    await captureError(e, { source: "wa-tick", path: "route" });
     return NextResponse.json(
       { error: e instanceof Error ? e.message : "Tick failed." },
       { status: 500 },

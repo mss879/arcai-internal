@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { requireCronSecret } from "@/lib/cron-auth";
+import { captureError } from "@/lib/errors";
 import type { Database } from "@/lib/database.types";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
@@ -216,10 +217,11 @@ export async function GET(request: Request) {
     let done = 0;
     for (; done < PASSES.length && Date.now() < cutoff; done++) {
       const [key, run] = PASSES[(start + done) % PASSES.length];
-      results[key] = await run(supabase).catch((e: unknown) => ({
-        ok: false,
-        error: e instanceof Error ? e.message : String(e),
-      }));
+      results[key] = await run(supabase).catch(async (e: unknown) => {
+        // 0121 — one row per distinct fault, counted; an admin hears once.
+        await captureError(e, { source: "tick", path: key });
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      });
     }
 
     await writeCursor(supabase, (start + done) % PASSES.length);
@@ -232,6 +234,7 @@ export async function GET(request: Request) {
       ...results,
     });
   } catch (e) {
+    await captureError(e, { source: "tick", path: "route" });
     return NextResponse.json(
       { error: e instanceof Error ? e.message : "Tick failed." },
       { status: 500 },

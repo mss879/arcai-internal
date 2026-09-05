@@ -46,3 +46,20 @@ every one of those tables and kept in step with the app's own idea of an
 app enforces it, once, and the database stays simple enough to reason about.
 The cost is honest: a member with a direct database credential is bounded by
 their role, not by their capabilities. Nobody but the service role has one.
+
+## Health and errors
+
+- **`GET /api/health`** (public, machine-only, rate-limited by IP) is the
+  uptime check: the database answers, the automation tick has run in the
+  last 16 minutes (it runs every 5), the WhatsApp tick in the last 6 (every
+  minute, only checked when WhatsApp is configured), which integrations have
+  keys (booleans only), and how many faults are open. `200` healthy, `503`
+  degraded — the body names the failing check. Point the monitor at it.
+- **Errors** are one row per distinct fault in `error_events` (0121),
+  counted rather than repeated: `captureError()` in `src/lib/errors.ts` is
+  called from the three tick routes and by the page error boundaries through
+  `POST /api/errors`. An admin is notified the first time a fingerprint is
+  seen and at most every six hours while it recurs; the Errors panel on
+  `/settings` lists and resolves them (a resolved fault reopens itself if it
+  comes back). With `SENTRY_DSN` set, each capture is also posted to Sentry
+  as a raw envelope — Sentry is a mirror, never the record.

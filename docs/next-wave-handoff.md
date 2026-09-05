@@ -2,8 +2,8 @@
 
 **Read this first, then `AGENTS.md` and `docs/projects-roadmap-handoff.md` §2/§4.**
 Updated 2026-09-06 at commit `HEAD` (see `git log -1`; last feature commit:
-"one front door to every setting"). Paste this into a new chat, or say:
-*"Read `docs/next-wave-handoff.md` and continue from step 42."*
+"capabilities — which areas a member may work in"). Paste this into a new chat, or say:
+*"Read `docs/next-wave-handoff.md` and continue from step 43."*
 
 This file is refreshed after EVERY committed step, so it is always the
 current handover — if a chat is cut off, the previous step's entry here is
@@ -13,8 +13,8 @@ complete and the next step has not started.
 
 ## 1. Where things stand
 
-**41 of 46 build steps are done (Track 4 is complete), plus an audit-and-fix
-pass over the first 26. 46 commits on `arc_ai_crm_system` `main` ahead of
+**42 of 46 build steps are done (Track 4 is complete), plus an audit-and-fix
+pass over the first 26. 48 commits on `arc_ai_crm_system` `main` ahead of
 `origin/main`, plus 2 on `arc_ai_website`. Nothing is pushed to either
 remote.**
 
@@ -59,9 +59,10 @@ statement. `0120` was extended twice after it was first written (the
 the file as it is now, not a copy taken earlier.
 
 **`0121_platform_foundation.sql` is new and additive** (no backfill). It
-currently holds section 1 only — the `expenses` category CHECK widened with
-`commission` for the payout run — and steps 42–45 ADD sections to it
-(capabilities, `system_events`, `error_events`, `clients.anonymised_at`).
+holds §1 (the `expenses` category CHECK widened with `commission`) and §2
+(`profiles.capabilities` + CHECK + the all-four backfill for members, and
+the `capabilities_enforced` seed row); steps 43–45 ADD sections to it
+(`system_events`, `error_events`, `clients.anonymised_at`).
 Apply it last, as the file stands when you push.
 
 `arc_ai_website` has its own two commits (`39cb034` UTM capture, `d2b9d1c`
@@ -129,11 +130,12 @@ client-login link) and needs no migration.
 
 ---
 
-### Track 5 — platform foundation (1 of 6)
+### Track 5 — platform foundation (2 of 6)
 
 | Commit | Feature |
 | --- | --- |
 | `(step 41)` | **T5.1** `/settings` hub (`src/app/(app)/settings/`): cards to every module's settings, forms for `app_settings.lead_form` / `outreach` / `web_chat_auto_lead`, the social-accounts connect form (first writer of `social_accounts`; `encryptToken()`, refuses without `SOCIAL_TOKEN_KEY`), `document_counters` read-only + forward-only "set next number" (service-role client behind `requireAdmin()` — the table has no RLS policies). Nav item (adminOnly), topbar gear, app-map entry. Delivery / WhatsApp / Content / Automation / Intelligence views take `?tab=` (`initialTab` prop, validated against `TAB_KEYS`). |
+| `(step 42)` | **T5.2** Capabilities: `src/lib/capabilities.ts` (pure `hasCapability()`, `CAPABILITIES`, `normaliseCapabilities`), `capabilities-server.ts` (`capabilitiesEnforced()` via the service-role client, `actorHasCapability()`, `capabilityAudienceIds()`), `auth.ts` `requireCapability()` / `assertCapability()`; `NavItem.capability` + the sidebar filter (committed as an index-only hunk); guards on 9 pages; `recordPayment()` choke point; `notifyFinance()` = finance audience in `payments.ts` and `slips.ts`; member editor checkboxes; Permissions panel on `/settings`; `docs/ops.md` "RLS-lite". Enforcement is OFF until an admin switches it on. |
 
 ## 3. The audit of steps 0–26
 
@@ -162,30 +164,11 @@ UI — the plan puts it under `/settings` (step 41).
 
 ---
 
-## 4. What remains — steps 42 to 46
+## 4. What remains — steps 43 to 46
 
 Numbers are the original plan's sequencing table.
 
 ### Track 5 — platform foundation (migration **0121** exists — add sections to it)
-
-**42 · T5.2 Permissions v2** — M. `profiles.capabilities text[]`
-(`finance, delivery, sales, marketing`) backfilled with all four for members.
-`src/lib/auth.ts`: `hasCapability`, `requireCapability` (redirect),
-(the `capabilities_enforced` toggle goes on `/settings` — add the key to
-`SETTING_KEYS` in `settings/actions.ts` and a Permissions panel to
-`settings-view.tsx`; the Errors panel of step 44 goes there too)
-`assertCapability` (ActionResult). `NavItem.capability?` in `nav.ts`;
-`sidebar.tsx` filter (**`sidebar.tsx` is one of the uncommitted hand-tracking
-files — stage only your hunks; see §6**). Page guards: `/finance`, `/payments`,
-`/invoices` → finance; `/delivery`, project reports → delivery; `/crm`,
-`/proposals` → sales; `/content`, `/sms`, WhatsApp admin tabs → marketing.
-Money actions call `assertCapability('finance')` — `recordPayment()` is the
-right choke point (it takes `actorId`; look the capability up there, and let
-`silent`/system callers through). Team page checkboxes (`updateMemberProfile`,
-`team/actions.ts:100`). Ship nav-only behind
-`app_settings.capabilities_enforced=false`. RLS stays `USING(true)` — document
-as "RLS-lite" in `docs/ops.md`. `notifyFinance()` in `payments.ts` and
-`slips.ts` currently means "admins" — switch it to the finance capability here.
 
 **43 · T5.3 System write audit** — S. `system_events` (job, actor
 `system:<job>|assistant|automation:<id>`, table_name, row_id, action,
@@ -359,8 +342,8 @@ Five things the plan got wrong. They are all silent failures.
 - **Slip idempotency on WhatsApp**: `fileWhatsAppSlip()` files on every
   classified slip; the 30-day reference/amount duplicate check marks a
   repeat as `duplicate` rather than dropping it.
-- **`notifyFinance()`** in `payments.ts` and `slips.ts` means "every admin"
-  until capabilities (step 42) name a finance group.
+- **`notifyFinance()`** now means admins + members with the `finance`
+  capability (step 42).
 - Out of scope this wave, deliberately: payment gateways (hook point only —
   `source: 'gateway'` + `payments.provider_ref`), mailbox/calendar provider
   sync, LinkedIn/TikTok publishing, start/stop timers, multi-tenancy, FX

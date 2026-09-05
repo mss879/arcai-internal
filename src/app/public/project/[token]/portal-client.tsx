@@ -23,6 +23,7 @@ import {
   Sparkles,
   Upload,
   Wallet,
+  Download,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -69,6 +70,39 @@ export type PortalProject = {
   clientName: string | null;
   clientCompany: string | null;
   documents: { label: string; url: string }[];
+  /**
+   * 0117 — files the team actually shared, rather than the two URLs typed
+   * onto the project. Signed links, minted for this page load.
+   */
+  deliverables: {
+    id: string;
+    title: string;
+    url: string;
+    version: number;
+    sizeBytes: number | null;
+    createdAt: string;
+  }[];
+  /** 0117 — anything they have been asked to sign, and whether they have. */
+  agreements: {
+    id: string;
+    kind: string;
+    title: string;
+    status: string;
+    url: string;
+    signedAt: string | null;
+  }[];
+  /** 0117 — what's in the diary, with a calendar file for each. */
+  meetings: {
+    id: string;
+    title: string;
+    at: string;
+    durationMinutes: number;
+    location: string | null;
+    joinUrl: string | null;
+    icsUrl: string;
+  }[];
+  /** 0117 — "book a call", when a booking link is configured. */
+  bookingUrl: string | null;
   payments: {
     id: string;
     amount: number;
@@ -336,6 +370,130 @@ export function PortalClient({
             </div>
           )}
         </div>
+
+        {/* ---- 0117: what they can download, sign and book ---- */}
+        {(project.deliverables.length > 0 ||
+          project.agreements.length > 0 ||
+          project.meetings.length > 0 ||
+          project.bookingUrl) && (
+          <div className="rounded-3xl border border-white/30 bg-white/70 p-6 shadow-lg backdrop-blur-xl saturate-150">
+            {project.deliverables.length > 0 && (
+              <div className="mb-6">
+                <h3 className="mb-3 flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-slate-400">
+                  <FileText className="h-4 w-4" />
+                  Your files
+                </h3>
+                <ul className="space-y-2">
+                  {project.deliverables.map((d) => (
+                    <li key={d.id}>
+                      <a
+                        href={d.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="flex items-center justify-between gap-3 rounded-xl bg-white/70 px-4 py-2.5 text-sm ring-1 ring-slate-200 transition hover:ring-primary-300"
+                      >
+                        <span className="min-w-0 truncate font-medium text-slate-800">
+                          {d.title}
+                          {d.version > 1 && (
+                            <span className="ml-1.5 text-xs text-slate-400">
+                              v{d.version}
+                            </span>
+                          )}
+                        </span>
+                        <Download className="h-4 w-4 shrink-0 text-slate-400" />
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+                {/* Links are minted for this visit and stop working after an
+                    hour — say so, or a bookmarked one looks broken. */}
+                <p className="mt-2 text-xs text-slate-400">
+                  These links expire after an hour. Reopen this page for fresh ones.
+                </p>
+              </div>
+            )}
+
+            {project.agreements.length > 0 && (
+              <div className="mb-6">
+                <h3 className="mb-3 flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-slate-400">
+                  <PenLine className="h-4 w-4" />
+                  To sign
+                </h3>
+                <ul className="space-y-2">
+                  {project.agreements.map((a) => (
+                    <li key={a.id}>
+                      <a
+                        href={a.url}
+                        className="flex items-center justify-between gap-3 rounded-xl bg-white/70 px-4 py-2.5 text-sm ring-1 ring-slate-200 transition hover:ring-primary-300"
+                      >
+                        <span className="min-w-0 truncate font-medium text-slate-800">
+                          {a.title}
+                        </span>
+                        <span
+                          className={
+                            a.signedAt
+                              ? "shrink-0 text-xs font-medium text-emerald-600"
+                              : "shrink-0 text-xs font-medium text-amber-600"
+                          }
+                        >
+                          {a.signedAt ? "Signed" : "Needs your signature"}
+                        </span>
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {project.meetings.length > 0 && (
+              <div className="mb-6">
+                <h3 className="mb-3 flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-slate-400">
+                  <CalendarDays className="h-4 w-4" />
+                  Coming up
+                </h3>
+                <ul className="space-y-2">
+                  {project.meetings.map((m) => (
+                    <li
+                      key={m.id}
+                      className="rounded-xl bg-white/70 px-4 py-2.5 ring-1 ring-slate-200"
+                    >
+                      <p className="text-sm font-medium text-slate-800">{m.title}</p>
+                      <p className="text-xs text-slate-500">
+                        {new Date(m.at).toLocaleString()} · {m.durationMinutes} min
+                        {m.location ? ` · ${m.location}` : ""}
+                      </p>
+                      <div className="mt-1.5 flex flex-wrap gap-3 text-xs font-medium">
+                        <a href={m.icsUrl} className="text-primary-600 hover:underline">
+                          Add to calendar
+                        </a>
+                        {m.joinUrl && (
+                          <a
+                            href={m.joinUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-primary-600 hover:underline"
+                          >
+                            Join
+                          </a>
+                        )}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {project.bookingUrl && (
+              <a
+                href={project.bookingUrl}
+                className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800"
+              >
+                <CalendarDays className="h-4 w-4" />
+                Book a call with us
+              </a>
+            )}
+          </div>
+        )}
 
         {/* ---- Asset timeline ---- */}
         <div className="rounded-3xl border border-white/30 bg-white/70 p-6 shadow-lg backdrop-blur-xl saturate-150">

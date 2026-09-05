@@ -34,6 +34,7 @@ import {
   ExpensesSection,
   type ProjectExpenseRow,
 } from "@/components/projects/expenses-section";
+import { DeliverablesCard } from "@/components/projects/deliverables-card";
 import { FilesSection, type ProjectFile } from "@/components/projects/files-section";
 import { LedgerSection } from "@/components/projects/ledger-section";
 import { MarginCard } from "@/components/projects/margin-card";
@@ -112,6 +113,7 @@ export default async function ProjectDetailPage({
     planRes,
     automationRunsRes,
     allStepsRes,
+    deliverablesRes,
   ] = await Promise.all([
     requireProfile(),
     (supabase as any)
@@ -256,6 +258,13 @@ export default async function ProjectDetailPage({
     // 0114 — step counts for the runs above, read in the same batch rather
     // than a second round-trip after it (the table is small).
     supabase.from("automation_steps").select("automation_id"),
+    // 0117 — files the team can hand to the client.
+    supabase
+      .from("project_deliverables")
+      .select("id, title, version, size_bytes, visible_to_client, created_at")
+      .eq("project_id", id)
+      .order("created_at", { ascending: false })
+      .limit(100),
   ]);
 
   const project = projectRes.data;
@@ -1016,7 +1025,24 @@ export default async function ProjectDetailPage({
             </div>
           </div>
         }
-        files={<FilesSection files={files} />}
+        files={
+          <div className="space-y-6">
+            {/* 0117 — above the read-only list on purpose: this is the one
+                part of Files somebody acts on. */}
+            <DeliverablesCard
+              projectId={id}
+              deliverables={(deliverablesRes.data ?? []).map((d) => ({
+                id: d.id,
+                title: d.title,
+                version: d.version,
+                sizeBytes: d.size_bytes,
+                visibleToClient: d.visible_to_client,
+                createdAt: d.created_at,
+              }))}
+            />
+            <FilesSection files={files} />
+          </div>
+        }
         activity={
           <div className="space-y-6">
             {/* Both of these answer "what happened to this project" — the

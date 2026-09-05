@@ -4,7 +4,7 @@ import { differenceInCalendarDays, startOfToday } from "date-fns";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { PortalClient, type PortalProject } from "./portal-client";
 import { PortalLock } from "./portal-lock";
-import { DELIVERY_STAGES } from "@/lib/constants";
+import { DELIVERY_STAGES, STORAGE_BUCKETS } from "@/lib/constants";
 import { checkPortalGate } from "@/lib/portal-access";
 import { computeProjectProgress } from "@/lib/project-progress";
 import { buildLedger, settledAmount } from "@/lib/projects";
@@ -98,7 +98,7 @@ export default async function PublicProjectPortal({
     .from("projects")
     // Explicit column list, never select("*") — see rule 2 above.
     .select(
-      "id, name, description, status, service_type, delivery_stage, currency, total_value, deposit_paid, start_date, due_date, proposal_url, proposal_name, invoice_url, invoice_name, progress_override, preview_url, live_url, launched_at, client_note, client_note_at, client:clients(name, company)",
+      "id, name, description, status, service_type, delivery_stage, currency, total_value, deposit_paid, start_date, due_date, proposal_url, proposal_name, invoice_url, invoice_name, progress_override, preview_url, live_url, launched_at, client_note, client_note_at, booking_slug, client_id, client:clients(name, company)",
     )
     .eq("id", access.id)
     .maybeSingle();
@@ -205,6 +205,70 @@ export default async function PublicProjectPortal({
     ? differenceInCalendarDays(startOfToday(), new Date(lastPulse)) < 7
     : false;
 
+  // 0117 — the four things a client should be able to do from their own
+  // page: download what we made, sign what we sent, see what's booked, and
+  // book more time. Each degrades to an empty list rather than failing the
+  // page, because 0117 may not have been applied yet.
+  const [deliverablesRes, agreementsRes, meetingsRes, bookingRes] =
+    await Promise.all([
+      supabase
+        .from("project_deliverables")
+        .select("id, title, file_path, version, size_bytes, created_at")
+        .eq("project_id", project.id)
+        .eq("visible_to_client", true)
+        .order("created_at", { ascending: false })
+        .limit(50)
+        .then((r) => r, () => ({ data: null })),
+      project.client_id
+        ? supabase
+            .from("agreements")
+            .select("id, kind, title, status, share_token, signed_at")
+            .eq("client_id", project.client_id)
+            .neq("status", "void")
+            .neq("status", "draft")
+            .order("created_at", { ascending: false })
+            .limit(20)
+            .then((r) => r, () => ({ data: null }))
+        : Promise.resolve({ data: null }),
+      project.client_id
+        ? supabase
+            .from("meetings")
+            .select("id, title, meeting_at, duration_minutes, location, meeting_url")
+            .eq("client_id", project.client_id)
+            .gte("meeting_at", new Date().toISOString())
+            .order("meeting_at", { ascending: true })
+            .limit(10)
+            .then((r) => r, () => ({ data: null }))
+        : Promise.resolve({ data: null }),
+      // The project's own slug wins; otherwise the workspace's first active
+      // booking link, so a portal gets one without anybody configuring it.
+      project.booking_slug
+        ? Promise.resolve({ data: { slug: project.booking_slug } })
+        : supabase
+            .from("meeting_links")
+            .select("slug")
+            .eq("active", true)
+            .order("created_at", { ascending: true })
+            .limit(1)
+            .maybeSingle()
+            .then((r) => r, () => ({ data: null })),
+    ]);
+
+  // One Storage call for every deliverable, not one each.
+  const deliverableRows = deliverablesRes.data ?? [];
+  const signedByPath = new Map<string, string>();
+  if (deliverableRows.length) {
+    const { data: signed } = await supabase.storage
+      .from(STORAGE_BUCKETS.projectDocs)
+      .createSignedUrls(
+        deliverableRows.map((d) => d.file_path),
+        3600,
+      );
+    for (const row of signed ?? []) {
+      if (row.path && row.signedUrl) signedByPath.set(row.path, row.signedUrl);
+    }
+  }
+
   const view: PortalProject = {
     name: project.name,
     description: project.description,
@@ -270,6 +334,36 @@ export default async function PublicProjectPortal({
       body: c.body,
       createdAt: c.created_at,
     })),
+    deliverables: deliverableRows
+      .filter((d) => signedByPath.has(d.file_path))
+      .map((d) => ({
+        id: d.id,
+        title: d.title,
+        url: signedByPath.get(d.file_path)!,
+        version: d.version,
+        sizeBytes: d.size_bytes,
+        createdAt: d.created_at,
+      })),
+    agreements: (agreementsRes.data ?? []).map((a) => ({
+      id: a.id,
+      kind: a.kind,
+      title: a.title,
+      status: a.status,
+      url: `/a/${a.share_token}`,
+      signedAt: a.signed_at,
+    })),
+    meetings: (meetingsRes.data ?? []).map((m) => ({
+      id: m.id,
+      title: m.title,
+      at: m.meeting_at,
+      durationMinutes: m.duration_minutes,
+      location: m.location,
+      joinUrl: m.meeting_url,
+      icsUrl: `/api/public/meeting/${token}/ics?meeting=${m.id}`,
+    })),
+    bookingUrl: bookingRes.data?.slug
+      ? `/book/${bookingRes.data.slug}?project=${token}`
+      : null,
     askForPulse: !pulseAskedRecently && stage !== null,
     // 0112
     progressPercent: progress.percent,

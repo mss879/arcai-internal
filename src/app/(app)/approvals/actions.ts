@@ -110,6 +110,18 @@ export async function decideApproval(
       break;
     }
 
+    // 0120 — a slip: confirm records the money at the claimed amount; a
+    // different figure, or a look at the picture, belongs on Finance → Slips.
+    case "slip": {
+      const { confirmSlipAction, rejectSlipAction } = await import("@/app/(app)/finance/actions");
+      const res =
+        decision === "approve"
+          ? await confirmSlipAction({ slipId: id })
+          : await rejectSlipAction({ slipId: id, reason: "" });
+      if (!res.ok) return res;
+      break;
+    }
+
     // An assistant draft is sent from its card (it needs a browser session),
     // and a carousel needs a design chosen. Both are "open it" rather than
     // "decide it here", and the UI links rather than offering a button.

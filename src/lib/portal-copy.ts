@@ -85,6 +85,13 @@ type Copy = {
   referBlurb: string;
   referCopy: string;
   referCopied: string;
+  /** 0120 — the bank-slip card */
+  slipTitle: string;
+  slipBlurb: string;
+  slipButton: string;
+  slipPending: string;
+  slipThanks: string;
+  slipNote: string;
   stages: Record<DeliveryStage, string>;
 };
 
@@ -154,6 +161,13 @@ const EN: Copy = {
     "Share your link — when they become a client, we'll thank you properly.",
   referCopy: "Copy your link",
   referCopied: "Copied",
+  slipTitle: "Paid by bank transfer?",
+  slipBlurb:
+    "Send us the slip or a screenshot of the transfer and we'll update your balance once it lands.",
+  slipButton: "Send the slip",
+  slipPending: "We have your slip — we'll confirm it shortly and let you know.",
+  slipThanks: "Thank you — we've got it. We'll confirm the payment shortly and let you know.",
+  slipNote: "Anything we should know? (optional)",
   stages: {
     onboarding: "Getting started",
     assets: "Collecting your content",
@@ -229,6 +243,13 @@ const SI: Copy = {
     "ඔබේ සබැඳිය බෙදාගන්න — ඔවුන් අපගේ සේවාදායකයෙකු වූ විට අපි ඔබට නිසි ලෙස ස්තූති කරන්නෙමු.",
   referCopy: "ඔබේ සබැඳිය පිටපත් කරන්න",
   referCopied: "පිටපත් කළා",
+  slipTitle: "බැංකු මාරුවකින් ගෙවුවාද?",
+  slipBlurb:
+    "ගෙවීම් රිසිට්පත හෝ මාරුවේ තිර රුවක් අපට එවන්න — මුදල් ලැබුණු විගස ඔබේ ශේෂය යාවත්කාලීන කරන්නෙමු.",
+  slipButton: "රිසිට්පත එවන්න",
+  slipPending: "ඔබේ රිසිට්පත අප සතුයි — ඉක්මනින් තහවුරු කර ඔබට දන්වන්නෙමු.",
+  slipThanks: "ස්තූතියි — ලැබුණා. ගෙවීම ඉක්මනින් තහවුරු කර ඔබට දන්වන්නෙමු.",
+  slipNote: "අප දැනගත යුතු දෙයක් තිබේද? (විකල්ප)",
   stages: {
     onboarding: "පටන් ගනිමු",
     assets: "ඔබේ අන්තර්ගතය එකතු කිරීම",
@@ -306,6 +327,13 @@ const TA: Copy = {
     "உங்கள் இணைப்பைப் பகிருங்கள் — அவர்கள் எங்கள் வாடிக்கையாளராகும் போது, உங்களுக்கு முறையாக நன்றி சொல்வோம்.",
   referCopy: "உங்கள் இணைப்பை நகலெடுக்கவும்",
   referCopied: "நகலெடுக்கப்பட்டது",
+  slipTitle: "வங்கிப் பரிமாற்றம் மூலம் செலுத்தினீர்களா?",
+  slipBlurb:
+    "ரசீதையோ பரிமாற்றத்தின் திரைப்படத்தையோ எங்களுக்கு அனுப்புங்கள் — பணம் வந்ததும் உங்கள் நிலுவையைப் புதுப்பிப்போம்.",
+  slipButton: "ரசீதை அனுப்பவும்",
+  slipPending: "உங்கள் ரசீது எங்களிடம் உள்ளது — விரைவில் உறுதிப்படுத்தி உங்களுக்குத் தெரிவிப்போம்.",
+  slipThanks: "நன்றி — கிடைத்தது. விரைவில் பணத்தை உறுதிப்படுத்தி உங்களுக்குத் தெரிவிப்போம்.",
+  slipNote: "நாங்கள் அறிய வேண்டியது ஏதேனும் உள்ளதா? (விருப்பத்திற்குரியது)",
   stages: {
     onboarding: "தொடங்குகிறோம்",
     assets: "உங்கள் உள்ளடக்கம் சேகரிக்கிறோம்",

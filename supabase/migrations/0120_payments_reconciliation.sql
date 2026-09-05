@@ -487,6 +487,30 @@ exception
     raise notice '0120: duplicate notice numbers exist — notices_number_key NOT created. Resolve by hand, then re-run this statement.';
 end $$;
 
+-- 7b. The approvals badge counts slips too ------------------------------------
+-- Same body as 0119's, plus the new queue. Replacing the function is the
+-- honest edit: a count that silently omitted a queue would be a lie.
+create or replace function public.approvals_count()
+returns int
+language sql
+stable
+security invoker
+set search_path = public
+as $$
+  select
+    (select count(*) from public.assistant_approvals where status = 'pending')
+  + (select count(*) from public.member_loans where approval = 'pending')
+  + (select count(*) from public.commissions where status = 'pending')
+  + (select count(*) from public.wa_lessons where status = 'pending')
+  + (select count(*) from public.lead_outreach where status = 'ready')
+  + (select count(*) from public.project_change_requests
+       where status in ('new', 'quoted'))
+  + (select count(*) from public.carousel_posts
+       where status = 'ready' and chosen_option_id is null)
+  -- 0120
+  + (select count(*) from public.payment_slips where status in ('pending', 'duplicate'));
+$$;
+
 -- 8. RLS ----------------------------------------------------------------------
 
 alter table public.payment_slips      enable row level security;

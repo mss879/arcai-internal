@@ -184,6 +184,8 @@ export const STORAGE_BUCKETS = {
   waMedia: "wa-media",
   waCampaigns: "wa-campaigns",
   projectDocs: "project-docs",
+  // 0120 — private: a slip is a picture of somebody's bank account.
+  paymentSlips: "payment-slips",
 } as const;
 
 export const SERVICE_TYPE_LABELS: Record<string, string> = {

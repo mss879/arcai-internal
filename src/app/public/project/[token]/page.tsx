@@ -210,7 +210,7 @@ export default async function PublicProjectPortal({
   // page: download what we made, sign what we sent, see what's booked, and
   // book more time. Each degrades to an empty list rather than failing the
   // page, because 0117 may not have been applied yet.
-  const [deliverablesRes, agreementsRes, meetingsRes, bookingRes, referralCode] =
+  const [deliverablesRes, agreementsRes, meetingsRes, bookingRes, referralCode, slipRes] =
     await Promise.all([
       supabase
         .from("project_deliverables")
@@ -258,6 +258,13 @@ export default async function PublicProjectPortal({
       project.client_id
         ? referralCodeFor(supabase, project.client_id).catch(() => null)
         : Promise.resolve(null),
+      // 0120 — a slip already waiting on this project.
+      supabase
+        .from("payment_slips")
+        .select("id", { count: "exact", head: true })
+        .eq("project_id", project.id)
+        .eq("status", "pending")
+        .then((r) => r, () => ({ count: 0 })),
     ]);
 
   // One Storage call for every deliverable, not one each.
@@ -374,6 +381,7 @@ export default async function PublicProjectPortal({
       const link = referralCode ? referralLink(referralCode) : null;
       return referralCode && link ? { code: referralCode, link } : null;
     })(),
+    slipPending: (slipRes.count ?? 0) > 0,
     askForPulse: !pulseAskedRecently && stage !== null,
     // 0112
     progressPercent: progress.percent,

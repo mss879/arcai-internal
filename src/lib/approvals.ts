@@ -28,7 +28,9 @@ export type ApprovalKind =
   | "wa_lesson"
   | "outreach"
   | "change_request"
-  | "carousel";
+  | "carousel"
+  // 0120
+  | "slip";
 
 export type ApprovalItem = {
   /** `<kind>:<id>` — unique across queues. */
@@ -77,6 +79,7 @@ export async function listApprovalItems(db: DB): Promise<ApprovalItem[]> {
     outreach,
     changes,
     carousels,
+    slips,
   ] = await Promise.all([
     safe(async () => {
       const { data } = await db
@@ -142,6 +145,16 @@ export async function listApprovalItems(db: DB): Promise<ApprovalItem[]> {
         .limit(50);
       return data ?? [];
     }),
+    // 0120 — bank slips waiting for a finance person.
+    safe(async () => {
+      const { data } = await db
+        .from("payment_slips")
+        .select("id, source, status, match, amount_claimed, reference, invoice_id, client_id, created_at")
+        .in("status", ["pending", "duplicate"])
+        .order("created_at", { ascending: false })
+        .limit(50);
+      return data ?? [];
+    }),
   ]);
 
   // Names, in one round-trip rather than per row.
@@ -158,6 +171,22 @@ export async function listApprovalItems(db: DB): Promise<ApprovalItem[]> {
       .select("id, full_name")
       .in("id", userIds);
     for (const p of data ?? []) names.set(p.id, p.full_name);
+  }
+
+  // 0120 — the slips' invoices and clients, one round-trip each.
+  const slipInvoiceNumbers = new Map<string, string>();
+  const slipClientNames = new Map<string, string>();
+  {
+    const invIds = [...new Set(slips.map((sl) => sl.invoice_id).filter((v): v is string => Boolean(v)))];
+    const cIds = [...new Set(slips.map((sl) => sl.client_id).filter((v): v is string => Boolean(v)))];
+    if (invIds.length) {
+      const { data } = await db.from("invoices").select("id, invoice_number").in("id", invIds);
+      for (const r of data ?? []) slipInvoiceNumbers.set(r.id, r.invoice_number);
+    }
+    if (cIds.length) {
+      const { data } = await db.from("clients").select("id, name").in("id", cIds);
+      for (const r of data ?? []) slipClientNames.set(r.id, r.name);
+    }
   }
 
   const items: ApprovalItem[] = [
@@ -252,6 +281,39 @@ export async function listApprovalItems(db: DB): Promise<ApprovalItem[]> {
       href: "/content",
       at: p.created_at,
       subject: null,
+    })),
+    // 0120 — bank slips. Approve records the money at the claimed amount;
+    // Finance → Slips is where to look at the picture or change the figure.
+    ...slips.map((sl) => ({
+      key: `slip:${sl.id}`,
+      kind: "slip" as const,
+      id: sl.id,
+      title:
+        sl.status === "duplicate"
+          ? "Payment slip — seen before"
+          : sl.match === "exact"
+            ? "Payment slip — matches the balance"
+            : sl.match === "partial"
+              ? "Payment slip — part of the balance"
+              : sl.match === "mismatch"
+                ? "Payment slip — does NOT match"
+                : "Payment slip — no invoice to match",
+      body: clip(
+        [
+          sl.invoice_id && slipInvoiceNumbers.get(sl.invoice_id)
+            ? `Invoice ${slipInvoiceNumbers.get(sl.invoice_id)}`
+            : null,
+          sl.reference ? `ref ${sl.reference}` : null,
+          `via ${sl.source.replace("_", " ")}`,
+        ]
+          .filter(Boolean)
+          .join(" · "),
+      ),
+      amount: sl.amount_claimed === null ? null : Number(sl.amount_claimed),
+      currency: "LKR",
+      href: "/finance?tab=slips",
+      at: sl.created_at,
+      subject: sl.client_id ? (slipClientNames.get(sl.client_id) ?? null) : null,
     })),
   ];
 

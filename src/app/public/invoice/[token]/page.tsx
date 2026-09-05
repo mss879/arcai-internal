@@ -57,6 +57,23 @@ export default async function PublicInvoicePage({
     .maybeSingle();
   const stamp = stampRow?.stamp ?? null;
 
+  // 0120 — is a slip already waiting on this invoice? Tolerates 0120 not
+  // being applied: the card simply offers the upload.
+  const { data: stateRow } = await supabase
+    .from("invoices")
+    .select("id, status")
+    .eq("share_token", token)
+    .maybeSingle()
+    .then((r) => r, () => ({ data: null }));
+  const { count: pendingSlips } = stateRow
+    ? await supabase
+        .from("payment_slips")
+        .select("id", { count: "exact", head: true })
+        .eq("invoice_id", stateRow.id)
+        .eq("status", "pending")
+        .then((r) => r, () => ({ count: 0 }))
+    : { count: 0 };
+
   const bank = invoiceBank(invoice.bank_account);
 
   const data: PublicInvoiceData = {
@@ -92,6 +109,10 @@ export default async function PublicInvoicePage({
     },
     questionsLine: INVOICE_SIGNOFF.questionsLine,
     pdfHref: `/api/public/invoice/${token}/pdf`,
+    // 0120 — the slip card
+    token,
+    slipPending: (pendingSlips ?? 0) > 0,
+    settledState: stateRow?.status === "paid" || stateRow?.status === "void",
   };
 
   return <PublicInvoice data={data} />;

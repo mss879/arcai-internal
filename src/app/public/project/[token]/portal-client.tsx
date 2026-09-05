@@ -29,6 +29,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DELIVERY_STAGES, SERVICE_TYPE_LABELS } from "@/lib/constants";
+import { SlipUploadForm } from "@/components/public/slip-upload-form";
 import { portalCopy, type PortalCopy } from "@/lib/portal-copy";
 import type {
   DeliveryStage,
@@ -43,6 +44,7 @@ import {
   sendPulse,
   submitChangeRequest,
   uploadPortalFile,
+  uploadPortalPaymentSlip,
 } from "./actions";
 
 /**
@@ -105,6 +107,8 @@ export type PortalProject = {
   bookingUrl: string | null;
   /** 0117 — the client's own referral code and the link that carries it. */
   referral: { code: string; link: string } | null;
+  /** 0120 — a slip is already waiting to be confirmed. */
+  slipPending: boolean;
   payments: {
     id: string;
     amount: number;
@@ -324,6 +328,24 @@ export function PortalClient({
               <p className="mt-1.5 text-xs text-slate-400">
                 {copy.settledPercent(project.paidPercent)}
               </p>
+            </div>
+          )}
+
+          {/* 0120 — the slip is the "pay" button */}
+          {project.balance > 0 && !isCompleted && (
+            <div className="mt-5">
+              <SlipUploadForm
+                onUpload={(fd) => uploadPortalPaymentSlip(token, fd)}
+                pending={project.slipPending}
+                copy={{
+                  title: copy.slipTitle,
+                  blurb: copy.slipBlurb,
+                  button: copy.slipButton,
+                  pending: copy.slipPending,
+                  thanks: copy.slipThanks,
+                  noteLabel: copy.slipNote,
+                }}
+              />
             </div>
           )}
 

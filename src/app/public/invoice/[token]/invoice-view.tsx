@@ -4,6 +4,8 @@ import { Download } from "lucide-react";
 
 import { formatCurrency } from "@/lib/utils";
 
+import { InvoiceSlipCard } from "./slip-card";
+
 export type PublicInvoiceData = {
   invoiceNumber: string;
   invoiceDate: string;
@@ -38,6 +40,11 @@ export type PublicInvoiceData = {
   };
   questionsLine: string;
   pdfHref: string;
+  /** 0120 — for the "I've paid" card. */
+  token: string;
+  slipPending: boolean;
+  /** Paid or void: nothing to upload against. */
+  settledState: boolean;
 };
 
 /**
@@ -198,6 +205,11 @@ export function PublicInvoice({ data }: { data: PublicInvoiceData }) {
               <Line label="Branch" value={data.bank.branch} />
             </dl>
           </div>
+        )}
+
+        {/* 0120 — I've paid: the slip becomes the "pay" button ------------ */}
+        {(data.dueToday > 0 || balance > 0) && !data.settledState && (
+          <InvoiceSlipCard token={data.token} pending={data.slipPending} />
         )}
 
         {/* Download ---------------------------------------------------- */}

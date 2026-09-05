@@ -370,3 +370,48 @@ export async function setIncomeEntryStatus(
   revalidatePath("/finance");
   return { ok: true };
 }
+
+// --- 0120: bank slips ------------------------------------------------------
+// Thin wrappers: the rules live in src/lib/slips.ts, and the money in
+// recordPayment(). Finance's tab and the approvals page both call these.
+
+export async function confirmSlipAction(input: {
+  slipId: string;
+  amount?: number | null;
+  paidAt?: string | null;
+}): Promise<ActionResult<{ told: boolean }>> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const { confirmSlip } = await import("@/lib/slips");
+  const res = await confirmSlip(supabase, {
+    slipId: input.slipId,
+    actorId: user.id,
+    amount: input.amount,
+    paidAt: input.paidAt,
+  });
+  if (!res.ok) return res;
+  revalidatePath("/finance");
+  revalidatePath("/invoices");
+  revalidatePath("/approvals");
+  return { ok: true, told: res.told };
+}
+
+export async function rejectSlipAction(input: {
+  slipId: string;
+  reason: string;
+}): Promise<ActionResult<{ told: boolean }>> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const { rejectSlip } = await import("@/lib/slips");
+  const res = await rejectSlip(supabase, { slipId: input.slipId, actorId: user.id, reason: input.reason });
+  if (!res.ok) return res;
+  revalidatePath("/finance");
+  revalidatePath("/approvals");
+  return { ok: true, told: res.told };
+}

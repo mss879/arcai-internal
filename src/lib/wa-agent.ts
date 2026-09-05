@@ -4718,6 +4718,26 @@ export async function handleInboundPaymentSlip(
       ? `Expected: installment ${pending.seq} of "${pending.planTitle}" — ${pending.currency} ${pending.amount.toLocaleString()}.`
       : "No pending installment found in Finance — double-check what this payment is for.";
 
+    // 0120 — when the sender is a known client, the slip joins the SAME
+    // verification queue as one uploaded from the invoice page: a row, a
+    // match against their oldest open invoice, and a finance person's
+    // confirmation that records the money. The task below stays only for a
+    // sender nobody can place.
+    if (contact.client_id && info.mediaUrl) {
+      const filed = await fileWhatsAppSlip(supabase, contact, info);
+      if (filed) {
+        await supabase.from("wa_agent_logs").insert({
+          contact_id: contact.id,
+          tool: "payment_slip",
+          args: (info.slip ?? {}) as Record<string, unknown>,
+          ok: true,
+          result:
+            "Slip filed for verification — tell the customer we've received it and will confirm shortly.".slice(0, 500),
+        });
+        return;
+      }
+    }
+
     await supabase.from("crm_tasks").insert({
       lead_id: contact.lead_id,
       title: `Verify payment slip — ${name}`,
@@ -4811,6 +4831,80 @@ export async function linkWaContactToCrm(
  * last rung is the behaviour this had before there was anywhere to record an
  * owner, so a workspace that has set neither is unaffected.
  */
+/**
+ * 0120 — put a WhatsApp slip on the verification queue.
+ *
+ * The media already lives in the wa-media bucket (the webhook stored it), so
+ * the row points at that object rather than copying it. The classifier's
+ * fields ride along as prefilled values; the reader only runs when they are
+ * missing. Returns false when nothing could be filed, so the caller falls
+ * back to the task it always raised.
+ */
+async function fileWhatsAppSlip(
+  supabase: DB,
+  contact: WaContact,
+  info: InboundSlipInfo,
+): Promise<boolean> {
+  try {
+    const { createSlip } = await import("@/lib/slips");
+    const { STORAGE_BUCKETS } = await import("@/lib/constants");
+    const marker = `/object/public/${STORAGE_BUCKETS.waMedia}/`;
+    const at = info.mediaUrl?.indexOf(marker) ?? -1;
+    if (!info.mediaUrl || at < 0) return false;
+    const path = decodeURIComponent(info.mediaUrl.slice(at + marker.length));
+    const isPdf = /\.pdf($|\?)/i.test(path);
+
+    // Their oldest open invoice, if any.
+    const { data: invoice } = await supabase
+      .from("invoices")
+      .select("id")
+      .eq("client_id", contact.client_id!)
+      .in("status", ["issued", "sent", "partially_paid"])
+      .order("invoice_date", { ascending: true })
+      .limit(1)
+      .maybeSingle()
+      .then((r) => r, () => ({ data: null }));
+
+    const { data: lastMessage } = await supabase
+      .from("wa_messages")
+      .select("id")
+      .eq("contact_id", contact.id)
+      .eq("direction", "in")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const res = await createSlip(supabase, {
+      source: "whatsapp",
+      existing: {
+        bucket: STORAGE_BUCKETS.waMedia,
+        path,
+        mime: isPdf ? "application/pdf" : "image/jpeg",
+        size: null,
+        publicUrl: info.mediaUrl,
+      },
+      prefilled: info.slip
+        ? {
+            amount: info.slip.amount ?? null,
+            currency: info.slip.currency ?? null,
+            reference: info.slip.reference ?? null,
+            bank: info.slip.bank ?? null,
+            date: info.slip.date ?? null,
+          }
+        : null,
+      invoiceId: invoice?.id ?? null,
+      clientId: contact.client_id,
+      waContactId: contact.id,
+      waMessageId: lastMessage?.id ?? null,
+      note: info.description?.slice(0, 200) || null,
+    });
+    return res.ok;
+  } catch (e) {
+    console.error("[wa-agent] filing the slip failed:", e);
+    return false;
+  }
+}
+
 export async function handoffAudience(
   supabase: DB,
   contactId: string,

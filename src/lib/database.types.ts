@@ -693,7 +693,7 @@ export type SlipParsed = {
   bank?: string | null;
   date?: string | null;
   payer?: string | null;
-  confidence?: number | null;
+  confidence?: "high" | "low" | null;
   raw?: string | null;
 };
 

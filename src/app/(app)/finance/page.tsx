@@ -1,4 +1,5 @@
 import { loadCashForecast } from "@/lib/finance-forecast";
+import { listSlips } from "@/lib/slips";
 import { createClient } from "@/lib/supabase/server";
 import { periodFor, targetsProgress } from "@/lib/targets";
 import type {
@@ -14,8 +15,13 @@ import { FinanceView } from "./finance-view";
 
 export const metadata = { title: "Money & Finance" };
 
-export default async function FinancePage() {
+export default async function FinancePage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ tab?: string }>;
+}) {
   const supabase = await createClient();
+  const params = (await searchParams) ?? {};
 
   const [
     plansRes,
@@ -28,6 +34,7 @@ export default async function FinancePage() {
     recurringRes,
     forecast,
     targetProgress,
+    slips,
   ] = await Promise.all([
       supabase.from("payment_plans").select("*").order("created_at", { ascending: false }),
       supabase.from("payment_installments").select("*").order("due_date"),
@@ -56,6 +63,8 @@ export default async function FinancePage() {
       // Same loader as Intelligence, so the two pages cannot disagree.
       loadCashForecast(supabase).catch(() => null),
       targetsProgress(supabase, periodFor(new Date())).catch(() => []),
+      // 0120 — slips waiting to be confirmed.
+      listSlips(supabase),
     ]);
 
   const projects = (projectsRes.data ?? []).map((p) => ({
@@ -78,6 +87,8 @@ export default async function FinancePage() {
       recurring={(recurringRes.data ?? []) as any}
       forecast={forecast}
       targetProgress={targetProgress}
+      slips={slips}
+      initialTab={params.tab === "slips" ? "slips" : undefined}
     />
   );
 }

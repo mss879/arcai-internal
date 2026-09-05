@@ -553,3 +553,64 @@ export async function sendPulse(
   revalidatePath(`/public/project/${token}`);
   return { ok: true };
 }
+
+/**
+ * 0120 — "I've paid" from the project portal. The gate is re-checked, the
+ * slip is capped and typed, and it joins the same queue as one from the
+ * invoice page: nothing is paid until a finance person confirms it. It
+ * lands on the project's oldest open invoice when there is one.
+ */
+export async function uploadPortalPaymentSlip(
+  token: string,
+  formData: FormData,
+): Promise<ActionResult> {
+  const busy = await portalLimit(token, "portal-slip", 5, 3600);
+  if (busy) return { ok: false, error: busy };
+
+  const opened = await openPortal(token);
+  if ("error" in opened) return { ok: false, error: opened.error };
+
+  const file = formData.get("file");
+  if (!(file instanceof File) || file.size === 0) return { ok: false, error: "Choose the slip first." };
+  const { createSlip, MAX_SLIP_BYTES, slipMimeOk } = await import("@/lib/slips");
+  if (!slipMimeOk(file.type)) return { ok: false, error: "Send a photo (JPG, PNG) or a PDF of the slip." };
+  if (file.size > MAX_SLIP_BYTES) return { ok: false, error: "That file is over 10MB — a screenshot is plenty." };
+
+  const supabase = createAdminClient();
+  const { data: project } = await supabase
+    .from("projects")
+    .select("id, client_id")
+    .eq("id", opened.project.id)
+    .maybeSingle();
+  const { data: openInvoice } = await supabase
+    .from("invoices")
+    .select("id")
+    .eq("project_id", opened.project.id)
+    .in("status", ["issued", "sent", "partially_paid"])
+    .order("invoice_date", { ascending: true })
+    .limit(1)
+    .maybeSingle()
+    .then((r) => r, () => ({ data: null }));
+
+  const { count } = await supabase
+    .from("payment_slips")
+    .select("id", { count: "exact", head: true })
+    .eq("project_id", opened.project.id)
+    .eq("status", "pending")
+    .then((r) => r, () => ({ count: 0 }));
+  if ((count ?? 0) > 0) {
+    return { ok: false, error: "We already have a slip from you — we'll confirm it shortly." };
+  }
+
+  const res = await createSlip(supabase, {
+    source: "portal",
+    file: { buffer: Buffer.from(await file.arrayBuffer()), mime: file.type, name: file.name },
+    invoiceId: openInvoice?.id ?? null,
+    projectId: opened.project.id,
+    clientId: project?.client_id ?? null,
+    note: String(formData.get("note") ?? "").slice(0, 200),
+  });
+  if (!res.ok) return res;
+  revalidatePath(`/public/project/${token}`);
+  return { ok: true };
+}

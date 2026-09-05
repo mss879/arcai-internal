@@ -73,6 +73,9 @@ const META: Record<
     tone: "text-fuchsia-600",
     decidable: false,
   },
+  // 0120 — approve records the money at the claimed amount; Finance → Slips
+  // is where to look at the picture or change the figure.
+  slip: { label: "Bank slip", icon: Wallet, tone: "text-emerald-700", decidable: true },
 };
 
 export function ApprovalsView({

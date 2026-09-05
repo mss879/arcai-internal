@@ -32,7 +32,10 @@ import { TargetsTile } from "@/components/dashboard/targets-tile";
 import { useRealtimeSync } from "@/hooks/use-realtime-sync";
 import type { CashForecast } from "@/lib/finance-forecast";
 import { monthlyInflows, monthlyOutflows } from "@/lib/finance-math";
+import type { SlipQueueRow } from "@/lib/slips";
 import type { TargetProgress } from "@/lib/targets";
+
+import { SlipsTab } from "./slips-tab";
 import { cn, formatCurrency } from "@/lib/utils";
 import type {
   Cheque,
@@ -70,6 +73,7 @@ type Tab =
   | "recurring"
   | "installments"
   | "cheques"
+  | "slips"
   | "expenses"
   | "tax";
 type ClientLite = { id: string; name: string; company: string | null };
@@ -122,6 +126,8 @@ export function FinanceView({
   recurring,
   forecast = null,
   targetProgress = [],
+  slips = [],
+  initialTab,
 }: {
   plans: PaymentPlan[];
   installments: PaymentInstallment[];
@@ -134,12 +140,15 @@ export function FinanceView({
   /** 0119 — the 90-day cash view, shared with Intelligence. */
   forecast?: CashForecast | null;
   targetProgress?: TargetProgress[];
+  /** 0120 — bank slips waiting to be confirmed. */
+  slips?: SlipQueueRow[];
+  initialTab?: Tab;
 }) {
   useRealtimeSync("payment_plans");
   useRealtimeSync("payment_installments");
   useRealtimeSync("cheques");
   useRealtimeSync("expenses");
-  const [tab, setTab] = React.useState<Tab>("overview");
+  const [tab, setTab] = React.useState<Tab>(initialTab ?? "overview");
 
   // 0100 — entries the tick has generated but nobody has ticked off. This is
   // the number that answers "did this month's money actually arrive".
@@ -186,6 +195,14 @@ export function FinanceView({
           Cheques
         </TabButton>
         <TabButton
+          active={tab === "slips"}
+          onClick={() => setTab("slips")}
+          icon={<Landmark className="h-4 w-4" />}
+          count={slips.length}
+        >
+          Slips
+        </TabButton>
+        <TabButton
           active={tab === "expenses"}
           onClick={() => setTab("expenses")}
           icon={<Receipt className="h-4 w-4" />}
@@ -218,6 +235,7 @@ export function FinanceView({
       {tab === "installments" && (
         <InstallmentsTab plans={plans} installments={installments} clients={clients} />
       )}
+      {tab === "slips" && <SlipsTab slips={slips} />}
       {tab === "cheques" && <ChequesTab cheques={cheques} clients={clients} />}
       {tab === "expenses" && (
         <ExpensesTab expenses={expenses} projects={projects} />

@@ -18,7 +18,7 @@ import type { ActionResult } from "@/lib/types";
  * client below is the key.
  */
 
-const SETTING_KEYS = ["lead_form", "outreach", "web_chat_auto_lead"] as const;
+const SETTING_KEYS = ["lead_form", "outreach", "web_chat_auto_lead", "capabilities_enforced"] as const;
 export type SettingKey = (typeof SETTING_KEYS)[number];
 
 /** Replace one `app_settings` value. The shape is the reader's business. */

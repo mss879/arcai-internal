@@ -10,6 +10,7 @@ import type {
 
 import { ContentView } from "./content-view";
 import type { SocialPostRow } from "./publishing-tab";
+import { requireCapability } from "@/lib/auth";
 
 export const metadata = { title: "Content Studio" };
 
@@ -18,6 +19,8 @@ export default async function ContentPage({
 }: {
   searchParams?: Promise<{ tab?: string }>;
 }) {
+  // T5.2 — marketing; hidden from the menu without it, refused once enforced.
+  await requireCapability("marketing");
   // T5.1 — a settings-hub card can open a specific tab.
   const { tab: initialTab } = (await searchParams) ?? {};
   const supabase = await createClient();

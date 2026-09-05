@@ -3,10 +3,13 @@ import { pricingAmounts } from "@/lib/proposal-pricing";
 import type { Proposal } from "@/lib/types";
 
 import { ProposalsView } from "./proposals-view";
+import { requireCapability } from "@/lib/auth";
 
 export const metadata = { title: "Proposals" };
 
 export default async function ProposalsPage() {
+  // T5.2 — sales; hidden from the menu without it, refused once enforced.
+  await requireCapability("sales");
   const supabase = await createClient();
 
   const [proposalsRes, clientsRes, priceAmounts] = await Promise.all([

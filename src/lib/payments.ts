@@ -3,6 +3,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { fireAutomationTrigger } from "@/lib/automation";
+import { actorHasCapability, capabilityAudienceIds } from "@/lib/capabilities-server";
 import type { Database, InvoiceStatus, PaymentSource } from "@/lib/database.types";
 import { buildPaymentEvent, logDeliveryEvent } from "@/lib/delivery";
 import { openInvoicesForProject, reconcileInvoice } from "@/lib/invoices";
@@ -81,6 +82,13 @@ export async function recordPayment(db: DB, input: RecordPaymentInput): Promise<
     !input.recurringEntryId
   ) {
     return { ok: false, error: "A payment has to settle something — a project, an invoice or an instalment." };
+  }
+
+  // T5.2 — the one choke point for "may this person record money". A
+  // system caller (null actor) and a silent backfill pass; a member without
+  // the finance tick is refused once enforcement is on.
+  if (input.actorId && !input.silent && !(await actorHasCapability(db, input.actorId, "finance"))) {
+    return { ok: false, error: "You don't have Finance access. Ask an admin to grant it on the Team page." };
   }
 
   const paidAt = (input.paidAt ?? new Date().toISOString()).slice(0, 10);
@@ -307,14 +315,13 @@ export async function recordPayment(db: DB, input: RecordPaymentInput): Promise<
   return { ok: true, paymentId, invoiceIds, invoiceStatus, firstPayment };
 }
 
-/** Admins, until capabilities (0121) name a finance group. */
+/** T5.2 — admins and the members with the finance tick. */
 async function notifyFinance(
   db: DB,
   input: { title: string; body: string; link: string; actorId: string | null },
 ): Promise<void> {
   try {
-    const { data: admins } = await db.from("profiles").select("id").eq("role", "admin");
-    const ids = (admins ?? []).map((a) => a.id).filter((id) => id !== input.actorId);
+    const ids = (await capabilityAudienceIds("finance")).filter((id) => id !== input.actorId);
     if (!ids.length) return;
     await notifyUsers(db, {
       userIds: ids,

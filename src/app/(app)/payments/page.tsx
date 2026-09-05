@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 
 import { PaymentsView } from "./payments-view";
 import type { PaymentsProject } from "./project-money";
+import { requireCapability } from "@/lib/auth";
 
 export const metadata = { title: "Payments" };
 
@@ -18,6 +19,8 @@ export const metadata = { title: "Payments" };
  * the old `id, name, total_value, deposit_paid` select did.
  */
 export default async function PaymentsPage() {
+  // T5.2 — finance; hidden from the menu without it, refused once enforced.
+  await requireCapability("finance");
   const supabase = await createClient();
 
   const [paymentsRes, projectsRes] = await Promise.all([

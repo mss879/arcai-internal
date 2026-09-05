@@ -12,6 +12,7 @@ import type {
 } from "@/lib/types";
 
 import { FinanceView } from "./finance-view";
+import { requireCapability } from "@/lib/auth";
 
 export const metadata = { title: "Money & Finance" };
 
@@ -20,6 +21,8 @@ export default async function FinancePage({
 }: {
   searchParams?: Promise<{ tab?: string }>;
 }) {
+  // T5.2 — finance; hidden from the menu without it, refused once enforced.
+  await requireCapability("finance");
   const supabase = await createClient();
   const params = (await searchParams) ?? {};
 

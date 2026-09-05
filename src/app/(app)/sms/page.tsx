@@ -10,10 +10,13 @@ import type {
 } from "@/lib/types";
 
 import { SmsView } from "./sms-view";
+import { requireCapability } from "@/lib/auth";
 
 export const metadata = { title: "SMS" };
 
 export default async function SmsPage() {
+  // T5.2 — marketing; hidden from the menu without it, refused once enforced.
+  await requireCapability("marketing");
   const supabase = await createClient();
 
   const [clientsRes, messagesRes, invoicesRes, workflowsRes, stepsRes, runsRes, status] =

@@ -15,6 +15,7 @@ import {
   type NavItem,
 } from "@/components/layout/nav";
 import { signOutAction } from "@/app/login/actions";
+import { hasCapability } from "@/lib/capabilities";
 import { cn } from "@/lib/utils";
 import type { Profile } from "@/lib/types";
 
@@ -250,8 +251,12 @@ export function Sidebar({
         ))}
 
         {NAV_GROUPS.map((group) => {
+          // T5.2 — and only the areas this member may work in. The page
+          // guards itself as well once enforcement is on.
           const items = group.items.filter(
-            (item) => !item.adminOnly || profile.role === "admin",
+            (item) =>
+              (!item.adminOnly || profile.role === "admin") &&
+              hasCapability(profile, item.capability),
           );
           // A group whose every item is admin-only disappears entirely for a
           // member rather than leaving an empty heading behind.

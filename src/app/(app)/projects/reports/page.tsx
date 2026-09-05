@@ -1,5 +1,5 @@
 import { allEstimates } from "@/lib/ai/project-estimate";
-import { requireProfile } from "@/lib/auth";
+import { requireCapability, requireProfile } from "@/lib/auth";
 import { allFinanceProjectCosts } from "@/lib/project-costs";
 import { getMembers } from "@/lib/data";
 import { createClient } from "@/lib/supabase/server";
@@ -19,6 +19,8 @@ export default async function ProjectReportsPage({
 }: {
   searchParams: Promise<{ tab?: string; months?: string }>;
 }) {
+  // T5.2 — delivery; hidden from the menu without it, refused once enforced.
+  await requireCapability("delivery");
   const supabase = await createClient();
   const { tab, months: monthsParam } = await searchParams;
 

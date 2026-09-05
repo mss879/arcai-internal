@@ -9,6 +9,7 @@ import type {
 } from "@/lib/types";
 
 import { CrmBoard } from "./crm-board";
+import { requireCapability } from "@/lib/auth";
 
 export const metadata = { title: "CRM Pipeline" };
 
@@ -17,6 +18,8 @@ export default async function CrmPage({
 }: {
   searchParams: Promise<{ p?: string }>;
 }) {
+  // T5.2 — sales; hidden from the menu without it, refused once enforced.
+  await requireCapability("sales");
   const { p } = await searchParams;
   const supabase = await createClient();
 

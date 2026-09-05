@@ -757,6 +757,9 @@ export type Database = {
           /** 0092 — what an hour of this member's time costs the agency, in
            * LKR. Feeds project margin only; never shown to the member. */
           hourly_cost: number | null;
+          /** 0121 — finance | delivery | sales | marketing. Members only;
+           * an admin has all four by role. */
+          capabilities: string[];
           created_at: Timestamp;
         };
         Insert: {
@@ -770,6 +773,8 @@ export type Database = {
           avatar_url?: string | null;
           // 0092
           hourly_cost?: number | null;
+          // 0121
+          capabilities?: string[];
           created_at?: Timestamp;
         };
         Update: Partial<Database["public"]["Tables"]["profiles"]["Insert"]>;

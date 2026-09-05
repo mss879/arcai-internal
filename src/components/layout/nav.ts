@@ -29,12 +29,19 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
+import type { Capability } from "@/lib/capabilities";
+
 export type NavItem = {
   label: string;
   href: string;
   icon: LucideIcon;
   /** Hidden from members; the route must also gate itself server-side. */
   adminOnly?: boolean;
+  /**
+   * T5.2 — hidden from a member without this capability; the route guards
+   * itself with requireCapability() once enforcement is on.
+   */
+  capability?: Capability;
 };
 
 export type NavGroup = {
@@ -81,8 +88,8 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     label: "Sales",
     items: [
-      { label: "CRM Pipeline", href: "/crm", icon: KanbanSquare },
-      { label: "Proposals", href: "/proposals", icon: ScrollText },
+      { label: "CRM Pipeline", href: "/crm", icon: KanbanSquare, capability: "sales" },
+      { label: "Proposals", href: "/proposals", icon: ScrollText, capability: "sales" },
       // 0117 — contracts, SOWs and NDAs, signed on a link.
       { label: "Agreements", href: "/agreements", icon: FileSignature },
       { label: "Pricing", href: "/pricing", icon: BadgeDollarSign },
@@ -92,24 +99,24 @@ export const NAV_GROUPS: NavGroup[] = [
     label: "Clients & Delivery",
     items: [
       { label: "Clients", href: "/clients", icon: Users },
-      { label: "Client Delivery", href: "/delivery", icon: PackageCheck },
+      { label: "Client Delivery", href: "/delivery", icon: PackageCheck, capability: "delivery" },
       { label: "Meetings", href: "/meetings", icon: CalendarClock },
     ],
   },
   {
     label: "Money",
     items: [
-      { label: "Money & Finance", href: "/finance", icon: Landmark },
-      { label: "Invoices & Quotes", href: "/invoices", icon: FileText },
-      { label: "Payments", href: "/payments", icon: CreditCard },
+      { label: "Money & Finance", href: "/finance", icon: Landmark, capability: "finance" },
+      { label: "Invoices & Quotes", href: "/invoices", icon: FileText, capability: "finance" },
+      { label: "Payments", href: "/payments", icon: CreditCard, capability: "finance" },
       { label: "Notice Generation", href: "/notices", icon: Megaphone },
     ],
   },
   {
     label: "Marketing & Outreach",
     items: [
-      { label: "Content Studio", href: "/content", icon: Sparkles },
-      { label: "SMS", href: "/sms", icon: MessageSquareText },
+      { label: "Content Studio", href: "/content", icon: Sparkles, capability: "marketing" },
+      { label: "SMS", href: "/sms", icon: MessageSquareText, capability: "marketing" },
       { label: "WhatsApp", href: "/whatsapp", icon: MessageCircle },
     ],
   },

@@ -47,6 +47,8 @@ export type SettingsData = {
   leadForm: { pipelineId: string; stageId: string };
   outreach: { enabled: boolean; fromEmail: string };
   chatAutoLead: boolean;
+  /** T5.2 — whether pages and money actions refuse a member without the tick. */
+  capabilitiesEnforced: boolean;
   pipelines: { id: string; name: string }[];
   stages: { id: string; name: string; pipelineId: string }[];
   social: {
@@ -193,6 +195,7 @@ export function SettingsView({ data }: { data: SettingsData }) {
           <div className="space-y-6">
             <OutreachCard data={data} />
             <ChatLeadCard data={data} />
+            <PermissionsCard data={data} />
           </div>
         </div>
         <SocialAccountsCard data={data} />
@@ -410,6 +413,55 @@ function ChatLeadCard({ data }: { data: SettingsData }) {
           <span className="block text-xs text-slate-400">Read on the next analytics sync. Off by default.</span>
         </span>
       </label>
+    </Panel>
+  );
+}
+
+/* ---- Permissions (T5.2) ------------------------------------------------ */
+
+function PermissionsCard({ data }: { data: SettingsData }) {
+  const router = useRouter();
+  const [enabled, setEnabled] = React.useState(data.capabilitiesEnforced);
+  const [saving, setSaving] = React.useState(false);
+
+  async function toggle(next: boolean) {
+    setEnabled(next);
+    setSaving(true);
+    const res = await saveAppSetting("capabilities_enforced", { enabled: next });
+    setSaving(false);
+    if (res.ok) {
+      toast.success(
+        next
+          ? "Enforced — a member without an area's tick is now refused there."
+          : "Menus only — pages and actions let everyone through again.",
+      );
+      router.refresh();
+    } else {
+      setEnabled(!next);
+      toast.error(res.error);
+    }
+  }
+
+  return (
+    <Panel
+      icon={<ShieldCheck className="h-4 w-4" />}
+      title="Permissions"
+      description="Each member's areas — Finance, Delivery, Sales, Marketing — are ticked on the Team page. This decides how far they reach."
+    >
+      <label className="flex items-start gap-2.5 text-sm text-slate-700">
+        <input type="checkbox" className="mt-0.5" checked={enabled} disabled={saving} onChange={(e) => void toggle(e.target.checked)} />
+        <span>
+          Enforce capabilities
+          <span className="block text-xs text-slate-400">
+            Off: an unticked area only leaves the member&apos;s menu. On: its pages send them to the dashboard and
+            recording money needs the Finance tick. Admins are never affected.
+          </span>
+        </span>
+      </label>
+      <p className="mt-2 text-[11px] text-slate-400">
+        The database keeps its permissive policies either way — the app enforces, the database records
+        (&ldquo;RLS-lite&rdquo;, see docs/ops.md).
+      </p>
     </Panel>
   );
 }

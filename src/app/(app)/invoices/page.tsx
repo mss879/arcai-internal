@@ -3,6 +3,7 @@ import type { Quote } from "@/lib/types";
 
 import { InvoicesView } from "./invoices-view";
 import type { ClientLite, LeadLite } from "./quotes-section";
+import { requireCapability } from "@/lib/auth";
 
 export const metadata = { title: "Invoices & Quotes" };
 
@@ -13,6 +14,8 @@ export default async function InvoicesPage({
 }: {
   searchParams: Promise<{ tab?: string; page?: string }>;
 }) {
+  // T5.2 — finance; hidden from the menu without it, refused once enforced.
+  await requireCapability("finance");
   const [supabase, { tab, page: pageParam }] = await Promise.all([
     createClient(),
     searchParams,

@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 
 import { DeliveryView } from "./delivery-view";
+import { requireCapability } from "@/lib/auth";
 
 export const metadata = { title: "Client Delivery" };
 
@@ -9,6 +10,8 @@ export default async function DeliveryPage({
 }: {
   searchParams?: Promise<{ tab?: string }>;
 }) {
+  // T5.2 — delivery; hidden from the menu without it, refused once enforced.
+  await requireCapability("delivery");
   // T5.1 — a settings-hub card can open a specific tab.
   const { tab: initialTab } = (await searchParams) ?? {};
   const supabase = await createClient();

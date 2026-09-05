@@ -41,7 +41,7 @@ export default async function SettingsPage() {
     admin
       .from("app_settings")
       .select("key, value, updated_at")
-      .in("key", ["lead_form", "outreach", "web_chat_auto_lead"])
+      .in("key", ["lead_form", "outreach", "web_chat_auto_lead", "capabilities_enforced"])
       .then((r) => r, () => ({ data: null })),
     supabase.from("pipelines").select("id, name").order("position"),
     supabase.from("pipeline_stages").select("id, name, pipeline_id").order("position"),
@@ -82,6 +82,7 @@ export default async function SettingsPage() {
   const leadForm = settings.get("lead_form") ?? {};
   const outreach = settings.get("outreach") ?? {};
   const chat = settings.get("web_chat_auto_lead") ?? {};
+  const enforced = settings.get("capabilities_enforced") ?? {};
 
   const handoffId = waRes.data?.handoff_user_id ?? null;
   const profiles = profilesRes.data ?? [];
@@ -96,6 +97,7 @@ export default async function SettingsPage() {
       fromEmail: typeof outreach.from_email === "string" ? outreach.from_email : "",
     },
     chatAutoLead: chat.enabled === true,
+    capabilitiesEnforced: enforced.enabled === true,
     pipelines: (pipelinesRes.data ?? []).map((p) => ({ id: p.id, name: p.name })),
     stages: (stagesRes.data ?? []).map((s) => ({ id: s.id, name: s.name, pipelineId: s.pipeline_id })),
     social: {

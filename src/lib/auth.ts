@@ -2,11 +2,15 @@ import { cache } from "react";
 import { redirect } from "next/navigation";
 import type { User } from "@supabase/supabase-js";
 
+import { CAPABILITY_META, hasCapability, type Capability } from "@/lib/capabilities";
+import { capabilitiesEnforced } from "@/lib/capabilities-server";
 import { getDeviceStatus } from "@/lib/device-trust";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { usernameFromName } from "@/lib/utils";
 import type { Profile, UserRole } from "@/lib/types";
+
+export { hasCapability };
 
 /** True when the Supabase env vars are present. */
 export function isSupabaseConfigured() {
@@ -138,4 +142,34 @@ export async function requireAdmin(): Promise<Profile> {
   const profile = await requireProfile();
   if (profile.role !== "admin") redirect("/dashboard");
   return profile;
+}
+
+// ---- Capabilities (T5.2) ---------------------------------------------------
+
+/**
+ * The page guard: a member without `capability` is sent to the dashboard —
+ * once enforcement is on. Before that the page opens (the sidebar has
+ * already hidden it), so a wrong tick costs a menu item, not a workday.
+ */
+export async function requireCapability(capability: Capability): Promise<Profile> {
+  const profile = await requireProfile();
+  if (hasCapability(profile, capability)) return profile;
+  if (await capabilitiesEnforced()) redirect("/dashboard");
+  return profile;
+}
+
+/** The action guard: the same rule as an ActionResult, for server actions. */
+export async function assertCapability(
+  capability: Capability,
+): Promise<{ ok: true; profile: Profile } | { ok: false; error: string }> {
+  const profile = await getProfile();
+  if (!profile) return { ok: false, error: "Not signed in." };
+  if (hasCapability(profile, capability)) return { ok: true, profile };
+  if (await capabilitiesEnforced()) {
+    return {
+      ok: false,
+      error: `You don't have ${CAPABILITY_META[capability].label} access. Ask an admin to grant it on the Team page.`,
+    };
+  }
+  return { ok: true, profile };
 }

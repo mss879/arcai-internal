@@ -3,6 +3,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { parseSlipImage, parseSlipText, type ParsedSlip } from "@/lib/ai/receipt";
+import { capabilityAudienceIds } from "@/lib/capabilities-server";
 import { notifyClient } from "@/lib/client-notify";
 import { STORAGE_BUCKETS } from "@/lib/constants";
 import type { Database, PaymentSlipMatch, PaymentSlipSource, SlipParsed } from "@/lib/database.types";
@@ -435,10 +436,10 @@ async function downloadBytes(db: DB, bucket: string, path: string): Promise<Buff
   return Buffer.from(await data.arrayBuffer());
 }
 
+/** T5.2 — admins and the members with the finance tick. */
 async function notifyFinance(db: DB, input: { title: string; body: string; link: string }): Promise<void> {
   try {
-    const { data: admins } = await db.from("profiles").select("id").eq("role", "admin");
-    const ids = (admins ?? []).map((a) => a.id);
+    const ids = await capabilityAudienceIds("finance");
     if (!ids.length) return;
     await notifyUsers(db, { userIds: ids, type: "approval", title: input.title, body: input.body, link: input.link });
   } catch {

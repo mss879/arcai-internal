@@ -39,6 +39,7 @@ import { cn, formatCurrency } from "@/lib/utils";
 import { useRealtimeSyncTables } from "@/hooks/use-realtime-sync";
 import type { TargetProgress } from "@/lib/targets";
 import { TargetsCard } from "@/components/team/targets-card";
+import { CAPABILITIES, CAPABILITY_META, normaliseCapabilities, type Capability } from "@/lib/capabilities";
 import type { Commission, Invitation, Profile, UserRole } from "@/lib/types";
 
 import {
@@ -593,6 +594,8 @@ function EditMemberModal({
   const [fullName, setFullName] = React.useState("");
   const [title, setTitle] = React.useState("");
   const [phone, setPhone] = React.useState("");
+  // T5.2 — a member's areas. Absent column (0121 not applied) = all four.
+  const [caps, setCaps] = React.useState<Capability[]>([...CAPABILITIES]);
   const [saving, startSave] = React.useTransition();
 
   React.useEffect(() => {
@@ -600,6 +603,11 @@ function EditMemberModal({
     setFullName(member.full_name ?? "");
     setTitle(member.title ?? "");
     setPhone(member.phone ? formatPhone(member.phone) : "");
+    setCaps(
+      member.capabilities === undefined || member.capabilities === null
+        ? [...CAPABILITIES]
+        : normaliseCapabilities(member.capabilities),
+    );
   }, [member]);
 
   function save() {
@@ -609,6 +617,7 @@ function EditMemberModal({
         full_name: fullName,
         title,
         phone,
+        ...(member.role === "member" ? { capabilities: caps } : {}),
       });
       if (res.ok) {
         toast.success("Profile updated");
@@ -657,6 +666,38 @@ function EditMemberModal({
               inputMode="tel"
             />
           </Field>
+
+          {/* T5.2 — which areas they may work in. Admins have all of them. */}
+          {member.role === "member" && (
+            <Field
+              label="Can work in"
+              hint="Unticked areas leave their menu now, and refuse them once enforcement is switched on in Settings."
+            >
+              <div className="grid gap-2 sm:grid-cols-2">
+                {CAPABILITIES.map((c) => (
+                  <label
+                    key={c}
+                    className="flex items-start gap-2.5 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-700"
+                  >
+                    <input
+                      type="checkbox"
+                      className="mt-0.5"
+                      checked={caps.includes(c)}
+                      onChange={(e) =>
+                        setCaps((prev) =>
+                          e.target.checked ? normaliseCapabilities([...prev, c]) : prev.filter((x) => x !== c),
+                        )
+                      }
+                    />
+                    <span>
+                      <span className="font-medium">{CAPABILITY_META[c].label}</span>
+                      <span className="block text-xs text-slate-400">{CAPABILITY_META[c].blurb}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </Field>
+          )}
         </div>
       )}
     </Modal>

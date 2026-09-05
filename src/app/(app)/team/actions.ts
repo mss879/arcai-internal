@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { nanoid } from "nanoid";
 
 import { requireAdmin } from "@/lib/auth";
+import { normaliseCapabilities } from "@/lib/capabilities";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { sendInviteEmail } from "@/lib/email";
@@ -99,12 +100,21 @@ export async function updateMemberRole(
  */
 export async function updateMemberProfile(
   userId: string,
-  input: { full_name?: string; title?: string; phone?: string },
+  input: {
+    full_name?: string;
+    title?: string;
+    phone?: string;
+    /** T5.2 — the areas a member may work in. Ignored for an admin. */
+    capabilities?: string[];
+  },
 ): Promise<ActionResult> {
   await requireAdmin();
   const supabase = await createClient();
 
   const patch: Database["public"]["Tables"]["profiles"]["Update"] = {};
+  if (input.capabilities !== undefined) {
+    patch.capabilities = normaliseCapabilities(input.capabilities);
+  }
   if (input.full_name !== undefined) {
     if (!input.full_name.trim())
       return { ok: false, error: "Name can't be empty." };

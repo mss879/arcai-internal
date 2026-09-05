@@ -139,7 +139,7 @@ export const FINANCE_TOOLS: ToolSchema[] = [
           category: {
             type: "string",
             description:
-              "expenses: salaries|rent|software|ads|hosting|equipment|transport|utilities|fees|other. recurring: retainer|hosting|maintenance|subscription|rent|other.",
+              "expenses: salaries|rent|software|ads|hosting|equipment|transport|utilities|fees|commission|other. recurring: retainer|hosting|maintenance|subscription|rent|other.",
           },
           direction: {
             type: "string",
@@ -221,6 +221,7 @@ export const FINANCE_TOOLS: ToolSchema[] = [
               "utilities",
               "fees",
               "other",
+              "commission",
             ],
           },
           vendor: { type: "string", description: "Who was paid." },
@@ -487,6 +488,8 @@ async function findProjectRow(
 const EXPENSE_CATEGORIES: ExpenseCategory[] = [
   "salaries", "rent", "software", "ads", "hosting",
   "equipment", "transport", "utilities", "fees", "other",
+  // 0121
+  "commission",
 ];
 
 const RECURRING_CATEGORIES: RecurringIncomeCategory[] = [

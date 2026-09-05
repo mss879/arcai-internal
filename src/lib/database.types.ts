@@ -500,7 +500,9 @@ export type ExpenseCategory =
   | "transport"
   | "utilities"
   | "fees"
-  | "other";
+  | "other"
+  // 0121 — a commission payout run's expenses row.
+  | "commission";
 export type ChurnSeverity = "cooling" | "warm" | "cold";
 export type ChurnStatus = "open" | "actioned" | "dismissed";
 export type CompetitorEntryKind = "price" | "post" | "ad" | "news" | "note";

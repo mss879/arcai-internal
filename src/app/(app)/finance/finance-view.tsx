@@ -106,6 +106,8 @@ const EXPENSE_CATEGORIES: { value: ExpenseCategory; label: string }[] = [
   { value: "transport", label: "Transport" },
   { value: "utilities", label: "Utilities" },
   { value: "fees", label: "Bank & gov. fees" },
+  // 0121 — written by a commission payout run; can be picked by hand too.
+  { value: "commission", label: "Commission payouts" },
   { value: "other", label: "Other" },
 ];
 

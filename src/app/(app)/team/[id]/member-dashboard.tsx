@@ -31,6 +31,7 @@ import {
   Pencil,
   Phone,
   Plus,
+  Receipt,
   Shield,
   ShieldCheck,
   Trash2,
@@ -58,7 +59,7 @@ import type { MemberScorecard } from "@/lib/scorecards";
 import { formatPhone } from "@/lib/sms-utils";
 import { cn, formatCurrency } from "@/lib/utils";
 import { useRealtimeSyncTables } from "@/hooks/use-realtime-sync";
-import type { Commission, MemberLoanApproval, Profile } from "@/lib/types";
+import type { Commission, CommissionPayout, MemberLoanApproval, Profile } from "@/lib/types";
 
 import { setMemberHourlyCost } from "@/app/(app)/projects/plan-actions";
 
@@ -68,6 +69,7 @@ import { ScorecardSection } from "./scorecard-section";
 import {
   deleteLoanRepayment,
   deleteMemberLoan,
+  runCommissionPayout,
   saveLoanRepayment,
   saveMemberLoan,
   setMemberLoanApproval,
@@ -87,6 +89,7 @@ export function MemberDashboard({
   isOnline,
   isYou,
   scorecards = [],
+  payouts = [],
 }: {
   member: Profile;
   commissions: CommissionRow[];
@@ -98,11 +101,14 @@ export function MemberDashboard({
   isYou: boolean;
   /** 0119 — this month and last, newest first. */
   scorecards?: MemberScorecard[];
+  /** 0120 — payout runs, newest first. */
+  payouts?: CommissionPayout[];
 }) {
   useRealtimeSyncTables([
     "commissions",
     "member_loans",
     "member_loan_repayments",
+    "commission_payouts",
   ]);
 
   const router = useRouter();
@@ -115,6 +121,7 @@ export function MemberDashboard({
   const [loanToDelete, setLoanToDelete] =
     React.useState<LoanWithRepayments | null>(null);
   const [showActivity, setShowActivity] = React.useState(false);
+  const [payoutOpen, setPayoutOpen] = React.useState(false);
 
   const money = React.useMemo(
     () => summariseMemberMoney(commissions, loans),
@@ -188,6 +195,19 @@ export function MemberDashboard({
                 <Activity className="h-4 w-4" /> Activity
               </Button>
             )}
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setPayoutOpen(true)}
+              disabled={money.commissionApproved <= 0}
+              title={
+                money.commissionApproved > 0
+                  ? undefined
+                  : "Nothing approved is waiting to be paid"
+              }
+            >
+              <Banknote className="h-4 w-4" /> Pay out
+            </Button>
             <Button size="sm" onClick={() => setLoanForm({ mode: "new" })}>
               <HandCoins className="h-4 w-4" /> Give a loan
             </Button>
@@ -352,6 +372,9 @@ export function MemberDashboard({
         </section>
       </div>
 
+      {/* 0120 — payout runs ---------------------------------------- */}
+      <PayoutsCard payouts={payouts} />
+
       {/* Cost rate (PLAN-5) --------------------------------------- */}
       <CostRateCard member={member} />
 
@@ -416,6 +439,14 @@ export function MemberDashboard({
         onClose={() => setRepayFor(null)}
       />
 
+      <PayoutModal
+        open={payoutOpen}
+        member={member}
+        approved={money.commissionApproved}
+        loanOutstanding={money.loansOutstanding}
+        onClose={() => setPayoutOpen(false)}
+      />
+
       <ActivityModal
         member={showActivity ? member : null}
         devices={devices}
@@ -441,6 +472,195 @@ export function MemberDashboard({
         }}
       />
     </div>
+  );
+}
+
+/**
+ * 0120 — every payout run, newest first.
+ *
+ * A run is a record, not a status flip: what was owed, what was withheld
+ * against a loan, what actually went out, how and when. The commissions it
+ * settled carry its id; the Finance ledger carries its expense.
+ */
+function PayoutsCard({ payouts }: { payouts: CommissionPayout[] }) {
+  if (payouts.length === 0) return null;
+  return (
+    <section className="rounded-2xl border border-slate-200/80 bg-white shadow-[var(--shadow-card)]">
+      <div className="flex items-center gap-2.5 border-b border-slate-100 px-5 py-4">
+        <span className="grid h-9 w-9 place-items-center rounded-xl bg-emerald-50 text-emerald-600">
+          <Receipt className="h-5 w-5" />
+        </span>
+        <div>
+          <h2 className="text-sm font-semibold text-slate-900">Payouts</h2>
+          <p className="text-xs text-slate-400">
+            {payouts.length} run{payouts.length === 1 ? "" : "s"} ·{" "}
+            {formatCurrency(payouts.reduce((s, p) => s + Number(p.net_paid), 0))} paid out in total
+          </p>
+        </div>
+      </div>
+      <ul className="divide-y divide-slate-50">
+        {payouts.map((p) => (
+          <li key={p.id} className="flex flex-wrap items-center gap-3 px-5 py-3.5 text-sm">
+            <div className="min-w-0 flex-1">
+              <p className="font-medium text-slate-900">
+                {format(new Date(`${p.period}T00:00:00`), "MMMM yyyy")}
+                <span className="ml-2 text-xs font-normal text-slate-400">
+                  paid {format(new Date(p.paid_at), "MMM d, yyyy")}
+                </span>
+              </p>
+              <p className="text-xs text-slate-400">
+                {formatCurrency(Number(p.gross))} owed
+                {Number(p.loan_deduction) > 0
+                  ? ` · ${formatCurrency(Number(p.loan_deduction))} withheld against their loan`
+                  : ""}
+                {p.method ? ` · ${p.method}` : ""}
+                {p.reference ? ` · ref ${p.reference}` : ""}
+                {p.note ? ` · ${p.note}` : ""}
+              </p>
+            </div>
+            <span className="w-28 shrink-0 text-right text-sm font-semibold text-emerald-700">
+              {formatCurrency(Number(p.net_paid))}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/**
+ * 0120 — pay out everything approved, in one go.
+ *
+ * The figures are the member's own summary (`summariseMemberMoney`): the
+ * approved-and-unpaid commissions are the gross, the outstanding loan is
+ * what can be withheld. The run itself is `runCommissionPayout`.
+ */
+function PayoutModal({
+  open,
+  member,
+  approved,
+  loanOutstanding,
+  onClose,
+}: {
+  open: boolean;
+  member: Profile;
+  approved: number;
+  loanOutstanding: number;
+  onClose: () => void;
+}) {
+  const router = useRouter();
+  const [pending, setPending] = React.useState(false);
+  const [period, setPeriod] = React.useState("");
+  const [method, setMethod] = React.useState("");
+  const [reference, setReference] = React.useState("");
+  const [note, setNote] = React.useState("");
+  const [deductLoan, setDeductLoan] = React.useState(true);
+
+  React.useEffect(() => {
+    if (!open) return;
+    setPeriod(new Date().toISOString().slice(0, 7));
+    setMethod("Bank transfer");
+    setReference("");
+    setNote("");
+    setDeductLoan(loanOutstanding > 0);
+  }, [open, loanOutstanding]);
+
+  const deduction = deductLoan ? Math.min(loanOutstanding, approved) : 0;
+  const net = Math.max(0, approved - deduction);
+
+  async function submit() {
+    if (!period) {
+      toast.error("Pick the month the payout covers.");
+      return;
+    }
+    setPending(true);
+    const res = await runCommissionPayout(member.id, {
+      period,
+      method,
+      reference,
+      note,
+      deductLoan,
+    });
+    setPending(false);
+    if (res.ok) {
+      toast.success(
+        res.loanDeduction > 0
+          ? `Paid ${formatCurrency(res.netPaid)} — ${formatCurrency(res.loanDeduction)} withheld against the loan`
+          : `Paid ${formatCurrency(res.netPaid)} across ${res.commissions} commission${res.commissions === 1 ? "" : "s"}`,
+      );
+      router.refresh();
+      onClose();
+    } else toast.error(res.error);
+  }
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={`Pay out ${member.full_name.split(" ")[0]}`}
+      description="Every approved commission is marked paid and the run is recorded, with an expense in Finance."
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose} disabled={pending}>
+            Cancel
+          </Button>
+          <Button onClick={submit} loading={pending} disabled={approved <= 0}>
+            Pay {formatCurrency(net)}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        <div className="grid grid-cols-3 gap-3 rounded-xl bg-slate-50 p-3 text-sm">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Approved</p>
+            <p className="mt-0.5 font-semibold text-slate-900">{formatCurrency(approved)}</p>
+          </div>
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Withheld</p>
+            <p className={cn("mt-0.5 font-semibold", deduction > 0 ? "text-amber-700" : "text-slate-400")}>
+              {deduction > 0 ? `− ${formatCurrency(deduction)}` : formatCurrency(0)}
+            </p>
+          </div>
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Pays</p>
+            <p className="mt-0.5 font-semibold text-emerald-700">{formatCurrency(net)}</p>
+          </div>
+        </div>
+
+        {loanOutstanding > 0 && (
+          <label className="flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50/60 p-3 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={deductLoan}
+              onChange={(e) => setDeductLoan(e.target.checked)}
+            />
+            <span>
+              Withhold {formatCurrency(Math.min(loanOutstanding, approved))} against their outstanding loan of{" "}
+              {formatCurrency(loanOutstanding)}. It is recorded as a repayment, oldest loan first.
+            </span>
+          </label>
+        )}
+
+        <div className="grid grid-cols-2 gap-4">
+          <Field label="Month covered" required>
+            <Input type="month" value={period} onChange={(e) => setPeriod(e.target.value)} />
+          </Field>
+          <Field label="How">
+            <Input value={method} onChange={(e) => setMethod(e.target.value)} placeholder="Bank transfer" />
+          </Field>
+        </div>
+
+        <Field label="Reference" hint="A transfer id or cheque number, if there is one.">
+          <Input value={reference} onChange={(e) => setReference(e.target.value)} />
+        </Field>
+
+        <Field label="Note">
+          <Textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} />
+        </Field>
+      </div>
+    </Modal>
   );
 }
 

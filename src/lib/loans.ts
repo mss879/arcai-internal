@@ -49,6 +49,8 @@ export type MemberMoney = {
   commissionPaidOut: number;
   /** Earned but not yet paid — what the company owes before loans. */
   commissionOwed: number;
+  /** 0120 — approved and not yet paid out: what a payout run would take. */
+  commissionApproved: number;
   /** Total actually advanced — approved loans only, written-off ones included. */
   loansIssued: number;
   /** Money that's come back. */
@@ -83,6 +85,9 @@ export function summariseMemberMoney(
   const commissionPaidOut = commissions
     .filter((c) => c.status === "paid")
     .reduce((s, c) => s + Number(c.amount), 0);
+  const commissionApproved = commissions
+    .filter((c) => c.status === "approved")
+    .reduce((s, c) => s + Number(c.amount), 0);
 
   // Only approved loans are real money. A pending request is excluded from
   // every total on purpose, so recording one changes nothing they see.
@@ -102,6 +107,7 @@ export function summariseMemberMoney(
     commissionEarned,
     commissionPaidOut,
     commissionOwed,
+    commissionApproved,
     loansIssued,
     loansRepaid,
     loansOutstanding,

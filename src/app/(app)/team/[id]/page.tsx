@@ -33,6 +33,7 @@ export default async function MemberPage({
     onlineRes,
     graceRes,
     scorecards,
+    payoutsRes,
   ] = await Promise.all([
     supabase.from("profiles").select("*").eq("id", id).maybeSingle(),
     supabase
@@ -82,6 +83,14 @@ export default async function MemberPage({
         return memberScorecard(supabase, id, periodFor(d)).catch(() => null);
       }),
     ).then((cards) => cards.filter((c) => c !== null)),
+    // 0120 — payout runs, newest first. Absent until the migration lands.
+    supabase
+      .from("commission_payouts")
+      .select("*")
+      .eq("user_id", id)
+      .order("paid_at", { ascending: false })
+      .limit(50)
+      .then((r) => r, () => ({ data: null })),
   ]);
 
   const member = memberRes.data;
@@ -123,6 +132,7 @@ export default async function MemberPage({
       }
       isYou={member.id === me.id}
       scorecards={scorecards}
+      payouts={payoutsRes.data ?? []}
     />
   );
 }

@@ -12,6 +12,8 @@
 import { revalidatePath } from "next/cache";
 
 import { requireAdmin } from "@/lib/auth";
+import { attachRepayments, loanBalance } from "@/lib/loans";
+import { notifyUsers } from "@/lib/notify";
 import { sendSmsToUser } from "@/lib/sms-alerts";
 import { createClient } from "@/lib/supabase/server";
 import { formatCurrency } from "@/lib/utils";
@@ -263,6 +265,10 @@ export type LoanRepaymentInput = {
   paid_on?: string | null;
   method?: string | null;
   note?: string | null;
+  /** 0120 — set when a payout run withheld this from the commission. */
+  payout_id?: string | null;
+  /** Skip the member's notification — the payout run sends its own. */
+  silent?: boolean;
 };
 
 export async function saveLoanRepayment(
@@ -291,6 +297,8 @@ export async function saveLoanRepayment(
     method: input.method?.trim() || null,
     note: input.note?.trim() || null,
     recorded_by: admin.id,
+    // Only when a payout run is writing — the column is 0120's.
+    ...(input.payout_id ? { payout_id: input.payout_id } : {}),
   };
 
   const { error } = input.id
@@ -302,7 +310,7 @@ export async function saveLoanRepayment(
 
   if (error) return { ok: false, error: error.message };
 
-  if (!input.id && input.user_id !== admin.id) {
+  if (!input.id && !input.silent && input.user_id !== admin.id) {
     await supabase.from("notifications").insert({
       user_id: input.user_id,
       actor_id: admin.id,
@@ -330,4 +338,234 @@ export async function deleteLoanRepayment(
   if (error) return { ok: false, error: error.message };
   revalidateMemberMoney(userId);
   return { ok: true };
+}
+
+
+// ---- Commission payout run (T4.7, 0120) ------------------------------------
+
+export type CommissionPayoutInput = {
+  /** The month the run covers — `YYYY-MM` or any date in it. */
+  period: string;
+  method?: string | null;
+  reference?: string | null;
+  note?: string | null;
+  /** Withhold what they still owe on approved loans, oldest first. */
+  deductLoan?: boolean;
+};
+
+export type CommissionPayoutResult = {
+  payoutId: string;
+  gross: number;
+  loanDeduction: number;
+  netPaid: number;
+  commissions: number;
+};
+
+/** `2026-09-01` from `2026-09`, `2026-09-17` or a full timestamp. */
+function periodStartOf(raw: string): string | null {
+  const m = raw.trim().match(/^(\d{4})-(\d{2})/);
+  if (!m) return null;
+  const month = Number(m[2]);
+  if (month < 1 || month > 12) return null;
+  return `${m[1]}-${m[2]}-01`;
+}
+
+function periodLabel(period: string): string {
+  return new Date(`${period}T00:00:00Z`).toLocaleDateString("en-US", {
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+}
+
+/**
+ * Pay a member what they are owed, as one record.
+ *
+ * Until 0120 "paid" was a status somebody flipped on each commission row,
+ * with nothing saying when, how much in total, or whether a loan was netted
+ * off. A run does it once, in order:
+ *
+ *   1. one `commission_payouts` row — gross, deduction, net, how and when;
+ *   2. every APPROVED, unpaid commission of theirs → `paid`, stamped with
+ *      the run, in ONE update (a pending allocation is not money yet);
+ *   3. the loan deduction as repayments through `saveLoanRepayment`, so the
+ *      loan's own trigger settles it and the balance reads right everywhere;
+ *   4. an `expenses` row, so Finance's outflows and this agree
+ *      (category `commission` from 0121; `salaries` on a database without it);
+ *   5. tell the member.
+ *
+ * Nothing here computes what is owed on its own: the figures come from the
+ * same rows `summariseMemberMoney()` reads.
+ */
+export async function runCommissionPayout(
+  userId: string,
+  input: CommissionPayoutInput,
+): Promise<ActionResult<CommissionPayoutResult>> {
+  const admin = await requireAdmin();
+  const period = periodStartOf(input.period);
+  if (!period) return { ok: false, error: "Pick the month the payout covers." };
+
+  const supabase = await createClient();
+
+  const { data: member } = await supabase
+    .from("profiles")
+    .select("id, full_name")
+    .eq("id", userId)
+    .maybeSingle();
+  if (!member) return { ok: false, error: "That member no longer exists." };
+
+  // --- What is owed: approved and not yet paid ---------------------------
+  const { data: approved, error: approvedError } = await supabase
+    .from("commissions")
+    .select("id, amount")
+    .eq("user_id", userId)
+    .eq("status", "approved")
+    .is("payout_id", null);
+  if (approvedError) return { ok: false, error: approvedError.message };
+  const rows = approved ?? [];
+  const gross = rows.reduce((s, c) => s + (Number(c.amount) || 0), 0);
+  if (gross <= 0) {
+    return { ok: false, error: "Nothing approved is waiting to be paid. Approve their commissions first." };
+  }
+
+  // --- The loan deduction, oldest loan first -----------------------------
+  const allocations: { loanId: string; amount: number }[] = [];
+  if (input.deductLoan) {
+    const [{ data: loans }, { data: repayments }] = await Promise.all([
+      supabase
+        .from("member_loans")
+        .select("*")
+        .eq("user_id", userId)
+        .eq("approval", "approved")
+        .eq("status", "outstanding")
+        .order("issued_on", { ascending: true }),
+      supabase.from("member_loan_repayments").select("*").eq("user_id", userId),
+    ]);
+    let remaining = gross;
+    for (const loan of attachRepayments(loans ?? [], repayments ?? [])) {
+      if (remaining <= 0) break;
+      const balance = loanBalance(loan);
+      if (balance <= 0) continue;
+      const take = Math.min(balance, remaining);
+      allocations.push({ loanId: loan.id, amount: Math.round(take * 100) / 100 });
+      remaining -= take;
+    }
+  }
+  const loanDeduction = allocations.reduce((s, a) => s + a.amount, 0);
+  const netPaid = Math.round((gross - loanDeduction) * 100) / 100;
+
+  // --- 1. The record ------------------------------------------------------
+  const { data: payout, error: payoutError } = await supabase
+    .from("commission_payouts")
+    .insert({
+      user_id: userId,
+      period,
+      gross,
+      loan_deduction: loanDeduction,
+      net_paid: netPaid,
+      method: input.method?.trim() || null,
+      reference: input.reference?.trim() || null,
+      note: input.note?.trim() || null,
+      paid_by: admin.id,
+    })
+    .select("id")
+    .single();
+  if (payoutError || !payout) {
+    return { ok: false, error: payoutError?.message ?? "Could not record the payout." };
+  }
+
+  // --- 2. Every approved commission → paid, in one statement --------------
+  const { error: markError } = await supabase
+    .from("commissions")
+    .update({ status: "paid", payout_id: payout.id })
+    .in(
+      "id",
+      rows.map((c) => c.id),
+    )
+    .eq("status", "approved")
+    .is("payout_id", null);
+  if (markError) {
+    // Leave no half-run behind: the record goes if the commissions did not move.
+    await supabase.from("commission_payouts").delete().eq("id", payout.id);
+    return { ok: false, error: markError.message };
+  }
+
+  // --- 3. The deduction, as repayments the loan trigger understands -------
+  const label = periodLabel(period);
+  for (const a of allocations) {
+    const res = await saveLoanRepayment({
+      loan_id: a.loanId,
+      user_id: userId,
+      amount: a.amount,
+      method: "Withheld from commission payout",
+      note: `Payout for ${label}`,
+      payout_id: payout.id,
+      silent: true,
+    });
+    if (!res.ok) {
+      // The commissions are paid and the record stands; say what did not.
+      revalidateMemberMoney(userId);
+      return { ok: false, error: `Paid, but the loan deduction failed: ${res.error}` };
+    }
+  }
+
+  // --- 4. The company ledger ---------------------------------------------
+  const description = `Commission payout — ${member.full_name} — ${label}`;
+  const expenseBase = {
+    expense_date: new Date().toISOString().slice(0, 10),
+    description,
+    vendor: member.full_name,
+    amount: netPaid,
+    currency: "LKR",
+    payment_method: input.method?.trim() || null,
+    created_by: admin.id,
+  };
+  let expenseId: string | null = null;
+  if (netPaid > 0) {
+    const first = await supabase
+      .from("expenses")
+      .insert({ ...expenseBase, category: "commission" })
+      .select("id")
+      .single();
+    if (first.data) {
+      expenseId = first.data.id;
+    } else {
+      // 0121 not applied: the CHECK still refuses 'commission'.
+      const second = await supabase
+        .from("expenses")
+        .insert({ ...expenseBase, category: "salaries" })
+        .select("id")
+        .single();
+      expenseId = second.data?.id ?? null;
+    }
+    if (expenseId) {
+      await supabase.from("commission_payouts").update({ expense_id: expenseId }).eq("id", payout.id);
+    }
+  }
+
+  // --- 5. Tell them --------------------------------------------------------
+  if (userId !== admin.id) {
+    await notifyUsers(supabase, {
+      userIds: [userId],
+      type: "commission",
+      title: `Commission of ${formatCurrency(netPaid)} paid out`,
+      body:
+        loanDeduction > 0
+          ? `${formatCurrency(gross)} for ${label}, less ${formatCurrency(loanDeduction)} withheld against your loan.${input.method ? ` Sent by ${input.method}.` : ""}`
+          : `For ${label}.${input.method ? ` Sent by ${input.method}.` : ""}${input.reference ? ` Ref ${input.reference}.` : ""}`,
+      link: "/profile",
+      actorId: admin.id,
+    }).catch(() => 0);
+  }
+
+  revalidateMemberMoney(userId);
+  revalidatePath("/finance");
+  return {
+    ok: true,
+    payoutId: payout.id,
+    gross,
+    loanDeduction,
+    netPaid,
+    commissions: rows.length,
+  };
 }

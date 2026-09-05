@@ -54,6 +54,8 @@ export type CompanyPayment = Tables["company_payments"]["Row"];
 export type Commission = Tables["commissions"]["Row"];
 export type MemberLoan = Tables["member_loans"]["Row"];
 export type MemberLoanRepayment = Tables["member_loan_repayments"]["Row"];
+/** 0120 — one payout run: what was owed, what was withheld, what was paid. */
+export type CommissionPayout = Tables["commission_payouts"]["Row"];
 export type Resource = Tables["resources"]["Row"];
 export type MeetingLink = Tables["meeting_links"]["Row"];
 export type MeetingBooking = Tables["meeting_bookings"]["Row"];

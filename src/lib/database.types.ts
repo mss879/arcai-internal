@@ -664,6 +664,48 @@ export type SocialPostStatus =
 /** One image in a post, in order. Public URLs — Meta fetches them itself. */
 export type SocialMediaItem = { url: string };
 
+// 0119 — targets, recurring to-dos and the knowledge base
+export type TargetKind =
+  | "revenue"
+  | "deals_won"
+  | "deliveries"
+  | "leads"
+  | "hours";
+
+/** How a to-do repeats. Null on a to-do means it happens once. */
+export type TodoRecurrence = {
+  freq: "daily" | "weekly" | "monthly";
+  /** Every N periods. Defaults to 1. */
+  interval?: number;
+  /** 0 = Sunday. Weekly only; empty means "the same day it was created". */
+  byweekday?: number[];
+  /** ISO date. Absent = forever. */
+  until?: string;
+};
+
+/** One line of a to-do template. `offset_days` is from the day it is applied. */
+export type TodoTemplateItem = {
+  title: string;
+  description?: string;
+  priority?: TodoPriority;
+  estimate_minutes?: number;
+  labels?: string[];
+  offset_days?: number;
+};
+
+export type KbVisibility = "team" | "agent" | "both";
+
+/** What public.kb_search() returns. */
+export type KbSearchHit = {
+  id: UUID;
+  slug: string;
+  title: string;
+  category: string;
+  visibility: KbVisibility;
+  snippet: string;
+  rank: number;
+};
+
 export type Database = {
   public: {
     Tables: {
@@ -782,6 +824,12 @@ export type Database = {
           created_by: UUID | null;
           completed_at: Timestamp | null;
           reminder_sent_at: Timestamp | null;
+          // 0119 — labels, an estimate, and whether it comes back.
+          labels: string[];
+          estimate_minutes: number | null;
+          recurrence: TodoRecurrence | null;
+          recurrence_parent_id: UUID | null;
+          next_occurrence_at: Timestamp | null;
           created_at: Timestamp;
         };
         Insert: {
@@ -799,6 +847,12 @@ export type Database = {
           created_by?: UUID | null;
           completed_at?: Timestamp | null;
           reminder_sent_at?: Timestamp | null;
+          // 0119
+          labels?: string[];
+          estimate_minutes?: number | null;
+          recurrence?: TodoRecurrence | null;
+          recurrence_parent_id?: UUID | null;
+          next_occurrence_at?: Timestamp | null;
           created_at?: Timestamp;
         };
         Update: Partial<Database["public"]["Tables"]["todos"]["Insert"]>;
@@ -5887,6 +5941,112 @@ export type Database = {
         Update: Partial<Database["public"]["Tables"]["social_posts"]["Insert"]>;
         Relationships: [];
       };
+      // 0119 — what a month is supposed to look like
+      targets: {
+        Row: {
+          id: UUID;
+          /** null = the whole team's target for that period. */
+          user_id: UUID | null;
+          /** First day of the month it applies to. */
+          period: string;
+          kind: TargetKind;
+          amount: number;
+          currency: string;
+          note: string | null;
+          created_by: UUID | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          user_id?: UUID | null;
+          period: string;
+          kind: TargetKind;
+          amount?: number;
+          currency?: string;
+          note?: string | null;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["targets"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0119 — a set of to-dos raised together
+      todo_templates: {
+        Row: {
+          id: UUID;
+          name: string;
+          description: string | null;
+          items: TodoTemplateItem[];
+          created_by: UUID | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          name: string;
+          description?: string | null;
+          items?: TodoTemplateItem[];
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["todo_templates"]["Insert"]>;
+        Relationships: [];
+      };
+      todo_comments: {
+        Row: {
+          id: UUID;
+          todo_id: UUID;
+          author_id: UUID | null;
+          body: string;
+          mentions: UUID[];
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          todo_id: UUID;
+          author_id?: UUID | null;
+          body: string;
+          mentions?: UUID[];
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["todo_comments"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0119 — how this agency does things, written down
+      kb_pages: {
+        Row: {
+          id: UUID;
+          slug: string;
+          title: string;
+          body_md: string;
+          category: string;
+          tags: string[];
+          /** 'agent' and 'both' are quotable by the WhatsApp agent. */
+          visibility: KbVisibility;
+          created_by: UUID | null;
+          updated_by: UUID | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          slug: string;
+          title: string;
+          body_md?: string;
+          category?: string;
+          tags?: string[];
+          visibility?: KbVisibility;
+          created_by?: UUID | null;
+          updated_by?: UUID | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["kb_pages"]["Insert"]>;
+        Relationships: [];
+      };
     };
     Views: {
       // 0114 — per-project counts and cost totals for the board.
@@ -5922,6 +6082,16 @@ export type Database = {
       rate_limit_check: {
         Args: { p_key: string; p_limit: number; p_window_seconds: number };
         Returns: boolean;
+      };
+      // 0119 — full-text search over the knowledge base.
+      kb_search: {
+        Args: { q: string; lim?: number };
+        Returns: KbSearchHit[];
+      };
+      // 0119 — everything waiting on a person, in one round-trip.
+      approvals_count: {
+        Args: Record<string, never>;
+        Returns: number;
       };
       // 0114 — the dashboard's numbers in one round-trip.
       dashboard_summary: {

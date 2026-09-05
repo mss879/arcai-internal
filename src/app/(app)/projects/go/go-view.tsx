@@ -20,9 +20,12 @@ import {
   Camera,
   ChevronRight,
   Clock,
+  CloudOff,
   MessageSquare,
   OctagonPause,
+  RefreshCw,
   Smartphone,
+  Trash2,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -31,32 +34,118 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Modal } from "@/components/ui/modal";
 import { Field, Input, Textarea } from "@/components/ui/input";
 import { DELIVERY_STAGES, DELIVERY_STAGE_META } from "@/lib/constants";
+import {
+  enqueueOutbox,
+  listOutbox,
+  removeFromOutbox,
+  syncOutbox,
+  type GoOutboxItem,
+} from "@/lib/go-outbox";
+// Type-only: the builder is server-only, the shape is not.
+import type { GoProject } from "@/lib/go-projects";
 import type { HealthTone } from "@/lib/projects";
-import type { DeliveryStage } from "@/lib/types";
 import { cn, formatCurrency } from "@/lib/utils";
 
 import { setProjectStage } from "../actions";
 import { logTime } from "../plan-actions";
 import { messageClient } from "../client-sms-actions";
 
-export type GoProject = {
-  id: string;
-  name: string;
-  clientName: string | null;
-  clientPhone: string | null;
-  stage: DeliveryStage | null;
-  currency: string;
-  balance: number;
-  dueDate: string | null;
-  idleDays: number | null;
-  blocked: boolean;
-  assetsOutstanding: number;
-  overdueTasks: number;
-  healthTone: HealthTone;
-  healthScore: number;
-  why: string | null;
-  riskRank: number | null;
-};
+export type { GoProject };
+
+/**
+ * 0119 — a server action called with no signal throws before it reaches the
+ * server. Those, and only those, go to the outbox; a refusal from the gate
+ * comes back as a normal result and is shown, never queued.
+ */
+function isNetworkFailure(e: unknown): boolean {
+  return e instanceof TypeError || (typeof navigator !== "undefined" && !navigator.onLine);
+}
+
+/** True when the browser says we're offline — the outbox is the only route. */
+function offline(): boolean {
+  return typeof navigator !== "undefined" && navigator.onLine === false;
+}
+
+/** The outbox as React state, kept in step with the service worker's replays. */
+function useOutbox() {
+  const router = useRouter();
+  const [items, setItems] = React.useState<GoOutboxItem[]>([]);
+  const [online, setOnline] = React.useState(true);
+  const [syncing, setSyncing] = React.useState(false);
+
+  const reload = React.useCallback(async () => {
+    try {
+      setItems(await listOutbox());
+    } catch {
+      setItems([]);
+    }
+  }, []);
+
+  const sync = React.useCallback(async () => {
+    setSyncing(true);
+    try {
+      const outcome = await syncOutbox();
+      if (outcome.synced > 0) {
+        toast.success(
+          `Synced ${outcome.synced} change${outcome.synced === 1 ? "" : "s"} made offline.`,
+        );
+        router.refresh();
+      }
+      if (outcome.refused > 0) {
+        toast.error(
+          `${outcome.refused} change${outcome.refused === 1 ? " was" : "s were"} refused — see the list below.`,
+        );
+      }
+    } catch {
+      // Still offline, or the server is unreachable: keep them queued.
+    } finally {
+      setSyncing(false);
+      void reload();
+    }
+  }, [reload, router]);
+
+  React.useEffect(() => {
+    setOnline(typeof navigator === "undefined" ? true : navigator.onLine);
+    void reload();
+    // Replay when the connection comes back, and whenever the page opens.
+    const onOnline = () => {
+      setOnline(true);
+      void sync();
+    };
+    const onOffline = () => setOnline(false);
+    window.addEventListener("online", onOnline);
+    window.addEventListener("offline", onOffline);
+    void sync();
+
+    // The service worker's Background Sync may replay while the page is open.
+    const onMessage = (event: MessageEvent) => {
+      if (event.data?.type === "go-outbox-synced") {
+        void reload();
+        router.refresh();
+      }
+    };
+    navigator.serviceWorker?.addEventListener("message", onMessage);
+    // A card just queued something.
+    const onChanged = () => void reload();
+    window.addEventListener("go-outbox-changed", onChanged);
+    return () => {
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("offline", onOffline);
+      window.removeEventListener("go-outbox-changed", onChanged);
+      navigator.serviceWorker?.removeEventListener("message", onMessage);
+    };
+  }, [reload, router, sync]);
+
+  const discard = React.useCallback(
+    async (id: string) => {
+      await removeFromOutbox([id]);
+      await reload();
+    },
+    [reload],
+  );
+
+  return { items, online, syncing, sync, reload, discard };
+}
 
 const TONE_BAR: Record<HealthTone, string> = {
   good: "bg-emerald-500",
@@ -72,9 +161,10 @@ export function GoView({
   userId: string;
 }) {
   const [openId, setOpenId] = React.useState<string | null>(null);
+  const outbox = useOutbox();
 
   return (
-    <div className="mx-auto max-w-lg space-y-4 pb-24">
+    <div className="mx-auto max-w-lg space-y-4 pb-28">
       <header className="px-1">
         <h1 className="flex items-center gap-2 text-xl font-extrabold tracking-tight text-slate-900">
           <Smartphone className="h-5 w-5 text-primary-500" />
@@ -107,8 +197,110 @@ export function GoView({
       )}
 
       <p className="px-1 text-center text-xs text-slate-400">
-        Add this page to your home screen — the app is already installable.
+        Add this page to your home screen — the app is already installable. It
+        works without signal: stage moves and time entries wait here and sync
+        when you&apos;re back.
       </p>
+
+      <QuickBar
+        online={outbox.online}
+        items={outbox.items}
+        syncing={outbox.syncing}
+        onSync={outbox.sync}
+        onDiscard={outbox.discard}
+      />
+    </div>
+  );
+}
+
+/**
+ * 0119 — the strip along the bottom: are we online, what is waiting to sync,
+ * and a way to push it now or drop something the server refused.
+ */
+function QuickBar({
+  online,
+  items,
+  syncing,
+  onSync,
+  onDiscard,
+}: {
+  online: boolean;
+  items: GoOutboxItem[];
+  syncing: boolean;
+  onSync: () => void;
+  onDiscard: (id: string) => void;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const refused = items.filter((i) => i.error).length;
+
+  if (online && items.length === 0) return null;
+
+  return (
+    <div className="fixed inset-x-0 bottom-0 z-40 mx-auto max-w-lg px-3 pb-3">
+      <div className="rounded-2xl border border-slate-200 bg-white/95 shadow-lg backdrop-blur">
+        <div className="flex items-center gap-3 px-4 py-3">
+          <span
+            className={cn(
+              "grid h-9 w-9 shrink-0 place-items-center rounded-xl",
+              online ? "bg-primary-50 text-primary-600" : "bg-amber-50 text-amber-600",
+            )}
+          >
+            {online ? <RefreshCw className="h-4 w-4" /> : <CloudOff className="h-4 w-4" />}
+          </span>
+          <button
+            type="button"
+            onClick={() => setOpen((o) => !o)}
+            className="min-w-0 flex-1 text-left"
+          >
+            <p className="text-sm font-semibold text-slate-900">
+              {online ? "Back online" : "No signal"}
+              {items.length > 0 && (
+                <span className="ml-2 rounded-full bg-amber-500 px-2 py-0.5 text-[11px] font-bold text-white">
+                  {items.length} pending
+                </span>
+              )}
+            </p>
+            <p className="truncate text-xs text-slate-500">
+              {items.length === 0
+                ? "Everything is saved."
+                : refused > 0
+                  ? `${refused} refused by the server — tap to see why.`
+                  : online
+                    ? "Waiting to sync — tap to see what."
+                    : "Your changes are kept here and sent when you're back."}
+            </p>
+          </button>
+          {online && items.length > 0 && (
+            <Button size="sm" onClick={onSync} loading={syncing}>
+              Sync now
+            </Button>
+          )}
+        </div>
+
+        {open && items.length > 0 && (
+          <ul className="divide-y divide-slate-100 border-t border-slate-100">
+            {items.map((i) => (
+              <li key={i.id} className="flex items-center gap-3 px-4 py-2.5 text-sm">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate font-medium text-slate-800">{i.label}</p>
+                  <p className={cn("truncate text-xs", i.error ? "text-rose-600" : "text-slate-400")}>
+                    {i.error ?? `Queued ${format(parseISO(i.createdAt), "d MMM, h:mm a")}`}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onDiscard(i.id)}
+                  className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                  aria-label="Drop this change"
+                  title="Drop this change"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </div>
   );
 }
@@ -140,36 +332,81 @@ function ProjectCard({
         ? DELIVERY_STAGES[0]
         : null;
 
+  /** 0119 — park it for later, with the words the list shows. */
+  async function queue(kind: "advance_stage" | "log_time", label: string, payload: Record<string, unknown>) {
+    try {
+      await enqueueOutbox({ kind, label, payload });
+      toast.success("No signal — saved. It syncs when you're back online.");
+      window.dispatchEvent(new Event("go-outbox-changed"));
+    } catch {
+      toast.error("Couldn't save this offline on this device.");
+    }
+  }
+
   async function advance() {
     if (!nextStage) return;
+    const label = `${p.name} → ${DELIVERY_STAGE_META[nextStage].label}`;
+    const payload = { project_id: p.id, stage: nextStage };
+    if (offline()) {
+      await queue("advance_stage", label, payload);
+      return;
+    }
     setBusy(true);
-    const res = await setProjectStage(p.id, nextStage);
-    setBusy(false);
-    if (res.ok) {
-      toast.success(`Moved to ${DELIVERY_STAGE_META[nextStage].label}.`);
-      router.refresh();
-    } else {
-      // The deposit gate and the launch checklist explain themselves — show
-      // the reason rather than a generic failure.
-      toast.error(res.error);
+    try {
+      const res = await setProjectStage(p.id, nextStage);
+      if (res.ok) {
+        toast.success(`Moved to ${DELIVERY_STAGE_META[nextStage].label}.`);
+        router.refresh();
+      } else {
+        // The deposit gate and the launch checklist explain themselves — show
+        // the reason rather than a generic failure.
+        toast.error(res.error);
+      }
+    } catch (e) {
+      if (isNetworkFailure(e)) await queue("advance_stage", label, payload);
+      else toast.error("That didn't work.");
+    } finally {
+      setBusy(false);
     }
   }
 
   async function submitTime() {
-    setBusy(true);
-    const res = await logTime({
+    const label = `${minutes} min on ${p.name}`;
+    const payload = {
       project_id: p.id,
       minutes: Number(minutes),
       note: note.trim() || null,
-      user_id: userId,
-    });
-    setBusy(false);
-    if (res.ok) {
-      toast.success(`Logged ${minutes} minutes.`);
+      worked_on: new Date().toISOString().slice(0, 10),
+    };
+    if (offline()) {
+      await queue("log_time", label, payload);
       setLogging(false);
       setNote("");
-      router.refresh();
-    } else toast.error(res.error);
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await logTime({
+        project_id: p.id,
+        minutes: Number(minutes),
+        note: note.trim() || null,
+        user_id: userId,
+      });
+      if (res.ok) {
+        toast.success(`Logged ${minutes} minutes.`);
+        setLogging(false);
+        setNote("");
+        router.refresh();
+      } else toast.error(res.error);
+    } catch (e) {
+      if (isNetworkFailure(e)) {
+        await queue("log_time", label, payload);
+        setLogging(false);
+        setNote("");
+      } else toast.error("That didn't work.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function submitNudge() {

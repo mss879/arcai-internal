@@ -83,3 +83,29 @@ their role, not by their capabilities. Nobody but the service role has one.
   row, and is refused once any invoice or payment exists: the accounts must
   still add up. "Delete" on the clients list is the same erasure with the
   same refusal. Every erasure is a `system_events` line naming who asked.
+
+## Backups and restore
+
+- **Database** — the Supabase project takes a daily backup on every paid
+  plan; enable **Point-in-Time Recovery** (Project → Database → Backups) so
+  a bad migration or a mistaken erasure can be rewound to the minute rather
+  than to last night. A restore is done from that screen; the app needs no
+  change afterwards — every migration in `supabase/migrations/` is additive
+  and already applied to the restored state.
+- **Storage is NOT in `pg_dump`.** A database backup carries the `file_path`
+  of every object and none of the bytes. The buckets that matter:
+  `project-docs` (deliverables), `receipts`, `resources`, `wa-media`,
+  `content-*` and `carousel-slides`, and **`payment-slips`** — private, and
+  it holds photographs of clients' bank-transfer slips, which is to say
+  images of bank-account details. Back the buckets up separately (Supabase
+  Storage → the bucket → download, or a scheduled `supabase storage cp`)
+  and treat a copy of `payment-slips` with the care you would give the
+  database itself.
+- **Secrets** live in Netlify's environment, not in the repo or the
+  database. Keep a copy of the variable list somewhere safe; a restore of
+  the database alone does not restore a lost `SUPABASE_SERVICE_ROLE_KEY`,
+  `SMS_CRON_SECRET`, `SOCIAL_TOKEN_KEY` (without which every stored social
+  token is unreadable) or `WHATSAPP_ACCESS_TOKEN`.
+- **The website** (`arc_ai_website`) is its own Supabase project with its
+  own backups; the CRM writes reviews and vacancies into it but never reads
+  it back for anything it cannot rebuild.

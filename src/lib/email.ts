@@ -86,55 +86,6 @@ export async function sendInviteEmail(opts: {
   }
 }
 
-/** Credentials email sent after a user accepts an invite. */
-export async function sendCredentialsEmail(opts: {
-  to: string;
-  fullName: string;
-  username: string;
-  password: string;
-  loginUrl: string;
-}): Promise<SendResult> {
-  const resend = getResend();
-  if (!resend) return { sent: false, error: "RESEND_API_KEY not configured" };
-
-  const cred = (label: string, value: string) => `
-    <tr>
-      <td style="padding:8px 0;color:#94a3b8;font-size:13px;width:90px;">${label}</td>
-      <td style="padding:8px 0;color:#0f172a;font-size:14px;font-weight:600;font-family:monospace;">${value}</td>
-    </tr>`;
-
-  const body = `
-    <p style="margin:0 0 16px;color:#475569;font-size:15px;line-height:1.6;">
-      Welcome aboard, <strong>${opts.fullName}</strong>! Your ARC AI account is ready.
-      Here are your login details:
-    </p>
-    <div style="background:#f6f7fb;border:1px solid #eef0f6;border-radius:14px;padding:16px 20px;margin:18px 0;">
-      <table style="width:100%;border-collapse:collapse;">
-        ${cred("Email", opts.to)}
-        ${cred("Username", opts.username)}
-        ${cred("Password", opts.password)}
-      </table>
-    </div>
-    <p style="margin:18px 0;">${button(opts.loginUrl, "Log in to ARC AI")}</p>
-    <p style="margin:0;color:#94a3b8;font-size:13px;">
-      For your security, change your password after your first login.
-    </p>
-  `;
-
-  try {
-    const { error } = await resend.emails.send({
-      from: FROM,
-      to: opts.to,
-      subject: "Your ARC AI login details",
-      html: shell("Your account is ready 🎉", body),
-    });
-    if (error) return { sent: false, error: error.message };
-    return { sent: true };
-  } catch (e) {
-    return { sent: false, error: e instanceof Error ? e.message : "send failed" };
-  }
-}
-
 // ---- Invoice email -------------------------------------------------------
 
 /** Escape user-supplied text before it goes into the HTML email. */

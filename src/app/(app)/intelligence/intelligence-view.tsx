@@ -57,6 +57,9 @@ type Tab =
   | "visitors"
   | "competitors"
   | "toolkit";
+/** Every tab, for validating a `?tab=` deep link (T5.1 — the settings hub). */
+const TAB_KEYS: Tab[] = ["digest", "goals", "forecast", "churn", "ads", "visitors", "competitors", "toolkit"];
+
 
 /** 0119 — one month's targets against what happened. */
 export type GoalMonth = { period: string; rows: TargetProgress[] };
@@ -74,7 +77,10 @@ export function IntelligenceView({
   members = [],
   aiReady,
   smsReady,
+  /** T5.1 — land on this tab from a link. Ignored when unknown. */
+  initialTab,
 }: {
+  initialTab?: string;
   digests: AiDigest[];
   churnAlerts: ChurnAlert[];
   ads: AdEntry[];
@@ -90,7 +96,9 @@ export function IntelligenceView({
   smsReady: boolean;
 }) {
   useRealtimeSync("churn_alerts");
-  const [tab, setTab] = React.useState<Tab>("digest");
+  const [tab, setTab] = React.useState<Tab>(
+    TAB_KEYS.includes(initialTab as Tab) ? (initialTab as Tab) : "digest",
+  );
   const openAlerts = churnAlerts.filter((a) => a.status === "open");
   const thisMonth = goals[goals.length - 1];
   const behind = thisMonth?.rows.filter((r) => r.percent < 100).length ?? 0;

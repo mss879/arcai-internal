@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Menu } from "lucide-react";
+import { Menu, Settings } from "lucide-react";
 
 import { Avatar } from "@/components/ui/avatar";
 import { ApprovalsBadge } from "@/components/layout/approvals-badge";
@@ -45,6 +45,17 @@ export function Topbar({
         <ApprovalsBadge initial={approvalsCount} />
 
         <NotificationsBell initial={notifications} />
+
+        {profile.role === "admin" && (
+          <Link
+            href="/settings"
+            aria-label="Settings"
+            title="Settings"
+            className="grid h-10 w-10 place-items-center rounded-xl text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
+          >
+            <Settings className="h-5 w-5" />
+          </Link>
+        )}
 
         <Link
           href="/profile"

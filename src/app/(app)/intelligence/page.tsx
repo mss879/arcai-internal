@@ -19,7 +19,13 @@ import { IntelligenceView } from "./intelligence-view";
 
 export const metadata = { title: "AI & Intelligence" };
 
-export default async function IntelligencePage() {
+export default async function IntelligencePage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ tab?: string }>;
+}) {
+  // T5.1 — a settings-hub card can open a specific tab.
+  const { tab: initialTab } = (await searchParams) ?? {};
   // Admin-only: members don't see this menu item, and typing the URL
   // bounces them back to the dashboard.
   await requireAdmin();
@@ -94,6 +100,7 @@ export default async function IntelligencePage() {
 
   return (
     <IntelligenceView
+      initialTab={initialTab}
       digests={(digestsRes.data ?? []) as AiDigest[]}
       churnAlerts={(churnRes.data ?? []) as ChurnAlert[]}
       ads={(adsRes.data ?? []) as AdEntry[]}

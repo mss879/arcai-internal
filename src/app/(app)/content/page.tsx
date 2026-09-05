@@ -13,7 +13,13 @@ import type { SocialPostRow } from "./publishing-tab";
 
 export const metadata = { title: "Content Studio" };
 
-export default async function ContentPage() {
+export default async function ContentPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ tab?: string }>;
+}) {
+  // T5.1 — a settings-hub card can open a specific tab.
+  const { tab: initialTab } = (await searchParams) ?? {};
   const supabase = await createClient();
 
   const [
@@ -85,6 +91,7 @@ export default async function ContentPage() {
 
   return (
     <ContentView
+      initialTab={initialTab}
       references={(referencesRes.data ?? []) as ContentReference[]}
       generations={(generationsRes.data ?? []) as ContentGeneration[]}
       carouselPosts={(postsRes.data ?? []) as CarouselPost[]}

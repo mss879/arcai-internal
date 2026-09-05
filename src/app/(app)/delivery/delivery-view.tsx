@@ -34,6 +34,9 @@ type Tab =
   | "automations"
   | "settings"
   | "activity";
+/** Every tab, for validating a `?tab=` deep link (T5.1 — the settings hub). */
+const TAB_KEYS: Tab[] = ["board", "assets", "testimonials", "automations", "settings", "activity"];
+
 
 export function DeliveryView({
   projects,
@@ -43,7 +46,10 @@ export function DeliveryView({
   automations,
   waMedia,
   reviews,
+  /** T5.1 — land on this tab from a link. Ignored when unknown. */
+  initialTab,
 }: {
+  initialTab?: string;
   projects: DeliveryProject[];
   requests: ProjectDocumentRequest[];
   settings: DeliverySettings | null;
@@ -53,7 +59,9 @@ export function DeliveryView({
   /** 0117 — what clients said, and whether it is on the website. */
   reviews: TestimonialRow[];
 }) {
-  const [tab, setTab] = React.useState<Tab>("board");
+  const [tab, setTab] = React.useState<Tab>(
+    TAB_KEYS.includes(initialTab as Tab) ? (initialTab as Tab) : "board",
+  );
   useRealtimeSyncTables([
     "projects",
     "project_document_requests",

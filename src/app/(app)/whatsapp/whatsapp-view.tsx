@@ -145,6 +145,9 @@ type Tab =
   | "keywords"
   | "activity"
   | "analytics";
+/** Every tab, for validating a `?tab=` deep link (T5.1 — the settings hub). */
+const TAB_KEYS: Tab[] = ["inbox", "agent", "campaign", "cold", "keywords", "activity", "analytics"];
+
 
 /** A cold-outreach row with its lead's display label joined in. */
 type ColdRow = WaColdOutreach & { lead_label: string };
@@ -186,7 +189,10 @@ export function WhatsappView({
   appBaseUrl,
   isAdmin,
   team,
+  /** T5.1 — land on this tab from a link. Ignored when unknown. */
+  initialTab,
 }: {
+  initialTab?: string;
   contacts: WaContact[];
   messages: WaMessage[];
   config: WaAgentConfig | null;
@@ -220,7 +226,9 @@ export function WhatsappView({
     "wa_campaigns",
     "wa_lessons",
   ]);
-  const [tab, setTab] = React.useState<Tab>("inbox");
+  const [tab, setTab] = React.useState<Tab>(
+    TAB_KEYS.includes(initialTab as Tab) ? (initialTab as Tab) : "inbox",
+  );
   // Hard stop for members: whatever the state says, they only ever render a
   // tab they're allowed on — Inbox or Analytics.
   const MEMBER_TABS: Tab[] = ["inbox", "analytics"];

@@ -79,7 +79,13 @@ async function buildCampaignStats(
   };
 }
 
-export default async function WhatsappPage() {
+export default async function WhatsappPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ tab?: string }>;
+}) {
+  // T5.1 — a settings-hub card can open a specific tab.
+  const { tab: initialTab } = (await searchParams) ?? {};
   // Members only get the Inbox tab; everything else is admin-only.
   const profile = await requireProfile();
   const supabase = await createClient();
@@ -224,6 +230,7 @@ export default async function WhatsappPage() {
 
   return (
     <WhatsappView
+      initialTab={profile.role === "admin" ? initialTab : undefined}
       contacts={(contactsRes.data ?? []) as WaContact[]}
       messages={((messagesRes.data ?? []) as WaMessage[]).reverse()}
       config={(configRes.data as WaAgentConfig | null) ?? null}

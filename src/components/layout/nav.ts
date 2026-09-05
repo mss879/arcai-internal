@@ -21,6 +21,7 @@ import {
   MessageSquareText,
   PackageCheck,
   ScrollText,
+  Settings,
   ShieldCheck,
   Sparkles,
   Users,
@@ -153,6 +154,9 @@ export const NAV_GROUPS: NavGroup[] = [
       // sidebar. `adminOnly` is what hides it now that the section is gone —
       // dropping this flag would show every member the team's access list.
       { label: "Team & Access", href: "/team", icon: ShieldCheck, adminOnly: true },
+      // T5.1 — one front door to every setting. The page gates itself with
+      // requireAdmin(); this flag only keeps it out of a member's menu.
+      { label: "Settings", href: "/settings", icon: Settings, adminOnly: true },
     ],
   },
 ];

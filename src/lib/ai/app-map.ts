@@ -361,6 +361,16 @@ export const APP_AREAS: AppAreaEntry[] = [
   },
   {
     area: "workspace",
+    label: "Settings",
+    href: "/settings",
+    blurb:
+      "Every setting from one page: links to each module's own settings, plus where a new enquiry lands, cold outreach, website chat → lead, the connected social accounts and the document number series.",
+    icon: "Settings",
+    adminOnly: true,
+    aliases: ["settings", "configuration", "config", "preferences", "setup", "social accounts", "numbering", "counters"],
+  },
+  {
+    area: "workspace",
     label: "My Profile",
     href: "/profile",
     blurb: "Your own details, your trusted devices and your sign-in history.",

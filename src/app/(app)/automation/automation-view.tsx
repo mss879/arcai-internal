@@ -31,6 +31,9 @@ import { RecipesTab } from "./recipes-tab";
 import type { ProjectTemplateLite } from "./flows-tab";
 
 type Tab = "flows" | "runs" | "connect" | "recipes";
+/** Every tab, for validating a `?tab=` deep link (T5.1 — the settings hub). */
+const TAB_KEYS: Tab[] = ["flows", "runs", "connect", "recipes"];
+
 
 /** How often the open page advances due timers (cron covers the rest). */
 const TICK_INTERVAL_MS = 30_000;
@@ -47,7 +50,10 @@ export function AutomationView({
   templates,
   members,
   smsReady,
+  /** T5.1 — land on this tab from a link. Ignored when unknown. */
+  initialTab,
 }: {
+  initialTab?: string;
   automations: Automation[];
   steps: AutomationStep[];
   runs: AutomationRun[];
@@ -62,7 +68,9 @@ export function AutomationView({
 }) {
   useRealtimeSync("automations");
   useRealtimeSync("automation_runs");
-  const [tab, setTab] = React.useState<Tab>("flows");
+  const [tab, setTab] = React.useState<Tab>(
+    TAB_KEYS.includes(initialTab as Tab) ? (initialTab as Tab) : "flows",
+  );
 
   React.useEffect(() => {
     let cancelled = false;

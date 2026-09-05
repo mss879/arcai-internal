@@ -4,7 +4,13 @@ import { DeliveryView } from "./delivery-view";
 
 export const metadata = { title: "Client Delivery" };
 
-export default async function DeliveryPage() {
+export default async function DeliveryPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ tab?: string }>;
+}) {
+  // T5.1 — a settings-hub card can open a specific tab.
+  const { tab: initialTab } = (await searchParams) ?? {};
   const supabase = await createClient();
   const [
     projectsRes,
@@ -56,6 +62,7 @@ export default async function DeliveryPage() {
 
   return (
     <DeliveryView
+      initialTab={initialTab}
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       projects={(projectsRes.data ?? []) as any}
       requests={requestsRes.data ?? []}

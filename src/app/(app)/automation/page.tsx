@@ -16,7 +16,13 @@ import { AutomationView } from "./automation-view";
 
 export const metadata = { title: "Automation" };
 
-export default async function AutomationPage() {
+export default async function AutomationPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ tab?: string }>;
+}) {
+  // T5.1 — a settings-hub card can open a specific tab.
+  const { tab: initialTab } = (await searchParams) ?? {};
   const supabase = await createClient();
 
   const [
@@ -54,6 +60,7 @@ export default async function AutomationPage() {
 
   return (
     <AutomationView
+      initialTab={initialTab}
       automations={(automationsRes.data ?? []) as Automation[]}
       steps={(stepsRes.data ?? []) as AutomationStep[]}
       runs={(runsRes.data ?? []) as AutomationRun[]}

@@ -20,6 +20,9 @@ import { HistoryTab } from "./history-tab";
 import { PublishingTab, type SocialPostRow } from "./publishing-tab";
 
 type Tab = "generate" | "calendar" | "references" | "history" | "publishing";
+/** Every tab, for validating a `?tab=` deep link (T5.1 — the settings hub). */
+const TAB_KEYS: Tab[] = ["generate", "calendar", "references", "history", "publishing"];
+
 
 export function ContentView({
   references,
@@ -31,7 +34,10 @@ export function ContentView({
   socialDryRun = false,
   geminiReady,
   carouselReady,
+  /** T5.1 — land on this tab from a link. Ignored when unknown. */
+  initialTab,
 }: {
+  initialTab?: string;
   references: ContentReference[];
   generations: ContentGeneration[];
   carouselPosts: CarouselPost[];
@@ -54,7 +60,9 @@ export function ContentView({
   const queued = socialPosts.filter(
     (p) => p.status === "scheduled" || p.status === "publishing",
   ).length;
-  const [tab, setTab] = React.useState<Tab>("generate");
+  const [tab, setTab] = React.useState<Tab>(
+    TAB_KEYS.includes(initialTab as Tab) ? (initialTab as Tab) : "generate",
+  );
 
   return (
     <div className="space-y-6">

@@ -59,9 +59,31 @@ export async function toggleCompanyPaymentPaid(
   // whether this is genuinely a false→true flip (not a re-save).
   const { data: prior } = await supabase
     .from("company_payments")
-    .select("id, price_lkr, project_id, is_paid")
+    .select("id, price_lkr, project_id, is_paid, invoice_id")
     .eq("id", id)
     .maybeSingle();
+  if (!prior) return { ok: false, error: "That payment no longer exists." };
+
+  // 0120 — a flip to PAID goes through recordPayment(): it links this row
+  // (never a second one), settles the invoice, fires the one
+  // payment_received and writes the History line.
+  if (isPaid && !prior.is_paid) {
+    const { recordPayment } = await import("@/lib/payments");
+    const res = await recordPayment(supabase, {
+      source: "payments_board",
+      companyPaymentId: id,
+      projectId: prior.project_id,
+      invoiceId: prior.invoice_id,
+      amount: Number(prior.price_lkr) || 0,
+      currency: "LKR",
+      actorId: user.id,
+    });
+    if (!res.ok) return res;
+    revalidatePath("/payments");
+    revalidatePath("/projects");
+    revalidatePath("/invoices");
+    return { ok: true };
+  }
 
   const { error } = await supabase
     .from("company_payments")
@@ -70,22 +92,16 @@ export async function toggleCompanyPaymentPaid(
 
   if (error) return { ok: false, error: error.message };
 
-  // 0085 — a project-linked payment flipping to PAID is the delivery
-  // system's cue (the "Payment received → full client onboarding" recipe
-  // filters on first_payment). The triggerKey makes un-tick/re-tick safe.
-  if (isPaid && prior && !prior.is_paid && prior.project_id) {
-    const event = await buildPaymentEvent(supabase, {
-      projectId: prior.project_id,
-      amountText: `LKR ${Number(prior.price_lkr).toLocaleString()}`,
-      source: "payments_board",
-      triggerKey: `company_payment:${id}:paid`,
-    });
-    if (event) await fireAutomationTrigger(supabase, event);
+  // Un-ticking takes the money back off the invoice too.
+  if (!isPaid && prior.invoice_id) {
+    const { reconcileInvoice } = await import("@/lib/invoices");
+    await reconcileInvoice(supabase, prior.invoice_id);
   }
 
   revalidatePath("/payments");
   // Paid/unpaid is what the project balance counts — keep that board honest.
   revalidatePath("/projects");
+  revalidatePath("/invoices");
   return { ok: true };
 }
 

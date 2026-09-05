@@ -197,6 +197,7 @@ const TOOL_LABELS: Record<string, string> = {
   member_money: "Reading commission and loans",
   record_expense: "Logging the expense",
   mark_money_received: "Marking the money received",
+  mark_invoice_paid: "Lining up the payment",
   create_notice: "Writing the notice",
   create_quote: "Writing the quote",
 

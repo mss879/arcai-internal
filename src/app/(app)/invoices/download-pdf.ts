@@ -13,6 +13,8 @@ export type InvoicePdfPayload = {
   stamp?: string | null;
   /** Bank account id from INVOICE_BANKS; omitted = the default account. */
   bank_account?: string | null;
+  /** 0120 — ISO code; omitted = LKR. */
+  currency?: string | null;
 };
 
 /**

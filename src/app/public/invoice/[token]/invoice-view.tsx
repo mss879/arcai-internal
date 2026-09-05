@@ -19,6 +19,8 @@ export type PublicInvoiceData = {
   grandTotal: number;
   amountPaid: number;
   dueToday: number;
+  /** 0120 — ISO code the invoice was raised in. */
+  currency: string;
   stampSrc: string | null;
   stampLabel: string | null;
   company: {
@@ -141,12 +143,12 @@ export function PublicInvoice({ data }: { data: PublicInvoiceData }) {
                     )}
                     {item.qty && item.rate && (
                       <p className="mt-1 text-[11px] tabular-nums text-slate-400">
-                        {item.qty} × {formatCurrency(Number(item.rate) || 0)}
+                        {item.qty} × {formatCurrency(Number(item.rate) || 0, data.currency)}
                       </p>
                     )}
                   </div>
                   <p className="shrink-0 text-sm font-semibold tabular-nums text-slate-900">
-                    {formatCurrency(item.total)}
+                    {formatCurrency(item.total, data.currency)}
                   </p>
                 </div>
               </li>
@@ -154,11 +156,11 @@ export function PublicInvoice({ data }: { data: PublicInvoiceData }) {
           </ul>
 
           <dl className="space-y-2 border-t border-slate-200/70 bg-slate-50/60 px-6 py-4 text-sm">
-            <Row label="Total" value={formatCurrency(data.grandTotal)} />
+            <Row label="Total" value={formatCurrency(data.grandTotal, data.currency)} />
             {data.amountPaid > 0 && (
               <Row
                 label="Paid"
-                value={`− ${formatCurrency(data.amountPaid)}`}
+                value={`− ${formatCurrency(data.amountPaid, data.currency)}`}
                 tone="emerald"
               />
             )}
@@ -171,13 +173,13 @@ export function PublicInvoice({ data }: { data: PublicInvoiceData }) {
                   settled ? "text-emerald-600" : "text-amber-600"
                 }`}
               >
-                {formatCurrency(data.dueToday)}
+                {formatCurrency(data.dueToday, data.currency)}
               </dd>
             </div>
             {balance > 0 && (
               <Row
                 label="Balance remaining after that"
-                value={formatCurrency(balance)}
+                value={formatCurrency(balance, data.currency)}
               />
             )}
           </dl>

@@ -254,7 +254,7 @@ export async function scanChurn(supabase: DB): Promise<number> {
   const lastPaymentByClient = new Map<string, string>();
   const projectClient = new Map((projects ?? []).map((p) => [p.id, p.client_id]));
   for (const p of payments ?? []) {
-    if (p.status !== "paid") continue;
+    if (p.status !== "paid" || !p.project_id) continue;
     const clientId = projectClient.get(p.project_id);
     if (!clientId) continue;
     const at = p.paid_at ?? p.created_at;

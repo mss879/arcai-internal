@@ -369,10 +369,12 @@ export async function scanTimeBasedTriggers(supabase: DB): Promise<number> {
         case "invoice_unpaid": {
           const days = Math.max(1, Number(cfg.days ?? 3));
           const cutoff = new Date(now - days * 24 * 3600_000).toISOString();
+          // 0120 — by state, not by stamp: a void or paid invoice is never
+          // chased, a part-paid one still is.
           const { data: invoices } = await supabase
             .from("invoices")
             .select("*")
-            .is("stamp", null)
+            .in("status", ["sent", "partially_paid"])
             .not("sent_at", "is", null)
             .lt("sent_at", cutoff);
           for (const inv of invoices ?? []) {
@@ -1128,11 +1130,9 @@ async function executeStep(
       if (quote.invoice_id)
         return { ok: true, detail: "Quote is already invoiced — skipped." };
 
-      // Same numbering style the AI invoice tool uses (#00201, #00202…).
-      const { count } = await supabase
-        .from("invoices")
-        .select("*", { count: "exact", head: true });
-      const invoiceNumber = "#" + String(200 + (count ?? 0) + 1).padStart(5, "0");
+      // 0120 — the one invoice series, allocated under a lock.
+      const { nextInvoiceNumberFor } = await import("@/lib/quotes");
+      const invoiceNumber = await nextInvoiceNumberFor(supabase);
       const grandTotal = Number(quote.grand_total) || 0;
       const deposit = Math.round(grandTotal / 2);
       const today = new Date().toISOString().slice(0, 10);

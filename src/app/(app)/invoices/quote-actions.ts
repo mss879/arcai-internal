@@ -78,10 +78,10 @@ export async function saveQuote(
     return { ok: true, quote: data as Quote };
   }
 
-  const { count } = await supabase
-    .from("quotes")
-    .select("*", { count: "exact", head: true });
-  const quoteNumber = `Q-${new Date().getFullYear()}-${String((count ?? 0) + 1).padStart(3, "0")}`;
+  // 0120 — one counter, under a lock, shared with the assistant and the
+  // proposal chain.
+  const { nextQuoteNumber } = await import("@/lib/quotes");
+  const quoteNumber = await nextQuoteNumber(supabase);
 
   const { data, error } = await supabase
     .from("quotes")
@@ -168,14 +168,10 @@ export async function convertQuoteToInvoice(
   if (quote.invoice_id)
     return { ok: false, error: "This quote was already converted to an invoice." };
 
-  const { count } = await supabase
-    .from("invoices")
-    .select("*", { count: "exact", head: true });
-  const invoiceNumber = `${String((count ?? 0) + 1).padStart(4, "0")}`;
-
-  // 0112 — the shared core carries the client, lead, currency and project
-  // onto the invoice; the automation step goes through the same code.
-  const { createInvoiceFromQuote } = await import("@/lib/quotes");
+  // 0120 — the invoice series, not a row count: "#00205", like every other
+  // invoice, allocated under a lock.
+  const { createInvoiceFromQuote, nextInvoiceNumberFor } = await import("@/lib/quotes");
+  const invoiceNumber = await nextInvoiceNumberFor(supabase);
   const created = await createInvoiceFromQuote(supabase, quote, {
     invoiceNumber,
     actorId: user.id,

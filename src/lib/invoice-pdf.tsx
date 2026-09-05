@@ -51,12 +51,16 @@ export type InvoiceEmailData = {
   stamp?: string | null;
   /** Bank account id from INVOICE_BANKS; null/absent = the default account. */
   bank_account?: string | null;
+  /** 0120 — ISO code the invoice was raised in. null/absent = LKR ("Rs."). */
+  currency?: string | null;
 };
 
-function money(amount: number): string {
+function money(amount: number, currency?: string | null): string {
   const v = typeof amount === "number" && Number.isFinite(amount) ? amount : 0;
+  const code = (currency ?? "LKR").toUpperCase();
+  const prefix = code === "LKR" ? "Rs. " : `${code} `;
   return (
-    "Rs. " +
+    prefix +
     v.toLocaleString("en-US", {
       minimumFractionDigits: v % 1 === 0 ? 0 : 2,
       maximumFractionDigits: 2,
@@ -278,10 +282,10 @@ function InvoicePdfDoc({ invoice }: { invoice: InvoiceEmailData }) {
               {it.qty}
             </Text>
             <Text style={[styles.bCell, styles.cRate, styles.vSoft, styles.right]}>
-              {it.rate ? money(parseAmount(it.rate)) : ""}
+              {it.rate ? money(parseAmount(it.rate), invoice.currency) : ""}
             </Text>
             <Text style={[styles.bCell, styles.cTotal, styles.vSoft, styles.right]}>
-              {it.total ? money(it.total) : ""}
+              {it.total ? money(it.total, invoice.currency) : ""}
             </Text>
           </View>
         ))}
@@ -290,25 +294,25 @@ function InvoicePdfDoc({ invoice }: { invoice: InvoiceEmailData }) {
         <View style={styles.totals}>
           <View style={styles.totalLine}>
             <Text style={styles.bold}>TOTAL:</Text>
-            <Text>{money(invoice.grand_total)}</Text>
+            <Text>{money(invoice.grand_total, invoice.currency)}</Text>
           </View>
           {paid > 0 ? (
             <View style={styles.totalLine}>
               <Text style={styles.paidLabel}>AMOUNT PAID:</Text>
-              <Text style={styles.paidValue}>{`- ${money(paid)}`}</Text>
+              <Text style={styles.paidValue}>{`- ${money(paid, invoice.currency)}`}</Text>
             </View>
           ) : null}
           <View style={styles.totalRule} />
           <View style={styles.totalLine}>
             <Text style={styles.bold}>DUE TODAY:</Text>
-            <Text>{money(invoice.due_today)}</Text>
+            <Text>{money(invoice.due_today, invoice.currency)}</Text>
           </View>
           {balance > 0 ? (
             <>
               <View style={styles.totalRule} />
               <View style={styles.totalLine}>
                 <Text style={styles.bold}>BALANCE REMAINING:</Text>
-                <Text style={styles.bold}>{money(balance)}</Text>
+                <Text style={styles.bold}>{money(balance, invoice.currency)}</Text>
               </View>
             </>
           ) : null}

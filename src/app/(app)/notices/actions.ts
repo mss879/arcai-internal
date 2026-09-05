@@ -27,7 +27,7 @@ export async function saveNotice(
      */
     id?: string;
   },
-): Promise<ActionResult<{ id: string }>> {
+): Promise<ActionResult<{ id: string; notice_number?: string }>> {
   const supabase = await createClient();
   const {
     data: { user },
@@ -69,16 +69,21 @@ export async function saveNotice(
     }
   }
 
+  // 0120 — a NEW notice is numbered by the counter, under a lock. The typed
+  // number is the form's preview, used only until the counter exists.
+  const { allocateDocumentNumber } = await import("@/lib/document-number");
+  const noticeNumber = await allocateDocumentNumber(supabase, "notice", () => fields.notice_number);
+
   const { data: inserted, error } = await supabase
     .from("notices")
-    .insert(fields)
+    .insert({ ...fields, notice_number: noticeNumber })
     .select("id")
     .single();
 
   if (error) return { ok: false, error: error.message };
 
   revalidatePath("/notices");
-  return { ok: true, id: inserted.id };
+  return { ok: true, id: inserted.id, notice_number: noticeNumber };
 }
 
 export async function deleteNotice(id: string): Promise<ActionResult> {

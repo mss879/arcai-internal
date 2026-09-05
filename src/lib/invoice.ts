@@ -142,6 +142,7 @@ export function invoiceEmailData(row: {
   amount_paid?: number | string | null;
   stamp?: string | null;
   bank_account?: string | null;
+  currency?: string | null;
 }): InvoiceEmailData {
   return {
     invoice_number: row.invoice_number,
@@ -154,6 +155,8 @@ export function invoiceEmailData(row: {
     amount_paid: Number(row.amount_paid ?? 0),
     stamp: row.stamp ?? null,
     bank_account: row.bank_account ?? null,
+    // 0120 — carried, so a USD invoice stops printing "Rs.".
+    currency: row.currency ?? null,
   };
 }
 

@@ -57,6 +57,8 @@ export function InvoiceGenerator({
   const [invoiceDate, setInvoiceDate] = React.useState(
     format(new Date(), "yyyy-MM-dd"),
   );
+  // 0120 — when it falls due. Blank = two weeks after the invoice date.
+  const [dueDate, setDueDate] = React.useState("");
   const [billToName, setBillToName] = React.useState("");
   const [billToDetails, setBillToDetails] = React.useState("");
   const [items, setItems] = React.useState<InvoiceLineItem[]>([
@@ -189,6 +191,9 @@ export function InvoiceGenerator({
   const handleDownload = async () => {
     setSaving(true);
     const payload = {
+      // 0120 — a loaded invoice is EDITED in place, never inserted again.
+      id: loadedId || undefined,
+      due_date: dueDate || null,
       invoice_number: invoiceNumber,
       invoice_date: invoiceDate,
       bill_to_name: billToName,
@@ -207,20 +212,27 @@ export function InvoiceGenerator({
       bank_account: bankAccount,
     };
     const res = await saveInvoice(payload);
+    // 0120 — the number is allocated at save, under a lock. The PDF carries
+    // the number the invoice was actually filed under, not the preview.
+    let filedNumber = invoiceNumber;
     if (res.ok) {
-      toast.success("Saved to Past invoices.");
+      filedNumber = res.invoice_number;
+      toast.success(
+        loadedId
+          ? `Updated invoice ${filedNumber}.`
+          : `Saved to Past invoices as ${filedNumber}.`,
+      );
       // Queue up the next number straight away so a second invoice needs no
-      // typing. A re-issued invoice (loaded from Past invoices to add a paid
-      // stamp) keeps the number it was issued under.
+      // typing. An edited invoice keeps the number it was issued under.
       if (!loadedId) {
-        setInvoiceNumber(nextInvoiceNumber([...pastNumbers, invoiceNumber]));
+        setInvoiceNumber(nextInvoiceNumber([...pastNumbers, filedNumber]));
       }
       router.refresh();
     } else {
       toast.error(`Couldn't save: ${res.error}`);
     }
     try {
-      await downloadInvoicePdf(payload);
+      await downloadInvoicePdf({ ...payload, invoice_number: filedNumber });
     } catch (err) {
       toast.error(
         err instanceof Error ? err.message : "Couldn't download the PDF.",
@@ -364,10 +376,22 @@ export function InvoiceGenerator({
                   onChange={(e) => setInvoiceDate(e.target.value)}
                 />
               </div>
+              <div>
+                <label className={labelCls}>Due date</label>
+                <input
+                  type="date"
+                  className={fieldCls}
+                  value={dueDate}
+                  min={invoiceDate}
+                  onChange={(e) => setDueDate(e.target.value)}
+                  title="Blank = two weeks after the invoice date"
+                />
+              </div>
             </div>
             <p className="mt-1 text-[11px] text-slate-400">
-              Numbered automatically from your highest past invoice — type over
-              it if you need a different one.
+              {loadedId
+                ? "Editing a saved invoice — it keeps this number."
+                : "The number is a preview; the one it is filed under is allocated when you save, so two people can never share one."}
             </p>
 
             <div className="mt-4">

@@ -222,10 +222,37 @@ export async function savePayment(input: PaymentInput): Promise<ActionResult> {
     receipt_path: input.receipt_path || null,
   };
 
+  // 0120 — a NEW paid row goes through recordPayment(): the one core that
+  // writes the money, settles the invoice, fires the single payment_received
+  // and writes the History line. Edits and pending rows stay a plain write.
+  if (!input.id && payload.status === "paid") {
+    const { recordPayment } = await import("@/lib/payments");
+    const res = await recordPayment(supabase, {
+      source: "project_detail",
+      projectId: input.project_id,
+      amount: input.amount,
+      currency: payload.currency,
+      paidAt: payload.paid_at,
+      method: payload.method,
+      notes: payload.notes,
+      receiptPath: payload.receipt_path,
+      actorId: user.id,
+    });
+    if (!res.ok) return res;
+    revalidatePath(`/projects/${input.project_id}`);
+    revalidatePath("/projects");
+    revalidatePath("/invoices");
+    return { ok: true };
+  }
+
   // For an edit, know whether it was ALREADY paid — only a transition to
-  // paid (or a new paid row) is a payment event.
+  // paid is a payment event.
   const { data: prior } = input.id
-    ? await supabase.from("payments").select("status").eq("id", input.id).maybeSingle()
+    ? await supabase
+        .from("payments")
+        .select("status, invoice_id")
+        .eq("id", input.id)
+        .maybeSingle()
     : { data: null };
 
   const saved = input.id
@@ -251,6 +278,11 @@ export async function savePayment(input: PaymentInput): Promise<ActionResult> {
     });
     if (event) await fireAutomationTrigger(supabase, event);
   }
+  // 0120 — an edited amount or status changes what its invoice has received.
+  if (prior?.invoice_id) {
+    const { reconcileInvoice } = await import("@/lib/invoices");
+    await reconcileInvoice(supabase, prior.invoice_id);
+  }
 
   revalidatePath(`/projects/${input.project_id}`);
   revalidatePath("/projects");
@@ -262,9 +294,20 @@ export async function deletePayment(
   projectId: string,
 ): Promise<ActionResult> {
   const { supabase } = await authed();
+  // 0120 — the invoice this settled has to be told.
+  const { data: prior } = await supabase
+    .from("payments")
+    .select("invoice_id")
+    .eq("id", id)
+    .maybeSingle();
   const { error } = await supabase.from("payments").delete().eq("id", id);
   if (error) return { ok: false, error: error.message };
+  if (prior?.invoice_id) {
+    const { reconcileInvoice } = await import("@/lib/invoices");
+    await reconcileInvoice(supabase, prior.invoice_id);
+  }
   revalidatePath(`/projects/${projectId}`);
+  revalidatePath("/invoices");
   return { ok: true };
 }
 

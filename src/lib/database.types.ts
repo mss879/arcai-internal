@@ -356,7 +356,9 @@ export type DeliveryEventKind =
   | "handover_sent"
   // 0112 — client tracking
   | "client_note"
-  | "site_launched";
+  | "site_launched"
+  // 0120 — money landed on the project
+  | "payment_received";
 /** Which brain the WhatsApp agent runs for a contact (0086). */
 export type WaContactMode = "sales" | "onboarding";
 /** WhatsApp system (0048). */
@@ -663,6 +665,37 @@ export type SocialPostStatus =
   | "cancelled";
 /** One image in a post, in order. Public URLs — Meta fetches them itself. */
 export type SocialMediaItem = { url: string };
+
+// 0120 — invoices as a state, payments with a source, the bank slip
+export type InvoiceStatus = "issued" | "sent" | "partially_paid" | "paid" | "void";
+/** Which door the money came in through. */
+export type PaymentSource =
+  | "team"
+  | "project_detail"
+  | "payments_board"
+  | "finance"
+  | "deposit"
+  | "assistant"
+  | "slip"
+  | "whatsapp"
+  | "recurring"
+  | "gateway"
+  | "automation"
+  | "import";
+export type PaymentSlipSource = "public_invoice" | "portal" | "whatsapp" | "team" | "gateway";
+export type PaymentSlipStatus = "pending" | "verified" | "rejected" | "duplicate";
+export type PaymentSlipMatch = "exact" | "partial" | "mismatch" | "unknown";
+/** What the reader made of a slip. Every field optional: a blurry photo yields little. */
+export type SlipParsed = {
+  amount?: number | null;
+  currency?: string | null;
+  reference?: string | null;
+  bank?: string | null;
+  date?: string | null;
+  payer?: string | null;
+  confidence?: number | null;
+  raw?: string | null;
+};
 
 // 0119 — targets, recurring to-dos and the knowledge base
 export type TargetKind =
@@ -1277,6 +1310,11 @@ export type Database = {
           ended_on: string | null;
           last_run_on: string | null;
           notes: string | null;
+          // 0120 — raise an invoice for each month, and chase it.
+          auto_invoice: boolean;
+          remind: boolean;
+          /** The line item to print; null = the label. */
+          invoice_item: { item: string; description: string } | null;
           created_by: UUID | null;
           created_at: Timestamp;
           updated_at: Timestamp;
@@ -1295,6 +1333,10 @@ export type Database = {
           ended_on?: string | null;
           last_run_on?: string | null;
           notes?: string | null;
+          // 0120
+          auto_invoice?: boolean;
+          remind?: boolean;
+          invoice_item?: { item: string; description: string } | null;
           created_by?: UUID | null;
           created_at?: Timestamp;
           updated_at?: Timestamp;
@@ -1316,6 +1358,10 @@ export type Database = {
           received_on: string | null;
           received_by: UUID | null;
           note: string | null;
+          // 0120 — the invoice this month became, and the reminders sent for it.
+          invoice_id: UUID | null;
+          reminded_at: Timestamp | null;
+          overdue_reminded_at: Timestamp | null;
           created_at: Timestamp;
           updated_at: Timestamp;
         };
@@ -1330,6 +1376,10 @@ export type Database = {
           received_on?: string | null;
           received_by?: UUID | null;
           note?: string | null;
+          // 0120
+          invoice_id?: UUID | null;
+          reminded_at?: Timestamp | null;
+          overdue_reminded_at?: Timestamp | null;
           created_at?: Timestamp;
           updated_at?: Timestamp;
         };
@@ -1789,6 +1839,8 @@ export type Database = {
           is_paid: boolean;
           // 0083 — the project this payment settles. NULL = standalone.
           project_id: UUID | null;
+          /** 0120 — the invoice this row settles, when it is linked to one. */
+          invoice_id: UUID | null;
           created_by: UUID | null;
           created_at: Timestamp;
         };
@@ -1800,6 +1852,8 @@ export type Database = {
           is_paid?: boolean;
           // 0083 — see the Row comment
           project_id?: UUID | null;
+          // 0120
+          invoice_id?: UUID | null;
           created_by?: UUID | null;
           created_at?: Timestamp;
         };
@@ -1834,6 +1888,16 @@ export type Database = {
           lead_id: UUID | null;
           /** ISO code; null = LKR. */
           currency: string | null;
+          // 0120 — the invoice as a state. Written only by src/lib/invoices.ts.
+          status: InvoiceStatus;
+          /** Sum of linked payments, or the legacy amount_paid snapshot. */
+          paid_amount: number;
+          paid_at: Timestamp | null;
+          due_date: string | null;
+          voided_at: Timestamp | null;
+          void_reason: string | null;
+          /** The invoice this one replaces. */
+          reissued_from_id: UUID | null;
           created_by: UUID | null;
           created_at: Timestamp;
         };
@@ -1860,6 +1924,14 @@ export type Database = {
           client_id?: UUID | null;
           lead_id?: UUID | null;
           currency?: string | null;
+          // 0120
+          status?: InvoiceStatus;
+          paid_amount?: number;
+          paid_at?: Timestamp | null;
+          due_date?: string | null;
+          voided_at?: Timestamp | null;
+          void_reason?: string | null;
+          reissued_from_id?: UUID | null;
           created_by?: UUID | null;
           created_at?: Timestamp;
         };
@@ -2125,7 +2197,8 @@ export type Database = {
       payments: {
         Row: {
           id: UUID;
-          project_id: UUID;
+          /** 0120 — null for money against a standalone invoice. */
+          project_id: UUID | null;
           amount: number;
           currency: string;
           status: PaymentStatus;
@@ -2134,12 +2207,19 @@ export type Database = {
           notes: string | null;
           receipt_url: string | null;
           receipt_path: string | null;
+          // 0120 — what this settles, and which door it came in through.
+          // Written only by recordPayment() in src/lib/payments.ts.
+          invoice_id: UUID | null;
+          installment_id: UUID | null;
+          slip_id: UUID | null;
+          source: PaymentSource;
+          provider_ref: string | null;
           created_by: UUID | null;
           created_at: Timestamp;
         };
         Insert: {
           id?: UUID;
-          project_id: UUID;
+          project_id?: UUID | null;
           amount: number;
           currency?: string;
           status?: PaymentStatus;
@@ -2148,6 +2228,12 @@ export type Database = {
           notes?: string | null;
           receipt_url?: string | null;
           receipt_path?: string | null;
+          // 0120
+          invoice_id?: UUID | null;
+          installment_id?: UUID | null;
+          slip_id?: UUID | null;
+          source?: PaymentSource;
+          provider_ref?: string | null;
           created_by?: UUID | null;
           created_at?: Timestamp;
         };
@@ -2170,6 +2256,8 @@ export type Database = {
            * 'percent_of_received' = `percentage` of what the client has
            * actually paid, so it accrues with the money in. */
           basis: CommissionBasis;
+          /** 0120 — the payout run that settled it. */
+          payout_id: UUID | null;
         };
         Insert: {
           id?: UUID;
@@ -2184,6 +2272,8 @@ export type Database = {
           created_at?: Timestamp;
           // 0091
           basis?: CommissionBasis;
+          // 0120
+          payout_id?: UUID | null;
         };
         Update: Partial<Database["public"]["Tables"]["commissions"]["Insert"]>;
         Relationships: [];
@@ -2244,6 +2334,8 @@ export type Database = {
           method: string | null;
           note: string | null;
           recorded_by: UUID | null;
+          /** 0120 — set when a payout run deducted this from the commission. */
+          payout_id: UUID | null;
           created_at: Timestamp;
         };
         Insert: {
@@ -2255,6 +2347,8 @@ export type Database = {
           method?: string | null;
           note?: string | null;
           recorded_by?: UUID | null;
+          // 0120
+          payout_id?: UUID | null;
           created_at?: Timestamp;
         };
         Update: Partial<
@@ -3488,6 +3582,8 @@ export type Database = {
           paid_at: Timestamp | null;
           reminder_sent_at: Timestamp | null;
           overdue_sent_at: Timestamp | null;
+          /** 0120 — the invoice this instalment pays down, when linked. */
+          invoice_id: UUID | null;
           created_at: Timestamp;
         };
         Insert: {
@@ -3500,6 +3596,8 @@ export type Database = {
           paid_at?: Timestamp | null;
           reminder_sent_at?: Timestamp | null;
           overdue_sent_at?: Timestamp | null;
+          // 0120
+          invoice_id?: UUID | null;
           created_at?: Timestamp;
         };
         Update: Partial<
@@ -6047,6 +6145,124 @@ export type Database = {
         Update: Partial<Database["public"]["Tables"]["kb_pages"]["Insert"]>;
         Relationships: [];
       };
+      // 0120 — the client's bank-transfer slip: the "pay" button
+      payment_slips: {
+        Row: {
+          id: UUID;
+          source: PaymentSlipSource;
+          invoice_id: UUID | null;
+          project_id: UUID | null;
+          client_id: UUID | null;
+          wa_contact_id: UUID | null;
+          wa_message_id: UUID | null;
+          /** Path inside `bucket`. */
+          file_path: string;
+          bucket: string;
+          mime: string | null;
+          size_bytes: number | null;
+          parsed: SlipParsed;
+          amount_claimed: number | null;
+          reference: string | null;
+          note: string | null;
+          status: PaymentSlipStatus;
+          match: PaymentSlipMatch;
+          decided_by: UUID | null;
+          decided_at: Timestamp | null;
+          rejection_reason: string | null;
+          /** The payment this slip became, once verified. */
+          payment_id: UUID | null;
+          ip: string | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          source: PaymentSlipSource;
+          invoice_id?: UUID | null;
+          project_id?: UUID | null;
+          client_id?: UUID | null;
+          wa_contact_id?: UUID | null;
+          wa_message_id?: UUID | null;
+          file_path: string;
+          bucket?: string;
+          mime?: string | null;
+          size_bytes?: number | null;
+          parsed?: SlipParsed;
+          amount_claimed?: number | null;
+          reference?: string | null;
+          note?: string | null;
+          status?: PaymentSlipStatus;
+          match?: PaymentSlipMatch;
+          decided_by?: UUID | null;
+          decided_at?: Timestamp | null;
+          rejection_reason?: string | null;
+          payment_id?: UUID | null;
+          ip?: string | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["payment_slips"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0120 — a commission payout run, as a record
+      commission_payouts: {
+        Row: {
+          id: UUID;
+          user_id: UUID;
+          /** The month the run covers, as its first day. */
+          period: string;
+          gross: number;
+          loan_deduction: number;
+          net_paid: number;
+          method: string | null;
+          reference: string | null;
+          note: string | null;
+          paid_at: Timestamp;
+          paid_by: UUID | null;
+          /** The expenses row the run wrote. */
+          expense_id: UUID | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          user_id: UUID;
+          period: string;
+          gross?: number;
+          loan_deduction?: number;
+          net_paid?: number;
+          method?: string | null;
+          reference?: string | null;
+          note?: string | null;
+          paid_at?: Timestamp;
+          paid_by?: UUID | null;
+          expense_id?: UUID | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["commission_payouts"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0120 — one counter per document series; read only through
+      // next_document_number()
+      document_counters: {
+        Row: {
+          kind: string;
+          prefix: string;
+          width: number;
+          suffix: string;
+          last: number;
+          yearly: boolean;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          kind: string;
+          prefix?: string;
+          width?: number;
+          suffix?: string;
+          last?: number;
+          yearly?: boolean;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["document_counters"]["Insert"]>;
+        Relationships: [];
+      };
     };
     Views: {
       // 0114 — per-project counts and cost totals for the board.
@@ -6092,6 +6308,11 @@ export type Database = {
       approvals_count: {
         Args: Record<string, never>;
         Returns: number;
+      };
+      // 0120 — the next invoice / quote / notice number, under a row lock.
+      next_document_number: {
+        Args: { p_kind: string };
+        Returns: string;
       };
       // 0114 — the dashboard's numbers in one round-trip.
       dashboard_summary: {

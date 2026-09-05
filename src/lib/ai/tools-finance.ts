@@ -881,11 +881,15 @@ async function datasetProjectPayments(supabase: DB, f: Filters): Promise<Dataset
     .limit(500);
   if (error) return error.message;
 
-  const names = await projectNames(supabase, (data ?? []).map((p) => p.project_id));
+  const names = await projectNames(
+    supabase,
+    (data ?? []).map((p) => p.project_id).filter((id): id is string => Boolean(id)),
+  );
   let rows = (data ?? []).map((p) => ({
     ...p,
     when: (p.paid_at ?? p.created_at).slice(0, 10),
-    project: names.get(p.project_id) ?? "—",
+    // 0120 — money against a standalone invoice has no project.
+    project: p.project_id ? (names.get(p.project_id) ?? "—") : "—",
   }));
   rows = rows.filter((p) => inWindow(p.when, f));
   if (f.query) rows = rows.filter((p) => contains(p.project, f.query));
@@ -1529,6 +1533,8 @@ async function loadProjectMoney(supabase: DB) {
 
   const payments = new Map<string, { amount: number; status: string | null }[]>();
   for (const p of payRes.data ?? []) {
+    // 0120 — money against a standalone invoice has no project.
+    if (!p.project_id) continue;
     const list = payments.get(p.project_id) ?? [];
     list.push({ amount: num(p.amount), status: p.status });
     payments.set(p.project_id, list);
@@ -2714,8 +2720,12 @@ async function createNotice(
     };
   }
 
-  const { data: past } = await supabase.from("notices").select("notice_number");
-  const noticeNumber = nextNoticeNumber((past ?? []).map((n) => n.notice_number));
+  // 0120 — allocated under a lock; the legacy rule only before the counter exists.
+  const { allocateDocumentNumber } = await import("@/lib/document-number");
+  const noticeNumber = await allocateDocumentNumber(supabase, "notice", async () => {
+    const { data: past } = await supabase.from("notices").select("notice_number");
+    return nextNoticeNumber((past ?? []).map((n) => n.notice_number));
+  });
   const noticeDate =
     String(args.notice_date ?? "").trim() || ctx.today;
 
@@ -2798,11 +2808,9 @@ async function createQuote(
   const discount = Math.max(0, Number(args.discount) || 0);
   const grandTotal = Math.max(0, subtotal - discount);
 
-  // Same numbering rule as the Quotes page: count + 1 within this year.
-  const { count } = await supabase
-    .from("quotes")
-    .select("*", { count: "exact", head: true });
-  const quoteNumber = `Q-${new Date().getFullYear()}-${String((count ?? 0) + 1).padStart(3, "0")}`;
+  // 0120 — the same counter the Quotes page uses, under a lock.
+  const { nextQuoteNumber } = await import("@/lib/quotes");
+  const quoteNumber = await nextQuoteNumber(supabase);
 
   const { data: saved, error } = await supabase
     .from("quotes")

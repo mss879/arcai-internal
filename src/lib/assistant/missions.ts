@@ -327,7 +327,9 @@ function isConfirmCard(card: AssistantCard): boolean {
     // 0118
     card.type === "confirm_social_post" ||
     // 0119
-    card.type === "confirm_portal_link"
+    card.type === "confirm_portal_link" ||
+    // 0120
+    card.type === "confirm_mark_paid"
   );
 }
 
@@ -348,7 +350,9 @@ async function parkApproval(
             ? "social_post"
             : card.type === "confirm_portal_link"
               ? "portal_link"
-              : "invoice_email";
+              : card.type === "confirm_mark_paid"
+                ? "mark_paid"
+                : "invoice_email";
   await supabase.from("assistant_approvals").insert({
     user_id: mission.user_id,
     mission_id: mission.id,

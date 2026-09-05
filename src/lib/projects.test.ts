@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  allocatePayment,
   balanceDue,
   buildLedger,
+  invoiceStatusFor,
   paidPercent,
   settledAmount,
   type MoneyProject,
@@ -203,5 +205,67 @@ describe("buildLedger", () => {
       }),
     );
     expect(rows.map((r) => r.id)).toEqual(["new", "old", "deposit"]);
+  });
+});
+
+// 0120 — an invoice's status is arithmetic, not a stamp somebody remembered.
+describe("invoiceStatusFor", () => {
+  it("reads paid at or above the total", () => {
+    expect(invoiceStatusFor(100_000, 100_000)).toBe("paid");
+    expect(invoiceStatusFor(120_000, 100_000)).toBe("paid");
+  });
+
+  it("reads partially paid between", () => {
+    expect(invoiceStatusFor(1, 100_000)).toBe("partially_paid");
+    expect(invoiceStatusFor(99_999, 100_000)).toBe("partially_paid");
+  });
+
+  it("keeps an unpaid invoice where it was", () => {
+    expect(invoiceStatusFor(0, 100_000)).toBe("issued");
+    expect(invoiceStatusFor(0, 100_000, "sent")).toBe("sent");
+    expect(invoiceStatusFor(-5, 100_000, "sent")).toBe("sent");
+  });
+
+  it("never reads paid on a zero total", () => {
+    expect(invoiceStatusFor(0, 0)).toBe("issued");
+    // Money against a zero-total invoice is odd, but it is money.
+    expect(invoiceStatusFor(500, 0)).toBe("partially_paid");
+  });
+
+  it("survives junk", () => {
+    expect(invoiceStatusFor(Number.NaN, "x" as unknown as number)).toBe("issued");
+  });
+});
+
+describe("allocatePayment", () => {
+  const open = [
+    { id: "b", grand_total: 40_000, paid_amount: 10_000, invoice_date: "2026-08-15" },
+    { id: "a", grand_total: 50_000, paid_amount: 0, invoice_date: "2026-08-01" },
+    { id: "c", grand_total: 20_000, paid_amount: 20_000, invoice_date: "2026-07-01" },
+  ];
+
+  it("settles the oldest open invoice first", () => {
+    const { allocations, unallocated } = allocatePayment(60_000, open);
+    expect(allocations).toEqual([
+      { invoiceId: "a", amount: 50_000 },
+      { invoiceId: "b", amount: 10_000 },
+    ]);
+    expect(unallocated).toBe(0);
+  });
+
+  it("skips what is already paid", () => {
+    const { allocations } = allocatePayment(5_000, open);
+    expect(allocations.map((a) => a.invoiceId)).not.toContain("c");
+  });
+
+  it("reports the overpayment rather than hiding it", () => {
+    const { allocations, unallocated } = allocatePayment(100_000, open);
+    expect(allocations.reduce((s, a) => s + a.amount, 0)).toBe(80_000);
+    expect(unallocated).toBe(20_000);
+  });
+
+  it("allocates nothing from nothing", () => {
+    expect(allocatePayment(0, open)).toEqual({ allocations: [], unallocated: 0 });
+    expect(allocatePayment(1_000, [])).toEqual({ allocations: [], unallocated: 1_000 });
   });
 });

@@ -211,6 +211,18 @@ export function ApprovalsTray({
                         return res;
                       })
                     }
+                    onMarkPaid={
+                      chat.markPaid &&
+                      (async (payment) => {
+                        const res = await chat.markPaid!(payment);
+                        await record(
+                          approval.id,
+                          res.ok ? "sent" : "failed",
+                          res.error,
+                        );
+                        return res;
+                      })
+                    }
                     onApproveMission={chat.approveMission}
                   />
                   <button

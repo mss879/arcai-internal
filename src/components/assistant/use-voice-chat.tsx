@@ -8,6 +8,7 @@ import type {
   AssistantCard,
   CardResolution,
   EmailCardData,
+  MarkPaidCardData,
   PortalLinkCardData,
   SmsCardData,
   SocialPostCardData,
@@ -188,6 +189,8 @@ const CONFIRM_CARD_TYPES = new Set<AssistantCard["type"]>([
   "confirm_social_post",
   // 0119
   "confirm_portal_link",
+  // 0120
+  "confirm_mark_paid",
 ]);
 
 /** Narrows to the cards that carry a `resolution`. */
@@ -346,6 +349,8 @@ export type VoiceChat = {
   scheduleSocial?: (social: SocialPostCardData) => Promise<SendInvoiceResult>;
   /** 0119 — send a client their project link, through the same ladder as the page. */
   sendPortalLink?: (portal: PortalLinkCardData) => Promise<SendInvoiceResult>;
+  /** 0120 — record money against an invoice, through recordPayment(). */
+  markPaid?: (payment: MarkPaidCardData) => Promise<SendInvoiceResult>;
   /** Start a mission the user approved (0103). */
   approveMission: (missionId: string) => Promise<SendInvoiceResult>;
   /** True while the mic re-opens itself after every reply (0104). */
@@ -1392,6 +1397,32 @@ export function useVoiceChat(): VoiceChat {
     [],
   );
 
+  const markPaid = React.useCallback(
+    async (payment: MarkPaidCardData): Promise<SendInvoiceResult> => {
+      pendingConfirmRef.current = null;
+      try {
+        const res = await fetch("/api/assistant/confirm-payment", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            invoiceId: payment.invoice_id,
+            amount: payment.amount,
+            paidAt: payment.paid_at,
+            method: payment.method,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data?.ok) {
+          return { ok: false, error: data?.error || "Could not record the payment." };
+        }
+        return { ok: true };
+      } catch {
+        return { ok: false, error: "Could not reach the server." };
+      }
+    },
+    [],
+  );
+
   /**
    * If a confirm card is pending and the user's words are a clear yes or no,
    * resolve it right here — the send still happens through the same
@@ -1445,9 +1476,11 @@ export function useVoiceChat(): VoiceChat {
                 ? await scheduleSocial(card.social)
                 : card.type === "confirm_portal_link"
                   ? await sendPortalLink(card.portal)
-                  : card.type === "confirm_send"
-                    ? await sendInvoice(card.invoice.id, card.emails, card.message)
-                    : { ok: false as const, error: "Nothing to send." };
+                  : card.type === "confirm_mark_paid"
+                    ? await markPaid(card.payment)
+                    : card.type === "confirm_send"
+                      ? await sendInvoice(card.invoice.id, card.emails, card.message)
+                      : { ok: false as const, error: "Nothing to send." };
 
       let reply: string;
       if (res.ok) {
@@ -1463,9 +1496,11 @@ export function useVoiceChat(): VoiceChat {
                   ? `Done — “${card.social.topic}” is on the queue for ${card.social.accounts.length} account${card.social.accounts.length === 1 ? "" : "s"}.`
                   : card.type === "confirm_portal_link"
                     ? `Done — ${card.portal.client_name} has their project link.`
-                    : card.type === "confirm_send"
-                      ? `Done — the invoice is on its way to ${card.emails.join(", ")}.`
-                      : "Done.";
+                    : card.type === "confirm_mark_paid"
+                      ? `Done — recorded against invoice ${card.payment.invoice_number}.`
+                      : card.type === "confirm_send"
+                        ? `Done — the invoice is on its way to ${card.emails.join(", ")}.`
+                        : "Done.";
       } else {
         updateCardResolution(pending, { state: "error", error: res.error });
         reply = `That didn't go through — ${res.error ?? "the send failed"}. You can tap Try again on the card.`;
@@ -1476,6 +1511,7 @@ export function useVoiceChat(): VoiceChat {
     },
     [
       appendThreadMessages,
+      markPaid,
       scheduleSocial,
       sendEmail,
       sendInvoice,
@@ -2271,6 +2307,7 @@ export function useVoiceChat(): VoiceChat {
     sendWhatsApp,
     scheduleSocial,
     sendPortalLink,
+    markPaid,
     approveMission,
     handsFree,
     setHandsFree,

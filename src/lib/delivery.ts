@@ -365,7 +365,8 @@ export async function buildPaymentEvent(
   opts: {
     projectId: string;
     amountText: string;
-    source: "payments_board" | "project_detail" | "finance";
+    /** Which door the money came in through (0120 — the PaymentSource union). */
+    source: string;
     triggerKey: string;
   },
 ): Promise<TriggerEvent | null> {

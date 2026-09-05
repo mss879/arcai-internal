@@ -20,6 +20,7 @@ import {
   Rocket,
   Send,
   Star,
+  Banknote,
 } from "lucide-react";
 
 import { EmptyState } from "@/components/ui/empty-state";
@@ -147,6 +148,12 @@ const KIND_META: Record<
     label: "Site launched",
     icon: <Rocket className="h-3.5 w-3.5" />,
     tone: "bg-emerald-50 text-emerald-600",
+  },
+  // 0120 — money landed, through recordPayment()
+  payment_received: {
+    label: "Payment received",
+    icon: <Banknote className="h-3.5 w-3.5" />,
+    tone: "bg-emerald-50 text-emerald-700",
   },
 };
 

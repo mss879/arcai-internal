@@ -518,8 +518,10 @@ export async function generateProjectInvoice(
     phone: string | null;
   } | null;
 
-  const invoiceNumber = nextInvoiceNumber(
-    (numbers ?? []).map((n) => n.invoice_number),
+  // 0120 — allocated under a lock; the legacy rule only before the counter exists.
+  const { allocateDocumentNumber } = await import("@/lib/document-number");
+  const invoiceNumber = await allocateDocumentNumber(db, "invoice", () =>
+    nextInvoiceNumber((numbers ?? []).map((n) => n.invoice_number)),
   );
 
   const { data: invoice, error } = await db

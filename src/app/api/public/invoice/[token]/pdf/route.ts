@@ -46,7 +46,7 @@ export async function GET(
   const { data: row } = await supabase
     .from("invoices")
     .select(
-      "invoice_number, invoice_date, bill_to_name, bill_to_details, items, grand_total, due_today, amount_paid, bank_account",
+      "invoice_number, invoice_date, bill_to_name, bill_to_details, items, grand_total, due_today, amount_paid, bank_account, currency",
     )
     .eq("share_token", token)
     .maybeSingle();
@@ -80,6 +80,8 @@ export async function GET(
     amount_paid: Number(row.amount_paid) || 0,
     stamp: stampRow?.stamp ?? null,
     bank_account: row.bank_account,
+    // 0120
+    currency: row.currency ?? null,
   };
 
   const pdf = await renderInvoicePdf(invoice);

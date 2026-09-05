@@ -18,6 +18,7 @@ import {
   MessageCircle,
   CalendarClock,
   Link2,
+  BadgeCheck,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -27,6 +28,7 @@ import type {
   CardSendState,
   EmailCardData,
   InvoiceCardData,
+  MarkPaidCardData,
   PortalLinkCardData,
   ProposalCardData,
   SmsCardData,
@@ -699,6 +701,97 @@ const CHANNEL_LABEL: Record<PortalLinkCardData["likely_channel"], string> = {
   none: "nothing can send it — a task will be raised instead",
 };
 
+function moneyText(amount: number, currency: string): string {
+  const v = Number.isFinite(amount) ? amount : 0;
+  const prefix = currency === "LKR" ? "Rs. " : `${currency} `;
+  return prefix + v.toLocaleString("en-US", { maximumFractionDigits: 2 });
+}
+
+/** Money against an invoice (0120). Written only on a tap, by recordPayment(). */
+function ConfirmMarkPaid({
+  payment,
+  resolution,
+  onMarkPaid,
+}: {
+  payment: MarkPaidCardData;
+  resolution?: CardResolution;
+  onMarkPaid?: (payment: MarkPaidCardData) => Promise<SendInvoiceResult>;
+}) {
+  const [localState, setLocalState] = React.useState<SendState>("idle");
+  const [localError, setLocalError] = React.useState<string | null>(null);
+  const state = resolution?.state ?? localState;
+  const error = resolution?.error ?? localError;
+
+  const send = async () => {
+    setLocalState("sending");
+    setLocalError(null);
+    if (!onMarkPaid) return;
+    const res = await onMarkPaid(payment);
+    if (res.ok) setLocalState("sent");
+    else {
+      setLocalError(res.error || "Could not record it.");
+      setLocalState("error");
+    }
+  };
+
+  const balance = Math.max(0, payment.grand_total - payment.paid_amount);
+  const settles = payment.amount >= balance;
+
+  return (
+    <>
+      <div className="flex items-center gap-2.5">
+        <div className="grid h-9 w-9 place-items-center rounded-xl bg-emerald-50 text-emerald-600">
+          <BadgeCheck className="h-4.5 w-4.5" />
+        </div>
+        <div className="leading-tight">
+          <p className="text-sm font-semibold text-slate-900">
+            {settles ? "Mark paid" : "Record a part-payment"}
+          </p>
+          <p className="text-[11px] text-slate-400">
+            Invoice {payment.invoice_number} · {payment.bill_to_name}
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-3 rounded-xl bg-slate-50 px-3 py-2.5 text-[13px] text-slate-800">
+        <p className="text-lg font-bold tabular-nums text-slate-900">
+          {moneyText(payment.amount, payment.currency)}
+        </p>
+        <p className="mt-0.5 text-[11px] text-slate-500">
+          of {moneyText(balance, payment.currency)} owed
+          {payment.paid_amount > 0
+            ? ` (${moneyText(payment.paid_amount, payment.currency)} already received)`
+            : ""}
+          {" · "}
+          {payment.paid_at}
+          {payment.method ? ` · ${payment.method}` : ""}
+        </p>
+        {payment.project_name && (
+          <p className="mt-1 text-[11px] text-slate-500">
+            Lands on {payment.project_name}&apos;s ledger too.
+          </p>
+        )}
+      </div>
+
+      {onMarkPaid ? (
+        <ConfirmFooter
+          state={state}
+          error={error ?? null}
+          sentLabel={settles ? "Invoice marked paid" : "Part-payment recorded"}
+          sendLabel={settles ? "Mark it paid" : "Record it"}
+          hint="Writes the payment once — the invoice, the project and any automation follow from it."
+          onSend={send}
+          onCancel={() => setLocalState("cancelled")}
+        />
+      ) : (
+        <p className="mt-2.5 text-[13px] text-slate-400">
+          Open Arcus to confirm this.
+        </p>
+      )}
+    </>
+  );
+}
+
 /** The client's project link (0119). Sent only on a tap, via the ladder. */
 function ConfirmPortalLink({
   portal,
@@ -1042,6 +1135,7 @@ export function AssistantCardView({
   onSendWhatsApp,
   onScheduleSocial,
   onSendPortalLink,
+  onMarkPaid,
 }: {
   card: AssistantCard;
   onSend: (
@@ -1061,6 +1155,8 @@ export function AssistantCardView({
   onScheduleSocial?: (social: SocialPostCardData) => Promise<SendInvoiceResult>;
   /** 0119 — send a client their project link. */
   onSendPortalLink?: (portal: PortalLinkCardData) => Promise<SendInvoiceResult>;
+  /** 0120 — record money against an invoice. */
+  onMarkPaid?: (payment: MarkPaidCardData) => Promise<SendInvoiceResult>;
   /**
    * Approve a planned mission. Omitted on surfaces that cannot start one —
    * the card then shows the plan without an Approve button rather than a
@@ -1113,6 +1209,13 @@ export function AssistantCardView({
           portal={card.portal}
           resolution={card.resolution}
           onSendPortalLink={onSendPortalLink}
+        />
+      )}
+      {card.type === "confirm_mark_paid" && (
+        <ConfirmMarkPaid
+          payment={card.payment}
+          resolution={card.resolution}
+          onMarkPaid={onMarkPaid}
         />
       )}
       {card.type === "proposal" && (

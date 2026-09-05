@@ -79,65 +79,52 @@ export async function setInstallmentPaid(
   paid: boolean,
 ): Promise<ActionResult> {
   const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  // 0120 — money landing goes through recordPayment(): it marks the
+  // instalment, completes the plan when it was the last one, settles the
+  // linked invoice and fires the ONE payment_received (trigger_key dedupes,
+  // so paid → unpaid → paid never spams the customer).
+  if (paid) {
+    const { data: inst } = await supabase
+      .from("payment_installments")
+      .select("id, amount, status")
+      .eq("id", id)
+      .maybeSingle();
+    if (!inst) return { ok: false, error: "That instalment no longer exists." };
+    if (inst.status === "paid") return { ok: true };
+    const { recordPayment } = await import("@/lib/payments");
+    const res = await recordPayment(supabase, {
+      source: "finance",
+      installmentId: id,
+      amount: Number(inst.amount) || 0,
+      actorId: user?.id ?? null,
+    });
+    if (!res.ok) return res;
+    revalidatePath("/finance");
+    revalidatePath("/invoices");
+    return { ok: true };
+  }
+
   const { data: inst, error } = await supabase
     .from("payment_installments")
-    .update({
-      status: paid ? "paid" : "pending",
-      paid_at: paid ? new Date().toISOString() : null,
-    })
+    .update({ status: "pending", paid_at: null })
     .eq("id", id)
-    .select("plan_id, seq, amount")
+    .select("plan_id, invoice_id")
     .single();
   if (error) return { ok: false, error: error.message };
 
-  // Complete the plan when its last installment is settled.
+  // The plan is no longer complete, and the invoice has received less.
   if (inst) {
-    const { data: siblings } = await supabase
-      .from("payment_installments")
-      .select("status")
-      .eq("plan_id", inst.plan_id);
-    const allPaid = (siblings ?? []).every((s) => s.status === "paid");
     await supabase
       .from("payment_plans")
-      .update({ status: allPaid ? "completed" : "active" })
+      .update({ status: "active" })
       .eq("id", inst.plan_id);
-  }
-
-  // Money landed → fire the payment_received automations (e.g. the
-  // "Deposit received 🚀" kickoff when seq = 1). trigger_key dedupes, so
-  // toggling paid → unpaid → paid never spams the customer.
-  if (paid && inst) {
-    const { data: plan } = await supabase
-      .from("payment_plans")
-      .select("*")
-      .eq("id", inst.plan_id)
-      .maybeSingle();
-    if (plan) {
-      const lead = plan.lead_id
-        ? (await supabase.from("leads").select("*").eq("id", plan.lead_id).maybeSingle()).data
-        : null;
-      await fireAutomationTrigger(supabase, {
-        trigger: "payment_received",
-        lead,
-        client: plan.client_id
-          ? { id: plan.client_id, name: plan.contact_name, phone: plan.phone }
-          : null,
-        payload: {
-          name: plan.contact_name,
-          phone: plan.phone,
-          amount: `${plan.currency} ${Number(inst.amount).toLocaleString()}`,
-          seq: inst.seq,
-          plan_title: plan.title,
-          total: Number(plan.total) || 0,
-          total_amount: `${plan.currency} ${Number(plan.total).toLocaleString()}`,
-          // 0085 — which surface recorded the money. Plans carry no project
-          // link, so first_payment stays unset here and the delivery-kickoff
-          // recipe (which filters on it) never fires from Finance; the
-          // legacy seq-1 deposit recipe still covers this path.
-          source: "finance",
-        },
-        triggerKey: `${id}:paid`,
-      });
+    if (inst.invoice_id) {
+      const { reconcileInvoice } = await import("@/lib/invoices");
+      await reconcileInvoice(supabase, inst.invoice_id);
     }
   }
 

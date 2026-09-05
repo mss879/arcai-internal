@@ -43,7 +43,7 @@ export default async function PublicInvoicePage({
     // that some databases never ran, and one missing presentation column
     // must not turn a client's invoice link into a 404.
     .select(
-      "invoice_number, invoice_date, bill_to_name, bill_to_details, items, grand_total, due_today, amount_paid, bank_account",
+      "invoice_number, invoice_date, bill_to_name, bill_to_details, items, grand_total, due_today, amount_paid, bank_account, currency",
     )
     .eq("share_token", token)
     .maybeSingle();
@@ -68,6 +68,8 @@ export default async function PublicInvoicePage({
     grandTotal: Number(invoice.grand_total) || 0,
     amountPaid: Number(invoice.amount_paid) || 0,
     dueToday: Number(invoice.due_today) || 0,
+    // 0120 — every figure on the page is formatted in it.
+    currency: invoice.currency || "LKR",
     stampSrc: stampImage(stamp),
     stampLabel:
       stamp === "deposit_paid"

@@ -21,7 +21,9 @@
 
 import { revalidatePath } from "next/cache";
 
+import { allocateDocumentNumber } from "@/lib/document-number";
 import { nextInvoiceNumber } from "@/lib/invoice";
+import { reconcileInvoice } from "@/lib/invoices";
 import { settledAmount } from "@/lib/projects";
 import {
   firstName,
@@ -121,8 +123,10 @@ export async function confirmDeposit(
   } | null;
 
   // ---- 1. The stamped invoice -------------------------------------------
-  const invoiceNumber = nextInvoiceNumber(
-    (numbersRes.data ?? []).map((n) => n.invoice_number),
+  // 0120 — allocated under a lock; the legacy highest-plus-one only when
+  // the counter isn't there yet.
+  const invoiceNumber = await allocateDocumentNumber(supabase, "invoice", () =>
+    nextInvoiceNumber((numbersRes.data ?? []).map((n) => n.invoice_number)),
   );
 
   const { data: invoice, error } = await supabase
@@ -148,6 +152,8 @@ export async function confirmDeposit(
       amount_paid: received,
       due_today: Math.max(0, total - received),
       project_id: projectId,
+      client_id: project.client_id ?? null,
+      currency: project.currency ?? null,
       recipient_email: client?.email ?? null,
       created_by: user.id,
     })
@@ -170,6 +176,15 @@ export async function confirmDeposit(
   if (stampError) {
     console.error("[deposit] couldn't stamp the invoice:", stampError.message);
   }
+  // 0120 — the project's payments settle this invoice from now on; link the
+  // ones already recorded and let the state follow from them.
+  await supabase
+    .from("payments")
+    .update({ invoice_id: invoice.id })
+    .eq("project_id", projectId)
+    .eq("status", "paid")
+    .is("invoice_id", null);
+  await reconcileInvoice(supabase, invoice.id).catch(() => null);
 
   // ---- 2. Stamp the project (before the text, so a slow SMS can't leave
   //         the confirmation un-recorded if the request is abandoned) ------

@@ -131,10 +131,7 @@ export async function createQuoteFromProposal(
       ).data
     : null;
 
-  const { count } = await supabase
-    .from("quotes")
-    .select("*", { count: "exact", head: true });
-  const quoteNumber = `Q-${new Date().getFullYear()}-${String((count ?? 0) + 1).padStart(3, "0")}`;
+  const quoteNumber = await nextQuoteNumber(supabase);
 
   const grandTotal = Number(proposal.grand_total) || 0;
   const { data: quote, error } = await supabase
@@ -178,4 +175,33 @@ export async function createQuoteFromProposal(
     .eq("id", proposal.id);
 
   return { ok: true, quoteId: quote.id };
+}
+
+/**
+ * The next quote number, Q-YYYY-NNN (0120).
+ *
+ * Allocated by next_document_number() under a row lock; the year rolls the
+ * count over. Before the counter exists it falls back to the old rule —
+ * row count plus one — which is the rule that once produced two Q-2026-014s.
+ */
+export async function nextQuoteNumber(supabase: DB): Promise<string> {
+  const { allocateDocumentNumber } = await import("@/lib/document-number");
+  return allocateDocumentNumber(supabase, "quote", async () => {
+    const { count } = await supabase
+      .from("quotes")
+      .select("*", { count: "exact", head: true });
+    return `Q-${new Date().getFullYear()}-${String((count ?? 0) + 1).padStart(3, "0")}`;
+  });
+}
+
+/**
+ * The next invoice number, "#00205" (0120). Same contract as nextQuoteNumber.
+ */
+export async function nextInvoiceNumberFor(supabase: DB): Promise<string> {
+  const { allocateDocumentNumber } = await import("@/lib/document-number");
+  const { nextInvoiceNumber } = await import("@/lib/invoice");
+  return allocateDocumentNumber(supabase, "invoice", async () => {
+    const { data } = await supabase.from("invoices").select("invoice_number");
+    return nextInvoiceNumber((data ?? []).map((r) => r.invoice_number));
+  });
 }

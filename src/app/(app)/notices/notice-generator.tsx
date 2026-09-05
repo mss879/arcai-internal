@@ -199,7 +199,11 @@ export function NoticeGenerator({
     });
     if (res.ok) {
       setSavedId(res.id);
-      toast.success(`Saved to Past notices as ${payload.notice_number}.`);
+      // 0120 — the number is allocated at save; show the one it was filed under.
+      if (res.notice_number && res.notice_number !== payload.notice_number) {
+        setNoticeNumber(res.notice_number);
+      }
+      toast.success(`Saved to Past notices as ${res.notice_number ?? payload.notice_number}.`);
       router.refresh();
     } else {
       toast.error(`Couldn't save: ${res.error}`);

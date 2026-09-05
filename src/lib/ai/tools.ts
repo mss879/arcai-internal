@@ -21,6 +21,7 @@ import type {
   SmsCardData,
   WhatsAppCardData,
   SocialPostCardData,
+  MarkPaidCardData,
 } from "@/lib/assistant-cards";
 import type {
   Artifact,
@@ -1447,6 +1448,31 @@ export const ASSISTANT_TOOLS: ToolSchema[] = [
   {
     type: "function",
     function: {
+      name: "mark_invoice_paid",
+      description:
+        "Record money against a saved invoice and show the user a confirmation first — 'mark invoice 204 paid', 'Silva paid 50,000 on their invoice'. Finds the invoice by number or by the name on it. IMPORTANT: this does NOT record anything — the user must tap Confirm. Defaults to the full balance; a smaller amount records a part-payment.",
+      parameters: {
+        type: "object",
+        properties: {
+          invoice: {
+            type: "string",
+            description: "The invoice number (e.g. '#00204' or '204') or the client/company name on it.",
+          },
+          amount: {
+            type: "number",
+            description: "Amount received. Omit for the whole balance.",
+          },
+          paid_on: { type: "string", description: "YYYY-MM-DD. Defaults to today." },
+          method: { type: "string", description: "Bank transfer, cash, cheque…" },
+        },
+        required: ["invoice"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "kb_page",
       description:
         "Read one knowledge-base page in full, by its title or slug. Use after kb_search when the snippet isn't enough, or when the user names a page ('open the refund policy page').",
@@ -2405,8 +2431,12 @@ async function resolveInvoiceNumber(
 ): Promise<string> {
   const p = (provided ?? "").trim();
   if (p) return p.startsWith("#") ? p : `#${p}`;
-  const { data } = await supabase.from("invoices").select("invoice_number");
-  return nextInvoiceNumber((data ?? []).map((row) => row.invoice_number));
+  // 0120 — allocated under a lock; the legacy rule only before the counter exists.
+  const { allocateDocumentNumber } = await import("@/lib/document-number");
+  return allocateDocumentNumber(supabase, "invoice", async () => {
+    const { data } = await supabase.from("invoices").select("invoice_number");
+    return nextInvoiceNumber((data ?? []).map((row) => row.invoice_number));
+  });
 }
 
 // ---- Executor ------------------------------------------------------------
@@ -4297,6 +4327,93 @@ export async function executeTool(
       };
     }
 
+    case "mark_invoice_paid": {
+      const ref = String(args.invoice ?? "").trim();
+      if (!ref) return { content: { ok: false, error: "Which invoice?" } };
+
+      // A number ("204", "#00204") or a name on the invoice.
+      const digits = ref.replace(/\D/g, "");
+      let query = supabase
+        .from("invoices")
+        .select(
+          "id, invoice_number, bill_to_name, currency, grand_total, paid_amount, status, project_id, invoice_date",
+        )
+        .in("status", ["issued", "sent", "partially_paid"])
+        .order("invoice_date", { ascending: false })
+        .limit(3);
+      query = digits
+        ? query.ilike("invoice_number", `%${digits}%`)
+        : query.ilike("bill_to_name", `%${ref.replace(/[%,()]/g, " ").trim()}%`);
+      const { data: matches } = await query;
+      if (!matches?.length)
+        return {
+          content: {
+            ok: false,
+            error: `No open invoice matching "${ref}". Paid and void invoices aren't offered.`,
+          },
+        };
+      // A number match should be exact when one exists.
+      const exact = digits
+        ? matches.filter((m) => m.invoice_number.replace(/\D/g, "") === digits)
+        : [];
+      const pool = exact.length ? exact : matches;
+      if (pool.length > 1)
+        return {
+          content: {
+            ok: false,
+            error: `More than one open invoice matches "${ref}". Which one?`,
+            candidates: pool.map((m) => `${m.invoice_number} — ${m.bill_to_name}`),
+          },
+        };
+      const inv = pool[0];
+
+      const balance = Math.max(0, Number(inv.grand_total) - Number(inv.paid_amount ?? 0));
+      const asked = Number(args.amount);
+      const amount = Number.isFinite(asked) && asked > 0 ? asked : balance;
+      if (balance <= 0)
+        return { content: { ok: false, error: `${inv.invoice_number} has nothing owed on it.` } };
+
+      const paidOn = String(args.paid_on ?? "").trim();
+      const paidAt = /^\d{4}-\d{2}-\d{2}$/.test(paidOn) ? paidOn : today;
+
+      let projectName: string | null = null;
+      if (inv.project_id) {
+        const { data: project } = await supabase
+          .from("projects")
+          .select("name")
+          .eq("id", inv.project_id)
+          .maybeSingle();
+        projectName = project?.name ?? null;
+      }
+
+      const payment: MarkPaidCardData = {
+        invoice_id: inv.id,
+        invoice_number: inv.invoice_number,
+        bill_to_name: inv.bill_to_name,
+        currency: inv.currency || "LKR",
+        grand_total: Number(inv.grand_total) || 0,
+        paid_amount: Number(inv.paid_amount ?? 0),
+        amount,
+        paid_at: paidAt,
+        method: String(args.method ?? "").trim() || null,
+        project_name: projectName,
+      };
+
+      return {
+        content: {
+          ok: true,
+          awaiting_user_confirmation: true,
+          invoice: inv.invoice_number,
+          bill_to: inv.bill_to_name,
+          amount,
+          balance_before: balance,
+          will_read: amount >= balance ? "paid" : "partially_paid",
+          note: "Shown to the user for confirmation. Nothing is recorded until the user taps Confirm. Do not say it has been recorded.",
+        },
+        card: { type: "confirm_mark_paid", payment },
+      };
+    }
+
     case "kb_page": {
       const query = String(args.query ?? "").trim();
       if (!query) return { content: { ok: false, error: "Which page?" } };
@@ -4956,35 +5073,32 @@ export async function executeTool(
       if (!Number.isFinite(amount) || amount <= 0)
         return { content: { ok: false, error: "Enter a valid amount." } };
 
-      const { data: payment, error } = await supabase
-        .from("payments")
-        .insert({
-          project_id: project.id,
-          amount,
-          currency: project.currency || "LKR",
-          status: "paid",
-          paid_at: today,
-          method: (args.method as string)?.trim() || null,
-        })
-        .select("id")
-        .single();
-      if (error || !payment)
-        return { content: { ok: false, error: error?.message ?? "Insert failed." } };
-
-      // The same payment_received event the board fires, so a deposit logged
-      // by voice still kicks off onboarding.
-      const { buildPaymentEvent } = await import("@/lib/delivery");
-      const { fireAutomationTrigger } = await import("@/lib/automation");
-      const event = await buildPaymentEvent(supabase, {
+      // 0120 — through the one core: writes the money, settles the invoice,
+      // fires the single payment_received (so a deposit logged by voice still
+      // kicks off onboarding) and writes the History line.
+      const { recordPayment } = await import("@/lib/payments");
+      const recorded = await recordPayment(supabase, {
+        source: "assistant",
         projectId: project.id,
-        amountText: `${project.currency || "LKR"} ${amount.toLocaleString()}`,
-        source: "project_detail",
-        triggerKey: `project_payment:${payment.id}:paid`,
+        amount,
+        currency: project.currency || "LKR",
+        paidAt: today,
+        method: (args.method as string)?.trim() || null,
+        actorId: ctx.userId,
+        actorLabel: "assistant",
       });
-      if (event) await fireAutomationTrigger(supabase, event);
+      if (!recorded.ok) return { content: { ok: false, error: recorded.error } };
 
       return {
-        content: { ok: true, project: project.name, amount },
+        content: {
+          ok: true,
+          project: project.name,
+          amount,
+          invoice_status: recorded.invoiceStatus,
+          note: recorded.invoiceIds.length
+            ? `Recorded, and the invoice now reads ${recorded.invoiceStatus}.`
+            : "Recorded against the project. No open invoice to settle.",
+        },
         event: {
           kind: "created",
           label: `Payment on ${project.name}`,

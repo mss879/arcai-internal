@@ -271,6 +271,73 @@ function flagDuplicates(rows: LedgerRow[]): void {
 }
 
 // ---------------------------------------------------------------------------
+// Invoices (0120)
+// ---------------------------------------------------------------------------
+
+export type InvoiceLiveStatus = "issued" | "sent" | "partially_paid" | "paid";
+
+/**
+ * What an invoice's status should read, from what has been paid against it.
+ *
+ * Pure, so it can be pinned: paid in full (or over) is `paid`; anything
+ * between is `partially_paid`; nothing paid keeps the invoice where it was —
+ * `sent` stays `sent`, an unsent one stays `issued`. A zero-total invoice
+ * never reads paid on the strength of nothing.
+ */
+export function invoiceStatusFor(
+  paid: number,
+  total: number,
+  unpaid: "issued" | "sent" = "issued",
+): InvoiceLiveStatus {
+  const p = num(paid);
+  const t = num(total);
+  if (p <= 0) return unpaid;
+  if (t > 0 && p >= t) return "paid";
+  return "partially_paid";
+}
+
+export type AllocatableInvoice = {
+  id: string;
+  grand_total: number | string | null;
+  paid_amount: number | string | null;
+  /** Oldest first is the order money is applied in. */
+  invoice_date?: string | null;
+};
+
+export type PaymentAllocation = {
+  invoiceId: string;
+  amount: number;
+};
+
+/**
+ * Spread one payment across a project's open invoices, oldest first.
+ *
+ * A client who pays "the balance" rarely names an invoice; the money settles
+ * the earliest one first, then the next, and whatever is left over is
+ * reported rather than silently attached to the last invoice as an
+ * overpayment. Never allocates to a fully paid invoice.
+ */
+export function allocatePayment(
+  amount: number,
+  invoices: AllocatableInvoice[],
+): { allocations: PaymentAllocation[]; unallocated: number } {
+  let remaining = Math.max(0, num(amount));
+  const allocations: PaymentAllocation[] = [];
+  const ordered = [...invoices].sort((a, b) =>
+    (a.invoice_date ?? "").localeCompare(b.invoice_date ?? ""),
+  );
+  for (const inv of ordered) {
+    if (remaining <= 0) break;
+    const owed = Math.max(0, num(inv.grand_total) - num(inv.paid_amount));
+    if (owed <= 0) continue;
+    const take = Math.min(owed, remaining);
+    allocations.push({ invoiceId: inv.id, amount: take });
+    remaining -= take;
+  }
+  return { allocations, unallocated: remaining };
+}
+
+// ---------------------------------------------------------------------------
 // Margin
 // ---------------------------------------------------------------------------
 

@@ -633,6 +633,8 @@ async function moneyForProjects(
 
   const payments = new Map<string, { amount: number; status: string | null }[]>();
   for (const p of payRes.data ?? []) {
+    // 0120 — money against a standalone invoice has no project.
+    if (!p.project_id) continue;
     const list = payments.get(p.project_id) ?? [];
     list.push({ amount: num(p.amount), status: p.status });
     payments.set(p.project_id, list);

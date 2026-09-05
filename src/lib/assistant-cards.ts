@@ -143,6 +143,27 @@ export type PortalLinkCardData = {
   sent_before: boolean;
 };
 
+/**
+ * A payment against a saved invoice, waiting for a tap (0120). Recording it
+ * goes through recordPayment(), so the invoice state, the project's ledger
+ * and the single payment_received all follow from one action.
+ */
+export type MarkPaidCardData = {
+  invoice_id: string;
+  invoice_number: string;
+  bill_to_name: string;
+  currency: string;
+  grand_total: number;
+  /** Already received before this. */
+  paid_amount: number;
+  /** What this tap records. Defaults to the balance. */
+  amount: number;
+  /** ISO date. */
+  paid_at: string;
+  method: string | null;
+  project_name: string | null;
+};
+
 export type CardSendState = "idle" | "sending" | "sent" | "error" | "cancelled";
 
 /**
@@ -209,6 +230,15 @@ export type AssistantCard =
   | {
       type: "confirm_portal_link";
       portal: PortalLinkCardData;
+      resolution?: CardResolution;
+    }
+  /**
+   * Money against an invoice, waiting for a tap (0120). Nothing is written
+   * until a person confirms; then it is written once, by recordPayment().
+   */
+  | {
+      type: "confirm_mark_paid";
+      payment: MarkPaidCardData;
       resolution?: CardResolution;
     }
   /** A saved proposal shown for review, with a PDF download (no send action). */

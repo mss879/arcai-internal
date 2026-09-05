@@ -968,6 +968,7 @@ export function VoiceAssistant({
                           onSendWhatsApp={chat.sendWhatsApp}
                           onScheduleSocial={chat.scheduleSocial}
                           onSendPortalLink={chat.sendPortalLink}
+                          onMarkPaid={chat.markPaid}
                           onApproveMission={chat.approveMission}
                           // The dock has nowhere to render a PDF, so Open
                           // takes the same route a chip does: promote to the

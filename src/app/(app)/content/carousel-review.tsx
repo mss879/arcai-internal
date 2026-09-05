@@ -12,7 +12,13 @@ import { Modal } from "@/components/ui/modal";
 import { cn } from "@/lib/utils";
 import type { CarouselOption, CarouselPost, CarouselSlide } from "@/lib/types";
 
-import { approveCarouselOption, regenerateCarouselOption } from "./actions";
+import {
+  approveCarouselOption,
+  listSocialAccounts,
+  regenerateCarouselOption,
+  scheduleSocialPost,
+  sendForClientApproval,
+} from "./actions";
 
 function slugify(text: string): string {
   return (
@@ -75,10 +81,13 @@ async function downloadOptionZip(post: CarouselPost, option: CarouselOption) {
 export function CarouselReview({
   post,
   options,
+  clients,
   onClose,
 }: {
   post: CarouselPost;
   options: CarouselOption[];
+  /** 0118 — who this could be for, and who it already is for. */
+  clients: { id: string; name: string }[];
   onClose: () => void;
 }) {
   const router = useRouter();
@@ -94,7 +103,7 @@ export function CarouselReview({
       open
       onClose={onClose}
       title={post.topic}
-      description="Compare the two designs, pick the one you like, then download the slides."
+      description="Compare the two designs, pick one, then send it to the client or schedule it."
       size="xl"
     >
       <div className="space-y-6">
@@ -107,6 +116,10 @@ export function CarouselReview({
             onRegenerate={() => setRegenId(option.id)}
           />
         ))}
+
+        {/* 0118 — the two things that used to happen outside this app:
+            getting the client's yes, and actually posting it. */}
+        <PublishBlock post={post} clients={clients} />
 
         {captionText && (
           <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
@@ -263,6 +276,176 @@ function OptionCard({
             </p>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Approval and publishing, in the order they actually happen.
+ *
+ * Both are deliberately gated on a chosen design: there is nothing to show a
+ * client and nothing to post until somebody has picked one.
+ */
+function PublishBlock({
+  post,
+  clients,
+}: {
+  post: CarouselPost;
+  clients: { id: string; name: string }[];
+}) {
+  const router = useRouter();
+  const [clientId, setClientId] = React.useState(post.client_id ?? "");
+  const [accounts, setAccounts] = React.useState<
+    { id: string; platform: string; name: string; clientId: string | null }[]
+  >([]);
+  const [chosenAccounts, setChosenAccounts] = React.useState<string[]>([]);
+  const [when, setWhen] = React.useState(post.scheduled_for);
+  const [busy, setBusy] = React.useState(false);
+  const [link, setLink] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    void listSocialAccounts().then(setAccounts);
+  }, []);
+
+  if (!post.chosen_option_id) {
+    return (
+      <p className="rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-500">
+        Pick a design above — then you can send it for approval or schedule it.
+      </p>
+    );
+  }
+
+  const approved = post.client_status === "approved";
+  const blocked = Boolean(post.client_id) && !approved;
+
+  async function send() {
+    if (!clientId) return;
+    setBusy(true);
+    const res = await sendForClientApproval(post.id, clientId);
+    setBusy(false);
+    if (res.ok) {
+      setLink(res.url);
+      toast.success("Sent. The link is below — paste it into WhatsApp too.");
+      router.refresh();
+    } else toast.error(res.error);
+  }
+
+  async function schedule() {
+    setBusy(true);
+    const res = await scheduleSocialPost({
+      postId: post.id,
+      accountIds: chosenAccounts,
+      scheduledFor: new Date(when).toISOString(),
+    });
+    setBusy(false);
+    if (res.ok) {
+      toast.success(`Queued for ${res.queued} account${res.queued === 1 ? "" : "s"}.`);
+      router.refresh();
+    } else toast.error(res.error);
+  }
+
+  return (
+    <div className="space-y-4 rounded-xl border border-slate-200 bg-white p-4">
+      {/* --- Client approval --- */}
+      <div>
+        <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+          Client approval
+        </p>
+        {approved ? (
+          <p className="mt-1 text-sm font-medium text-emerald-600">
+            Approved by the client.
+          </p>
+        ) : post.client_status === "changes_requested" ? (
+          <p className="mt-1 text-sm text-amber-700">
+            They asked for changes{post.client_feedback ? `: “${post.client_feedback}”` : "."}
+          </p>
+        ) : (
+          <p className="mt-1 text-sm text-slate-500">
+            {post.client_status === "sent"
+              ? "Sent — waiting on them."
+              : "Not sent yet."}
+          </p>
+        )}
+
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <select
+            value={clientId}
+            onChange={(e) => setClientId(e.target.value)}
+            className="rounded-lg border border-slate-200 px-2 py-1.5 text-sm text-slate-700"
+          >
+            <option value="">No client — internal</option>
+            {clients.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+          <Button size="sm" variant="outline" onClick={send} disabled={!clientId || busy}>
+            {post.client_status === "not_sent" ? "Send for approval" : "Send again"}
+          </Button>
+          {link && <CopyButton value={link} label="Copy the approval link" />}
+        </div>
+      </div>
+
+      {/* --- Scheduling --- */}
+      <div className="border-t border-slate-100 pt-4">
+        <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+          Publish
+        </p>
+        {accounts.length === 0 ? (
+          <p className="mt-1 text-sm text-slate-500">
+            No Instagram or Facebook account connected yet — the ZIP download
+            above still works for posting by hand.
+          </p>
+        ) : (
+          <>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {accounts.map((a) => {
+                const on = chosenAccounts.includes(a.id);
+                return (
+                  <button
+                    key={a.id}
+                    onClick={() =>
+                      setChosenAccounts((prev) =>
+                        on ? prev.filter((x) => x !== a.id) : [...prev, a.id],
+                      )
+                    }
+                    className={cn(
+                      "rounded-full px-3 py-1 text-xs font-medium transition",
+                      on
+                        ? "bg-primary-600 text-white"
+                        : "bg-slate-100 text-slate-600 hover:bg-slate-200",
+                    )}
+                  >
+                    {a.platform === "instagram" ? "IG" : "FB"} · {a.name}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <input
+                type="datetime-local"
+                value={when.length > 10 ? when.slice(0, 16) : `${when}T09:00`}
+                onChange={(e) => setWhen(e.target.value)}
+                className="rounded-lg border border-slate-200 px-2 py-1.5 text-sm text-slate-700"
+              />
+              <Button
+                size="sm"
+                onClick={schedule}
+                disabled={busy || blocked || chosenAccounts.length === 0}
+              >
+                Schedule it
+              </Button>
+            </div>
+            {blocked && (
+              <p className="mt-1 text-xs text-amber-600">
+                Waiting on the client&apos;s approval — the publisher checks it
+                again before it posts, so this stays off until they say yes.
+              </p>
+            )}
+          </>
+        )}
       </div>
     </div>
   );

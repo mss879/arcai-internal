@@ -2,6 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 
+import { getProfile } from "@/lib/auth";
+import { sendAndLogEmail } from "@/lib/email-outbox";
 import { createClient } from "@/lib/supabase/server";
 import { STORAGE_BUCKETS } from "@/lib/constants";
 import {
@@ -473,5 +475,187 @@ export async function advanceCarousels(): Promise<{ ok: boolean }> {
     return { ok: true };
   } catch {
     return { ok: false };
+  }
+}
+
+// ---- 0118: client approval, and getting it posted -------------------------
+
+/**
+ * Send a post to the client for approval.
+ *
+ * Approval used to happen in WhatsApp and in screenshots, and was lost. Now
+ * it is a link with a state behind it, which is what makes "the client hasn't
+ * approved this yet" something the publisher can enforce rather than
+ * something somebody has to remember.
+ */
+export async function sendForClientApproval(
+  postId: string,
+  clientId: string,
+): Promise<ActionResult<{ url: string }>> {
+  const profile = await getProfile();
+  if (!profile) return { ok: false, error: "Not signed in." };
+
+  const supabase = await createClient();
+  const { data: post } = await supabase
+    .from("carousel_posts")
+    .select("id, topic, chosen_option_id, approval_token")
+    .eq("id", postId)
+    .maybeSingle();
+  if (!post) return { ok: false, error: "That post no longer exists." };
+  if (!post.chosen_option_id) {
+    return { ok: false, error: "Pick a design first — there's nothing to show them." };
+  }
+
+  const { error } = await supabase
+    .from("carousel_posts")
+    .update({
+      client_id: clientId,
+      client_status: "sent",
+      client_feedback: null,
+      client_decided_at: null,
+    })
+    .eq("id", postId);
+  if (error) return { ok: false, error: error.message };
+
+  const url = `${process.env.NEXT_PUBLIC_APP_URL ?? ""}/public/content/${post.approval_token}`;
+
+  // Email it when they have an address; the link is returned either way, so
+  // it can be pasted into WhatsApp — which is how most of these actually go.
+  const { data: client } = await supabase
+    .from("clients")
+    .select("name, email")
+    .eq("id", clientId)
+    .maybeSingle();
+  if (client?.email) {
+    await sendAndLogEmail(supabase, {
+      to: client.email,
+      kind: "compose",
+      sentBy: profile.id,
+      clientId,
+      message: {
+        transport: "generic",
+        subject: `A post for your approval — ${post.topic}`,
+        body: `Hi${client.name ? ` ${client.name.split(/\s+/)[0]}` : ""},\nHere's the next post ready to go. Have a look and either approve it or tell us what to change — it takes a second.`,
+        cta: { href: url, label: "See the post" },
+      },
+    });
+  }
+
+  revalidatePath("/content");
+  return { ok: true, url };
+}
+
+/**
+ * Queue a post for Instagram and/or Facebook.
+ *
+ * Only ever queues: the publisher owns the actual send, re-checks the
+ * client's approval immediately before it, and holds a lease so two ticks
+ * can't post the same thing twice.
+ */
+export async function scheduleSocialPost(input: {
+  postId: string;
+  accountIds: string[];
+  scheduledFor: string;
+}): Promise<ActionResult<{ queued: number }>> {
+  const profile = await getProfile();
+  if (!profile) return { ok: false, error: "Not signed in." };
+  if (!input.accountIds.length) {
+    return { ok: false, error: "Pick at least one account." };
+  }
+
+  const supabase = await createClient();
+  const { data: post } = await supabase
+    .from("carousel_posts")
+    .select("id, topic, caption, hashtags, chosen_option_id, client_id, client_status")
+    .eq("id", input.postId)
+    .maybeSingle();
+  if (!post) return { ok: false, error: "That post no longer exists." };
+  if (!post.chosen_option_id) {
+    return { ok: false, error: "Pick a design first." };
+  }
+  if (post.client_id && post.client_status !== "approved") {
+    return {
+      ok: false,
+      error: "The client hasn't approved this one yet.",
+    };
+  }
+
+  const { data: option } = await supabase
+    .from("carousel_options")
+    .select("slides")
+    .eq("id", post.chosen_option_id)
+    .maybeSingle();
+  const media = (option?.slides ?? [])
+    .filter((s) => s.image_url)
+    .sort((a, b) => a.index - b.index)
+    .map((s) => ({ url: s.image_url! }));
+  if (!media.length) {
+    return { ok: false, error: "That design has no rendered slides yet." };
+  }
+
+  const { data: accounts } = await supabase
+    .from("social_accounts")
+    .select("id, platform")
+    .in("id", input.accountIds)
+    .eq("active", true);
+  if (!accounts?.length) {
+    return { ok: false, error: "Those accounts aren't connected." };
+  }
+
+  const caption = [
+    post.caption,
+    post.hashtags.length
+      ? post.hashtags.map((h) => (h.startsWith("#") ? h : `#${h}`)).join(" ")
+      : null,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  const { error } = await supabase.from("social_posts").insert(
+    accounts.map((a) => ({
+      platform: a.platform,
+      account_id: a.id,
+      carousel_post_id: post.id,
+      client_id: post.client_id,
+      caption,
+      media,
+      scheduled_for: input.scheduledFor,
+      status: "scheduled" as const,
+      created_by: profile.id,
+    })),
+  );
+  if (error) return { ok: false, error: error.message };
+
+  await supabase
+    .from("carousel_posts")
+    .update({ status: "scheduled" })
+    .eq("id", post.id);
+
+  revalidatePath("/content");
+  return { ok: true, queued: accounts.length };
+}
+
+/** The accounts a post can go to. Never returns the token, encrypted or not. */
+export async function listSocialAccounts(): Promise<
+  { id: string; platform: string; name: string; clientId: string | null }[]
+> {
+  const profile = await getProfile();
+  if (!profile) return [];
+  const supabase = await createClient();
+  try {
+    const { data } = await supabase
+      .from("social_accounts")
+      .select("id, platform, name, client_id")
+      .eq("active", true)
+      .order("name");
+    return (data ?? []).map((a) => ({
+      id: a.id,
+      platform: a.platform,
+      name: a.name,
+      clientId: a.client_id,
+    }));
+  } catch {
+    // 0118 not applied yet.
+    return [];
   }
 }

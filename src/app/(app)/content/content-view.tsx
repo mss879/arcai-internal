@@ -25,6 +25,7 @@ export function ContentView({
   generations,
   carouselPosts,
   carouselOptions,
+  clients,
   geminiReady,
   carouselReady,
 }: {
@@ -32,6 +33,8 @@ export function ContentView({
   generations: ContentGeneration[];
   carouselPosts: CarouselPost[];
   carouselOptions: CarouselOption[];
+  /** 0118 — for the client picker on a post. */
+  clients: { id: string; name: string }[];
   geminiReady: boolean;
   carouselReady: boolean;
 }) {
@@ -95,6 +98,7 @@ export function ContentView({
         <CalendarTab
           posts={carouselPosts}
           options={carouselOptions}
+          clients={clients}
           carouselReady={carouselReady}
         />
       )}

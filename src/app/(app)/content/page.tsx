@@ -15,7 +15,7 @@ export const metadata = { title: "Content Studio" };
 export default async function ContentPage() {
   const supabase = await createClient();
 
-  const [referencesRes, generationsRes, postsRes, optionsRes] =
+  const [referencesRes, generationsRes, postsRes, optionsRes, clientsRes] =
     await Promise.all([
       supabase
         .from("content_references")
@@ -36,6 +36,8 @@ export default async function ContentPage() {
         .select("*")
         .order("created_at", { ascending: false })
         .limit(240),
+      // 0118 — for the client picker and the approval link.
+      supabase.from("clients").select("id, name").order("name").limit(500),
     ]);
 
   return (
@@ -44,6 +46,7 @@ export default async function ContentPage() {
       generations={(generationsRes.data ?? []) as ContentGeneration[]}
       carouselPosts={(postsRes.data ?? []) as CarouselPost[]}
       carouselOptions={(optionsRes.data ?? []) as CarouselOption[]}
+      clients={clientsRes.data ?? []}
       geminiReady={isGeminiConfigured()}
       carouselReady={isCarouselConfigured()}
     />

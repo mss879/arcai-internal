@@ -143,7 +143,11 @@ export type CarouselPostStatus =
   | "rendering"
   | "ready"
   | "approved"
-  | "error";
+  | "error"
+  // 0118 — queued for, or through, the publisher.
+  | "scheduled"
+  | "published"
+  | "publish_failed";
 /**
  * One slide of a carousel option (0046). Copy fields are written at the
  * copywriting step; image fields fill in as each slide renders.
@@ -642,6 +646,23 @@ export type OutreachSequenceStep = {
   /** Stop the whole sequence if they reply before this step is due. */
   stop_on_reply?: boolean;
 };
+
+// 0118 — Content Studio's client approval and social publishing
+export type ContentClientStatus =
+  | "not_sent"
+  | "sent"
+  | "approved"
+  | "changes_requested";
+export type SocialPlatform = "instagram" | "facebook";
+export type SocialPostStatus =
+  | "draft"
+  | "scheduled"
+  | "publishing"
+  | "published"
+  | "failed"
+  | "cancelled";
+/** One image in a post, in order. Public URLs — Meta fetches them itself. */
+export type SocialMediaItem = { url: string };
 
 export type Database = {
   public: {
@@ -1920,12 +1941,15 @@ export type Database = {
           image_size: string;
           model: string;
           reference_ids: string[];
+          // 0118 — which client this was made for.
+          client_id: UUID | null;
           created_by: UUID | null;
           created_at: Timestamp;
         };
         Insert: {
           id?: UUID;
           prompt?: string;
+          client_id?: UUID | null;
           image_url: string;
           image_path: string;
           mime_type?: string;
@@ -1954,6 +1978,12 @@ export type Database = {
           locked_at: Timestamp | null;
           /** 0111 — consecutive claims without committed progress. */
           claims: number;
+          // 0118 — who it's for, and what they said about it.
+          client_id: UUID | null;
+          approval_token: UUID;
+          client_status: ContentClientStatus;
+          client_feedback: string | null;
+          client_decided_at: Timestamp | null;
           created_by: UUID | null;
           created_at: Timestamp;
           updated_at: Timestamp;
@@ -1971,6 +2001,12 @@ export type Database = {
           error?: string | null;
           locked_at?: Timestamp | null;
           claims?: number;
+          // 0118
+          client_id?: UUID | null;
+          approval_token?: UUID;
+          client_status?: ContentClientStatus;
+          client_feedback?: string | null;
+          client_decided_at?: Timestamp | null;
           created_by?: UUID | null;
           created_at?: Timestamp;
           updated_at?: Timestamp;
@@ -5766,6 +5802,89 @@ export type Database = {
           created_at?: Timestamp;
         };
         Update: Partial<Database["public"]["Tables"]["site_audit_requests"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0118 — a connected Instagram or Facebook account
+      social_accounts: {
+        Row: {
+          id: UUID;
+          platform: SocialPlatform;
+          name: string;
+          /** The IG user id or the FB page id, as Meta knows it. */
+          external_id: string;
+          /** IG publishes through its linked Page, so it carries one too. */
+          page_id: string | null;
+          /** AES-GCM ciphertext. Never leaves the server in the clear. */
+          access_token_enc: string | null;
+          token_expires_at: Timestamp | null;
+          /** null = the agency's own account. */
+          client_id: UUID | null;
+          active: boolean;
+          created_by: UUID | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          platform: SocialPlatform;
+          name: string;
+          external_id: string;
+          page_id?: string | null;
+          access_token_enc?: string | null;
+          token_expires_at?: Timestamp | null;
+          client_id?: UUID | null;
+          active?: boolean;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["social_accounts"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0118 — the publish queue
+      social_posts: {
+        Row: {
+          id: UUID;
+          platform: SocialPlatform;
+          account_id: UUID | null;
+          carousel_post_id: UUID | null;
+          generation_id: UUID | null;
+          client_id: UUID | null;
+          caption: string;
+          media: SocialMediaItem[];
+          scheduled_for: Timestamp;
+          status: SocialPostStatus;
+          external_post_id: string | null;
+          permalink: string | null;
+          error: string | null;
+          attempts: number;
+          /** Lease — two ticks must never publish the same post twice. */
+          locked_at: Timestamp | null;
+          created_by: UUID | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          platform: SocialPlatform;
+          account_id?: UUID | null;
+          carousel_post_id?: UUID | null;
+          generation_id?: UUID | null;
+          client_id?: UUID | null;
+          caption?: string;
+          media?: SocialMediaItem[];
+          scheduled_for?: Timestamp;
+          status?: SocialPostStatus;
+          external_post_id?: string | null;
+          permalink?: string | null;
+          error?: string | null;
+          attempts?: number;
+          locked_at?: Timestamp | null;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["social_posts"]["Insert"]>;
         Relationships: [];
       };
     };

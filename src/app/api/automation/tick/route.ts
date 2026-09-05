@@ -29,6 +29,7 @@ import {
   processOutreachSequences,
 } from "@/lib/lead-outreach";
 import { processSiteAudits } from "@/lib/site-audit-magnet";
+import { processDueSocialPosts } from "@/lib/social/publish";
 import { processPendingCarousels } from "@/lib/carousels";
 import { processIntelligenceJobs } from "@/lib/intelligence-jobs";
 import { processPendingWaShowcases } from "@/lib/wa-showcase";
@@ -138,6 +139,9 @@ const PASSES: ReadonlyArray<readonly [string, (db: DB) => Promise<unknown>]> = [
   // 0117 — the free audits people asked for. One per tick: a Lighthouse run
   // is slow, metered, and the tick is shared.
   ["siteAudits", processSiteAudits],
+  // 0118 — post what's due to Instagram/Facebook. Leased, capped at three a
+  // tick, and it re-checks the client's approval before every send.
+  ["socialPublish", processDueSocialPosts],
   ["carousels", processPendingCarousels],
   // Lead scoring (hourly, unscored only), the churn scan (daily from 06:00)
   // and the Monday digest — each self-gated by its own app_settings stamp.

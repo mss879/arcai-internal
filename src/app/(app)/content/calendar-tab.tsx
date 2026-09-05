@@ -45,10 +45,13 @@ function slideProgress(options: CarouselOption[]): { done: number; total: number
 export function CalendarTab({
   posts,
   options,
+  clients,
   carouselReady,
 }: {
   posts: CarouselPost[];
   options: CarouselOption[];
+  /** 0118 — who a post can be for, and sent to for approval. */
+  clients: { id: string; name: string }[];
   carouselReady: boolean;
 }) {
   const router = useRouter();
@@ -221,6 +224,7 @@ export function CalendarTab({
         <CarouselReview
           post={reviewPost}
           options={optionsByPost.get(reviewPost.id) ?? []}
+          clients={clients}
           onClose={() => setReviewId(null)}
         />
       )}

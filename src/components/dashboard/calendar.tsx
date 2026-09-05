@@ -2,7 +2,9 @@
 
 import * as React from "react";
 import {
+  addDays,
   addMonths,
+  addWeeks,
   eachDayOfInterval,
   endOfMonth,
   endOfWeek,
@@ -13,13 +15,18 @@ import {
   startOfDay,
   startOfMonth,
   startOfWeek,
+  subDays,
   subMonths,
+  subWeeks,
 } from "date-fns";
+import Link from "next/link";
 import {
+  Banknote,
   CalendarClock,
   ChevronLeft,
   ChevronRight,
   Clock,
+  Flag,
   ListChecks,
   MapPin,
   Plus,
@@ -30,7 +37,7 @@ import { MeetingFormModal } from "@/components/dashboard/meeting-form-modal";
 import { TodoFormModal } from "@/components/todos/todo-form-modal";
 import { Modal } from "@/components/ui/modal";
 import { PRIORITY_META } from "@/lib/constants";
-import { cn, formatTime12 } from "@/lib/utils";
+import { cn, formatCurrency, formatTime12 } from "@/lib/utils";
 import type { MemberLite, MeetingWithAttendees, Todo } from "@/lib/types";
 import { useRealtimeSyncTables } from "@/hooks/use-realtime-sync";
 
@@ -44,19 +51,59 @@ type CalendarBooking = {
   link?: { title: string } | null;
 };
 
+/** 0119 — a project milestone with a date, so delivery shows beside the diary. */
+export type CalendarMilestone = {
+  id: string;
+  project_id: string;
+  project_name: string;
+  title: string;
+  /** YYYY-MM-DD */
+  due_date: string;
+  status: "pending" | "done" | "blocked";
+};
+
+/** 0119 — an instalment falling due, so money shows beside the work. */
+export type CalendarInstallment = {
+  id: string;
+  project_id: string | null;
+  project_name: string;
+  amount: number;
+  currency: string;
+  /** YYYY-MM-DD */
+  due_date: string;
+  status: string;
+  seq: number;
+};
+
 type DayEvent =
   | { id: string; type: "todo"; data: Todo; time: Date | null }
   | { id: string; type: "booking"; data: CalendarBooking; time: Date }
-  | { id: string; type: "meeting"; data: MeetingWithAttendees; time: Date };
+  | { id: string; type: "meeting"; data: MeetingWithAttendees; time: Date }
+  | { id: string; type: "milestone"; data: CalendarMilestone; time: null }
+  | { id: string; type: "installment"; data: CalendarInstallment; time: null };
+
+type CalendarView = "month" | "week" | "day";
 
 /** Small status dot colour for the compact (mobile) day view. */
 function dotClass(event: DayEvent): string {
   if (event.type === "booking") return "bg-cyan-500";
   if (event.type === "meeting") return "bg-violet-500";
+  if (event.type === "milestone")
+    return event.data.status === "done" ? "bg-slate-400" : "bg-emerald-500";
+  if (event.type === "installment")
+    return event.data.status === "paid" ? "bg-slate-400" : "bg-amber-600";
   const t = event.data;
   if (t.status === "done") return "bg-slate-400";
   if (t.status === "in_progress") return "bg-amber-500";
   return PRIORITY_META[t.priority].dot;
+}
+
+/** Where a milestone or an instalment lives in the app. */
+function projectHref(event: DayEvent): string | null {
+  if (event.type === "milestone") return `/projects/${event.data.project_id}?tab=plan`;
+  if (event.type === "installment")
+    return event.data.project_id ? `/projects/${event.data.project_id}?tab=money` : "/finance";
+  return null;
 }
 
 export function Calendar({
@@ -64,15 +111,39 @@ export function Calendar({
   members,
   bookings = [],
   meetings = [],
+  milestones = [],
+  installments = [],
 }: {
   todos: Todo[];
   members: MemberLite[];
   bookings?: CalendarBooking[];
   meetings?: MeetingWithAttendees[];
+  /** 0119 — dated milestones and instalments, so delivery and money share the diary. */
+  milestones?: CalendarMilestone[];
+  installments?: CalendarInstallment[];
 }) {
   useRealtimeSyncTables(["todos", "meeting_bookings", "meetings"]);
 
   const today = React.useMemo(() => startOfDay(new Date()), []);
+  // 0119 — month, week or day. Local to the component, remembered per
+  // browser; the page never has to know which one is showing.
+  const [view, setViewState] = React.useState<CalendarView>("month");
+  React.useEffect(() => {
+    try {
+      const stored = localStorage.getItem("arc:calendarView");
+      if (stored === "week" || stored === "day" || stored === "month") setViewState(stored);
+    } catch {
+      // storage unavailable
+    }
+  }, []);
+  const setView = React.useCallback((next: CalendarView) => {
+    setViewState(next);
+    try {
+      localStorage.setItem("arc:calendarView", next);
+    } catch {
+      // storage unavailable
+    }
+  }, []);
   const [month, setMonth] = React.useState(() => new Date());
   const [selected, setSelected] = React.useState(() => startOfDay(new Date()));
   const [editing, setEditing] = React.useState<Todo | null>(null);
@@ -87,10 +158,45 @@ export function Calendar({
     React.useState<MeetingWithAttendees | null>(null);
 
   const days = React.useMemo(() => {
+    if (view === "day") return [startOfDay(selected)];
+    if (view === "week") {
+      return eachDayOfInterval({ start: startOfWeek(selected), end: endOfWeek(selected) });
+    }
     const start = startOfWeek(startOfMonth(month));
     const end = endOfWeek(endOfMonth(month));
     return eachDayOfInterval({ start, end });
-  }, [month]);
+  }, [month, selected, view]);
+
+  // Moving "back" and "forward" means a different step per view. The
+  // selected day travels with the week and day views so the agenda follows.
+  const step = React.useCallback(
+    (direction: 1 | -1) => {
+      if (view === "month") {
+        setMonth((m) => (direction > 0 ? addMonths(m, 1) : subMonths(m, 1)));
+        return;
+      }
+      setSelected((d) => {
+        const next =
+          view === "week"
+            ? direction > 0
+              ? addWeeks(d, 1)
+              : subWeeks(d, 1)
+            : direction > 0
+              ? addDays(d, 1)
+              : subDays(d, 1);
+        setMonth(next);
+        return startOfDay(next);
+      });
+    },
+    [view],
+  );
+
+  const heading =
+    view === "month"
+      ? format(month, "MMMM yyyy")
+      : view === "week"
+        ? `${format(startOfWeek(selected), "d MMM")} – ${format(endOfWeek(selected), "d MMM yyyy")}`
+        : format(selected, "EEEE, d MMMM yyyy");
 
   const byDay = React.useMemo(() => {
     const map = new Map<string, Todo[]>();
@@ -126,13 +232,43 @@ export function Calendar({
     return map;
   }, [meetings]);
 
+  const milestonesByDay = React.useMemo(() => {
+    const map = new Map<string, CalendarMilestone[]>();
+    for (const m of milestones) {
+      const arr = map.get(m.due_date) ?? [];
+      arr.push(m);
+      map.set(m.due_date, arr);
+    }
+    return map;
+  }, [milestones]);
+
+  const installmentsByDay = React.useMemo(() => {
+    const map = new Map<string, CalendarInstallment[]>();
+    for (const i of installments) {
+      const arr = map.get(i.due_date) ?? [];
+      arr.push(i);
+      map.set(i.due_date, arr);
+    }
+    return map;
+  }, [installments]);
+
   // Sorted events for a given yyyy-MM-dd key (shared by the grid and agenda).
   const eventsForKey = React.useCallback(
     (key: string): DayEvent[] => {
       const items = byDay.get(key) ?? [];
       const dayBookings = bookingsByDay.get(key) ?? [];
       const dayMeetings = meetingsByDay.get(key) ?? [];
+      const dayMilestones = milestonesByDay.get(key) ?? [];
+      const dayInstallments = installmentsByDay.get(key) ?? [];
       return [
+        // Dated but untimed: a milestone or an instalment is due on the day,
+        // so they lead it rather than trailing the 9am meeting.
+        ...dayMilestones.map(
+          (m): DayEvent => ({ id: m.id, type: "milestone", data: m, time: null }),
+        ),
+        ...dayInstallments.map(
+          (i): DayEvent => ({ id: i.id, type: "installment", data: i, time: null }),
+        ),
         ...items.map(
           (t): DayEvent => ({
             id: t.id,
@@ -158,16 +294,23 @@ export function Calendar({
           }),
         ),
       ].sort((a, b) => {
-        const aDone = a.type === "todo" && a.data.status === "done";
-        const bDone = b.type === "todo" && b.data.status === "done";
+        const done = (e: DayEvent) =>
+          (e.type === "todo" && e.data.status === "done") ||
+          (e.type === "milestone" && e.data.status === "done") ||
+          (e.type === "installment" && e.data.status === "paid");
+        const aDone = done(a);
+        const bDone = done(b);
         if (aDone && !bDone) return 1;
         if (!aDone && bDone) return -1;
+        const dated = (e: DayEvent) => e.type === "milestone" || e.type === "installment";
+        if (dated(a) && !dated(b)) return -1;
+        if (!dated(a) && dated(b)) return 1;
         if (!a.time) return 1;
         if (!b.time) return -1;
         return a.time.getTime() - b.time.getTime();
       });
     },
-    [byDay, bookingsByDay, meetingsByDay],
+    [byDay, bookingsByDay, meetingsByDay, milestonesByDay, installmentsByDay],
   );
 
   function openCreate(day: Date) {
@@ -181,15 +324,32 @@ export function Calendar({
 
   return (
     <div className="glass rounded-3xl border border-white/30 p-3 shadow-xl relative overflow-hidden backdrop-blur-xl saturate-150 sm:p-6">
-      <div className="mb-4 flex items-center justify-between sm:mb-5">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2 sm:mb-5">
         <h2 className="text-base font-bold text-slate-800 tracking-tight sm:text-lg">
-          {format(month, "MMMM yyyy")}
+          {heading}
         </h2>
         <div className="flex items-center gap-1.5">
+          {/* 0119 — month / week / day */}
+          <div className="mr-1 inline-flex rounded-lg border border-white/20 bg-white/40 p-0.5 shadow-sm">
+            {(["month", "week", "day"] as CalendarView[]).map((v) => (
+              <button
+                key={v}
+                onClick={() => setView(v)}
+                className={cn(
+                  "rounded-md px-2 py-1 text-[11px] font-semibold capitalize transition",
+                  view === v
+                    ? "bg-primary-600 text-white shadow-sm"
+                    : "text-slate-600 hover:bg-white/60",
+                )}
+              >
+                {v}
+              </button>
+            ))}
+          </div>
           <button
-            onClick={() => setMonth((m) => subMonths(m, 1))}
+            onClick={() => step(-1)}
             className="grid h-8 w-8 place-items-center rounded-lg border border-white/20 bg-white/40 text-slate-600 hover:bg-white/60 transition shadow-sm"
-            aria-label="Previous month"
+            aria-label={view === "month" ? "Previous month" : view === "week" ? "Previous week" : "Previous day"}
           >
             <ChevronLeft className="h-4 w-4" />
           </button>
@@ -203,17 +363,22 @@ export function Calendar({
             Today
           </button>
           <button
-            onClick={() => setMonth((m) => addMonths(m, 1))}
+            onClick={() => step(1)}
             className="grid h-8 w-8 place-items-center rounded-lg border border-white/20 bg-white/40 text-slate-600 hover:bg-white/60 transition shadow-sm"
-            aria-label="Next month"
+            aria-label={view === "month" ? "Next month" : view === "week" ? "Next week" : "Next day"}
           >
             <ChevronRight className="h-4 w-4" />
           </button>
         </div>
       </div>
 
-      <div className="grid grid-cols-7 gap-1 sm:gap-1.5">
-        {WEEKDAYS.map((d) => (
+      <div
+        className={cn(
+          "grid gap-1 sm:gap-1.5",
+          view === "day" ? "grid-cols-1" : "grid-cols-7",
+        )}
+      >
+        {view !== "day" && WEEKDAYS.map((d) => (
           <div
             key={d}
             className="pb-1.5 text-center text-[10px] font-bold uppercase tracking-wider text-slate-500/80 sm:pb-2 sm:text-xs"
@@ -226,10 +391,14 @@ export function Calendar({
         {days.map((day) => {
           const key = format(day, "yyyy-MM-dd");
           const dayEvents = eventsForKey(key);
-          const inMonth = isSameMonth(day, month);
+          // A week or a day shows every day at full strength; only the month
+          // grid greys out its neighbours' overflow.
+          const inMonth = view === "month" ? isSameMonth(day, month) : true;
           const hasEvents = dayEvents.length > 0;
           const isPastDay = startOfDay(day) < today;
           const isSelected = isSameDay(day, selected);
+          // Room for everything in a week or a day; the month grid trims.
+          const chipLimit = view === "month" ? 3 : 50;
 
           return (
             <div
@@ -240,9 +409,13 @@ export function Calendar({
               aria-label={format(day, "EEEE, MMMM d")}
               className={cn(
                 "group relative cursor-pointer rounded-xl border p-1.5 transition duration-300 ease-in-out sm:rounded-2xl sm:p-2",
-                hasEvents
-                  ? "min-h-[54px] sm:min-h-[125px]"
-                  : "min-h-[54px] sm:min-h-[62px]",
+                view === "month"
+                  ? hasEvents
+                    ? "min-h-[54px] sm:min-h-[125px]"
+                    : "min-h-[54px] sm:min-h-[62px]"
+                  : view === "week"
+                    ? "min-h-[54px] sm:min-h-[220px]"
+                    : "min-h-[120px]",
                 inMonth
                   ? isPastDay
                     ? "border-slate-200/40 bg-slate-100/40 text-slate-400/80 opacity-60"
@@ -255,7 +428,8 @@ export function Calendar({
               <div className="flex items-center justify-between sm:mb-1.5">
                 <span
                   className={cn(
-                    "grid h-6 w-6 place-items-center rounded-full text-xs font-bold transition-transform group-hover:scale-105",
+                    view === "day" ? "text-sm font-bold text-slate-700" : "",
+                    view !== "day" && "grid h-6 w-6 place-items-center rounded-full text-xs font-bold transition-transform group-hover:scale-105",
                     isToday(day)
                       ? "bg-gradient-to-br from-primary-500 to-primary-600 text-white shadow-md font-extrabold"
                       : inMonth
@@ -265,7 +439,7 @@ export function Calendar({
                         : "text-slate-400/50",
                   )}
                 >
-                  {format(day, "d")}
+                  {view === "day" ? format(day, "EEEE d MMMM") : format(day, "d")}
                 </span>
                 {!isPastDay && (
                   <button
@@ -299,8 +473,46 @@ export function Calendar({
               )}
 
               {/* Desktop: full event chips */}
-              <div className="hidden space-y-1 sm:block">
-                {dayEvents.slice(0, 3).map((event) => {
+              <div className={cn("space-y-1", view === "day" ? "block" : "hidden sm:block")}>
+                {dayEvents.slice(0, chipLimit).map((event) => {
+                  if (event.type === "milestone" || event.type === "installment") {
+                    const href = projectHref(event)!;
+                    const finished =
+                      (event.type === "milestone" && event.data.status === "done") ||
+                      (event.type === "installment" && event.data.status === "paid");
+                    const label =
+                      event.type === "milestone"
+                        ? event.data.title
+                        : `${formatCurrency(event.data.amount, event.data.currency)} due`;
+                    const Icon = event.type === "milestone" ? Flag : Banknote;
+                    return (
+                      <Link
+                        key={event.id}
+                        href={href}
+                        onClick={(e) => e.stopPropagation()}
+                        title={`${event.data.project_name} · ${label}`}
+                        className={cn(
+                          "flex w-full items-center gap-1.5 rounded-lg border px-1.5 py-0.5 text-left text-[11px] font-bold truncate shadow-xs transition hover:brightness-95",
+                          finished
+                            ? "border-slate-200/60 bg-slate-200/40 text-slate-500/70 line-through font-medium"
+                            : event.type === "milestone"
+                              ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-950"
+                              : "border-amber-600/25 bg-amber-500/10 text-amber-950",
+                        )}
+                      >
+                        <Icon
+                          className={cn(
+                            "h-3.5 w-3.5 shrink-0",
+                            event.type === "milestone" ? "text-emerald-700" : "text-amber-700",
+                          )}
+                        />
+                        <span className="truncate">
+                          {label}
+                          <span className="ml-1 font-medium opacity-70">{event.data.project_name}</span>
+                        </span>
+                      </Link>
+                    );
+                  }
                   if (event.type === "todo") {
                     const t = event.data;
                     return (
@@ -363,10 +575,13 @@ export function Calendar({
                     );
                   }
                 })}
-                {dayEvents.length > 3 && (
+                {dayEvents.length > chipLimit && (
                   <p className="px-1.5 text-[10px] font-semibold text-slate-400/90">
-                    +{dayEvents.length - 3} more
+                    +{dayEvents.length - chipLimit} more
                   </p>
+                )}
+                {view === "day" && dayEvents.length === 0 && (
+                  <p className="px-1.5 py-2 text-xs text-slate-400">Nothing scheduled.</p>
                 )}
               </div>
             </div>
@@ -374,8 +589,8 @@ export function Calendar({
         })}
       </div>
 
-      {/* Mobile: agenda for the selected day */}
-      <div className="mt-4 sm:hidden">
+      {/* Mobile: agenda for the selected day (the day view is already one) */}
+      <div className={cn("mt-4", view === "day" ? "hidden" : "sm:hidden")}>
         <div className="mb-2 flex items-center justify-between">
           <h3 className="text-sm font-bold text-slate-700">
             {isToday(selected) ? "Today" : format(selected, "EEE, MMM d")}
@@ -397,6 +612,36 @@ export function Calendar({
         ) : (
           <div className="space-y-1.5">
             {selectedEvents.map((event) => {
+              if (event.type === "milestone" || event.type === "installment") {
+                const finished =
+                  (event.type === "milestone" && event.data.status === "done") ||
+                  (event.type === "installment" && event.data.status === "paid");
+                const Icon = event.type === "milestone" ? Flag : Banknote;
+                return (
+                  <Link
+                    key={event.id}
+                    href={projectHref(event)!}
+                    className={cn(
+                      "flex w-full items-center gap-2 rounded-xl border px-3 py-2 text-left text-sm font-semibold transition active:scale-[0.99]",
+                      finished
+                        ? "border-slate-200 bg-slate-200/50 text-slate-500 line-through"
+                        : event.type === "milestone"
+                          ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-950"
+                          : "border-amber-600/25 bg-amber-500/10 text-amber-950",
+                    )}
+                  >
+                    <Icon className="h-4 w-4 shrink-0" />
+                    <span className="min-w-0 flex-1 break-words">
+                      {event.type === "milestone"
+                        ? event.data.title
+                        : `${formatCurrency(event.data.amount, event.data.currency)} due`}
+                      <span className="ml-1 text-xs font-medium opacity-70">
+                        {event.data.project_name}
+                      </span>
+                    </span>
+                  </Link>
+                );
+              }
               if (event.type === "todo") {
                 const t = event.data;
                 return (

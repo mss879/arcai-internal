@@ -21,7 +21,11 @@ import {
   Wallet,
 } from "lucide-react";
 
-import { Calendar } from "@/components/dashboard/calendar";
+import {
+  Calendar,
+  type CalendarInstallment,
+  type CalendarMilestone,
+} from "@/components/dashboard/calendar";
 import { MeetingAttendancePrompt } from "@/components/dashboard/meeting-attendance-prompt";
 import { QuickAddTask } from "@/components/dashboard/quick-add-task";
 import { TargetsTile } from "@/components/dashboard/targets-tile";
@@ -91,6 +95,8 @@ export default async function DashboardPage() {
     meetingsRes,
     notificationsRes,
     targetProgress,
+    milestonesRes,
+    installmentsRes,
   ] = await Promise.all([
       // Every open task, plus finished ones due inside the calendar's window.
       supabase
@@ -129,7 +135,68 @@ export default async function DashboardPage() {
       // 0119 — what the month was supposed to look like. Empty when none are
       // set, or when 0119 hasn't been applied.
       targetsProgress(supabase, periodFor(new Date())).catch(() => []),
+      // 0119 — delivery and money on the same diary: dated milestones and
+      // instalments falling inside the calendar's window.
+      supabase
+        .from("project_milestones")
+        .select("id, project_id, title, due_date, status, project:projects(name, deleted_at)")
+        .not("due_date", "is", null)
+        .gte("due_date", windowStart)
+        .lte("due_date", windowEnd)
+        .eq("client_visible", true)
+        .order("due_date", { ascending: true })
+        .limit(300),
+      supabase
+        .from("payment_installments")
+        .select(
+          "id, seq, amount, due_date, status, plan:payment_plans(project_id, project:projects(name, currency, deleted_at))",
+        )
+        .gte("due_date", windowStart)
+        .lte("due_date", windowEnd)
+        .order("due_date", { ascending: true })
+        .limit(300),
     ]);
+
+  const milestones: CalendarMilestone[] = ((milestonesRes.data ?? []) as unknown as {
+    id: string;
+    project_id: string;
+    title: string;
+    due_date: string;
+    status: "pending" | "done" | "blocked";
+    project: { name: string; deleted_at: string | null } | null;
+  }[])
+    .filter((m) => m.project && !m.project.deleted_at)
+    .map((m) => ({
+      id: m.id,
+      project_id: m.project_id,
+      project_name: m.project!.name,
+      title: m.title,
+      due_date: m.due_date.slice(0, 10),
+      status: m.status,
+    }));
+
+  const installments: CalendarInstallment[] = ((installmentsRes.data ?? []) as unknown as {
+    id: string;
+    seq: number;
+    amount: number;
+    due_date: string;
+    status: string;
+    plan: {
+      project_id: string | null;
+      project: { name: string; currency: string; deleted_at: string | null } | null;
+    } | null;
+  }[])
+    .filter((i) => !i.plan?.project?.deleted_at)
+    .map((i) => ({
+      id: i.id,
+      project_id: i.plan?.project_id ?? null,
+      project_name: i.plan?.project?.name ?? "Payment plan",
+      amount: Number(i.amount) || 0,
+      currency: i.plan?.project?.currency ?? "LKR",
+      due_date: i.due_date.slice(0, 10),
+      status: i.status,
+      seq: i.seq,
+    }));
 
   if (summaryRes.error) {
     // Migration 0114 not applied yet: the tiles read zero rather than the
@@ -450,6 +517,8 @@ export default async function DashboardPage() {
           members={members}
           bookings={bookings}
           meetings={meetings}
+          milestones={milestones}
+          installments={installments}
         />
       </div>
 

@@ -28,6 +28,7 @@ import { Field, Input, Select, Textarea } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { PageHeader } from "@/components/ui/page-header";
 import { useRealtimeSync } from "@/hooks/use-realtime-sync";
+import { monthlyInflows, monthlyOutflows } from "@/lib/finance-math";
 import { cn, formatCurrency } from "@/lib/utils";
 import type {
   Cheque,
@@ -276,28 +277,11 @@ function OverviewTab({
   const now = new Date();
   const thisMonth = now.toISOString().slice(0, 7);
 
-  // Money in = paid project payments + paid installments.
-  const inflows = [
-    ...paidPayments.map((p) => ({
-      date: (p.paid_at ?? p.created_at).slice(0, 10),
-      amount: Number(p.amount),
-    })),
-    ...installments
-      .filter((i) => i.status === "paid")
-      .map((i) => ({ date: (i.paid_at ?? i.due_date).slice(0, 10), amount: Number(i.amount) })),
-    // 0100 — RECEIVED recurring months only. A pending entry is a promise,
-    // and a promise in a cash-flow chart is how a month looks fine right up
-    // until payroll.
-    ...recurring.flatMap((r) =>
-      r.entries
-        .filter((e) => e.status === "received")
-        .map((e) => ({
-          date: (e.received_on ?? e.due_date).slice(0, 10),
-          amount: Number(e.amount),
-        })),
-    ),
-  ];
-  const outflows = expenses.map((e) => ({ date: e.expense_date, amount: Number(e.amount) }));
+  // 0119 — money in and out are defined once, in finance-math.ts, because
+  // the Tax page and targets-vs-actual read the same numbers and the moment
+  // two of them disagree the whole page becomes untrustworthy.
+  const inflows = monthlyInflows({ payments: paidPayments, installments, recurring });
+  const outflows = monthlyOutflows(expenses);
 
   const inThisMonth = inflows.filter((f) => monthKey(f.date) === thisMonth).reduce((s, f) => s + f.amount, 0);
   const outThisMonth = outflows.filter((f) => monthKey(f.date) === thisMonth).reduce((s, f) => s + f.amount, 0);

@@ -3,6 +3,8 @@ import { attachRepayments } from "@/lib/loans";
 import { ONLINE_WINDOW_MS } from "@/lib/ping";
 import { createClient } from "@/lib/supabase/server";
 
+import { periodFor, targetsProgress } from "@/lib/targets";
+
 import { TeamView } from "./team-view";
 
 export const metadata = { title: "Team & Access" };
@@ -19,6 +21,7 @@ export default async function TeamPage() {
     onlineRes,
     loansRes,
     repaymentsRes,
+    targetProgress,
   ] = await Promise.all([
       supabase
         .from("profiles")
@@ -51,6 +54,9 @@ export default async function TeamPage() {
         .select("*")
         .order("issued_on", { ascending: false }),
       supabase.from("member_loan_repayments").select("*"),
+      // 0119 — what this month was supposed to look like. Degrades to an
+      // empty list if the migration hasn't been applied yet.
+      targetsProgress(supabase, periodFor(new Date())).catch(() => []),
     ]);
 
   return (
@@ -64,6 +70,8 @@ export default async function TeamPage() {
       onlineUserIds={Array.from(
         new Set((onlineRes.data ?? []).map((r) => r.user_id)),
       )}
+      targetProgress={targetProgress}
+      targetPeriod={periodFor(new Date())}
       currentUserId={profile.id}
       currentUserName={profile.full_name || profile.username}
       appBaseUrl={process.env.NEXT_PUBLIC_APP_URL ?? ""}

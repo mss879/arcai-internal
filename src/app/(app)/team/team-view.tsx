@@ -37,6 +37,8 @@ import { loansByUser, summariseMemberMoney, type LoanWithRepayments } from "@/li
 import { formatPhone } from "@/lib/sms-utils";
 import { cn, formatCurrency } from "@/lib/utils";
 import { useRealtimeSyncTables } from "@/hooks/use-realtime-sync";
+import type { TargetProgress } from "@/lib/targets";
+import { TargetsCard } from "@/components/team/targets-card";
 import type { Commission, Invitation, Profile, UserRole } from "@/lib/types";
 
 import {
@@ -69,6 +71,8 @@ export function TeamView({
   loans,
   trustedDevices,
   onlineUserIds,
+  targetProgress,
+  targetPeriod,
   currentUserId,
   currentUserName,
   appBaseUrl,
@@ -80,6 +84,9 @@ export function TeamView({
   loans: LoanWithRepayments[];
   trustedDevices: MemberDevice[];
   onlineUserIds: string[];
+  /** 0119 — this month's targets and how they're going. */
+  targetProgress: TargetProgress[];
+  targetPeriod: string;
   currentUserId: string;
   currentUserName: string;
   appBaseUrl: string;
@@ -185,6 +192,15 @@ export function TeamView({
           value={pending.length}
         />
       </div>
+
+      {/* 0119 — the leaderboard. Above the invite form on purpose: this is
+          what a manager opens the page to look at. */}
+      <TargetsCard
+        progress={targetProgress}
+        members={members.map((m) => ({ id: m.id, full_name: m.full_name }))}
+        period={targetPeriod}
+        canEdit
+      />
 
       {/* Invite */}
       <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[var(--shadow-card)]">

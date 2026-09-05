@@ -43,6 +43,9 @@ export default defineConfig({
       // 0119 — every recurring-task bug is a date bug, and they are all
       // invisible until the wrong week.
       "src/lib/todo-recurrence.test.ts",
+      // 0119 — the one definition of "money in". Three screens read it, and
+      // the moment two of them disagree the whole page is untrustworthy.
+      "src/lib/finance-math.test.ts",
     ],
   },
 });

@@ -3,6 +3,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { appLink } from "@/lib/app-url";
+import { catchUpOccurrence } from "@/lib/todo-recurrence";
 import type { Database } from "@/lib/database.types";
 import { isSmsConfigured, sendSms } from "@/lib/sms";
 import { countSmsSegments, normalizePhone } from "@/lib/sms-utils";
@@ -54,6 +55,14 @@ function remainingLabel(dueMs: number, nowMs: number): string {
  */
 export async function processTodoReminders(supabase: DB): Promise<TodoReminderResult> {
   const result: TodoReminderResult = { todo_reminders: 0, sms_sent: 0 };
+
+  // 0119 — the safety net under recurring to-dos. A series normally advances
+  // when somebody ticks the last one off; this catches the ones nobody ever
+  // did, so a weekly job doesn't silently stop existing because it was
+  // skipped once.
+  await respawnMissedOccurrences(supabase).catch((e) => {
+    console.error("[todos] respawning recurrences failed:", e);
+  });
 
   const now = Date.now();
   const windowEnd = new Date(now + REMINDER_HOURS * 3600_000).toISOString();
@@ -140,4 +149,62 @@ export async function processTodoReminders(supabase: DB): Promise<TodoReminderRe
   }
 
   return result;
+}
+
+/**
+ * Bring overdue recurring to-dos forward.
+ *
+ * Only ones that were never finished AND are already past due: a series is
+ * meant to advance on completion, and this is the fallback for when it
+ * didn't. Exactly one new occurrence per series — catchUpOccurrence skips
+ * every missed date and returns the next real one, so a month of neglect
+ * produces one task rather than four.
+ */
+async function respawnMissedOccurrences(supabase: DB): Promise<number> {
+  const now = new Date();
+
+  const { data: stale } = await supabase
+    .from("todos")
+    .select(
+      "id, title, description, priority, due_date, assigned_to, project_id, labels, estimate_minutes, recurrence, recurrence_parent_id, created_by",
+    )
+    .neq("status", "done")
+    .not("recurrence", "is", null)
+    .lt("due_date", now.toISOString())
+    .limit(50);
+  if (!stale?.length) return 0;
+
+  let created = 0;
+  for (const todo of stale) {
+    const next = catchUpOccurrence(todo.recurrence, todo.due_date!, now);
+    if (!next) continue;
+
+    // Don't stack: if the series already has a future occurrence, this one is
+    // just late, not lost.
+    const seriesId = todo.recurrence_parent_id ?? todo.id;
+    const { count } = await supabase
+      .from("todos")
+      .select("id", { count: "exact", head: true })
+      .or(`id.eq.${seriesId},recurrence_parent_id.eq.${seriesId}`)
+      .neq("status", "done")
+      .gte("due_date", now.toISOString());
+    if ((count ?? 0) > 0) continue;
+
+    const { error } = await supabase.from("todos").insert({
+      title: todo.title,
+      description: todo.description,
+      priority: todo.priority,
+      status: "todo" as const,
+      due_date: next,
+      assigned_to: todo.assigned_to,
+      project_id: todo.project_id,
+      labels: todo.labels,
+      estimate_minutes: todo.estimate_minutes,
+      recurrence: todo.recurrence,
+      recurrence_parent_id: seriesId,
+      created_by: todo.created_by,
+    });
+    if (!error) created += 1;
+  }
+  return created;
 }

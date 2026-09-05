@@ -68,6 +68,13 @@ export function TodoFormModal({
   const [projectId, setProjectId] = React.useState("");
   const [due, setDue] = React.useState("");
   const [subtasks, setSubtasks] = React.useState<SubtaskDraft[]>([]);
+  // 0119
+  const [labels, setLabels] = React.useState<string[]>([]);
+  const [labelDraft, setLabelDraft] = React.useState("");
+  const [estimate, setEstimate] = React.useState("");
+  const [repeats, setRepeats] = React.useState(false);
+  const [freq, setFreq] = React.useState<"daily" | "weekly" | "monthly">("weekly");
+  const [interval, setIntervalValue] = React.useState(1);
 
   React.useEffect(() => {
     if (!open) return;
@@ -78,6 +85,12 @@ export function TodoFormModal({
     setAssignee(todo?.assigned_to ?? "");
     setProjectId(todo?.project_id ?? defaultProjectId ?? "");
     setDue(toLocalInput(todo?.due_date ?? defaultDue ?? null));
+    setLabels(todo?.labels ?? []);
+    setLabelDraft("");
+    setEstimate(todo?.estimate_minutes ? String(todo.estimate_minutes) : "");
+    setRepeats(Boolean(todo?.recurrence));
+    setFreq(todo?.recurrence?.freq ?? "weekly");
+    setIntervalValue(todo?.recurrence?.interval ?? 1);
     setSubtasks(
       (todo?.subtasks ?? [])
         .slice()
@@ -108,6 +121,13 @@ export function TodoFormModal({
 
   const doneCount = subtasks.filter((s) => s.is_done).length;
 
+  function addLabel() {
+    const clean = labelDraft.trim();
+    if (!clean) return;
+    setLabels((prev) => [...new Set([...prev, clean])]);
+    setLabelDraft("");
+  }
+
   function submit() {
     if (!title.trim()) {
       toast.error("Give the task a title.");
@@ -125,6 +145,11 @@ export function TodoFormModal({
       subtasks: subtasks
         .filter((s) => s.title.trim())
         .map((s) => ({ id: s.id, title: s.title, is_done: s.is_done })),
+      labels,
+      estimate_minutes: estimate ? Number(estimate) : null,
+      recurrence: repeats
+        ? { freq, interval: Math.max(1, Math.round(interval)) }
+        : null,
     };
     startTransition(async () => {
       const res = await saveTodo(input);
@@ -239,6 +264,88 @@ export function TodoFormModal({
             </Select>
           </Field>
         )}
+
+        {/* 0119 — labels, an estimate, and whether it comes back. */}
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Labels">
+            <div className="mb-1.5 flex flex-wrap gap-1.5">
+              {labels.map((l) => (
+                <button
+                  key={l}
+                  type="button"
+                  onClick={() => setLabels((prev) => prev.filter((x) => x !== l))}
+                  className="rounded-full bg-violet-50 px-2 py-0.5 text-xs text-violet-700 hover:bg-violet-100"
+                  title="Remove"
+                >
+                  {l} ×
+                </button>
+              ))}
+            </div>
+            <Input
+              value={labelDraft}
+              onChange={(e) => setLabelDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  addLabel();
+                }
+              }}
+              onBlur={addLabel}
+              placeholder="design, urgent…"
+            />
+          </Field>
+
+          <Field label="Estimate (minutes)">
+            <Input
+              type="number"
+              min={0}
+              value={estimate}
+              onChange={(e) => setEstimate(e.target.value)}
+              placeholder="e.g. 45"
+            />
+          </Field>
+        </div>
+
+        <Field label="Repeat">
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              checked={repeats}
+              onChange={(e) => setRepeats(e.target.checked)}
+              className="h-4 w-4 rounded border-slate-300 text-primary-600"
+            />
+            This comes back after it&apos;s done
+          </label>
+          {repeats && (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <span className="text-sm text-slate-500">Every</span>
+              <Input
+                type="number"
+                min={1}
+                value={String(interval)}
+                onChange={(e) => setIntervalValue(Number(e.target.value) || 1)}
+                className="w-20"
+              />
+              <Select
+                value={freq}
+                onChange={(e) =>
+                  setFreq(e.target.value as "daily" | "weekly" | "monthly")
+                }
+                className="w-40"
+              >
+                <option value="daily">day(s)</option>
+                <option value="weekly">week(s)</option>
+                <option value="monthly">month(s)</option>
+              </Select>
+            </div>
+          )}
+          {repeats && (
+            <p className="mt-1.5 text-xs text-slate-400">
+              Counted from its due date, not from when you tick it — so a task
+              done late doesn&apos;t drag the whole series later with it.
+            </p>
+          )}
+        </Field>
 
         {/* Subtasks / checklist */}
         <Field

@@ -3,10 +3,13 @@
 import { revalidatePath } from "next/cache";
 
 import { appLink } from "@/lib/app-url";
+import { notifyUsers } from "@/lib/notify";
 import { createClient } from "@/lib/supabase/server";
+import { catchUpOccurrence } from "@/lib/todo-recurrence";
 import { sendPushToUser } from "@/lib/push";
 import { sendSmsToUser } from "@/lib/sms-alerts";
 import { extractMentions } from "@/lib/utils";
+import type { TodoRecurrence } from "@/lib/database.types";
 import type { ActionResult, TodoPriority, TodoStatus } from "@/lib/types";
 
 export type SubtaskInput = {
@@ -25,6 +28,10 @@ export type TodoInput = {
   assigned_to?: string | null;
   project_id?: string | null;
   subtasks?: SubtaskInput[];
+  // 0119
+  labels?: string[];
+  estimate_minutes?: number | null;
+  recurrence?: TodoRecurrence | null;
 };
 
 export async function saveTodo(input: TodoInput): Promise<ActionResult> {
@@ -45,6 +52,20 @@ export async function saveTodo(input: TodoInput): Promise<ActionResult> {
     assigned_to: input.assigned_to || null,
     project_id: input.project_id || null,
     completed_at: status === "done" ? new Date().toISOString() : null,
+    // 0119 — only sent when the caller actually set them, so an older form
+    // that doesn't know about labels can't blank them.
+    ...(input.labels !== undefined
+      ? { labels: [...new Set(input.labels.map((l) => l.trim()).filter(Boolean))] }
+      : {}),
+    ...(input.estimate_minutes !== undefined
+      ? {
+          estimate_minutes:
+            input.estimate_minutes && input.estimate_minutes > 0
+              ? Math.round(input.estimate_minutes)
+              : null,
+        }
+      : {}),
+    ...(input.recurrence !== undefined ? { recurrence: input.recurrence } : {}),
   };
 
   let todoId = input.id;
@@ -249,6 +270,47 @@ export async function setTodoStatus(
     .eq("id", id);
   if (error) return { ok: false, error: error.message };
 
+  // 0119 — a repeating to-do comes back when it is finished, not on a timer.
+  // Measured from its own due date rather than from now, so a weekly job done
+  // three days late is still due on the same weekday next week instead of
+  // drifting later every time.
+  if (status === "done") {
+    try {
+      const { data: todo } = await supabase
+        .from("todos")
+        .select(
+          "id, title, description, priority, due_date, assigned_to, project_id, labels, estimate_minutes, recurrence, recurrence_parent_id, created_by",
+        )
+        .eq("id", id)
+        .maybeSingle();
+
+      if (todo?.recurrence) {
+        const from = todo.due_date ?? new Date().toISOString();
+        const next = catchUpOccurrence(todo.recurrence, from, new Date());
+        if (next) {
+          await supabase.from("todos").insert({
+            title: todo.title,
+            description: todo.description,
+            priority: todo.priority,
+            status: "todo" as const,
+            due_date: next,
+            assigned_to: todo.assigned_to,
+            project_id: todo.project_id,
+            labels: todo.labels,
+            estimate_minutes: todo.estimate_minutes,
+            recurrence: todo.recurrence,
+            // The whole series points at the first one, so it can be found
+            // and stopped in one place.
+            recurrence_parent_id: todo.recurrence_parent_id ?? todo.id,
+            created_by: todo.created_by,
+          });
+        }
+      }
+    } catch {
+      // 0119 not applied yet — the to-do is still done.
+    }
+  }
+
   // 0117 — a to-do raised from the website scan closes its insight too, so
   // the checklist on /web-analytics doesn't keep asking for work that's done.
   try {
@@ -323,6 +385,161 @@ export async function setSubtaskDone(
     .update({ is_done: isDone })
     .eq("id", id);
   if (error) return { ok: false, error: error.message };
+  revalidatePath("/todos");
+  return { ok: true };
+}
+
+// ---- 0119: templates and comments -----------------------------------------
+
+/**
+ * Raise a set of to-dos at once.
+ *
+ * The same handful of jobs get typed out every time a project starts or a
+ * month turns. `offset_days` is measured from today, so "apply the launch
+ * checklist" lands the whole sequence with sensible dates rather than a pile
+ * all due at once.
+ */
+export async function applyTodoTemplate(
+  templateId: string,
+  opts: { projectId?: string | null; assignedTo?: string | null } = {},
+): Promise<ActionResult<{ created: number }>> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+
+  const { data: template } = await supabase
+    .from("todo_templates")
+    .select("id, name, items")
+    .eq("id", templateId)
+    .maybeSingle();
+  if (!template) return { ok: false, error: "That template no longer exists." };
+
+  const items = Array.isArray(template.items) ? template.items : [];
+  if (!items.length) return { ok: false, error: "That template is empty." };
+
+  const today = new Date();
+  const rows = items
+    .filter((i) => i?.title?.trim())
+    .map((i) => {
+      const due = new Date(today);
+      due.setDate(due.getDate() + Math.max(0, Math.floor(Number(i.offset_days) || 0)));
+      return {
+        title: i.title.trim(),
+        description: i.description?.trim() || null,
+        priority: i.priority ?? ("medium" as const),
+        status: "todo" as const,
+        due_date: due.toISOString(),
+        assigned_to: opts.assignedTo || null,
+        project_id: opts.projectId || null,
+        labels: i.labels ?? [],
+        estimate_minutes: i.estimate_minutes ?? null,
+        created_by: user.id,
+      };
+    });
+
+  const { error } = await supabase.from("todos").insert(rows);
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath("/todos");
+  return { ok: true, created: rows.length };
+}
+
+/** Turn a set of existing to-dos into a template. */
+export async function saveTodoTemplate(input: {
+  name: string;
+  description?: string;
+  todoIds: string[];
+}): Promise<ActionResult> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+
+  const name = input.name.trim();
+  if (!name) return { ok: false, error: "Give the template a name." };
+  if (!input.todoIds.length) return { ok: false, error: "Pick some to-dos first." };
+
+  const { data: todos } = await supabase
+    .from("todos")
+    .select("title, description, priority, due_date, labels, estimate_minutes")
+    .in("id", input.todoIds);
+  if (!todos?.length) return { ok: false, error: "Those to-dos no longer exist." };
+
+  // Offsets are relative to the EARLIEST due date in the set, so the shape of
+  // the sequence survives even though its absolute dates don't.
+  const dates = todos.map((t) => (t.due_date ? new Date(t.due_date).getTime() : null));
+  const earliest = Math.min(
+    ...dates.filter((d): d is number => d !== null).concat(Date.now()),
+  );
+
+  const { error } = await supabase.from("todo_templates").insert({
+    name,
+    description: input.description?.trim() || null,
+    items: todos.map((t) => ({
+      title: t.title,
+      description: t.description ?? undefined,
+      priority: t.priority,
+      labels: t.labels,
+      estimate_minutes: t.estimate_minutes ?? undefined,
+      offset_days: t.due_date
+        ? Math.max(
+            0,
+            Math.round((new Date(t.due_date).getTime() - earliest) / 86_400_000),
+          )
+        : 0,
+    })),
+    created_by: user.id,
+  });
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath("/todos");
+  return { ok: true };
+}
+
+/** Say something about a to-do, and tell anyone named in it. */
+export async function addTodoComment(
+  todoId: string,
+  body: string,
+  mentions: string[] = [],
+): Promise<ActionResult> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+
+  const text = body.trim();
+  if (!text) return { ok: false, error: "Write something first." };
+
+  const clean = [...new Set(mentions.filter(Boolean))];
+  const { error } = await supabase.from("todo_comments").insert({
+    todo_id: todoId,
+    author_id: user.id,
+    body: text,
+    mentions: clean,
+  });
+  if (error) return { ok: false, error: error.message };
+
+  const targets = clean.filter((id) => id !== user.id);
+  if (targets.length) {
+    const { data: todo } = await supabase
+      .from("todos")
+      .select("title")
+      .eq("id", todoId)
+      .maybeSingle();
+    await notifyUsers(supabase, {
+      userIds: targets,
+      type: "mention",
+      title: "You were mentioned on a to-do",
+      body: `${todo?.title ?? "A to-do"} — ${text.slice(0, 140)}`,
+      link: "/todos",
+      actorId: user.id,
+    });
+  }
+
   revalidatePath("/todos");
   return { ok: true };
 }

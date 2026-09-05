@@ -1398,6 +1398,58 @@ export const ASSISTANT_TOOLS: ToolSchema[] = [
   {
     type: "function",
     function: {
+      name: "update_todo",
+      description:
+        "Change an existing to-do: its status, priority, due date, assignee, labels or estimate. Use for 'mark the logo task done', 'push the invoice task to Friday', 'give that one to Musa'. Find it by title.",
+      parameters: {
+        type: "object",
+        properties: {
+          todo_query: {
+            type: "string",
+            description: "Words from the to-do's title.",
+          },
+          status: { type: "string", enum: ["todo", "in_progress", "done"] },
+          priority: { type: "string", enum: ["low", "medium", "high", "urgent"] },
+          due_date: {
+            type: "string",
+            description: "ISO date (YYYY-MM-DD) it should now be due.",
+          },
+          assign_to: {
+            type: "string",
+            description: "Team member's name, or 'me'.",
+          },
+          labels: {
+            type: "array",
+            items: { type: "string" },
+            description: "Replaces the labels entirely.",
+          },
+          estimate_minutes: { type: "number" },
+        },
+        required: ["todo_query"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "add_todo_comment",
+      description:
+        "Leave a note on a to-do — what was tried, what is blocking it, what to do next. Use for 'note on the logo task that the client wants blue'.",
+      parameters: {
+        type: "object",
+        properties: {
+          todo_query: { type: "string", description: "Words from the title." },
+          body: { type: "string", description: "The note." },
+        },
+        required: ["todo_query", "body"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "create_agreement",
       description:
         "Draft a contract, scope of work or NDA and save it as a DRAFT for a person to review and send. Use for 'draft a contract for…', 'write an NDA for…'. It is never sent and never signed by this tool — a person opens Agreements, reads it, and sends the signing link.",
@@ -3984,6 +4036,117 @@ export async function executeTool(
           note: "Shown to the user for confirmation. Nothing is sent until the user taps Send, and sending pauses the AI for that chat. Do not say it has been sent.",
         },
         card: { type: "confirm_send_whatsapp", whatsapp },
+      };
+    }
+
+    case "update_todo": {
+      const query = String(args.todo_query ?? "").trim();
+      if (!query) return { content: { ok: false, error: "Which to-do?" } };
+
+      const { data: matches } = await supabase
+        .from("todos")
+        .select("id, title, status")
+        .ilike("title", `%${query}%`)
+        .neq("status", "done")
+        .order("created_at", { ascending: false })
+        .limit(3);
+
+      // Finished ones are searched only when nothing open matches — "mark X
+      // done" on an already-done task should say so, not create confusion.
+      const pool = matches?.length
+        ? matches
+        : (
+            await supabase
+              .from("todos")
+              .select("id, title, status")
+              .ilike("title", `%${query}%`)
+              .order("created_at", { ascending: false })
+              .limit(3)
+          ).data ?? [];
+
+      if (!pool.length)
+        return { content: { ok: false, error: `No to-do matching "${query}".` } };
+      if (pool.length > 1)
+        return {
+          content: {
+            ok: false,
+            error: `More than one to-do matches "${query}".`,
+            candidates: pool.map((t) => t.title),
+          },
+        };
+      const todo = pool[0];
+
+      const patch: Database["public"]["Tables"]["todos"]["Update"] = {};
+      if (args.status) {
+        patch.status = args.status as TodoStatus;
+        patch.completed_at =
+          args.status === "done" ? new Date().toISOString() : null;
+      }
+      if (args.priority) patch.priority = args.priority as TodoPriority;
+      if (args.due_date) patch.due_date = new Date(String(args.due_date)).toISOString();
+      if (Array.isArray(args.labels)) {
+        patch.labels = args.labels.map(String).filter(Boolean);
+      }
+      if (typeof args.estimate_minutes === "number") {
+        patch.estimate_minutes = Math.max(0, Math.round(args.estimate_minutes));
+      }
+      if (args.assign_to) {
+        const memberId = await resolveMemberId(ctx, String(args.assign_to));
+        if (!memberId)
+          return {
+            content: { ok: false, error: `No team member called "${args.assign_to}".` },
+          };
+        patch.assigned_to = memberId;
+      }
+      if (!Object.keys(patch).length)
+        return { content: { ok: false, error: "Nothing to change." } };
+
+      const { error } = await supabase.from("todos").update(patch).eq("id", todo.id);
+      if (error) return { content: { ok: false, error: error.message } };
+
+      return {
+        content: { ok: true, todo: todo.title, changed: Object.keys(patch) },
+        event: { kind: "updated" as const, label: `Updated: ${todo.title}`, href: "/todos" },
+      };
+    }
+
+    case "add_todo_comment": {
+      const query = String(args.todo_query ?? "").trim();
+      const body = String(args.body ?? "").trim();
+      if (!query || !body)
+        return { content: { ok: false, error: "Need the to-do and the note." } };
+
+      const { data: matches } = await supabase
+        .from("todos")
+        .select("id, title")
+        .ilike("title", `%${query}%`)
+        .order("created_at", { ascending: false })
+        .limit(3);
+      if (!matches?.length)
+        return { content: { ok: false, error: `No to-do matching "${query}".` } };
+      if (matches.length > 1)
+        return {
+          content: {
+            ok: false,
+            error: `More than one to-do matches "${query}".`,
+            candidates: matches.map((t) => t.title),
+          },
+        };
+
+      const { error } = await supabase.from("todo_comments").insert({
+        todo_id: matches[0].id,
+        author_id: ctx.userId,
+        body,
+      });
+      if (error) return { content: { ok: false, error: error.message } };
+
+      return {
+        content: { ok: true, todo: matches[0].title },
+        event: {
+          kind: "created" as const,
+          label: `Noted on: ${matches[0].title}`,
+          href: "/todos",
+        },
       };
     }
 

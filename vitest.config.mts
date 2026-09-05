@@ -40,6 +40,9 @@ export default defineConfig({
       // 0117 — a document somebody signs must not be able to carry a
       // script, so escaping is pinned rather than assumed.
       "src/lib/markdown.test.ts",
+      // 0119 — every recurring-task bug is a date bug, and they are all
+      // invisible until the wrong week.
+      "src/lib/todo-recurrence.test.ts",
     ],
   },
 });

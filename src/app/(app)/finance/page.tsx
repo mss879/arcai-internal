@@ -1,4 +1,6 @@
+import { loadCashForecast } from "@/lib/finance-forecast";
 import { createClient } from "@/lib/supabase/server";
+import { periodFor, targetsProgress } from "@/lib/targets";
 import type {
   Cheque,
   Client,
@@ -24,6 +26,8 @@ export default async function FinancePage() {
     clientsRes,
     projectsRes,
     recurringRes,
+    forecast,
+    targetProgress,
   ] = await Promise.all([
       supabase.from("payment_plans").select("*").order("created_at", { ascending: false }),
       supabase.from("payment_installments").select("*").order("due_date"),
@@ -48,6 +52,10 @@ export default async function FinancePage() {
         .select("*, entries:recurring_income_entries(*)")
         .order("is_active", { ascending: false })
         .order("created_at", { ascending: false }),
+      // 0119 — the 90-day cash view and this month's targets, on Overview.
+      // Same loader as Intelligence, so the two pages cannot disagree.
+      loadCashForecast(supabase).catch(() => null),
+      targetsProgress(supabase, periodFor(new Date())).catch(() => []),
     ]);
 
   const projects = (projectsRes.data ?? []).map((p) => ({
@@ -68,6 +76,8 @@ export default async function FinancePage() {
       projects={projects}
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       recurring={(recurringRes.data ?? []) as any}
+      forecast={forecast}
+      targetProgress={targetProgress}
     />
   );
 }

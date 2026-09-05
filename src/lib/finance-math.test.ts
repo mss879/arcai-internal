@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  detectStandingCosts,
   forecastCash,
   monthlyInflows,
   monthlyOutflows,
   monthKey,
+  projectStandingCosts,
   recentMonths,
   seriesByMonth,
   totalForMonth,
@@ -185,5 +187,56 @@ describe("forecastCash", () => {
     );
     expect(weeks).toHaveLength(13);
     expect(weeks[0].weekStart).toBe("2026-08-31");
+  });
+});
+
+describe("standing costs", () => {
+  const now = new Date("2026-09-05T00:00:00.000Z");
+  const ledger = [
+    // Rent, three months running, always the 1st.
+    { expense_date: "2026-07-01", amount: 60_000, vendor: "Landlord", description: "Office rent" },
+    { expense_date: "2026-08-01", amount: 60_000, vendor: "Landlord", description: "Office rent" },
+    { expense_date: "2026-09-01", amount: 60_000, vendor: "Landlord", description: "Office rent" },
+    // Hosting, two months, no vendor — keyed on the description.
+    { expense_date: "2026-07-15", amount: 4_000, vendor: null, description: "Netlify" },
+    { expense_date: "2026-08-15", amount: 4_500, vendor: null, description: "netlify" },
+    // A laptop is not a standing cost.
+    { expense_date: "2026-08-20", amount: 350_000, vendor: "Abans", description: "MacBook" },
+    // Two payments in ONE month is still one month.
+    { expense_date: "2026-08-03", amount: 2_000, vendor: "Uber", description: "Transport" },
+    { expense_date: "2026-08-09", amount: 2_500, vendor: "Uber", description: "Transport" },
+    // Too old to count.
+    { expense_date: "2026-04-01", amount: 9_000, vendor: "Dialog", description: "Phones" },
+    { expense_date: "2026-05-01", amount: 9_000, vendor: "Dialog", description: "Phones" },
+  ];
+
+  it("finds what comes back in two of the last three months", () => {
+    const costs = detectStandingCosts(ledger, now);
+    expect(costs.map((c) => c.name)).toEqual(["Landlord", "Netlify"]);
+  });
+
+  it("uses the typical amount and the usual day", () => {
+    const hosting = detectStandingCosts(ledger, now).find((c) => c.name === "Netlify")!;
+    expect(hosting.amount).toBe(4_250);
+    expect(hosting.day).toBe(15);
+  });
+
+  it("projects forward, skipping what this month has already paid", () => {
+    const rows = projectStandingCosts(ledger, now, 2);
+    // Rent was paid on the 1st, so September's is not expected again.
+    expect(rows.filter((r) => r.amount === 60_000).map((r) => r.date)).toEqual([
+      "2026-10-01",
+      "2026-11-01",
+    ]);
+    // Hosting hasn't landed yet this month — the 15th is still ahead.
+    expect(rows.filter((r) => r.amount === 4_250).map((r) => r.date)).toEqual([
+      "2026-09-15",
+      "2026-10-15",
+      "2026-11-15",
+    ]);
+  });
+
+  it("returns nothing for an empty ledger", () => {
+    expect(projectStandingCosts([], now)).toEqual([]);
   });
 });

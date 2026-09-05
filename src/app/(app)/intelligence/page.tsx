@@ -1,7 +1,11 @@
 import { requireAdmin } from "@/lib/auth";
+import { getMembers } from "@/lib/data";
+import { loadCashForecast } from "@/lib/finance-forecast";
+import { recentMonths } from "@/lib/finance-math";
 import { createClient } from "@/lib/supabase/server";
 import { isOpenAIConfigured } from "@/lib/ai/openai";
 import { isSmsConfigured } from "@/lib/sms";
+import { targetsProgress } from "@/lib/targets";
 import type {
   AdEntry,
   AiDigest,
@@ -24,6 +28,11 @@ export default async function IntelligencePage() {
   monthAgoDate.setDate(monthAgoDate.getDate() - 30);
   const monthAgo = monthAgoDate.toISOString();
 
+  // 0119 — this month and the two before it, so a goal can be read as a
+  // trend rather than a single bar.
+  const now = new Date();
+  const goalMonths = recentMonths(now, 3).map((m) => `${m}-01`);
+
   const [
     digestsRes,
     churnRes,
@@ -32,6 +41,9 @@ export default async function IntelligencePage() {
     competitorsRes,
     entriesRes,
     scoreRes,
+    goalRows,
+    forecast,
+    members,
   ] = await Promise.all([
     supabase
       .from("ai_digests")
@@ -61,6 +73,15 @@ export default async function IntelligencePage() {
       .select("score")
       .eq("status", "open")
       .is("deleted_at", null),
+    Promise.all(
+      goalMonths.map((period) =>
+        targetsProgress(supabase, period)
+          .then((rows) => ({ period, rows }))
+          .catch(() => ({ period, rows: [] })),
+      ),
+    ),
+    loadCashForecast(supabase, now).catch(() => null),
+    getMembers(),
   ]);
 
   const scores = { hot: 0, warm: 0, cold: 0, unscored: 0 };
@@ -80,6 +101,9 @@ export default async function IntelligencePage() {
       competitors={(competitorsRes.data ?? []) as Competitor[]}
       competitorEntries={(entriesRes.data ?? []) as CompetitorEntry[]}
       scores={scores}
+      goals={goalRows}
+      forecast={forecast}
+      members={members.map((m) => ({ id: m.id, full_name: m.full_name }))}
       aiReady={isOpenAIConfigured()}
       smsReady={isSmsConfigured()}
     />

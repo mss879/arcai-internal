@@ -205,3 +205,112 @@ export function forecastCash(
   }
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// Standing costs
+// ---------------------------------------------------------------------------
+
+export type ExpenseLike = {
+  expense_date: string;
+  amount: number | string;
+  vendor?: string | null;
+  description: string;
+};
+
+export type StandingCost = {
+  /** The vendor, or the description when there is no vendor. */
+  name: string;
+  /** The typical monthly amount — the median of what was actually paid. */
+  amount: number;
+  /** Day of the month it usually lands on. */
+  day: number;
+};
+
+const DAY_MS = 86_400_000;
+
+function median(values: number[]): number {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+/**
+ * The costs that come back every month, worked out from the ledger rather
+ * than declared.
+ *
+ * There is no "recurring" flag on an expense, and asking people to maintain
+ * one is how the flag ends up wrong. Instead: the same vendor (or, failing a
+ * vendor, the same description) paid in at least two different months of the
+ * last three is a standing cost. Rent, salaries, hosting and software all
+ * pass that test; a one-off laptop does not.
+ */
+export function detectStandingCosts(expenses: ExpenseLike[], now: Date): StandingCost[] {
+  const since = new Date(now.getTime() - 92 * DAY_MS).toISOString().slice(0, 10);
+  const groups = new Map<
+    string,
+    { name: string; months: Set<string>; amounts: number[]; days: number[] }
+  >();
+
+  for (const e of expenses) {
+    if (e.expense_date < since) continue;
+    const name = (e.vendor?.trim() || e.description.trim()).replace(/\s+/g, " ");
+    if (!name) continue;
+    const key = name.toLowerCase();
+    const group = groups.get(key) ?? { name, months: new Set(), amounts: [], days: [] };
+    group.months.add(monthKey(e.expense_date));
+    group.amounts.push(num(e.amount));
+    group.days.push(Number(e.expense_date.slice(8, 10)) || 1);
+    groups.set(key, group);
+  }
+
+  return [...groups.values()]
+    .filter((g) => g.months.size >= 2)
+    .map((g) => ({
+      name: g.name,
+      amount: median(g.amounts),
+      day: Math.max(1, Math.min(28, Math.round(median(g.days)))),
+    }))
+    .filter((c) => c.amount > 0)
+    .sort((a, b) => b.amount - a.amount);
+}
+
+/**
+ * The standing costs, dated forward.
+ *
+ * One row per cost per month, on its usual day, for the current month (when
+ * that day is still ahead and nothing has been paid to that name yet this
+ * month) and the next `months` months. Feeds forecastCash() as
+ * `scheduledOut`, so rent shows in the week it falls rather than being
+ * smeared across the run rate.
+ */
+export function projectStandingCosts(
+  expenses: ExpenseLike[],
+  now: Date,
+  months = 4,
+): CashRow[] {
+  const costs = detectStandingCosts(expenses, now);
+  if (!costs.length) return [];
+
+  const today = now.toISOString().slice(0, 10);
+  const thisMonth = monthKey(today);
+  const paidThisMonth = new Set(
+    expenses
+      .filter((e) => monthKey(e.expense_date) === thisMonth)
+      .map((e) => (e.vendor?.trim() || e.description.trim()).toLowerCase()),
+  );
+
+  const out: CashRow[] = [];
+  for (const cost of costs) {
+    for (let i = 0; i <= months; i++) {
+      const month = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + i, 1));
+      const date = `${month.toISOString().slice(0, 7)}-${String(cost.day).padStart(2, "0")}`;
+      if (i === 0) {
+        // Already paid this month, or the day has passed: nothing more to expect.
+        if (date < today || paidThisMonth.has(cost.name.toLowerCase())) continue;
+      }
+      out.push({ date, amount: cost.amount });
+    }
+  }
+  return out.sort((a, b) => a.date.localeCompare(b.date));
+}

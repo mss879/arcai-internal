@@ -13,6 +13,8 @@ import {
   Send,
   Sparkles,
   Swords,
+  Target,
+  TrendingUp,
   Wrench,
 } from "lucide-react";
 
@@ -22,8 +24,12 @@ import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Textarea } from "@/components/ui/input";
 import { PageHeader } from "@/components/ui/page-header";
+import { ForecastCard } from "@/components/finance/forecast-card";
+import { TargetsCard } from "@/components/team/targets-card";
 import { useRealtimeSync } from "@/hooks/use-realtime-sync";
-import { cn } from "@/lib/utils";
+import type { CashForecast } from "@/lib/finance-forecast";
+import type { TargetProgress } from "@/lib/targets";
+import { cn, formatCurrency } from "@/lib/utils";
 import type {
   AdEntry,
   AiDigest,
@@ -42,7 +48,18 @@ import {
 } from "./actions";
 import { AdsPanel, CompetitorsPanel, ToolkitPanel, VisitorsPanel } from "./panels";
 
-type Tab = "digest" | "churn" | "ads" | "visitors" | "competitors" | "toolkit";
+type Tab =
+  | "digest"
+  | "goals"
+  | "forecast"
+  | "churn"
+  | "ads"
+  | "visitors"
+  | "competitors"
+  | "toolkit";
+
+/** 0119 — one month's targets against what happened. */
+export type GoalMonth = { period: string; rows: TargetProgress[] };
 
 export function IntelligenceView({
   digests,
@@ -52,6 +69,9 @@ export function IntelligenceView({
   competitors,
   competitorEntries,
   scores,
+  goals = [],
+  forecast = null,
+  members = [],
   aiReady,
   smsReady,
 }: {
@@ -62,12 +82,18 @@ export function IntelligenceView({
   competitors: Competitor[];
   competitorEntries: CompetitorEntry[];
   scores: { hot: number; warm: number; cold: number; unscored: number };
+  /** 0119 — newest month last. */
+  goals?: GoalMonth[];
+  forecast?: CashForecast | null;
+  members?: { id: string; full_name: string | null }[];
   aiReady: boolean;
   smsReady: boolean;
 }) {
   useRealtimeSync("churn_alerts");
   const [tab, setTab] = React.useState<Tab>("digest");
   const openAlerts = churnAlerts.filter((a) => a.status === "open");
+  const thisMonth = goals[goals.length - 1];
+  const behind = thisMonth?.rows.filter((r) => r.percent < 100).length ?? 0;
 
   return (
     <div className="space-y-6">
@@ -89,6 +115,21 @@ export function IntelligenceView({
       <div className="inline-flex flex-wrap gap-1 rounded-xl border border-slate-200 bg-white p-1 shadow-sm">
         <TabButton active={tab === "digest"} onClick={() => setTab("digest")} icon={<Sparkles className="h-4 w-4" />}>
           Weekly Digest
+        </TabButton>
+        <TabButton
+          active={tab === "goals"}
+          onClick={() => setTab("goals")}
+          icon={<Target className="h-4 w-4" />}
+          count={behind}
+        >
+          Goals
+        </TabButton>
+        <TabButton
+          active={tab === "forecast"}
+          onClick={() => setTab("forecast")}
+          icon={<TrendingUp className="h-4 w-4" />}
+        >
+          Forecast
         </TabButton>
         <TabButton
           active={tab === "churn"}
@@ -121,6 +162,8 @@ export function IntelligenceView({
       </div>
 
       {tab === "digest" && <DigestTab digests={digests} scores={scores} aiReady={aiReady} />}
+      {tab === "goals" && <GoalsTab goals={goals} members={members} />}
+      {tab === "forecast" && <ForecastTab forecast={forecast} />}
       {tab === "churn" && <ChurnTab alerts={churnAlerts} smsReady={smsReady} />}
       {tab === "ads" && <AdsPanel ads={ads} />}
       {tab === "visitors" && <VisitorsPanel events={visitorEvents} />}
@@ -130,6 +173,106 @@ export function IntelligenceView({
       {tab === "toolkit" && <ToolkitPanel aiReady={aiReady} />}
     </div>
   );
+}
+
+// ---- 0119: goals vs actual ----------------------------------------------------
+
+const KIND_LABEL: Record<TargetProgress["kind"], string> = {
+  revenue: "Revenue",
+  deals_won: "Deals won",
+  deliveries: "Delivered",
+  leads: "New leads",
+  hours: "Hours",
+};
+
+function GoalsTab({
+  goals,
+  members,
+}: {
+  goals: GoalMonth[];
+  members: { id: string; full_name: string | null }[];
+}) {
+  const current = goals[goals.length - 1];
+  const history = goals.slice(0, -1).filter((g) => g.rows.length > 0);
+
+  if (!current) return null;
+
+  return (
+    <div className="space-y-6">
+      <TargetsCard
+        progress={current.rows}
+        members={members}
+        period={current.period}
+        canEdit
+      />
+
+      {history.length > 0 ? (
+        <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[var(--shadow-card)]">
+          <h3 className="text-sm font-semibold text-slate-900">Earlier months</h3>
+          <p className="mt-1 text-xs text-slate-500">
+            How each target closed — a goal read as a trend rather than a bar.
+          </p>
+          <div className="mt-4 overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs uppercase tracking-wide text-slate-400">
+                  <th className="py-2 pr-3 font-semibold">Month</th>
+                  <th className="py-2 pr-3 font-semibold">Target</th>
+                  <th className="py-2 pr-3 text-right font-semibold">Aimed for</th>
+                  <th className="py-2 pr-3 text-right font-semibold">Actual</th>
+                  <th className="py-2 text-right font-semibold">Result</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
+                {history.flatMap((g) =>
+                  g.rows.map((r) => (
+                    <tr key={`${g.period}-${r.kind}-${r.userId ?? "team"}`} className="text-slate-700">
+                      <td className="py-2 pr-3">{g.period.slice(0, 7)}</td>
+                      <td className="py-2 pr-3">
+                        {r.name ? `${r.name} · ` : ""}
+                        {KIND_LABEL[r.kind]}
+                      </td>
+                      <td className="py-2 pr-3 text-right tabular-nums">
+                        {r.kind === "revenue" ? formatCurrency(r.target) : r.target}
+                      </td>
+                      <td className="py-2 pr-3 text-right tabular-nums">
+                        {r.kind === "revenue" ? formatCurrency(r.actual) : r.actual}
+                      </td>
+                      <td
+                        className={cn(
+                          "py-2 text-right font-semibold tabular-nums",
+                          r.percent >= 100 ? "text-emerald-600" : "text-amber-600",
+                        )}
+                      >
+                        {r.percent}%
+                      </td>
+                    </tr>
+                  )),
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : (
+        <p className="px-1 text-xs text-slate-400">
+          Earlier months appear here once a target has been set for them.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function ForecastTab({ forecast }: { forecast: CashForecast | null }) {
+  if (!forecast) {
+    return (
+      <EmptyState
+        icon={<TrendingUp className="h-6 w-6" />}
+        title="No forecast yet"
+        description="The cash view reads payments, instalments, recurring income and expenses. It fills in as those are recorded."
+      />
+    );
+  }
+  return <ForecastCard weeks={forecast.weeks} standing={forecast.standing} asOf={forecast.asOf} />;
 }
 
 function TabButton({

@@ -27,8 +27,12 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Field, Input, Select, Textarea } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { PageHeader } from "@/components/ui/page-header";
+import { ForecastCard } from "@/components/finance/forecast-card";
+import { TargetsTile } from "@/components/dashboard/targets-tile";
 import { useRealtimeSync } from "@/hooks/use-realtime-sync";
+import type { CashForecast } from "@/lib/finance-forecast";
 import { monthlyInflows, monthlyOutflows } from "@/lib/finance-math";
+import type { TargetProgress } from "@/lib/targets";
 import { cn, formatCurrency } from "@/lib/utils";
 import type {
   Cheque,
@@ -116,6 +120,8 @@ export function FinanceView({
   clients,
   projects,
   recurring,
+  forecast = null,
+  targetProgress = [],
 }: {
   plans: PaymentPlan[];
   installments: PaymentInstallment[];
@@ -125,6 +131,9 @@ export function FinanceView({
   clients: ClientLite[];
   projects: ProjectLite[];
   recurring: RecurringRow[];
+  /** 0119 — the 90-day cash view, shared with Intelligence. */
+  forecast?: CashForecast | null;
+  targetProgress?: TargetProgress[];
 }) {
   useRealtimeSync("payment_plans");
   useRealtimeSync("payment_installments");
@@ -195,6 +204,8 @@ export function FinanceView({
           expenses={expenses}
           paidPayments={paidPayments}
           recurring={recurring}
+          forecast={forecast}
+          targetProgress={targetProgress}
         />
       )}
       {tab === "recurring" && (
@@ -267,12 +278,16 @@ function OverviewTab({
   expenses,
   paidPayments,
   recurring,
+  forecast,
+  targetProgress,
 }: {
   installments: PaymentInstallment[];
   cheques: Cheque[];
   expenses: Expense[];
   paidPayments: Payment[];
   recurring: RecurringRow[];
+  forecast: CashForecast | null;
+  targetProgress: TargetProgress[];
 }) {
   const now = new Date();
   const thisMonth = now.toISOString().slice(0, 7);
@@ -371,6 +386,17 @@ function OverviewTab({
             </p>
           )}
         </div>
+      )}
+
+      {/* 0119 — what the month was supposed to look like, and the 90 days ahead */}
+      {targetProgress.length > 0 && <TargetsTile progress={targetProgress} />}
+      {forecast && (
+        <ForecastCard
+          weeks={forecast.weeks}
+          standing={forecast.standing}
+          asOf={forecast.asOf}
+          compact
+        />
       )}
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">

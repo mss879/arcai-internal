@@ -333,6 +333,8 @@ export default async function ClientPage({
       createdAt: client.created_at,
       portalLastLoginAt: client.portal_last_login_at,
       portalLoginCount: client.portal_login_count ?? 0,
+      // 0121 — scrubbed on request; null on a database without the column.
+      anonymisedAt: (client as { anonymised_at?: string | null }).anonymised_at ?? null,
     },
     isAdmin: profile.role === "admin",
     baseUrl: (process.env.NEXT_PUBLIC_APP_URL || "").replace(/\/+$/, ""),

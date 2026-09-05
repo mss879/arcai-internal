@@ -2,7 +2,9 @@
 
 import { revalidatePath } from "next/cache";
 
+import { requireAdmin } from "@/lib/auth";
 import { fireAutomationTrigger } from "@/lib/automation";
+import { eraseClient, type EraseMode } from "@/lib/client-erasure";
 import { createClient } from "@/lib/supabase/server";
 import type { ActionResult, ClientStatus } from "@/lib/types";
 
@@ -63,10 +65,39 @@ export async function saveClient(input: ClientInput): Promise<ActionResult<{ cli
   return { ok: true, client: data };
 }
 
+/**
+ * T5.7 — "delete" from the list is an erasure: admin-only, refused once
+ * money exists (anonymise from the client's page instead), and it scrubs
+ * the person's data from every conversation before the row goes.
+ */
 export async function deleteClient(id: string): Promise<ActionResult> {
+  const admin = await requireAdmin();
   const supabase = await createClient();
-  const { error } = await supabase.from("clients").delete().eq("id", id);
-  if (error) return { ok: false, error: error.message };
+  const res = await eraseClient(supabase, id, "delete", { actorId: admin.id });
+  if (!res.ok) return res;
   revalidatePath("/clients");
   return { ok: true };
+}
+
+/**
+ * The right to be forgotten, with the person's name typed to confirm.
+ * Anonymise keeps the row (and the money); delete removes it and is only
+ * possible when nothing was ever invoiced or paid.
+ */
+export async function eraseClientAction(
+  id: string,
+  input: { mode: EraseMode; confirmName: string },
+): Promise<ActionResult<{ mode: EraseMode; touched: Record<string, number> }>> {
+  const admin = await requireAdmin();
+  const supabase = await createClient();
+  const { data: client } = await supabase.from("clients").select("id, name").eq("id", id).maybeSingle();
+  if (!client) return { ok: false, error: "That client no longer exists." };
+  if (input.confirmName.trim().toLowerCase() !== client.name.trim().toLowerCase()) {
+    return { ok: false, error: "Type the client's name exactly as it appears to confirm." };
+  }
+  const res = await eraseClient(supabase, id, input.mode, { actorId: admin.id });
+  if (!res.ok) return res;
+  revalidatePath("/clients");
+  revalidatePath(`/clients/${id}`);
+  return { ok: true, mode: res.mode, touched: res.touched };
 }

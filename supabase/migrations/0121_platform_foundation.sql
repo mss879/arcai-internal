@@ -155,3 +155,15 @@ begin
 exception
   when duplicate_object then null;
 end $$;
+
+-- 5. GDPR (T5.7) ---------------------------------------------------------------
+-- A client who asks to be forgotten is scrubbed, not deleted, when money
+-- was ever invoiced or received against them: the accounts must still add
+-- up. src/lib/client-erasure.ts eraseClient() is the one way in; this stamp
+-- is how a scrubbed row is told apart from a client called "Erased client".
+
+alter table public.clients
+  add column if not exists anonymised_at timestamptz;
+
+comment on column public.clients.anonymised_at is
+  'Set by eraseClient() when the personal data on this client and its conversations was scrubbed. The row stays so invoices and payments still reconcile.';

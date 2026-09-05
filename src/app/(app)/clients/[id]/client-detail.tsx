@@ -25,6 +25,7 @@ import {
   Phone,
   Receipt,
   Target,
+  Trash2,
   TrendingUp,
   Users,
   Wallet,
@@ -54,6 +55,8 @@ import { firstNameOf } from "@/lib/email-templates";
 import { toast } from "sonner";
 
 import { sendStatementByWhatsApp } from "./actions";
+import { eraseClientAction } from "@/app/(app)/clients/actions";
+import { Modal } from "@/components/ui/modal";
 
 /**
  * The client's page (0112) — every record about one client in one place.
@@ -76,6 +79,8 @@ export type ClientView = {
     createdAt: string;
     portalLastLoginAt: string | null;
     portalLoginCount: number;
+    /** 0121 — when the personal data was scrubbed on request. */
+    anonymisedAt: string | null;
   };
   isAdmin: boolean;
   baseUrl: string;
@@ -268,6 +273,7 @@ export function ClientDetail({ view }: { view: ClientView }) {
   const [tab, setTab] = React.useState<Tab>("overview");
   const [editOpen, setEditOpen] = React.useState(false);
   const [emailOpen, setEmailOpen] = React.useState(false);
+  const [eraseOpen, setEraseOpen] = React.useState(false);
 
   const { client, summary } = view;
   const statusMeta = CLIENT_STATUS_META[client.status];
@@ -295,6 +301,7 @@ export function ClientDetail({ view }: { view: ClientView }) {
     // 0117 — present on the row type; the edit form never touches them.
     statement_token: "",
     referral_code: null,
+    anonymised_at: client.anonymisedAt,
     created_by: null,
     created_at: client.createdAt,
   };
@@ -322,6 +329,11 @@ export function ClientDetail({ view }: { view: ClientView }) {
                 <Badge className={statusMeta.badge}>{statusMeta.label}</Badge>
                 {view.churn.some((c) => c.status === "open") && (
                   <Badge className="bg-rose-50 text-rose-600 ring-rose-200">Churn risk</Badge>
+                )}
+                {client.anonymisedAt && (
+                  <Badge className="bg-slate-100 text-slate-600 ring-slate-200">
+                    Anonymised {when(client.anonymisedAt)}
+                  </Badge>
                 )}
               </div>
               <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-500">
@@ -388,6 +400,25 @@ export function ClientDetail({ view }: { view: ClientView }) {
             <Button size="sm" variant="outline" onClick={() => setEditOpen(true)}>
               <Pencil className="h-3.5 w-3.5" /> Edit
             </Button>
+            {view.isAdmin && (
+              <>
+                <a href={`/api/clients/${client.id}/export`}>
+                  <Button size="sm" variant="ghost" title="Everything we hold about them, as a zip">
+                    <Download className="h-3.5 w-3.5" /> Export data
+                  </Button>
+                </a>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-rose-600 hover:bg-rose-50"
+                  onClick={() => setEraseOpen(true)}
+                  disabled={Boolean(client.anonymisedAt)}
+                  title={client.anonymisedAt ? "Already anonymised" : "Forget this person"}
+                >
+                  <Trash2 className="h-3.5 w-3.5" /> Erase…
+                </Button>
+              </>
+            )}
           </div>
         </div>
 
@@ -534,6 +565,13 @@ export function ClientDetail({ view }: { view: ClientView }) {
         onSent={() => router.refresh()}
       />
 
+      <EraseClientModal
+        open={eraseOpen}
+        client={client}
+        hasMoney={view.invoices.length > 0 || summary.received > 0}
+        onClose={() => setEraseOpen(false)}
+      />
+
       <ClientFormModal
         open={editOpen}
         client={editRow}
@@ -548,6 +586,105 @@ export function ClientDetail({ view }: { view: ClientView }) {
 }
 
 /* ------------------------------------------------------------------ */
+
+/**
+ * T5.7 — the right to be forgotten, with the name typed to confirm.
+ *
+ * Anonymise scrubs every personal detail on the client and in every
+ * conversation and keeps the rows, so the money still adds up. Delete goes
+ * further and removes the row — only ever possible when nothing was
+ * invoiced or paid, which the server checks again.
+ */
+function EraseClientModal({
+  open,
+  client,
+  hasMoney,
+  onClose,
+}: {
+  open: boolean;
+  client: ClientView["client"];
+  hasMoney: boolean;
+  onClose: () => void;
+}) {
+  const router = useRouter();
+  const [mode, setMode] = React.useState<"anonymise" | "delete">("anonymise");
+  const [typed, setTyped] = React.useState("");
+  const [pending, setPending] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!open) return;
+    setMode("anonymise");
+    setTyped("");
+  }, [open]);
+
+  const matches = typed.trim().toLowerCase() === client.name.trim().toLowerCase();
+
+  async function confirm() {
+    setPending(true);
+    const res = await eraseClientAction(client.id, { mode, confirmName: typed });
+    setPending(false);
+    if (!res.ok) {
+      toast.error(res.error);
+      return;
+    }
+    const n = Object.values(res.touched).reduce((s, v) => s + v, 0);
+    toast.success(res.mode === "delete" ? `Deleted — ${n} record(s) scrubbed first.` : `Anonymised — ${n} record(s) scrubbed.`);
+    onClose();
+    if (res.mode === "delete") router.push("/clients");
+    else router.refresh();
+  }
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={`Forget ${client.name}`}
+      description="Their name, contact details and every message on WhatsApp, SMS and email are scrubbed. This cannot be undone — export their data first if they asked for it."
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose} disabled={pending}>
+            Cancel
+          </Button>
+          <Button variant="danger" onClick={confirm} loading={pending} disabled={!matches}>
+            {mode === "delete" ? "Delete client" : "Anonymise client"}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        <div className="space-y-2">
+          <label className="flex items-start gap-2.5 rounded-xl border border-slate-200 p-3 text-sm text-slate-700">
+            <input type="radio" name="erase-mode" className="mt-0.5" checked={mode === "anonymise"} onChange={() => setMode("anonymise")} />
+            <span>
+              <span className="font-medium">Anonymise</span> — keep the record, scrub the person
+              <span className="block text-xs text-slate-400">Invoices and payments stay so the accounts still add up. The row reads &ldquo;Erased client&rdquo;.</span>
+            </span>
+          </label>
+          <label
+            className={cn(
+              "flex items-start gap-2.5 rounded-xl border p-3 text-sm",
+              hasMoney ? "border-slate-100 text-slate-400" : "border-slate-200 text-slate-700",
+            )}
+          >
+            <input type="radio" name="erase-mode" className="mt-0.5" disabled={hasMoney} checked={mode === "delete"} onChange={() => setMode("delete")} />
+            <span>
+              <span className="font-medium">Delete</span> — scrub, then remove the record
+              <span className="block text-xs text-slate-400">
+                {hasMoney ? "Not possible: money was invoiced or received against this client." : "Only while nothing was ever invoiced or paid."}
+              </span>
+            </span>
+          </label>
+        </div>
+        <div>
+          <p className="mb-1.5 text-xs font-medium text-slate-600">
+            Type <span className="font-semibold text-slate-900">{client.name}</span> to confirm
+          </p>
+          <Input value={typed} onChange={(e) => setTyped(e.target.value)} placeholder={client.name} autoFocus />
+        </div>
+      </div>
+    </Modal>
+  );
+}
 
 function ProjectCard({
   project: p,

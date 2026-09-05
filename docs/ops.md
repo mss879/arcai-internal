@@ -63,3 +63,23 @@ their role, not by their capabilities. Nobody but the service role has one.
   `/settings` lists and resolves them (a resolved fault reopens itself if it
   comes back). With `SENTRY_DSN` set, each capture is also posted to Sentry
   as a raw envelope — Sentry is a mirror, never the record.
+
+## Personal data — export and erasure
+
+- **Export** — `GET /api/clients/<id>/export` (admins) is everything held
+  about one client as a zip of JSON files plus their statement; the client
+  page's "Export data" button. Produced by `exportClientData()` in
+  `src/lib/client-erasure.ts`; hand-picked fields, never internal costs or
+  notes about margins. Each export is a `system_events` line.
+- **Erasure** — "Erase…" on the client page (admins, the name typed to
+  confirm) calls `eraseClient()`, the one way to forget a person:
+  **anonymise** scrubs the client row (name, email, phone, company, city,
+  notes, referral code; the statement link is re-minted) and every place
+  their words or details live — WhatsApp contact names and message bodies,
+  SMS numbers (masked to the last three digits) and texts, lead contact
+  fields, email addresses and bodies, booking details, agreement signatures,
+  bank-slip images (the objects in `payment-slips` are removed) — and stamps
+  `clients.anonymised_at`. **delete** does the same and then removes the
+  row, and is refused once any invoice or payment exists: the accounts must
+  still add up. "Delete" on the clients list is the same erasure with the
+  same refusal. Every erasure is a `system_events` line naming who asked.

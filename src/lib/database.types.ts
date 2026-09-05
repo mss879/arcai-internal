@@ -834,6 +834,8 @@ export type Database = {
           // 0117 — their statement link, and the code they share.
           statement_token: UUID;
           referral_code: string | null;
+          /** 0121 — set when the personal data was scrubbed (eraseClient). */
+          anonymised_at: Timestamp | null;
           created_by: UUID | null;
           created_at: Timestamp;
         };
@@ -852,6 +854,8 @@ export type Database = {
           // 0117
           statement_token?: UUID;
           referral_code?: string | null;
+          // 0121
+          anonymised_at?: Timestamp | null;
           created_by?: UUID | null;
           created_at?: Timestamp;
         };

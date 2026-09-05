@@ -4,7 +4,9 @@ import { format } from "date-fns";
 import { requireAdmin } from "@/lib/auth";
 import { attachRepayments } from "@/lib/loans";
 import { ONLINE_WINDOW_MS } from "@/lib/ping";
+import { memberScorecard } from "@/lib/scorecards";
 import { createClient } from "@/lib/supabase/server";
+import { periodFor } from "@/lib/targets";
 
 import { MemberDashboard } from "./member-dashboard";
 
@@ -30,6 +32,7 @@ export default async function MemberPage({
     devicesRes,
     onlineRes,
     graceRes,
+    scorecards,
   ] = await Promise.all([
     supabase.from("profiles").select("*").eq("id", id).maybeSingle(),
     supabase
@@ -69,6 +72,16 @@ export default async function MemberPage({
       .select("started_at")
       .eq("user_id", id)
       .maybeSingle(),
+    // 0119 — this month and last, newest first. A month that fails to load
+    // (a table not yet migrated) is simply absent from the picker.
+    Promise.all(
+      [0, 1].map((back) => {
+        const d = new Date();
+        d.setUTCDate(1);
+        d.setUTCMonth(d.getUTCMonth() - back);
+        return memberScorecard(supabase, id, periodFor(d)).catch(() => null);
+      }),
+    ).then((cards) => cards.filter((c) => c !== null)),
   ]);
 
   const member = memberRes.data;
@@ -109,6 +122,7 @@ export default async function MemberPage({
         member.role === "member" && (onlineRes.data ?? []).length > 0
       }
       isYou={member.id === me.id}
+      scorecards={scorecards}
     />
   );
 }

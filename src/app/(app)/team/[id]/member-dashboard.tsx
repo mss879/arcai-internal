@@ -54,6 +54,7 @@ import {
   summariseMemberMoney,
   type LoanWithRepayments,
 } from "@/lib/loans";
+import type { MemberScorecard } from "@/lib/scorecards";
 import { formatPhone } from "@/lib/sms-utils";
 import { cn, formatCurrency } from "@/lib/utils";
 import { useRealtimeSyncTables } from "@/hooks/use-realtime-sync";
@@ -63,6 +64,7 @@ import { setMemberHourlyCost } from "@/app/(app)/projects/plan-actions";
 
 import { ActivityModal } from "../activity-modal";
 import type { MemberDevice } from "../team-view";
+import { ScorecardSection } from "./scorecard-section";
 import {
   deleteLoanRepayment,
   deleteMemberLoan,
@@ -84,6 +86,7 @@ export function MemberDashboard({
   deviceStatus,
   isOnline,
   isYou,
+  scorecards = [],
 }: {
   member: Profile;
   commissions: CommissionRow[];
@@ -93,6 +96,8 @@ export function MemberDashboard({
   deviceStatus: string | null;
   isOnline: boolean;
   isYou: boolean;
+  /** 0119 — this month and last, newest first. */
+  scorecards?: MemberScorecard[];
 }) {
   useRealtimeSyncTables([
     "commissions",
@@ -246,6 +251,9 @@ export function MemberDashboard({
           accent={money.netPayable < 0 ? "rose" : "primary"}
         />
       </div>
+
+      {/* 0119 — the month in numbers ----------------------------- */}
+      {scorecards.length > 0 && <ScorecardSection scorecards={scorecards} />}
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         {/* Loans ------------------------------------------------- */}

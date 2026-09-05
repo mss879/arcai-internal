@@ -1,17 +1,22 @@
-# Next Wave — handoff (second edition)
+# Next Wave — handoff (third edition)
 
 **Read this first, then `AGENTS.md` and `docs/projects-roadmap-handoff.md` §2/§4.**
-Written 2026-09-05 at commit `908e8b8` ("a recurring month raises its own
-invoice, and chases itself"). Paste this into a new chat, or say:
-*"Read `docs/next-wave-handoff.md` and continue from step 38."*
+Updated 2026-09-06 at commit `76c63f9` ("the Tax tab reads the same money-in
+as Overview"). Paste this into a new chat, or say:
+*"Read `docs/next-wave-handoff.md` and continue from step 41."*
+
+This file is refreshed after EVERY committed step, so it is always the
+current handover — if a chat is cut off, the previous step's entry here is
+complete and the next step has not started.
 
 ---
 
 ## 1. Where things stand
 
-**37 of 46 build steps are done, plus an audit-and-fix pass over the first 26.
-39 commits on `arc_ai_crm_system` `main` ahead of `origin/main`, plus 2 on
-`arc_ai_website`. Nothing is pushed to either remote.**
+**40 of 46 build steps are done (Track 4 is complete), plus an audit-and-fix
+pass over the first 26. 44 commits on `arc_ai_crm_system` `main` ahead of
+`origin/main`, plus 2 on `arc_ai_website`. Nothing is pushed to either
+remote.**
 
 ```
 git log --oneline origin/main..HEAD
@@ -24,20 +29,19 @@ find .next/types -name "* [0-9].ts" -delete && npx tsc --noEmit && npx vitest ru
   && node scripts/lint-baseline.mjs && npm run build
 ```
 
-192 tests across 13 files. Lint baseline is 24 errors in 10 files (13 in `src`,
+209 tests across 15 files. Lint baseline is 24 errors in 10 files (13 in `src`,
 11 in the vendored MediaPipe bundles under `public/arcus/hand/`) — `node
 scripts/lint-baseline.mjs --write` re-records it. If `npm run build` fails with
 `ENOTEMPTY` on `.next/server`, `rm -rf .next/server` first.
 
-Every commit, including the last one, passed the full check (the T4.5
-build finished green just before this handoff was written).
+Every commit, including the last one, passed the full check.
 
 ### ⚠️ Before ANY push
 
 Apply these by hand in the Supabase SQL editor, **in this order**:
 
 ```
-0112 → 0113 → 0114 → 0115 → 0116 → 0117 → 0118 → 0119 → 0120
+0112 → 0113 → 0114 → 0115 → 0116 → 0117 → 0118 → 0119 → 0120 → 0121
 ```
 
 `0112`–`0114` predate this wave and were already outstanding. The code degrades
@@ -53,6 +57,12 @@ skipped with a notice telling you to fix them by hand and re-run that one
 statement. `0120` was extended twice after it was first written (the
 `approvals_count()` replacement in §7b, and the slip bucket policies) — apply
 the file as it is now, not a copy taken earlier.
+
+**`0121_platform_foundation.sql` is new and additive** (no backfill). It
+currently holds section 1 only — the `expenses` category CHECK widened with
+`commission` for the payout run — and steps 42–45 ADD sections to it
+(capabilities, `system_events`, `error_events`, `clients.anonymised_at`).
+Apply it last, as the file stands when you push.
 
 `arc_ai_website` has its own two commits (`39cb034` UTM capture, `d2b9d1c`
 client-login link) and needs no migration.
@@ -106,13 +116,16 @@ client-login link) and needs no migration.
 | `3b8ec71` | T3.8 Calendar month/week/day + milestones + instalments. |
 | `e6a4c4a` | T3.9 Offline `/projects/go` (service worker cache, IndexedDB outbox, `/api/go/data`, `/api/go/sync`). |
 
-### Track 4 — get paid faster (6 of 9)
+### Track 4 — get paid faster (COMPLETE)
 
 | Commit | Feature |
 | --- | --- |
 | `ad4fe77` | **T4.1 + T4.8 + T4.2** on migration **0120**: invoices as a state (`src/lib/invoices.ts`), `document_counters` + `next_document_number()` (`src/lib/document-number.ts`), `recordPayment()` (`src/lib/payments.ts`), assistant `mark_invoice_paid` card → `/api/assistant/confirm-payment`. Currency reaches the PDF, the public page and the email data. |
 | `4f80d33` | **T4.3 + T4.4** Bank slips: upload on the public invoice page and the portal (3 languages), WhatsApp slips filed to the same queue, `parseSlipImage`/`parseSlipText`, Finance → Slips tab, slips on `/approvals`, `notifyClient()` (`src/lib/client-notify.ts`). |
 | `908e8b8` | **T4.5** Recurring billing: `auto_invoice` + `remind` on an arrangement, `createRecurringInvoice()`, reminders on the tick, "Invoice now", retainer projects upsert their `recurring_income` row. |
+| `97f64e1` | **T4.6** Client statement of account: `src/lib/statement.ts` (`composeStatement()` pure + `buildClientStatement()`, pinned by `statement.test.ts`), `statement-pdf.tsx` (fixed page footer, no Page lineHeight), authed `/api/statements/[clientId]/pdf`, public `/public/statement/[token]` + PDF on `clients.statement_token` (rate-limited), Statement card on the client's Money tab (Download / Email via the compose modal's `attachStatement` → kind `statement` / WhatsApp as a document while the window is open, link by SMS otherwise — first use of `sendWhatsAppDocument`), statement link on `/portal`, assistant `client_statement`. |
+| `20e45e8` | **T4.7** Commission payout run: `runCommissionPayout()` in `team/[id]/actions.ts` (one `commission_payouts` row; approved → paid in ONE update; loan deduction through `saveLoanRepayment` with `payout_id` + `silent`; an `expenses` row, category `commission` from **0121** with `salaries` fallback; `notifyUsers` type `commission`). `summariseMemberMoney()` gains `commissionApproved`. "Pay out" + payout modal + Payouts card on the member page. |
+| `76c63f9` | **T4.9** `inflowLines()` in `finance-math.ts` — `monthlyInflows()` is now those lines minus the words, and the Tax tab reads them, so Overview and Tax cannot disagree (tested). `profitAndLoss()` + a P&L strip on Overview (payouts shown as "of which", never subtracted twice — the run's expense row is already in "out"). `src/components/finance/receipt-reader.tsx` on the company expense form. |
 
 ---
 
@@ -143,61 +156,11 @@ UI — the plan puts it under `/settings` (step 41).
 
 ---
 
-## 4. What remains — steps 38 to 46
+## 4. What remains — steps 41 to 46
 
 Numbers are the original plan's sequencing table.
 
-### Track 4, remaining
-
-**38 · T4.6 Client statement of account** — M, no migration
-(`clients.statement_token` exists since 0117).
-`src/lib/statement.ts buildClientStatement(db, clientId, {from, to})`:
-invoices by client (`invoices.client_id`, and by the client's projects),
-receipts via `buildLedger()` per project plus client-level payments
-(`payments` rows with `invoice_id` and no project — new since 0120), per
-currency, opening/closing balance. **Money maths only through
-`src/lib/projects.ts`** (`settledAmount`, `buildLedger`, `invoiceStatusFor`).
-`src/lib/statement-pdf.tsx` on the invoice letterhead (`src/lib/invoice-pdf.tsx`
-is the pattern; note the `react-pdf` fixed-footer trap in memory: a Page-level
-`lineHeight` deletes the footer). Authed
-`src/app/api/statements/[clientId]/pdf` and public
-`src/app/public/statement/[token]/` — nothing to add to the proxy: `/public`
-is already a prefix in `PUBLIC_PREFIXES` (`src/lib/supabase/middleware.ts:55`),
-so anything under it is public. Rate-limit it (`enforceRateLimit`,
-`src/lib/rate-limit.ts`), hand-pick columns, never `select("*")`. Client page Money tab (`src/app/(app)/clients/[id]/client-detail.tsx`):
-Download / Email (`sendAndLogEmail(kind:'statement')`, attachments as in
-`email.ts` `sendInvoiceEmail`) / WhatsApp document (`sendWhatsAppDocument` in
-`src/lib/whatsapp.ts:258`, unused so far). Portal: `statementUrl` on the
-`/portal` account page (T2.3 left the slot). Assistant `client_statement`
-(read tool; label in `src/lib/ai/tool-registry.ts`). Add
-`src/lib/statement.test.ts` to `vitest.config.mts` **on purpose**.
-
-**39 · T4.7 Commission payout run** — S. Tables `commission_payouts`,
-`commissions.payout_id`, `member_loan_repayments.payout_id` exist (0120).
-`team/[id]/actions.ts runCommissionPayout(userId, {period, method,
-reference, note, deductLoan})`: one `commission_payouts` row; every
-`approved` commission of that member → `paid` + `payout_id` in ONE update;
-the loan deduction through the existing `saveLoanRepayment` (:268) with
-`payout_id`; an `expenses` row (category — check `ExpenseCategory` in
-`database.types.ts`; there is no `commission` value, so either add one in a
-migration (0121 is the next) or use `salaries` with the description naming
-the payout); notify the member (`notifyUsers`, type `commission`). "Pay out"
-button on `member-dashboard.tsx` using `summariseMemberMoney`
-(`src/lib/loans.ts:75`) for the figures; a "Payouts" card listing
-`commission_payouts`. Hook it to `logSystemWrite()` once T5.3 exists.
-
-**40 · T4.9 Finance leftovers** — S. The forecast card and targets tile on
-Overview are DONE (in `e9ab085`). Left: **a unit test asserting Finance
-Overview's inflow total equals the Tax tab's total** — read how `TaxTab` in
-`finance-view.tsx` computes its total; if it does not go through
-`monthlyInflows()`, make it, then add the test to `finance-math.test.ts`;
-Expenses tab reusing `readReceipt` (`projects/[id]/actions.ts:848`) via a new
-`src/components/finance/receipt-reader.tsx` (the parse is
-`parseReceipt()` in `src/lib/ai/receipt.ts`, which now also holds the slip
-parsers); a small P&L strip on Overview (inflows − outflows − payouts by
-month, payouts from `commission_payouts` once 39 lands).
-
-### Track 5 — platform foundation (migration **0121**, not yet written)
+### Track 5 — platform foundation (migration **0121** exists — add sections to it)
 
 **41 · T5.1 `/settings` hub** — S. Cards to every settings surface (CRM
 settings `/crm/settings`, Delivery settings tab, pricing, WhatsApp
@@ -324,6 +287,9 @@ Five things the plan got wrong. They are all silent failures.
 | `markdownToHtml()` — the ONLY escaper for stored text | `src/lib/markdown.ts` |
 | `choosePortalChannel()` — the portal send ladder | `src/lib/portal-send-core.ts` |
 | `publishReview()` + `careers/sync` — the ONLY website writers | `src/lib/reviews/publish.ts` |
+| `composeStatement()` / `buildClientStatement()` — the client statement, every surface | `src/lib/statement.ts` |
+| `inflowLines()` → `monthlyInflows()` — money in, with and without words | `src/lib/finance-math.ts` |
+| `runCommissionPayout()` — the only thing that marks a commission `paid` | `src/app/(app)/team/[id]/actions.ts` |
 
 **Money rules that are now load-bearing:**
 
@@ -393,8 +359,9 @@ Five things the plan got wrong. They are all silent failures.
 - **`payment-slips` bucket policies** in 0120 grant authenticated read/insert/
   delete; the public routes upload through the service-role client. There is
   no anon policy, on purpose.
-- **Commission expense category**: `ExpenseCategory` has no `commission`
-  value. Decide in step 39 (a 0121 CHECK widening, or `salaries`).
+- **Commission expense category**: decided in step 39 — `commission`, via
+  the 0121 CHECK widening; `runCommissionPayout()` falls back to `salaries`
+  on a database without 0121.
 - **Slip idempotency on WhatsApp**: `fileWhatsAppSlip()` files on every
   classified slip; the 30-day reference/amount duplicate check marks a
   repeat as `duplicate` rather than dropping it.

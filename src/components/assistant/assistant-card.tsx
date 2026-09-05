@@ -17,6 +17,7 @@ import {
   Send,
   MessageCircle,
   CalendarClock,
+  Link2,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -26,6 +27,7 @@ import type {
   CardSendState,
   EmailCardData,
   InvoiceCardData,
+  PortalLinkCardData,
   ProposalCardData,
   SmsCardData,
   SocialPostCardData,
@@ -690,6 +692,96 @@ function ConfirmSendWhatsApp({
   );
 }
 
+const CHANNEL_LABEL: Record<PortalLinkCardData["likely_channel"], string> = {
+  whatsapp: "WhatsApp, with an “Open your project” button",
+  whatsapp_template: "WhatsApp, as the approved portal template",
+  sms: "SMS",
+  none: "nothing can send it — a task will be raised instead",
+};
+
+/** The client's project link (0119). Sent only on a tap, via the ladder. */
+function ConfirmPortalLink({
+  portal,
+  resolution,
+  onSendPortalLink,
+}: {
+  portal: PortalLinkCardData;
+  resolution?: CardResolution;
+  onSendPortalLink?: (portal: PortalLinkCardData) => Promise<SendInvoiceResult>;
+}) {
+  const [localState, setLocalState] = React.useState<SendState>("idle");
+  const [localError, setLocalError] = React.useState<string | null>(null);
+  const state = resolution?.state ?? localState;
+  const error = resolution?.error ?? localError;
+
+  const send = async () => {
+    setLocalState("sending");
+    setLocalError(null);
+    if (!onSendPortalLink) return;
+    const res = await onSendPortalLink(portal);
+    if (res.ok) setLocalState("sent");
+    else {
+      setLocalError(res.error || "Could not send the link.");
+      setLocalState("error");
+    }
+  };
+
+  return (
+    <>
+      <div className="flex items-center gap-2.5">
+        <div className="grid h-9 w-9 place-items-center rounded-xl bg-sky-50 text-sky-600">
+          <Link2 className="h-4.5 w-4.5" />
+        </div>
+        <div className="leading-tight">
+          <p className="text-sm font-semibold text-slate-900">
+            {portal.sent_before ? "Resend the project link" : "Send the project link"}
+          </p>
+          <p className="text-[11px] text-slate-400">
+            {portal.client_name} · {portal.to_display}
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-3 rounded-xl bg-slate-50 px-3 py-2.5">
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+          {portal.project_name}
+        </p>
+        <p className="mt-0.5 text-[13px] leading-relaxed text-slate-800">
+          Goes out on {CHANNEL_LABEL[portal.likely_channel]}.
+        </p>
+        {portal.note && (
+          <p className="mt-1.5 whitespace-pre-line text-[13px] text-slate-600">
+            “{portal.note}”
+          </p>
+        )}
+      </div>
+
+      {portal.channel_note && state !== "sent" && (
+        <p className="mt-2 flex items-start gap-1.5 text-[11px] text-amber-600">
+          <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          {portal.channel_note}
+        </p>
+      )}
+
+      {onSendPortalLink ? (
+        <ConfirmFooter
+          state={state}
+          error={error ?? null}
+          sentLabel={`Sent to ${portal.client_name}`}
+          sendLabel="Send the link"
+          hint="Same ladder as the project page: WhatsApp while their chat is open, the template after, SMS last."
+          onSend={send}
+          onCancel={() => setLocalState("cancelled")}
+        />
+      ) : (
+        <p className="mt-2.5 text-[13px] text-slate-400">
+          Open Arcus to send this.
+        </p>
+      )}
+    </>
+  );
+}
+
 /** A post lined up for the publish queue (0118). Queued only on a tap. */
 function ConfirmSocialPost({
   social,
@@ -949,6 +1041,7 @@ export function AssistantCardView({
   onSendEmail,
   onSendWhatsApp,
   onScheduleSocial,
+  onSendPortalLink,
 }: {
   card: AssistantCard;
   onSend: (
@@ -966,6 +1059,8 @@ export function AssistantCardView({
   onSendWhatsApp?: (whatsapp: WhatsAppCardData) => Promise<SendInvoiceResult>;
   /** 0118 — put a prepared post on the publish queue. */
   onScheduleSocial?: (social: SocialPostCardData) => Promise<SendInvoiceResult>;
+  /** 0119 — send a client their project link. */
+  onSendPortalLink?: (portal: PortalLinkCardData) => Promise<SendInvoiceResult>;
   /**
    * Approve a planned mission. Omitted on surfaces that cannot start one —
    * the card then shows the plan without an Approve button rather than a
@@ -1011,6 +1106,13 @@ export function AssistantCardView({
           social={card.social}
           resolution={card.resolution}
           onScheduleSocial={onScheduleSocial}
+        />
+      )}
+      {card.type === "confirm_portal_link" && (
+        <ConfirmPortalLink
+          portal={card.portal}
+          resolution={card.resolution}
+          onSendPortalLink={onSendPortalLink}
         />
       )}
       {card.type === "proposal" && (

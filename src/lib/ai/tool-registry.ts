@@ -209,6 +209,8 @@ const TOOL_LABELS: Record<string, string> = {
   log_project_time: "Logging the hours",
   set_project_blocked: "Marking what it is waiting on",
   complete_milestone: "Ticking the milestone off",
+  create_milestone: "Adding the milestone",
+  send_portal_link: "Lining up the project link",
 
   // Growth — @/lib/ai/tools-growth
   pipeline_report: "Reading the pipeline",

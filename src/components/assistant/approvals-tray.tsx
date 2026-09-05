@@ -199,6 +199,18 @@ export function ApprovalsTray({
                         return res;
                       })
                     }
+                    onSendPortalLink={
+                      chat.sendPortalLink &&
+                      (async (portal) => {
+                        const res = await chat.sendPortalLink!(portal);
+                        await record(
+                          approval.id,
+                          res.ok ? "sent" : "failed",
+                          res.error,
+                        );
+                        return res;
+                      })
+                    }
                     onApproveMission={chat.approveMission}
                   />
                   <button

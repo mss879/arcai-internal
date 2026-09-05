@@ -122,6 +122,27 @@ export type SocialPostCardData = {
   client_approved: boolean;
 };
 
+/**
+ * A client's project link, ready to go out (0119). The ladder in
+ * portal-send.ts decides the channel at send time; the card only says what
+ * it will most likely be, so the person knows what they are approving.
+ */
+export type PortalLinkCardData = {
+  project_id: string;
+  project_name: string;
+  client_name: string;
+  /** Pretty-printed number, or a note that there isn't one. */
+  to_display: string;
+  /** What the ladder will most likely use. */
+  likely_channel: "whatsapp" | "whatsapp_template" | "sms" | "none";
+  /** Why it is not WhatsApp, when it isn't. */
+  channel_note: string | null;
+  /** An optional line under the link. */
+  note: string | null;
+  /** True when the link has been sent before — a resend, not a first send. */
+  sent_before: boolean;
+};
+
 export type CardSendState = "idle" | "sending" | "sent" | "error" | "cancelled";
 
 /**
@@ -178,6 +199,16 @@ export type AssistantCard =
   | {
       type: "confirm_social_post";
       social: SocialPostCardData;
+      resolution?: CardResolution;
+    }
+  /**
+   * The client's project link, waiting for a tap (0119). Sending goes through
+   * sendPortalLink() with actor 'assistant', so it walks the same ladder and
+   * writes the same History line as a send from the project page.
+   */
+  | {
+      type: "confirm_portal_link";
+      portal: PortalLinkCardData;
       resolution?: CardResolution;
     }
   /** A saved proposal shown for review, with a PDF download (no send action). */

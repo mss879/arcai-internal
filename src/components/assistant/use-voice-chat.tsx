@@ -8,6 +8,7 @@ import type {
   AssistantCard,
   CardResolution,
   EmailCardData,
+  PortalLinkCardData,
   SmsCardData,
   SocialPostCardData,
   WhatsAppCardData,
@@ -185,6 +186,8 @@ const CONFIRM_CARD_TYPES = new Set<AssistantCard["type"]>([
   "confirm_send_whatsapp",
   // 0118
   "confirm_social_post",
+  // 0119
+  "confirm_portal_link",
 ]);
 
 /** Narrows to the cards that carry a `resolution`. */
@@ -341,6 +344,8 @@ export type VoiceChat = {
   sendWhatsApp?: (whatsapp: WhatsAppCardData) => Promise<SendInvoiceResult>;
   /** 0118 — put a prepared post on the publish queue. Optional like the two above. */
   scheduleSocial?: (social: SocialPostCardData) => Promise<SendInvoiceResult>;
+  /** 0119 — send a client their project link, through the same ladder as the page. */
+  sendPortalLink?: (portal: PortalLinkCardData) => Promise<SendInvoiceResult>;
   /** Start a mission the user approved (0103). */
   approveMission: (missionId: string) => Promise<SendInvoiceResult>;
   /** True while the mic re-opens itself after every reply (0104). */
@@ -1366,6 +1371,27 @@ export function useVoiceChat(): VoiceChat {
     [],
   );
 
+  const sendPortalLink = React.useCallback(
+    async (portal: PortalLinkCardData): Promise<SendInvoiceResult> => {
+      pendingConfirmRef.current = null;
+      try {
+        const res = await fetch("/api/assistant/send-portal-link", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ projectId: portal.project_id, note: portal.note }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data?.ok) {
+          return { ok: false, error: data?.error || "Could not send the link." };
+        }
+        return { ok: true };
+      } catch {
+        return { ok: false, error: "Could not reach the server." };
+      }
+    },
+    [],
+  );
+
   /**
    * If a confirm card is pending and the user's words are a clear yes or no,
    * resolve it right here — the send still happens through the same
@@ -1417,9 +1443,11 @@ export function useVoiceChat(): VoiceChat {
               ? await sendWhatsApp(card.whatsapp)
               : card.type === "confirm_social_post"
                 ? await scheduleSocial(card.social)
-                : card.type === "confirm_send"
-                  ? await sendInvoice(card.invoice.id, card.emails, card.message)
-                  : { ok: false as const, error: "Nothing to send." };
+                : card.type === "confirm_portal_link"
+                  ? await sendPortalLink(card.portal)
+                  : card.type === "confirm_send"
+                    ? await sendInvoice(card.invoice.id, card.emails, card.message)
+                    : { ok: false as const, error: "Nothing to send." };
 
       let reply: string;
       if (res.ok) {
@@ -1433,9 +1461,11 @@ export function useVoiceChat(): VoiceChat {
                 ? `Done — sent to ${card.whatsapp.to_display}. I've stepped back from that chat.`
                 : card.type === "confirm_social_post"
                   ? `Done — “${card.social.topic}” is on the queue for ${card.social.accounts.length} account${card.social.accounts.length === 1 ? "" : "s"}.`
-                  : card.type === "confirm_send"
-                    ? `Done — the invoice is on its way to ${card.emails.join(", ")}.`
-                    : "Done.";
+                  : card.type === "confirm_portal_link"
+                    ? `Done — ${card.portal.client_name} has their project link.`
+                    : card.type === "confirm_send"
+                      ? `Done — the invoice is on its way to ${card.emails.join(", ")}.`
+                      : "Done.";
       } else {
         updateCardResolution(pending, { state: "error", error: res.error });
         reply = `That didn't go through — ${res.error ?? "the send failed"}. You can tap Try again on the card.`;
@@ -1449,6 +1479,7 @@ export function useVoiceChat(): VoiceChat {
       scheduleSocial,
       sendEmail,
       sendInvoice,
+      sendPortalLink,
       sendSms,
       sendWhatsApp,
       speak,
@@ -2239,6 +2270,7 @@ export function useVoiceChat(): VoiceChat {
     sendEmail,
     sendWhatsApp,
     scheduleSocial,
+    sendPortalLink,
     approveMission,
     handsFree,
     setHandsFree,

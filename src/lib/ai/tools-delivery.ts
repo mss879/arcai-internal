@@ -34,7 +34,12 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { ToolSchema } from "@/lib/ai/openai";
 import type { ToolContext, ToolResult } from "@/lib/ai/tools";
+import type { PortalLinkCardData } from "@/lib/assistant-cards";
+import { getDeliverySettings, withinWaWindow } from "@/lib/delivery";
 import { applyProjectTemplate } from "@/lib/project-templates";
+import { isSmsConfigured } from "@/lib/sms";
+import { formatPhone, normalizePhone } from "@/lib/sms-utils";
+import { isWhatsAppConfigured } from "@/lib/whatsapp";
 import type {
   AppArea,
   Artifact,
@@ -300,6 +305,55 @@ export const DELIVERY_TOOLS: ToolSchema[] = [
           milestone: { type: "string", description: "The milestone's title, matched loosely." },
         },
         required: ["project", "milestone"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "create_milestone",
+      description:
+        "Add a milestone to a project's plan — 'add a design sign-off milestone to the Silva site for the 20th'. A milestone is a dated step the client can see on their portal; a launch check is an internal gate they never see. Adds only; nothing is sent.",
+      parameters: {
+        type: "object",
+        properties: {
+          project: { type: "string", description: "Project name, matched loosely." },
+          title: { type: "string", description: "The milestone's name." },
+          detail: { type: "string", description: "One line of what it means, optional." },
+          due_date: { type: "string", description: "YYYY-MM-DD, optional." },
+          kind: {
+            type: "string",
+            enum: ["milestone", "launch_check"],
+            description: "Defaults to milestone.",
+          },
+          owner: { type: "string", description: "Team member's name, optional." },
+          client_visible: {
+            type: "boolean",
+            description: "Show it on the client's portal. Defaults to true for a milestone.",
+          },
+        },
+        required: ["project", "title"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "send_portal_link",
+      description:
+        "Send (or resend) a client the link to their project portal, and show the user a confirmation first. Use for 'send Silva their project link', 'resend the tracking link to Musa'. IMPORTANT: this does NOT send it — the user must tap Send. It then goes out exactly as it would from the project page: WhatsApp while their chat is open, the approved template after, SMS last.",
+      parameters: {
+        type: "object",
+        properties: {
+          project: { type: "string", description: "Project name, matched loosely." },
+          note: {
+            type: "string",
+            description: "An optional line to add under the link, in the user's voice.",
+          },
+        },
+        required: ["project"],
         additionalProperties: false,
       },
     },
@@ -3943,11 +3997,216 @@ export async function executeDeliveryTool(
       return setBlocked(args, ctx);
     case "complete_milestone":
       return completeMilestone(args, ctx);
+    case "create_milestone":
+      return createMilestone(args, ctx);
+    case "send_portal_link":
+      return preparePortalLink(args, ctx);
     case "apply_project_template":
       return applyTemplate(args, ctx);
     default:
       return null;
   }
+}
+
+/**
+ * Add a milestone (0119). The same row the plan's "Add milestone" button
+ * writes, with the same two rules: a launch check is never client-visible
+ * and never texts anyone, and a new milestone lands at the end of the plan.
+ */
+async function createMilestone(
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+): Promise<ToolResult> {
+  const project = await findProjectRow(ctx.supabase, args.project);
+  if (!project) {
+    return { content: { ok: false, error: `No live project matching "${str(args.project)}".` } };
+  }
+  const title = str(args.title);
+  if (!title) return { content: { ok: false, error: "What is the milestone called?" } };
+
+  const kind = args.kind === "launch_check" ? "launch_check" : "milestone";
+  const due = str(args.due_date);
+  if (due && !/^\d{4}-\d{2}-\d{2}$/.test(due)) {
+    return { content: { ok: false, error: "The due date has to be YYYY-MM-DD." } };
+  }
+
+  let ownerId: string | null = null;
+  const ownerName = str(args.owner);
+  if (ownerName) {
+    const { data: people } = await ctx.supabase
+      .from("profiles")
+      .select("id, full_name")
+      .ilike("full_name", `%${ownerName}%`)
+      .limit(2);
+    if (!people?.length) {
+      return { content: { ok: false, error: `No team member called "${ownerName}".` } };
+    }
+    if (people.length > 1) {
+      return {
+        content: {
+          ok: false,
+          error: `More than one team member matches "${ownerName}".`,
+          candidates: people.map((p) => p.full_name),
+        },
+      };
+    }
+    ownerId = people[0].id;
+  }
+
+  const { data: last } = await ctx.supabase
+    .from("project_milestones")
+    .select("position")
+    .eq("project_id", project.id)
+    .eq("kind", kind)
+    .order("position", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const { data: row, error } = await ctx.supabase
+    .from("project_milestones")
+    .insert({
+      project_id: project.id,
+      title,
+      detail: str(args.detail) || null,
+      kind,
+      due_date: due || null,
+      owner_id: ownerId,
+      // A launch check is an internal gate; showing it to a client would read
+      // as a list of things that might be wrong with their site.
+      client_visible: kind === "launch_check" ? false : args.client_visible !== false,
+      notify_sms: false,
+      position: (last?.position ?? -1) + 1,
+    })
+    .select("id")
+    .single();
+  if (error) return { content: { ok: false, error: error.message } };
+
+  return {
+    content: {
+      ok: true,
+      project: project.name,
+      milestone: title,
+      kind,
+      due_date: due || null,
+      client_visible: kind === "launch_check" ? false : args.client_visible !== false,
+      note: "Added to the plan. Nothing was sent to the client.",
+    },
+    event: {
+      kind: "created",
+      label: `Milestone: ${title}`,
+      href: `/projects/${project.id}?tab=plan`,
+    },
+  };
+}
+
+/**
+ * Line up the client's portal link (0119) and hand the decision to a person.
+ *
+ * Only builds the card. The send happens in /api/assistant/send-portal-link,
+ * through sendPortalLink() with actor 'assistant', which walks the same
+ * ladder the project page does. The channel shown here is the ladder's
+ * likely answer from the same five facts, so the person knows what they are
+ * approving — but the route decides again at the moment of sending.
+ */
+async function preparePortalLink(
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+): Promise<ToolResult> {
+  const found = await findProjectRow(ctx.supabase, args.project);
+  if (!found) {
+    return { content: { ok: false, error: `No live project matching "${str(args.project)}".` } };
+  }
+  const { data: project } = await ctx.supabase
+    .from("projects")
+    .select(
+      "id, name, share_token, portal_revoked_at, portal_last_sent_at, client:clients(name, phone)",
+    )
+    .eq("id", found.id)
+    .maybeSingle();
+  if (!project) return { content: { ok: false, error: "That project no longer exists." } };
+  if (!project.share_token) {
+    return { content: { ok: false, error: `${project.name} has no portal link yet.` } };
+  }
+  if (project.portal_revoked_at) {
+    return {
+      content: {
+        ok: false,
+        error: `${project.name}'s portal link is revoked — re-open it from the project's Client tab first.`,
+      },
+    };
+  }
+  const client = (project.client as unknown as { name: string; phone: string | null } | null) ?? null;
+  if (!client) {
+    return { content: { ok: false, error: `${project.name} has no client linked, so there is nobody to send it to.` } };
+  }
+  const phone = client.phone?.trim() ? normalizePhone(client.phone) : null;
+  if (!phone?.ok) {
+    return {
+      content: {
+        ok: false,
+        error: `${client.name} has no usable phone number on their client record. Add one, then try again.`,
+      },
+    };
+  }
+
+  // The ladder's likely rung, from the same facts sendPortalLink() reads.
+  let likely: PortalLinkCardData["likely_channel"] = "none";
+  let channelNote: string | null = null;
+  const waConfigured = isWhatsAppConfigured();
+  const { data: wa } = waConfigured
+    ? await ctx.supabase
+        .from("wa_contacts")
+        .select("do_not_contact, last_inbound_at")
+        .eq("wa_id", phone.value)
+        .maybeSingle()
+    : { data: null };
+  if (wa && !wa.do_not_contact && withinWaWindow(wa.last_inbound_at)) {
+    likely = "whatsapp";
+  } else if (wa && !wa.do_not_contact) {
+    const settings = await getDeliverySettings(ctx.supabase).catch(() => null);
+    if (settings?.portal_template_name?.trim()) {
+      likely = "whatsapp_template";
+    } else {
+      likely = isSmsConfigured() ? "sms" : "none";
+      channelNote =
+        "Their WhatsApp chat has been quiet for over 24h and no portal template is set, so it goes by SMS.";
+    }
+  } else {
+    likely = isSmsConfigured() ? "sms" : "none";
+    channelNote = wa?.do_not_contact
+      ? "They opted out of WhatsApp, so it goes by SMS."
+      : waConfigured
+        ? "They haven't written to us on WhatsApp, so it goes by SMS."
+        : "WhatsApp isn't configured, so it goes by SMS.";
+  }
+  if (likely === "none") {
+    channelNote = "Neither WhatsApp nor SMS can send this — a task will be raised for the team.";
+  }
+
+  const portal: PortalLinkCardData = {
+    project_id: project.id,
+    project_name: project.name,
+    client_name: client.name,
+    to_display: formatPhone(phone.value),
+    likely_channel: likely,
+    channel_note: channelNote,
+    note: str(args.note) || null,
+    sent_before: Boolean(project.portal_last_sent_at),
+  };
+
+  return {
+    content: {
+      ok: true,
+      awaiting_user_confirmation: true,
+      project: project.name,
+      client: client.name,
+      to: portal.to_display,
+      likely_channel: likely,
+      sent_before: portal.sent_before,
+      note: "Shown to the user for confirmation. Nothing is sent until the user taps Send. Do not say it has been sent.",
+    },
+    card: { type: "confirm_portal_link", portal },
+  };
 }
 
 /**

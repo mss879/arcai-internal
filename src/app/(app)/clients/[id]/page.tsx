@@ -444,6 +444,8 @@ export default async function ClientPage({
         rewardNote: r.reward_note,
       })),
     },
+    // T4.6 — the statement link (0117); null until the migration is applied.
+    statement: { token: client.statement_token ?? null },
   };
 
   return <ClientDetail view={view} />;

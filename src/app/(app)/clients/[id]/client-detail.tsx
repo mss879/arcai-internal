@@ -8,6 +8,7 @@ import {
   ArrowLeft,
   Building2,
   CalendarClock,
+  Download,
   ExternalLink,
   FileSignature,
   FileText,
@@ -48,7 +49,11 @@ import { cn, formatCurrency } from "@/lib/utils";
 import { useRealtimeSyncTables } from "@/hooks/use-realtime-sync";
 import { ClientFormModal } from "@/app/(app)/clients/clients-view";
 import { ComposeEmailModal } from "@/components/email/compose-email-modal";
+import { Input } from "@/components/ui/input";
 import { firstNameOf } from "@/lib/email-templates";
+import { toast } from "sonner";
+
+import { sendStatementByWhatsApp } from "./actions";
 
 /**
  * The client's page (0112) — every record about one client in one place.
@@ -212,6 +217,8 @@ export type ClientView = {
       rewardNote: string | null;
     }[];
   };
+  /** T4.6 — the statement link (0117). Null before the migration. */
+  statement: { token: string | null };
 };
 
 type Tab = "overview" | "projects" | "money" | "conversations" | "meetings" | "timeline";
@@ -627,6 +634,8 @@ function MoneyTab({ view }: { view: ClientView }) {
   const { quotes, invoices, plans } = view;
   return (
     <div className="space-y-6">
+      <StatementCard view={view} />
+
       <Section title="Quotes" icon={<FileText className="h-4 w-4 text-violet-500" />} empty={quotes.length === 0 ? "No quotes for this client." : null}>
         <ul className="divide-y divide-slate-100">
           {quotes.map((q) => (
@@ -699,6 +708,104 @@ function MoneyTab({ view }: { view: ClientView }) {
         </ul>
       </Section>
     </div>
+  );
+}
+
+/**
+ * T4.6 — the client's statement of account.
+ *
+ * One document instead of a tab full of rows: every invoice and every
+ * payment, per currency, with a running balance. Download is a plain link
+ * to the authed PDF route; Email goes through the compose modal so it lands
+ * in the log; WhatsApp sends the PDF itself while the window is open and the
+ * link otherwise. The dates are optional — blank is the whole history.
+ */
+function StatementCard({ view }: { view: ClientView }) {
+  const router = useRouter();
+  const { client } = view;
+  const [from, setFrom] = React.useState("");
+  const [to, setTo] = React.useState("");
+  const [emailOpen, setEmailOpen] = React.useState(false);
+  const [sending, setSending] = React.useState(false);
+
+  const qs = new URLSearchParams();
+  if (from) qs.set("from", from);
+  if (to) qs.set("to", to);
+  const suffix = qs.toString() ? `?${qs}` : "";
+  const pdfHref = `/api/statements/${client.id}/pdf${suffix}`;
+  const publicUrl =
+    view.statement.token && view.baseUrl
+      ? `${view.baseUrl}/public/statement/${view.statement.token}${suffix}`
+      : null;
+  const periodLabel = from || to ? `${from || "the beginning"} → ${to || "today"}` : "the whole history";
+
+  async function whatsapp() {
+    setSending(true);
+    const res = await sendStatementByWhatsApp(client.id, { from: from || null, to: to || null });
+    setSending(false);
+    if (res.ok) {
+      toast.success(res.channel === "whatsapp" ? "Sent on WhatsApp as a PDF." : "Their WhatsApp window is closed — the link went by SMS.");
+      router.refresh();
+    } else {
+      toast.error(res.error);
+    }
+  }
+
+  return (
+    <Section title="Statement of account" icon={<Receipt className="h-4 w-4 text-primary-600" />} empty={null}>
+      <div className="space-y-3 px-5 py-4">
+        <p className="text-xs text-slate-500">
+          Every invoice and every payment on one page, with a running balance. Leave the dates blank for the full history.
+        </p>
+        <div className="flex flex-wrap items-end gap-2">
+          <label className="space-y-1 text-[11px] font-medium text-slate-500">
+            From
+            <Input type="date" value={from} max={to || undefined} onChange={(e) => setFrom(e.target.value)} className="h-9 w-40" />
+          </label>
+          <label className="space-y-1 text-[11px] font-medium text-slate-500">
+            To
+            <Input type="date" value={to} min={from || undefined} onChange={(e) => setTo(e.target.value)} className="h-9 w-40" />
+          </label>
+          <a href={pdfHref} target="_blank" rel="noreferrer">
+            <Button variant="outline" size="sm">
+              <Download className="h-3.5 w-3.5" /> Download PDF
+            </Button>
+          </a>
+          <Button variant="outline" size="sm" disabled={!client.email} onClick={() => setEmailOpen(true)} title={client.email ? undefined : "No email on their record"}>
+            <Mail className="h-3.5 w-3.5" /> Email
+          </Button>
+          <Button variant="outline" size="sm" disabled={!client.phone || sending} loading={sending} onClick={whatsapp} title={client.phone ? undefined : "No phone on their record"}>
+            <MessageCircle className="h-3.5 w-3.5 text-emerald-600" /> WhatsApp
+          </Button>
+          {publicUrl && <CopyButton value={publicUrl} label="Copy their link" />}
+        </div>
+        {publicUrl && (
+          <p className="text-[11px] text-slate-400">
+            Their link opens the statement for {periodLabel}, and is on their portal as well.
+          </p>
+        )}
+      </div>
+
+      <ComposeEmailModal
+        open={emailOpen}
+        onClose={() => setEmailOpen(false)}
+        title="Email the statement"
+        to={client.email ?? ""}
+        subject={`Statement of account — ${client.name}`}
+        body={`Hi ${firstNameOf(client.name)},\n\nPlease find your statement of account attached, covering ${periodLabel}. It lists every invoice we have raised and every payment we have received, with the balance as it stands today.\n\nIf anything on it looks different from your own records, reply to this email and we will go through it together.\n\nThank you,\nARC AI`}
+        links={{ clientId: client.id }}
+        attachStatement={{ clientId: client.id, from: from || null, to: to || null }}
+        attachmentLabel="Statement of account attached as a PDF"
+        tokens={{
+          name: firstNameOf(client.name),
+          full_name: client.name,
+          company: client.company ?? "",
+          email: client.email ?? "",
+          phone: client.phone ?? "",
+        }}
+        onSent={() => router.refresh()}
+      />
+    </Section>
   );
 }
 

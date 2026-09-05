@@ -110,6 +110,7 @@ export function PortalHome({
   meetings = [],
   bookingUrl = null,
   referral = null,
+  statementUrl = null,
 }: {
   clientName: string;
   company: string | null;
@@ -122,6 +123,8 @@ export function PortalHome({
   meetings?: PortalMeeting[];
   bookingUrl?: string | null;
   referral?: { code: string; link: string } | null;
+  /** T4.6 — every invoice and payment with a running balance. */
+  statementUrl?: string | null;
   appUrl: string;
 }) {
   const [signingOut, setSigningOut] = React.useState(false);
@@ -176,6 +179,25 @@ export function PortalHome({
             tone={owed > 0 ? "amber" : "good"}
           />
         </div>
+
+        {/* T4.6 — the account, as one document */}
+        {statementUrl && (
+          <Link
+            href={statementUrl}
+            className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-5 py-3.5 shadow-sm transition hover:bg-slate-50"
+          >
+            <span className="flex items-center gap-3">
+              <Receipt className="h-4 w-4 text-primary-600" />
+              <span>
+                <span className="block text-sm font-semibold text-slate-800">Statement of account</span>
+                <span className="block text-xs text-slate-400">
+                  Every invoice and every payment, with a running balance. Download it as a PDF.
+                </span>
+              </span>
+            </span>
+            <ArrowUpRight className="h-4 w-4 shrink-0 text-slate-400" />
+          </Link>
+        )}
 
         {/* Projects */}
         <section>

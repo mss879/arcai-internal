@@ -53,6 +53,8 @@ export type ComposeEmailProps = {
   /** Attach a saved document, rendered server-side from the record. */
   attachInvoiceId?: string | null;
   attachProposalId?: string | null;
+  /** T4.6 — the client's statement of account for a period. */
+  attachStatement?: ComposeEmailInput["attachStatement"];
   /** A button under the body — a quote link, a portal link. */
   cta?: { href: string; label: string } | null;
   /** Values for {{tokens}} in a template. */
@@ -72,6 +74,7 @@ export function ComposeEmailModal({
   links,
   attachInvoiceId = null,
   attachProposalId = null,
+  attachStatement = null,
   cta = null,
   tokens,
   attachmentLabel,
@@ -111,6 +114,7 @@ export function ComposeEmailModal({
       ...links,
       attachInvoiceId,
       attachProposalId,
+      attachStatement,
       cta,
     });
     setSending(false);
@@ -123,7 +127,7 @@ export function ComposeEmailModal({
     }
   }
 
-  const attached = attachInvoiceId || attachProposalId;
+  const attached = attachInvoiceId || attachProposalId || attachStatement;
 
   return (
     <Modal

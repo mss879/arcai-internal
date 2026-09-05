@@ -200,6 +200,7 @@ const TOOL_LABELS: Record<string, string> = {
   mark_invoice_paid: "Lining up the payment",
   create_notice: "Writing the notice",
   create_quote: "Writing the quote",
+  client_statement: "Reading the client's statement",
 
   // Delivery — @/lib/ai/tools-delivery
   project_dossier: "Reading the whole project",

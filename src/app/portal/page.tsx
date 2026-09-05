@@ -37,7 +37,7 @@ export default async function PortalHomePage() {
 
   const { data: client } = await supabase
     .from("clients")
-    .select("id, name, company")
+    .select("id, name, company, statement_token")
     .eq("id", clientId)
     .maybeSingle();
   // The client record was deleted while they held a session.
@@ -237,6 +237,8 @@ export default async function PortalHomePage() {
       meetings={meetings}
       bookingUrl={bookingUrl}
       referral={referralCode && referralUrl ? { code: referralCode, link: referralUrl } : null}
+      // T4.6 — their statement of account, on the token that is theirs alone.
+      statementUrl={client.statement_token ? `/public/statement/${client.statement_token}` : null}
       appUrl={appLink("") ?? ""}
     />
   );

@@ -46,6 +46,10 @@ export default defineConfig({
       // 0119 — the one definition of "money in". Three screens read it, and
       // the moment two of them disagree the whole page is untrustworthy.
       "src/lib/finance-math.test.ts",
+      // T4.6 — the client's statement. Its closing balance is a number on a
+      // letterhead their accountant reconciles against; the ways it can be
+      // wrong (money counted twice, money missed) are all silent.
+      "src/lib/statement.test.ts",
     ],
   },
 });

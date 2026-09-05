@@ -48,6 +48,11 @@ export type ComposeEmailInput = {
   attachInvoiceId?: string | null;
   /** Attach this proposal's PDF. */
   attachProposalId?: string | null;
+  /**
+   * T4.6 — attach this client's statement of account, rendered fresh from
+   * the books for the period given. Makes the log row's kind `statement`.
+   */
+  attachStatement?: { clientId: string; from?: string | null; to?: string | null } | null;
   /** A button under the body — a quote or portal link. */
   cta?: { href: string; label: string } | null;
   templateId?: string | null;
@@ -132,13 +137,34 @@ export async function sendComposedEmail(
     }
   }
 
+  if (input.attachStatement?.clientId) {
+    try {
+      const { buildClientStatement } = await import("@/lib/statement");
+      const { renderStatementPdf, statementFilename } = await import("@/lib/statement-pdf");
+      const statement = await buildClientStatement(supabase, input.attachStatement.clientId, {
+        from: input.attachStatement.from ?? null,
+        to: input.attachStatement.to ?? null,
+      });
+      if (!statement) return { ok: false, error: "That client no longer exists." };
+      attachments.push({
+        filename: statementFilename(statement),
+        content: await renderStatementPdf(statement),
+      });
+    } catch (e) {
+      return {
+        ok: false,
+        error: e instanceof Error ? e.message : "Could not render the statement PDF.",
+      };
+    }
+  }
+
   const res = await sendAndLogEmail(supabase, {
     to,
     cc,
-    kind: "compose",
+    kind: input.attachStatement ? "statement" : "compose",
     actor: "team",
     sentBy: profile.id,
-    clientId: input.clientId ?? null,
+    clientId: input.clientId ?? input.attachStatement?.clientId ?? null,
     leadId: input.leadId ?? null,
     projectId: input.projectId ?? null,
     invoiceId,

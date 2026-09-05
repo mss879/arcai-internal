@@ -58,6 +58,7 @@ import type {
   RecurringIncomeCategory,
 } from "@/lib/database.types";
 import { attachRepayments, loanBalance, loanRepaid, summariseMemberMoney } from "@/lib/loans";
+import { buildClientStatement } from "@/lib/statement";
 import { projectCostsByProject } from "@/lib/project-costs";
 import {
   balanceDue,
@@ -336,6 +337,24 @@ export const FINANCE_TOOLS: ToolSchema[] = [
           notes: { type: "string", description: "Notes printed on the quote." },
         },
         required: ["customer_name", "items"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "client_statement",
+      description:
+        "One client's statement of account: every invoice raised and every payment received, per currency, with opening and closing balances and the invoices still open. Use for 'what does Nimal owe us', 'show me Perera Traders' statement', 'how much has that client paid us in total', 'reconcile this client' or before a payment conversation. Read-only — the statement is downloaded, emailed or sent on WhatsApp from the client's page (Money tab).",
+      parameters: {
+        type: "object",
+        properties: {
+          client: { type: "string", description: "The client's name or company (contains-match)." },
+          from: { type: "string", description: "Period start, YYYY-MM-DD (inclusive). Omit for the whole history." },
+          to: { type: "string", description: "Period end, YYYY-MM-DD (inclusive). Defaults to today." },
+        },
+        required: ["client"],
         additionalProperties: false,
       },
     },
@@ -2659,6 +2678,8 @@ export async function executeFinanceTool(
       return createNotice(args, ctx);
     case "create_quote":
       return createQuote(args, ctx);
+    case "client_statement":
+      return clientStatement(args, ctx);
     default:
       return null;
   }
@@ -2855,5 +2876,152 @@ async function createQuote(
       label: `Quote ${saved.quote_number} — ${client?.name ?? customer}`,
       href: "/quotes",
     },
+  };
+}
+
+// ---- client_statement (T4.6) ---------------------------------------------
+
+/**
+ * A client's statement of account — the same document the client page
+ * downloads and the portal shows, read through `buildClientStatement()` so
+ * the figure the assistant quotes and the figure on the PDF can never
+ * disagree. Per currency, never summed across.
+ */
+async function clientStatement(
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+): Promise<ToolResult> {
+  const { supabase } = ctx;
+  const query = safeLike(str(args.client));
+  if (!query) {
+    return { content: { ok: false, error: "Say which client — a name or a company." } };
+  }
+
+  const { data: matches, error } = await supabase
+    .from("clients")
+    .select("id, name, company")
+    .or(`name.ilike.%${query}%,company.ilike.%${query}%`)
+    .order("name")
+    .limit(5);
+  if (error) return { content: { ok: false, error: error.message } };
+  const client = matches?.[0];
+  if (!client) {
+    return { content: { ok: false, reason: `No client matching "${query}". Say so rather than guessing a figure.` } };
+  }
+
+  const from = /^\d{4}-\d{2}-\d{2}$/.test(str(args.from)) ? str(args.from) : null;
+  const to = /^\d{4}-\d{2}-\d{2}$/.test(str(args.to)) ? str(args.to) : null;
+  const statement = await buildClientStatement(supabase, client.id, { from, to });
+  if (!statement) return { content: { ok: false, reason: "That client no longer exists." } };
+
+  const href = `/clients/${client.id}`;
+  const periodLabel = statement.period.from
+    ? `${statement.period.from} to ${statement.period.to}`
+    : `everything to ${statement.period.to}`;
+  const lineColumns: ArtifactColumn[] = [
+    { key: "date", label: "Date", format: "date" },
+    { key: "reference", label: "Reference" },
+    { key: "description", label: "Details", secondary: true },
+    { key: "invoiced", label: "Invoiced", format: "money", align: "right" },
+    { key: "received", label: "Received", format: "money", align: "right" },
+    { key: "balance", label: "Balance", format: "money", align: "right" },
+  ];
+
+  const artifacts: Artifact[] = statement.currencies.flatMap((block) => {
+    const cur = block.currency;
+    return [
+      recordArtifact({
+        title: `Statement — ${client.name}${statement.currencies.length > 1 ? ` (${cur})` : ""}`,
+        subtitle: periodLabel,
+        summary: `${cur} ${money(block.closing)} ${block.closing > 0 ? "still to pay" : block.closing < 0 ? "in credit" : "— settled"}.`,
+        href,
+        area: "clients",
+        fields: [
+          { label: "Opening balance", value: money(block.opening), format: "money" },
+          { label: "Invoiced", value: money(block.invoiced), format: "money" },
+          { label: "Received", value: money(block.received), format: "money", tone: "positive" },
+          {
+            label: block.closing < 0 ? "Credit balance" : "Balance due",
+            value: money(Math.abs(block.closing)),
+            format: "money",
+            tone: block.closing > 0 ? "warning" : "positive",
+          },
+          { label: "Open invoices", value: block.outstanding.length, format: "number" },
+          {
+            label: "Overdue",
+            value: block.outstanding.filter((i) => i.overdue).length,
+            format: "number",
+            tone: block.outstanding.some((i) => i.overdue) ? "danger" : "neutral",
+          },
+        ],
+        actions: [
+          { label: "Open the client", href, icon: "User" },
+          { label: "Send it to them", href: `${href}?tab=money`, icon: "Send" },
+        ],
+      }),
+      tableArtifact({
+        title: `Statement lines${statement.currencies.length > 1 ? ` (${cur})` : ""}`,
+        subtitle: `${client.name} · ${periodLabel}`,
+        href,
+        area: "clients",
+        columns: lineColumns,
+        rows: block.lines.map((l) => ({
+          id: l.id,
+          tone: l.kind === "invoice" ? ("neutral" as const) : ("positive" as const),
+          cells: {
+            date: l.date,
+            reference: l.reference,
+            description: l.description,
+            invoiced: l.debit || null,
+            received: l.credit || null,
+            balance: l.balance,
+          },
+        })),
+        total_label: "Closing balance",
+        total_value: block.closing,
+        total_format: "money" as const,
+        ...(block.opening ? { footnote: `Opening balance ${cur} ${money(block.opening)} carried in from before ${statement.period.from}.` } : {}),
+      }),
+    ];
+  });
+
+  return {
+    content: {
+      ok: true,
+      client: { id: client.id, name: client.name, company: client.company },
+      period: statement.period,
+      other_matches: (matches ?? []).slice(1).map((m) => m.name),
+      currencies: statement.currencies.map((block) => ({
+        currency: block.currency,
+        opening: money(block.opening),
+        invoiced: money(block.invoiced),
+        received: money(block.received),
+        closing: money(block.closing),
+        open_invoices: block.outstanding.map((i) => ({
+          number: i.number,
+          date: i.date,
+          due_date: i.dueDate,
+          total: money(i.total),
+          paid: money(i.paid),
+          balance: money(i.balance),
+          overdue: i.overdue,
+        })),
+        lines_total: block.lines.length,
+        // The most recent movement; the whole list is in the preview canvas.
+        recent_lines: block.lines.slice(-15).map((l) => ({
+          date: l.date,
+          reference: l.reference,
+          description: l.description,
+          invoiced: l.debit || null,
+          received: l.credit || null,
+          balance: l.balance,
+        })),
+      })),
+      note:
+        "Closing = opening + invoiced − received, per currency; nothing is converted between currencies. A positive closing balance is what the client owes; negative is credit. To send it, open the client's Money tab — Download, Email or WhatsApp.",
+      open_href: href,
+    },
+    event: { kind: "read", label: `Statement — ${client.name}`, href },
+    artifacts,
   };
 }

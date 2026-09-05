@@ -2,8 +2,8 @@
 
 **Read this first, then `AGENTS.md` and `docs/projects-roadmap-handoff.md` §2/§4.**
 Updated 2026-09-06 at commit `HEAD` (see `git log -1`; last feature commit:
-"/api/health, and one row per fault"). Paste this into a new chat, or say:
-*"Read `docs/next-wave-handoff.md` and continue from step 45."*
+"the right to be forgotten, and the right to a copy"). Paste this into a new chat, or say:
+*"Read `docs/next-wave-handoff.md` and continue from step 46."*
 
 This file is refreshed after EVERY committed step, so it is always the
 current handover — if a chat is cut off, the previous step's entry here is
@@ -13,8 +13,8 @@ complete and the next step has not started.
 
 ## 1. Where things stand
 
-**44 of 46 build steps are done (Track 4 is complete), plus an audit-and-fix
-pass over the first 26. 52 commits on `arc_ai_crm_system` `main` ahead of
+**45 of 46 build steps are done (Track 4 is complete), plus an audit-and-fix
+pass over the first 26. 54 commits on `arc_ai_crm_system` `main` ahead of
 `origin/main`, plus 2 on `arc_ai_website`. Nothing is pushed to either
 remote.**
 
@@ -62,7 +62,8 @@ the file as it is now, not a copy taken earlier.
 holds §1 (the `expenses` category CHECK widened with `commission`) and §2
 (`profiles.capabilities` + CHECK + the all-four backfill for members, and
 the `capabilities_enforced` seed row), §3 (`system_events` + policies) and
-§4 (`error_events` + policies); step 45 ADDS §5 (`clients.anonymised_at`).
+§4 (`error_events` + policies) and §5 (`clients.anonymised_at`). Step 46
+needs no SQL.
 Apply it last, as the file stands when you push.
 
 `arc_ai_website` has its own two commits (`39cb034` UTM capture, `d2b9d1c`
@@ -130,7 +131,7 @@ client-login link) and needs no migration.
 
 ---
 
-### Track 5 — platform foundation (4 of 6)
+### Track 5 — platform foundation (5 of 6)
 
 | Commit | Feature |
 | --- | --- |
@@ -138,6 +139,7 @@ client-login link) and needs no migration.
 | `(step 42)` | **T5.2** Capabilities: `src/lib/capabilities.ts` (pure `hasCapability()`, `CAPABILITIES`, `normaliseCapabilities`), `capabilities-server.ts` (`capabilitiesEnforced()` via the service-role client, `actorHasCapability()`, `capabilityAudienceIds()`), `auth.ts` `requireCapability()` / `assertCapability()`; `NavItem.capability` + the sidebar filter (committed as an index-only hunk); guards on 9 pages; `recordPayment()` choke point; `notifyFinance()` = finance audience in `payments.ts` and `slips.ts`; member editor checkboxes; Permissions panel on `/settings`; `docs/ops.md` "RLS-lite". Enforcement is OFF until an admin switches it on. |
 | `(step 43)` | **T5.3** `system_events` (0121 §3) + `src/lib/system-audit.ts` `logSystemWrite()` (best-effort) / `listSystemEvents()`; called from `recordPayment()` (null actor), `generateProjectInvoice()`, `createRecurringInvoice()`, `processDueSocialPosts()`, `publishReview()`, `publishVacancy()`, `createSlip()` (whatsapp), `runCommissionPayout()`. Team page "System activity" (`team/system-activity.tsx`) merges `member_changes` + `system_events`, 7 days, people/system filter. |
 | `(step 44)` | **T5.5** `/api/health` (public + machine, rate-limited; DB ping, `automation_tick` + new `wa_agent_tick` stamps, env booleans, open-fault count → 200/503). `error_events` (0121 §4) + `src/lib/errors.ts` `captureError()` (fingerprinted, counted, admin notify on first sighting / 6h, raw Sentry envelope when `SENTRY_DSN`), hooked into the three tick routes; `src/app/error.tsx` + `global-error.tsx` → `POST /api/errors`; Errors panel on `/settings` (resolve / reopen); `docs/ops.md` runbook paragraph. |
+| `(step 45)` | **T5.7** `src/lib/client-erasure.ts`: `eraseClient(db, id, mode, {actorId})` (anonymise scrubs clients + wa_contacts/wa_messages + sms_messages + leads + email_messages + meeting_bookings + agreements + payment_slips objects/parse + client_login_codes, re-mints `statement_token`, stamps `anonymised_at`; delete refused with invoices/payments) and `exportClientData()` (zip via jszip). `GET /api/clients/[id]/export` (admin). `deleteClient()` on the list is now the erasure; `eraseClientAction()` with the typed name; "Export data" / "Erase…" on the client page. Both logged to `system_events` (job `gdpr`). |
 
 ## 3. The audit of steps 0–26
 
@@ -166,22 +168,11 @@ UI — the plan puts it under `/settings` (step 41).
 
 ---
 
-## 4. What remains — steps 45 to 46
+## 4. What remains — step 46
 
 Numbers are the original plan's sequencing table.
 
 ### Track 5 — platform foundation (migration **0121** exists — add sections to it)
-
-**45 · T5.7 GDPR** — S. `clients.anonymised_at`;
-`src/lib/client-erasure.ts eraseClient(db, id, mode)` replacing the bare
-delete at `clients/actions.ts:66` — scrub `clients` name/email/phone/company/
-notes, `wa_contacts` names + `wa_messages` bodies, mask
-`sms_messages.to_number`, lead contact fields, `email_messages`, and now
-also `payment_slips` (delete the objects in `payment-slips` and null the
-row's `parsed`/`reference`) and `agreements.signer_email`/`signed_name`;
-hard delete only with no invoices/payments. `exportClientData()` → zip
-(`jszip` is already a dependency) via `/api/clients/[id]/export`. Typed-name
-confirm on the client page. Logged to `system_events`.
 
 **46 · T5.8 Backups, dead code, `docs/api.md`** — S. `docs/ops.md`
 (Supabase daily backups / PITR; storage is not in `pg_dump`; the
@@ -252,6 +243,7 @@ Five things the plan got wrong. They are all silent failures.
 | `runCommissionPayout()` — the only thing that marks a commission `paid` | `src/app/(app)/team/[id]/actions.ts` |
 | `logSystemWrite()` — every write nobody clicked for | `src/lib/system-audit.ts` |
 | `captureError()` — every failure, one row per fault | `src/lib/errors.ts` |
+| `eraseClient()` / `exportClientData()` — forgetting a person, and their copy | `src/lib/client-erasure.ts` |
 
 **Money rules that are now load-bearing:**
 

@@ -2,8 +2,8 @@
 
 **Read this first, then `AGENTS.md` and `docs/projects-roadmap-handoff.md` §2/§4.**
 Updated 2026-09-06 at commit `HEAD` (see `git log -1`; last feature commit:
-"what the system wrote on its own, beside what people changed"). Paste this into a new chat, or say:
-*"Read `docs/next-wave-handoff.md` and continue from step 44."*
+"/api/health, and one row per fault"). Paste this into a new chat, or say:
+*"Read `docs/next-wave-handoff.md` and continue from step 45."*
 
 This file is refreshed after EVERY committed step, so it is always the
 current handover — if a chat is cut off, the previous step's entry here is
@@ -13,8 +13,8 @@ complete and the next step has not started.
 
 ## 1. Where things stand
 
-**43 of 46 build steps are done (Track 4 is complete), plus an audit-and-fix
-pass over the first 26. 50 commits on `arc_ai_crm_system` `main` ahead of
+**44 of 46 build steps are done (Track 4 is complete), plus an audit-and-fix
+pass over the first 26. 52 commits on `arc_ai_crm_system` `main` ahead of
 `origin/main`, plus 2 on `arc_ai_website`. Nothing is pushed to either
 remote.**
 
@@ -61,8 +61,8 @@ the file as it is now, not a copy taken earlier.
 **`0121_platform_foundation.sql` is new and additive** (no backfill). It
 holds §1 (the `expenses` category CHECK widened with `commission`) and §2
 (`profiles.capabilities` + CHECK + the all-four backfill for members, and
-the `capabilities_enforced` seed row) and §3 (`system_events` + policies);
-steps 44–45 ADD sections to it (`error_events`, `clients.anonymised_at`).
+the `capabilities_enforced` seed row), §3 (`system_events` + policies) and
+§4 (`error_events` + policies); step 45 ADDS §5 (`clients.anonymised_at`).
 Apply it last, as the file stands when you push.
 
 `arc_ai_website` has its own two commits (`39cb034` UTM capture, `d2b9d1c`
@@ -130,13 +130,14 @@ client-login link) and needs no migration.
 
 ---
 
-### Track 5 — platform foundation (3 of 6)
+### Track 5 — platform foundation (4 of 6)
 
 | Commit | Feature |
 | --- | --- |
 | `(step 41)` | **T5.1** `/settings` hub (`src/app/(app)/settings/`): cards to every module's settings, forms for `app_settings.lead_form` / `outreach` / `web_chat_auto_lead`, the social-accounts connect form (first writer of `social_accounts`; `encryptToken()`, refuses without `SOCIAL_TOKEN_KEY`), `document_counters` read-only + forward-only "set next number" (service-role client behind `requireAdmin()` — the table has no RLS policies). Nav item (adminOnly), topbar gear, app-map entry. Delivery / WhatsApp / Content / Automation / Intelligence views take `?tab=` (`initialTab` prop, validated against `TAB_KEYS`). |
 | `(step 42)` | **T5.2** Capabilities: `src/lib/capabilities.ts` (pure `hasCapability()`, `CAPABILITIES`, `normaliseCapabilities`), `capabilities-server.ts` (`capabilitiesEnforced()` via the service-role client, `actorHasCapability()`, `capabilityAudienceIds()`), `auth.ts` `requireCapability()` / `assertCapability()`; `NavItem.capability` + the sidebar filter (committed as an index-only hunk); guards on 9 pages; `recordPayment()` choke point; `notifyFinance()` = finance audience in `payments.ts` and `slips.ts`; member editor checkboxes; Permissions panel on `/settings`; `docs/ops.md` "RLS-lite". Enforcement is OFF until an admin switches it on. |
 | `(step 43)` | **T5.3** `system_events` (0121 §3) + `src/lib/system-audit.ts` `logSystemWrite()` (best-effort) / `listSystemEvents()`; called from `recordPayment()` (null actor), `generateProjectInvoice()`, `createRecurringInvoice()`, `processDueSocialPosts()`, `publishReview()`, `publishVacancy()`, `createSlip()` (whatsapp), `runCommissionPayout()`. Team page "System activity" (`team/system-activity.tsx`) merges `member_changes` + `system_events`, 7 days, people/system filter. |
+| `(step 44)` | **T5.5** `/api/health` (public + machine, rate-limited; DB ping, `automation_tick` + new `wa_agent_tick` stamps, env booleans, open-fault count → 200/503). `error_events` (0121 §4) + `src/lib/errors.ts` `captureError()` (fingerprinted, counted, admin notify on first sighting / 6h, raw Sentry envelope when `SENTRY_DSN`), hooked into the three tick routes; `src/app/error.tsx` + `global-error.tsx` → `POST /api/errors`; Errors panel on `/settings` (resolve / reopen); `docs/ops.md` runbook paragraph. |
 
 ## 3. The audit of steps 0–26
 
@@ -165,22 +166,11 @@ UI — the plan puts it under `/settings` (step 41).
 
 ---
 
-## 4. What remains — steps 44 to 46
+## 4. What remains — steps 45 to 46
 
 Numbers are the original plan's sequencing table.
 
 ### Track 5 — platform foundation (migration **0121** exists — add sections to it)
-
-**44 · T5.5 Health + error tracking** — S. `src/app/api/health/route.ts`
-(DB ping, tick freshness from `app_settings.automation_tick`, WA tick stamp,
-env flags → 200/503) — **add `/api/health` to `PUBLIC_PREFIXES` AND
-`MACHINE_PREFIXES` in `src/lib/supabase/middleware.ts`, and to the matcher
-exclusion list in `src/proxy.ts`** (that list is where machine paths skip the
-session proxy). `error_events` + `src/lib/errors.ts captureError()` (upsert by
-fingerprint, admin notify on a new fingerprint, throttled, Sentry when
-`SENTRY_DSN`) in the tick catch (`api/automation/tick/route.ts` ~:219), the
-assistant and WA ticks, route handlers; `src/app/error.tsx` +
-`global-error.tsx` posting to `/api/errors`. Errors panel on `/settings`.
 
 **45 · T5.7 GDPR** — S. `clients.anonymised_at`;
 `src/lib/client-erasure.ts eraseClient(db, id, mode)` replacing the bare
@@ -261,6 +251,7 @@ Five things the plan got wrong. They are all silent failures.
 | `inflowLines()` → `monthlyInflows()` — money in, with and without words | `src/lib/finance-math.ts` |
 | `runCommissionPayout()` — the only thing that marks a commission `paid` | `src/app/(app)/team/[id]/actions.ts` |
 | `logSystemWrite()` — every write nobody clicked for | `src/lib/system-audit.ts` |
+| `captureError()` — every failure, one row per fault | `src/lib/errors.ts` |
 
 **Money rules that are now load-bearing:**
 

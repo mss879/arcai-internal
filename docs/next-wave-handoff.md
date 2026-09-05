@@ -1,18 +1,20 @@
-# Next Wave — handoff
+# Next Wave — handoff (second edition)
 
 **Read this first, then `AGENTS.md` and `docs/projects-roadmap-handoff.md` §2/§4.**
-Written 2026-09-05 at commit `bd52621`. Paste this into a new chat, or say:
-*"Read `docs/next-wave-handoff.md` and continue from step 27."*
+Written 2026-09-05 at commit `908e8b8` ("a recurring month raises its own
+invoice, and chases itself"). Paste this into a new chat, or say:
+*"Read `docs/next-wave-handoff.md` and continue from step 38."*
 
 ---
 
 ## 1. Where things stand
 
-**26 of 46 build steps are done. 24 commits on `arc_ai_crm_system` `main`, plus
-2 on `arc_ai_website`. Nothing is pushed to either remote.**
+**37 of 46 build steps are done, plus an audit-and-fix pass over the first 26.
+39 commits on `arc_ai_crm_system` `main` ahead of `origin/main`, plus 2 on
+`arc_ai_website`. Nothing is pushed to either remote.**
 
 ```
-git log --oneline origin/main..HEAD    # 29 commits (5 predate this wave)
+git log --oneline origin/main..HEAD
 ```
 
 Every commit passed the four-command check:
@@ -22,23 +24,35 @@ find .next/types -name "* [0-9].ts" -delete && npx tsc --noEmit && npx vitest ru
   && node scripts/lint-baseline.mjs && npm run build
 ```
 
-179 tests across 13 files. Lint baseline is 24 errors in 10 files (13 in `src`,
+192 tests across 13 files. Lint baseline is 24 errors in 10 files (13 in `src`,
 11 in the vendored MediaPipe bundles under `public/arcus/hand/`) — `node
 scripts/lint-baseline.mjs --write` re-records it. If `npm run build` fails with
-`ENOTEMPTY` on `.next/server`, `rm -rf .next` first.
+`ENOTEMPTY` on `.next/server`, `rm -rf .next/server` first.
+
+Every commit, including the last one, passed the full check (the T4.5
+build finished green just before this handoff was written).
 
 ### ⚠️ Before ANY push
 
 Apply these by hand in the Supabase SQL editor, **in this order**:
 
 ```
-0112 → 0113 → 0114 → 0115 → 0116 → 0117 → 0118 → 0119
+0112 → 0113 → 0114 → 0115 → 0116 → 0117 → 0118 → 0119 → 0120
 ```
 
 `0112`–`0114` predate this wave and were already outstanding. The code degrades
 quietly without them (empty lists, unassigned threads, in-process-only rate
-limiting) rather than crashing — which is exactly why a missing one is easy not
-to notice.
+limiting, invoices with no status column) rather than crashing — which is
+exactly why a missing one is easy not to notice.
+
+**`0120` is the only migration in the wave that backfills. Run it on a branch
+database first.** Its header carries five pre-check queries; the DO blocks
+raise notices with the counts they touched, and the three partial unique
+indexes are guarded — if duplicate quote or notice numbers exist, the index is
+skipped with a notice telling you to fix them by hand and re-run that one
+statement. `0120` was extended twice after it was first written (the
+`approvals_count()` replacement in §7b, and the slip bucket policies) — apply
+the file as it is now, not a copy taken earlier.
 
 `arc_ai_website` has its own two commits (`39cb034` UTM capture, `d2b9d1c`
 client-login link) and needs no migration.
@@ -51,210 +65,241 @@ client-login link) and needs no migration.
 
 | Commit | Feature |
 | --- | --- |
-| `dc24cf9` | T5.6 CI + tests. GH Actions runs tsc → vitest → lint → build. Pure cores extracted from the `server-only` modules so they can be tested. |
-| `5d7eb90` | T1.1 `sendAndLogEmail()` + migration **0115**. Every client email leaves an `email_messages` row. `email.ts` is transport only. |
-| `6a7c9ae` | T1.2 `/inbox` — WhatsApp, SMS, portal, email in one screen. `conversation_meta` owns thread assignment. |
-| `4d68022` | T1.3 Targeted hand-off. `notifyEveryone` gained an audience; `handoff_human` wakes the owner, not the team. |
+| `dc24cf9` | T5.6 CI + tests. GH Actions runs tsc → vitest → lint → build. |
+| `5d7eb90` | T1.1 `sendAndLogEmail()` + migration **0115**. |
+| `6a7c9ae` | T1.2 `/inbox` — WhatsApp, SMS, portal, email in one screen. |
+| `4d68022` | T1.3 Targeted hand-off. |
 | `5408b0b` | T1.4 Compose email + templates; "Email" on invoices, quotes, proposals. |
-| `1f77d45` | T1.5 `.ics` invites. Stable UID + SEQUENCE so a reschedule updates rather than double-books. |
+| `1f77d45` | T1.5 `.ics` invites. |
 | `5ea1c53` | T1.6 Timeline learns email, portal comments, change requests. |
-| `2e5ccec` | T1.7 Notification preferences, quiet hours, per-thread mute, bell v2. |
+| `2e5ccec` | T1.7 Notification preferences, quiet hours, bell v2. |
 | `b794887` | T1.9 Assistant `prepare_email` / `prepare_whatsapp` / `assign_conversation`. |
 
 ### Track 2 — client & growth machine (COMPLETE)
 
 | Commit | Feature |
 | --- | --- |
-| `ee7ff92` | T5.4 Rate limiting on every public endpoint + migration **0116**. |
-| `2c8c7c3` | T2.8 + T1.8 Lead scoring / churn / digest on the tick; digest emails. |
-| `aa2da16` | T2.6 `createInboundLead()` + UTM attribution + migration **0117**. |
+| `ee7ff92` | T5.4 Rate limiting + migration **0116**. |
+| `2c8c7c3` | T2.8 + T1.8 Scoring / churn / digest on the tick; digest emails. |
+| `aa2da16` | T2.6 `createInboundLead()` + UTM + migration **0117**. |
 | `e232c2f` | T2.7 chat → lead; T2.5 referrals. |
-| `978a93a` | T2.1 Proposals signable at `/p/[token]`; `convert_proposal_to_quote` step. |
+| `978a93a` | T2.1 Proposals signable at `/p/[token]`. |
 | `008ee47` | T2.2 Agreements at `/a/[token]` + `src/lib/markdown.ts`. |
 | `cbb24cc` | T2.4 Testimonials → website; T2.9 web insight → to-do. |
 | `b105629` | T2.10 Outreach sequences + open/click tracking. |
 | `a410499` | T2.11 Free site-audit magnet at `/audit`. |
-| `a931e69` | T2.3 Portal 2.0 — deliverables, agreements, meetings, booking. |
+| `a931e69` | T2.3 Portal 2.0. |
 | `d76b8da` | T2.12 Content client approval + Meta publishing + migration **0118**. |
 
-### Track 3 — team & intelligence (4 of 9)
+### Track 3 — team & intelligence (COMPLETE)
 
 | Commit | Feature |
 | --- | --- |
-| `569d6d3` | T3.2 `/approvals` — all seven queues in one list + migration **0119**. |
+| `569d6d3` | T3.2 `/approvals` + migration **0119**. |
 | `c78d837` | T3.3 To-do recurrence, templates, labels, estimates, comments. |
-| `de102a2` | T3.4 Knowledge base at `/kb`, fed to the WhatsApp agent. |
+| `de102a2` | T3.4 Knowledge base at `/kb`. |
 | `bd52621` | T3.1 Targets + leaderboard + `src/lib/finance-math.ts`. |
+| `e13d6aa` | **Audit fix** — the pieces of steps 0–26 the plan named and the build skipped (see §3). |
+| `e9ab085` | T3.5 Goals + Forecast tabs on Intelligence; the forecast card and targets tile on Finance Overview (that half of T4.9 is done). |
+| `6bdb4c7` | T3.6 Member scorecards (`src/lib/scorecards.ts`, this month and last). |
+| `faf2fc1` | T3.7 Assistant `create_milestone`, `send_portal_link` (card → `/api/assistant/send-portal-link`). |
+| `3b8ec71` | T3.8 Calendar month/week/day + milestones + instalments. |
+| `e6a4c4a` | T3.9 Offline `/projects/go` (service worker cache, IndexedDB outbox, `/api/go/data`, `/api/go/sync`). |
+
+### Track 4 — get paid faster (6 of 9)
+
+| Commit | Feature |
+| --- | --- |
+| `ad4fe77` | **T4.1 + T4.8 + T4.2** on migration **0120**: invoices as a state (`src/lib/invoices.ts`), `document_counters` + `next_document_number()` (`src/lib/document-number.ts`), `recordPayment()` (`src/lib/payments.ts`), assistant `mark_invoice_paid` card → `/api/assistant/confirm-payment`. Currency reaches the PDF, the public page and the email data. |
+| `4f80d33` | **T4.3 + T4.4** Bank slips: upload on the public invoice page and the portal (3 languages), WhatsApp slips filed to the same queue, `parseSlipImage`/`parseSlipText`, Finance → Slips tab, slips on `/approvals`, `notifyClient()` (`src/lib/client-notify.ts`). |
+| `908e8b8` | **T4.5** Recurring billing: `auto_invoice` + `remind` on an arrangement, `createRecurringInvoice()`, reminders on the tick, "Invoice now", retainer projects upsert their `recurring_income` row. |
 
 ---
 
-## 3. What remains — steps 27 to 46
+## 3. The audit of steps 0–26
+
+The previous chat's handoff said 26 steps were done. Against the plan's "How"
+bullets, the cores, migrations and pages were all there; a set of named
+details were not. Commit `e13d6aa` closed them: rate limits on the booking
+form, the portal's calendar file and the client login; the assistant's
+WhatsApp send refusing free text outside the 24h window; a lead's first
+open/click on its timeline; the `utm_source` filter and the pipeline report's
+by-source table; "New agreement" from a project's Client tab and a proposal
+row; the `/portal` account page listing files, agreements, meetings, booking
+and a referral code; the referral block on the per-project portal (3
+languages) and the introductions column on `/clients`; a Publishing tab in
+Content Studio with `queueSocialPost()` as the one queue writer and the
+assistant's `schedule_social_post` card + `content_queue`; a targets tile on
+the dashboard and `set_target` / `targets_report` / `kb_page`; the approvals
+badge in the topbar (`approvals_count`, realtime on the two outside-in queues)
+and the `approval` notification type on change requests and design picks;
+label filter, apply-template and save-as-template on To-Dos.
+
+Two things were judged fine as built and left alone: the lead attribution
+card lives on the lead's detail page rather than the form modal, and
+deliverables have their own card on the project's Files tab rather than a
+toggle inside `files-section.tsx`. Social accounts still have no management
+UI — the plan puts it under `/settings` (step 41).
+
+---
+
+## 4. What remains — steps 38 to 46
 
 Numbers are the original plan's sequencing table.
 
-### Track 3, remaining
+### Track 4, remaining
 
-**27 · T3.5 Goals + forecast on Intelligence** — M, no migration.
-`intelligence-view.tsx:45` has `type Tab`; add `goals` and `forecast`.
-`forecastCash()` already exists and is tested in `src/lib/finance-math.ts`.
-The next step is `src/components/finance/forecast-card.tsx` — **`mkdir -p
-src/components/finance` first, that directory does not exist yet** (a write to
-it failed for exactly this reason). Feed it: scheduled instalments, recurring
-entries, open invoices as `scheduledIn`; recurring expenses as `scheduledOut`;
-`monthlyInflows`/`monthlyOutflows` history for the run rate. Mount the same
-card on Finance Overview for T4.9.
+**38 · T4.6 Client statement of account** — M, no migration
+(`clients.statement_token` exists since 0117).
+`src/lib/statement.ts buildClientStatement(db, clientId, {from, to})`:
+invoices by client (`invoices.client_id`, and by the client's projects),
+receipts via `buildLedger()` per project plus client-level payments
+(`payments` rows with `invoice_id` and no project — new since 0120), per
+currency, opening/closing balance. **Money maths only through
+`src/lib/projects.ts`** (`settledAmount`, `buildLedger`, `invoiceStatusFor`).
+`src/lib/statement-pdf.tsx` on the invoice letterhead (`src/lib/invoice-pdf.tsx`
+is the pattern; note the `react-pdf` fixed-footer trap in memory: a Page-level
+`lineHeight` deletes the footer). Authed
+`src/app/api/statements/[clientId]/pdf` and public
+`src/app/public/statement/[token]/` — nothing to add to the proxy: `/public`
+is already a prefix in `PUBLIC_PREFIXES` (`src/lib/supabase/middleware.ts:55`),
+so anything under it is public. Rate-limit it (`enforceRateLimit`,
+`src/lib/rate-limit.ts`), hand-pick columns, never `select("*")`. Client page Money tab (`src/app/(app)/clients/[id]/client-detail.tsx`):
+Download / Email (`sendAndLogEmail(kind:'statement')`, attachments as in
+`email.ts` `sendInvoiceEmail`) / WhatsApp document (`sendWhatsAppDocument` in
+`src/lib/whatsapp.ts:258`, unused so far). Portal: `statementUrl` on the
+`/portal` account page (T2.3 left the slot). Assistant `client_statement`
+(read tool; label in `src/lib/ai/tool-registry.ts`). Add
+`src/lib/statement.test.ts` to `vitest.config.mts` **on purpose**.
 
-**28 · T3.6 Member scorecards** — S, no migration.
-`src/lib/scorecards.ts memberScorecard(db, userId, period)` reusing
-`targetsProgress` (`src/lib/targets.ts`), `summariseMemberMoney`
-(`src/lib/loans.ts:75`), `time_entries`, `todos`, and first-reply delta from
-`conversation_meta.assigned_at`. Section on `team/[id]/member-dashboard.tsx`.
-Admin-only figures stay hidden from the member.
+**39 · T4.7 Commission payout run** — S. Tables `commission_payouts`,
+`commissions.payout_id`, `member_loan_repayments.payout_id` exist (0120).
+`team/[id]/actions.ts runCommissionPayout(userId, {period, method,
+reference, note, deductLoan})`: one `commission_payouts` row; every
+`approved` commission of that member → `paid` + `payout_id` in ONE update;
+the loan deduction through the existing `saveLoanRepayment` (:268) with
+`payout_id`; an `expenses` row (category — check `ExpenseCategory` in
+`database.types.ts`; there is no `commission` value, so either add one in a
+migration (0121 is the next) or use `salaries` with the description naming
+the payout); notify the member (`notifyUsers`, type `commission`). "Pay out"
+button on `member-dashboard.tsx` using `summariseMemberMoney`
+(`src/lib/loans.ts:75`) for the figures; a "Payouts" card listing
+`commission_payouts`. Hook it to `logSystemWrite()` once T5.3 exists.
 
-**29 · T3.7 Assistant write coverage** — M, needs T4.2 for one tool.
-`create_milestone` (tools-delivery.ts), `send_portal_link` (card
-`confirm_portal_link` → new `/api/assistant/send-portal-link` →
-`sendPortalLink(actor:'assistant')`), `mark_invoice_paid` (card → new
-`/api/assistant/confirm-payment` → `recordPayment(source:'assistant')` —
-**register only after step 34**). A new card touches four files; see §5.
-
-**30 · T3.8 Calendar week/day + milestones/instalments** — S, no migration.
-`src/components/dashboard/calendar.tsx:47` `DayEvent` gains `milestone` and
-`installment`; `dashboard/page.tsx` loads both for the window. Month/week/day
-switch is local component state. "Add to calendar" per meeting already exists
-(`/api/meetings/[id]/ics`).
-
-**31 · T3.9 Offline `/projects/go`** — M, no migration.
-`public/sw.js` already exists and is served no-cache (see `next.config.ts`).
-Precache the `/projects/go` shell; network-first with cache fallback for it and
-a new `/api/go/data`. IndexedDB outbox + Background Sync replaying to a new
-authed `/api/go/sync` — which must call `logTime` (`plan-actions.ts:286`) and
-`setProjectDeliveryStage`, never write those tables directly.
-
-### Track 4 — get paid faster (migration **0120**, not yet written)
-
-**Write 0120 on a branch database first.** It is the only migration in this
-wave that backfills. Put a dry-run count query in its header the way
-`0113_merge_website_projects.sql:32-37` does.
-
-**32 · T4.1 Invoice real paid state + currency + update instead of re-issue** — M.
-Today "paid" is the `invoices.stamp` image and `saveInvoice`
-(`invoices/actions.ts:59-68`) always INSERTs, so re-stamping duplicates the
-row. Add `status issued|sent|partially_paid|paid|void`, `paid_at`,
-`paid_amount`, `due_date`, `voided_at`, `void_reason`, `reissued_from_id`;
-backfill from `stamp`/`sent_at`. New `src/lib/invoices.ts` with `updateInvoice`,
-`voidInvoice`, `reissueInvoice`, `reconcileInvoice()`. Pure
-`invoiceStatusFor(paid, total)` goes in `projects.ts` **with tests**.
-`invoices.currency` (0112) is written by two of five creators and read by no
-renderer — fix `invoice-pdf.tsx money()`, the public invoice page and
-`invoice-view.tsx`.
-
-**33 · T4.8 Document numbering** — M. `document_counters` +
-`next_document_number(kind)` (row lock). Five numbering rules exist today
-(`invoice.ts:60-108`, `quote-actions.ts:81,163`, `automation.ts:1296`,
-`quotes.ts createQuoteFromProposal`) and no constraint. A DO block marks
-duplicate `invoice_number`s as re-issues (keep the oldest) before the partial
-unique indexes are created; guard index creation with `exception when
-unique_violation` + `raise notice`.
-
-**34 · T4.2 `recordPayment()`** — M. Five writers today
-(`projects/actions.ts:208`, `payments/actions.ts:48`, `finance/actions.ts:77`,
-`deposit-actions.ts:166`, `ai/tools.ts:3717`), each firing its own event, none
-touching an invoice. One core: insert the payment, resolve the invoice →
-`reconcileInvoice`, mark the instalment paid, fire ONE `buildPaymentEvent`
-(`delivery.ts:363`), log the delivery event, notify finance. **Never write
-`deposit_paid`** — `settledAmount()` reconciles. Pure `allocatePayment` in
-`projects.ts`, tested.
-
-**35 · T4.3 Bank-slip upload + verification queue** — L. `payment_slips` +
-private bucket `payment-slips` in `STORAGE_BUCKETS` (`constants.ts:176`).
-`src/lib/ai/receipt.ts` gains `parseSlip()`. Slip card on the public invoice
-page under the bank block (`invoice-view.tsx:186-201`) and on the portal Money
-section. Confirm → `recordPayment(source:'slip')` → `notifyClient()` (new
-`src/lib/client-notify.ts`, the `portal-send.ts` ladder generalised — note
-`choosePortalChannel()` is already extracted and tested). Gateway hook point:
-`source:'gateway'` + `payments.provider_ref`.
-
-**36 · T4.4 WhatsApp slip → the same queue** — S. `handleInboundPaymentSlip`
-(`wa-agent.ts`, near the `handoffAudience` call added in `4d68022`) creates a
-`payment_slips` row instead of a task.
-
-**37 · T4.5 Recurring billing** — M. `recurring_income` + `auto_invoice`,
-`remind`, `invoice_item`; entries + `invoice_id`, `reminded_at`,
-`overdue_reminded_at`. `processRecurringIncome` (`recurring-income.ts:30-114`)
-raises the invoice; `runRetainers` (`project-automation.ts:120`) upserts the
-retainer's `recurring_income`.
-
-**38 · T4.6 Client statements** — M. `src/lib/statement.ts` +
-`statement-pdf.tsx`; authed `/api/statements/[clientId]/pdf` and public
-`/public/statement/[token]` using `clients.statement_token` (already added in
-0117). Maths reuses `projects.ts` only.
-
-**39 · T4.7 Commission payout run** — S. `commission_payouts` +
-`commissions.payout_id`, `member_loan_repayments.payout_id`.
-
-**40 · T4.9 Finance forecast/targets/OCR/tax** — S. Mount the forecast card and
-a targets tile on Overview; **write a unit test asserting Overview's total and
-Tax's total are equal** (both must go through `monthlyInflows`).
+**40 · T4.9 Finance leftovers** — S. The forecast card and targets tile on
+Overview are DONE (in `e9ab085`). Left: **a unit test asserting Finance
+Overview's inflow total equals the Tax tab's total** — read how `TaxTab` in
+`finance-view.tsx` computes its total; if it does not go through
+`monthlyInflows()`, make it, then add the test to `finance-math.test.ts`;
+Expenses tab reusing `readReceipt` (`projects/[id]/actions.ts:848`) via a new
+`src/components/finance/receipt-reader.tsx` (the parse is
+`parseReceipt()` in `src/lib/ai/receipt.ts`, which now also holds the slip
+parsers); a small P&L strip on Overview (inflows − outflows − payouts by
+month, payouts from `commission_payouts` once 39 lands).
 
 ### Track 5 — platform foundation (migration **0121**, not yet written)
 
-**41 · T5.1 `/settings` hub** — S. Cards to every settings surface, plus forms
-for `app_settings.lead_form`, `outreach` (`lead-outreach.ts:117`),
-`web_chat_auto_lead` (read by `web-analytics/sync.ts chatAutoLeadEnabled`), and
-the WhatsApp `handoff_user_id`.
+**41 · T5.1 `/settings` hub** — S. Cards to every settings surface (CRM
+settings `/crm/settings`, Delivery settings tab, pricing, WhatsApp
+agent/keywords, Studio settings, Automation Connect, profile, team, email
+templates on `/inbox`, **social accounts** (nothing exists — `social_accounts`
+rows are inserted nowhere yet; build a connect form: platform, name,
+external_id, page_id, token → `encryptToken()` in `src/lib/social/crypto.ts`,
+needs `SOCIAL_TOKEN_KEY`), targets, numbering counters
+(`document_counters`, read-only view + "set next number"), API keys/webhooks +
+`docs/api.md`), plus forms for `app_settings.lead_form`, `outreach`
+(`src/lib/lead-outreach.ts:117`), `web_chat_auto_lead`
+(`web-analytics/sync.ts chatAutoLeadEnabled`), and the WhatsApp
+`handoff_user_id` (already on the Agent tab; link to it). Nav: Workspace →
+Settings (`adminOnly`) in `src/components/layout/nav.ts`; a gear in
+`topbar.tsx`.
 
-**42 · T5.2 Permissions v2** — M. `profiles.capabilities text[]` backfilled
-with all four for members. `hasCapability` / `requireCapability` /
-`assertCapability` in `auth.ts`; `NavItem.capability?`. Ship nav-only behind
-`app_settings.capabilities_enforced=false` for a week. RLS stays USING(true) —
-document as server-check "RLS-lite".
+**42 · T5.2 Permissions v2** — M. `profiles.capabilities text[]`
+(`finance, delivery, sales, marketing`) backfilled with all four for members.
+`src/lib/auth.ts`: `hasCapability`, `requireCapability` (redirect),
+`assertCapability` (ActionResult). `NavItem.capability?` in `nav.ts`;
+`sidebar.tsx` filter (**`sidebar.tsx` is one of the uncommitted hand-tracking
+files — stage only your hunks; see §6**). Page guards: `/finance`, `/payments`,
+`/invoices` → finance; `/delivery`, project reports → delivery; `/crm`,
+`/proposals` → sales; `/content`, `/sms`, WhatsApp admin tabs → marketing.
+Money actions call `assertCapability('finance')` — `recordPayment()` is the
+right choke point (it takes `actorId`; look the capability up there, and let
+`silent`/system callers through). Team page checkboxes (`updateMemberProfile`,
+`team/actions.ts:100`). Ship nav-only behind
+`app_settings.capabilities_enforced=false`. RLS stays `USING(true)` — document
+as "RLS-lite" in `docs/ops.md`. `notifyFinance()` in `payments.ts` and
+`slips.ts` currently means "admins" — switch it to the finance capability here.
 
-**43 · T5.3 System write audit** — S. `system_events` + `logSystemWrite()` from
-`recordPayment`, `generateProjectInvoice`, recurring invoices,
-`processDueSocialPosts`, `publishReview`, careers publishes.
+**43 · T5.3 System write audit** — S. `system_events` (job, actor
+`system:<job>|assistant|automation:<id>`, table_name, row_id, action,
+summary, meta). `src/lib/system-audit.ts logSystemWrite()` from
+`recordPayment` (when `actorId` is null), `generateProjectInvoice`,
+`createRecurringInvoice`, `processDueSocialPosts`, `publishReview`, careers
+publishes, `createSlip` (source whatsapp), `runCommissionPayout`. Team page
+"System activity" tab merging `member_changes` + `system_events`.
 
-**44 · T5.5 Health + error tracking** — S. `/api/health` (DB ping, tick
-freshness from `app_settings.automation_tick`, env flags → 200/503) — **add
-`/api/health` to `PUBLIC_PREFIXES` in `src/lib/supabase/middleware.ts`**.
-`error_events` + `captureError()`.
+**44 · T5.5 Health + error tracking** — S. `src/app/api/health/route.ts`
+(DB ping, tick freshness from `app_settings.automation_tick`, WA tick stamp,
+env flags → 200/503) — **add `/api/health` to `PUBLIC_PREFIXES` AND
+`MACHINE_PREFIXES` in `src/lib/supabase/middleware.ts`, and to the matcher
+exclusion list in `src/proxy.ts`** (that list is where machine paths skip the
+session proxy). `error_events` + `src/lib/errors.ts captureError()` (upsert by
+fingerprint, admin notify on a new fingerprint, throttled, Sentry when
+`SENTRY_DSN`) in the tick catch (`api/automation/tick/route.ts` ~:219), the
+assistant and WA ticks, route handlers; `src/app/error.tsx` +
+`global-error.tsx` posting to `/api/errors`. Errors panel on `/settings`.
 
-**45 · T5.7 GDPR erasure + export** — S. `clients.anonymised_at`;
-`eraseClient()` replacing the bare delete at `clients/actions.ts:66`;
-`exportClientData()` → zip via jszip.
+**45 · T5.7 GDPR** — S. `clients.anonymised_at`;
+`src/lib/client-erasure.ts eraseClient(db, id, mode)` replacing the bare
+delete at `clients/actions.ts:66` — scrub `clients` name/email/phone/company/
+notes, `wa_contacts` names + `wa_messages` bodies, mask
+`sms_messages.to_number`, lead contact fields, `email_messages`, and now
+also `payment_slips` (delete the objects in `payment-slips` and null the
+row's `parsed`/`reference`) and `agreements.signer_email`/`signed_name`;
+hard delete only with no invoices/payments. `exportClientData()` → zip
+(`jszip` is already a dependency) via `/api/clients/[id]/export`. Typed-name
+confirm on the client page. Logged to `system_events`.
 
-**46 · T5.8 Backups, dead code, `docs/api.md`** — S. Delete
-`src/components/assistant/mobile-voice-screen.tsx` (untracked), `email.ts`'s
-`sendCredentialsEmail` (zero callers), root `zz_*.mjs`. Write `docs/api.md`
-covering `/api/public/v1/*`, hooks, forms (incl. `utm`, `ref`), track,
-webhooks, `/api/health` and the rate limits.
+**46 · T5.8 Backups, dead code, `docs/api.md`** — S. `docs/ops.md`
+(Supabase daily backups / PITR; storage is not in `pg_dump`; the
+`payment-slips` bucket is private and holds bank-account images — say so).
+Delete `src/components/assistant/mobile-voice-screen.tsx` (untracked),
+`email.ts`'s `sendCredentialsEmail` (zero callers), root `zz_*.mjs` (grep
+first). `docs/api.md` for `/api/public/v1/*`, hooks, forms (incl. `utm`,
+`ref`), track, webhooks, `/api/health`, the rate limits, and the two
+assistant-free public POSTs added this wave (slip uploads).
 
 ---
 
-## 4. Corrections to the original plan
+## 5. Corrections to the original plan
 
-Four things the plan got wrong. They are all silent failures.
+Five things the plan got wrong. They are all silent failures.
 
-1. **Widening a CHECK is `drop constraint if exists` + `add constraint`** — not
-   a `do $$ … exception when duplicate_object` block. That form swallows the
+1. **Widening a CHECK is `drop constraint if exists` + `add constraint`** —
+   not a `do $$ … exception when duplicate_object` block, which swallows the
    failure and leaves the OLD constraint in place. The do-$$ form is only for
    adding a brand-new named constraint.
 2. **Widening REPLACES a CHECK**, so the new list must repeat every value any
-   earlier migration added. 0104 had already widened
-   `assistant_approvals.kind`; writing 0115's list from 0103's would have
-   revoked `campaign_launch` and `engine_start`. Always
-   `grep -rn "<constraint_name>" supabase/migrations/` before widening.
+   earlier migration added. Always `grep -rn "<constraint_name>"
+   supabase/migrations/` before widening. (0120 does this for
+   `delivery_events_kind_check` and `invoices_status_check`.)
 3. **Public route prefixes are NOT matched in `src/proxy.ts`.** The list is
-   `PUBLIC_PREFIXES` in `src/lib/supabase/middleware.ts` (some routes also need
-   `MACHINE_PREFIXES` in the same file). `/p`, `/a`, `/audit` are already added.
-4. **`src/lib/database.types.ts` is hand-authored**, not generated — its header
-   says so. Never run `supabase gen types`; it would destroy ~600 lines of
-   hand-written unions and every jsdoc. Tables are NOT alphabetical: a new one
-   goes at the END of `Tables` under a `// 0NNN — summary` comment.
+   `PUBLIC_PREFIXES` in `src/lib/supabase/middleware.ts` (machine routes also
+   go in `MACHINE_PREFIXES` there AND the matcher exclusion in `proxy.ts`).
+4. **`src/lib/database.types.ts` is hand-authored**, not generated. Never run
+   `supabase gen types`. Tables are NOT alphabetical: a new one goes at the END
+   of `Tables` (before `Views`!) under a `// 0NNN — summary` comment. **Views
+   come after Tables in the same object** — a new table pasted after
+   `project_rollups` lands in `Views` and every `Database["public"]["Tables"]
+   ["x"]` reference fails. (This bit me once.)
+5. **`payments.project_id` is nullable since 0120.** Every place that keyed a
+   Map on `p.project_id` needed a null guard (`tools-delivery.ts`,
+   `tools-finance.ts`, `intelligence.ts`). Anything new that reads `payments`
+   must expect null.
 
 ---
 
-## 5. Conventions this wave established
+## 6. Conventions this wave established
 
 **Single-owner cores. Do not reimplement any of these anywhere else.**
 
@@ -262,56 +307,100 @@ Four things the plan got wrong. They are all silent failures.
 | --- | --- |
 | `sendAndLogEmail()` — every client/lead/project email | `src/lib/email-outbox.ts` |
 | `createInboundLead()` — every inbound enquiry | `src/lib/lead-intake.ts` |
-| `monthlyInflows()` / `forecastCash()` — every inflow array | `src/lib/finance-math.ts` |
+| `monthlyInflows()` / `forecastCash()` / `detectStandingCosts()` | `src/lib/finance-math.ts` |
+| `loadCashForecast()` — the one forecast object (Intelligence + Finance) | `src/lib/finance-forecast.ts` |
 | `enforceRateLimit()` — every public route and action | `src/lib/rate-limit.ts` |
-| `listApprovalItems()` — the seven decision queues | `src/lib/approvals.ts` |
-| `nextOccurrence()` / `catchUpOccurrence()` | `src/lib/todo-recurrence.ts` |
+| `listApprovalItems()` — the eight decision queues (slips added) | `src/lib/approvals.ts` |
+| `upsertTarget()` — the only writer of `targets` | `src/lib/targets.ts` |
+| `queueSocialPost()` — the only writer of `social_posts` | `src/lib/social/queue.ts` |
+| `recordPayment()` — every payment, from any screen, slip or the assistant | `src/lib/payments.ts` |
+| `reconcileInvoice()` / `updateInvoice` / `voidInvoice` / `reissueInvoice` / `createRecurringInvoice` — the only writers of invoice state | `src/lib/invoices.ts` |
+| `allocateDocumentNumber()` → `next_document_number(kind)` — every invoice/quote/notice number at INSERT | `src/lib/document-number.ts` (+ `nextQuoteNumber`, `nextInvoiceNumberFor` in `src/lib/quotes.ts`) |
+| `notifyClient()` — every client message outside an open thread | `src/lib/client-notify.ts` |
+| `createSlip()` / `confirmSlip()` / `rejectSlip()` / `listSlips()` | `src/lib/slips.ts` |
+| `loadGoProjects()` — the on-the-go list for the page and `/api/go/data` | `src/lib/go-projects.ts` |
+| `memberScorecard()` — a mirror, never a writer | `src/lib/scorecards.ts` |
+| `invoiceStatusFor()` / `allocatePayment()` / `settledAmount()` etc. | `src/lib/projects.ts` |
 | `markdownToHtml()` — the ONLY escaper for stored text | `src/lib/markdown.ts` |
 | `choosePortalChannel()` — the portal send ladder | `src/lib/portal-send-core.ts` |
 | `publishReview()` + `careers/sync` — the ONLY website writers | `src/lib/reviews/publish.ts` |
-| `settledAmount()` etc. — project money | `src/lib/projects.ts` (unchanged) |
 
-Still to come, per the plan: `recordPayment()` (`payments.ts`),
-`reconcileInvoice()` (`invoices.ts`), `notifyClient()` (`client-notify.ts`),
-`next_document_number(kind)` (SQL).
+**Money rules that are now load-bearing:**
+
+- `recordPayment()` never writes `deposit_paid`; `settledAmount()` reconciles.
+- An instalment ticked off and a recurring month received are THE money for
+  `monthlyInflows()` — `recordPayment()` links them and writes **no** `payments`
+  row for them. A slip, a project payment, a board row flip or the assistant
+  DO write (or link) a row. Double-counting is the bug this guards against.
+- `reconcileInvoice()` sums linked `payments` + `company_payments` +
+  `payment_installments` + `recurring_income_entries`; with nothing linked it
+  falls back to the legacy `amount_paid` snapshot / `payment_received` stamp.
+  The stamp follows the state (its two automatic values only).
+- `allocatePayment()` settles a project's open invoices oldest first; a
+  payment row links to the first invoice it settles (no per-invoice split is
+  stored — reported, not recorded).
+- Every document number comes from the counter at INSERT.
+  `nextDocumentNumber()` / `nextInvoiceNumber()` in TS are form PREVIEWS and
+  the fallback before 0120 exists.
 
 **Other rules in force:**
 
-- A new assistant card touches four files: `src/lib/assistant-cards.ts` (the
-  union), `assistant-card.tsx` (render + a `ConfirmFooter`), `use-voice-chat.tsx`
-  (`CONFIRM_CARD_TYPES` + the send callback + the voice-confirm branch), and
-  `src/lib/assistant/missions.ts` (`isConfirmCard` + `parkApproval`). Anything
-  that reaches a customer is a card → a `/api/assistant/send-*` route on a human
-  tap. Missions must never import a sender.
-- A new automation trigger or step touches three: the union in
-  `database.types.ts`, `automation-meta.ts`, and the executor switch in
-  `automation.ts`.
-- A new tick pass is registered in `PASSES` (`api/automation/tick/route.ts`) and
-  self-gates with a stamp in `app_settings`, claimed BEFORE the work.
-- `"use server"` modules export only async functions. A plain const there breaks
-  the Turbopack build — that is why `DEFAULT_NOTIFICATION_PREFS` lives in
-  `src/lib/notification-prefs.ts`.
-- Never `git add -A`. The repo carries a large uncommitted hand-tracking feature
-  (`src/components/assistant/interactivity/*`, `studio-*`, `command/*`,
-  `public/arcus/hand/*`, `arcus-preview/*`, `layout/sidebar.tsx`). Stage
-  explicitly, every time.
+- A new assistant confirm card touches four files: `src/lib/assistant-cards.ts`
+  (data type + union), `assistant-card.tsx` (component + `ConfirmFooter` +
+  dispatch + prop), `use-voice-chat.tsx` (`CONFIRM_CARD_TYPES`, the send
+  callback, the voice-confirm branch AND its reply text, the `VoiceChat` type,
+  the returned object), and `src/lib/assistant/missions.ts` (`isConfirmCard`
+  + `parkApproval` kind). Then the three surfaces pass the callback:
+  `voice-assistant.tsx`, `assistant-workspace.tsx` (props type + destructure +
+  two mounts), `approvals-tray.tsx` (wrapped in `record()`). Five cards exist
+  now as worked examples: email, whatsapp, social_post, portal_link, mark_paid.
+- A new automation trigger or step touches three: `database.types.ts`,
+  `automation-meta.ts`, the executor switch in `automation.ts`.
+- A new tick pass is registered in `PASSES` (`api/automation/tick/route.ts`)
+  and self-gates with a stamp in `app_settings`, claimed BEFORE the work.
+  Reminders in `recurring-income.ts` claim the stamp on the ROW before
+  sending, which is the same idea.
+- `"use server"` modules export only async functions. Every server action that
+  a public page can reach re-resolves its token and calls `enforceRateLimit()`
+  before touching the database; `src/app/public/invoice/[token]/actions.ts`
+  and `uploadPortalPaymentSlip` are the newest examples.
+- A `"use client"` component may receive a server action as a prop from
+  another client component (`SlipUploadForm` takes `onUpload`); never from a
+  server component.
+- Never `git add -A`. The repo carries a large uncommitted hand-tracking
+  feature (`src/components/assistant/interactivity/*`, `studio-*`,
+  `command/*`, `public/arcus/hand/*`, `arcus-preview/*`, `layout/sidebar.tsx`,
+  `globals.css`, `mobile-voice-screen.tsx`). Stage explicitly, every time —
+  the previous chat kept a file list in the scratchpad and piped it to
+  `git add` (`cat list | xargs git add`; BSD `xargs` has no `-a`).
+- The shell's working directory sometimes resets to `~/Desktop/ARC_AI`
+  between tool calls. Start commands with
+  `cd /Users/shahidshamir/Desktop/ARC_AI/arc_ai_crm_system &&`.
 - The two repos are separate remotes. Commit and push each on its own.
 
 ---
 
-## 6. Known deferrals
+## 7. Known deferrals and open questions
 
 - **Meta app review** for `instagram_content_publish` / `pages_manage_posts`
   takes weeks. `SOCIAL_DRY_RUN=1` runs the whole publish queue without calling
-  Meta. The ZIP hand-off stays for LinkedIn/TikTok. Submit the review now if it
-  should be live this quarter.
-- **WhatsApp template approvals** are needed for slip confirmations, recurring
-  reminders and content-approval links outside the 24h window. `notifyClient()`
-  (step 35) always falls back to SMS then a task.
-- **Resend open/click tracking** must be switched on for the sending domain
-  before the outreach analytics show anything; the UI already says so rather
-  than displaying a misleading zero.
-- **`SOCIAL_TOKEN_KEY`** must be set before a social account can be connected.
-- Out of scope this wave, deliberately: payment gateways (hook point only),
-  mailbox/calendar provider sync, LinkedIn/TikTok publishing, start/stop timers,
-  multi-tenancy, FX conversion.
+  Meta. No `social_accounts` row can be created until step 41 builds the form.
+- **WhatsApp template approvals** are needed for slip confirmations and
+  recurring reminders outside the 24h window. `notifyClient()` has no
+  template rung on purpose (the only approved template is the portal link);
+  it falls to SMS, then a task. When templates are approved, the rung goes in
+  `src/lib/client-notify.ts` and nowhere else.
+- **`payment-slips` bucket policies** in 0120 grant authenticated read/insert/
+  delete; the public routes upload through the service-role client. There is
+  no anon policy, on purpose.
+- **Commission expense category**: `ExpenseCategory` has no `commission`
+  value. Decide in step 39 (a 0121 CHECK widening, or `salaries`).
+- **Slip idempotency on WhatsApp**: `fileWhatsAppSlip()` files on every
+  classified slip; the 30-day reference/amount duplicate check marks a
+  repeat as `duplicate` rather than dropping it.
+- **`notifyFinance()`** in `payments.ts` and `slips.ts` means "every admin"
+  until capabilities (step 42) name a finance group.
+- Out of scope this wave, deliberately: payment gateways (hook point only —
+  `source: 'gateway'` + `payments.provider_ref`), mailbox/calendar provider
+  sync, LinkedIn/TikTok publishing, start/stop timers, multi-tenancy, FX
+  conversion (currency is carried and displayed, not converted).

@@ -59,3 +59,51 @@ update public.profiles
 insert into public.app_settings (key, value)
 values ('capabilities_enforced', '{"enabled": false}'::jsonb)
 on conflict (key) do nothing;
+
+-- 3. System write audit (T5.3) --------------------------------------------
+-- member_changes (0081) records what a PERSON changed, by trigger. Nothing
+-- recorded what the system did on its own: an invoice the tick raised, a
+-- post published to Instagram, a review put on the website, a slip filed
+-- from a WhatsApp photo, a payout run. system_events is that record, written
+-- by src/lib/system-audit.ts logSystemWrite() from each of those cores.
+
+create table if not exists public.system_events (
+  id         uuid primary key default gen_random_uuid(),
+  -- The job or core that wrote: 'recurringIncome', 'socialPublish', 'payout'…
+  job        text not null,
+  -- system:<job> | assistant | automation:<id> | user:<uuid>
+  actor      text not null,
+  table_name text not null,
+  row_id     text,
+  action     text not null
+             check (action in ('created', 'updated', 'deleted', 'sent', 'published', 'unpublished')),
+  summary    text not null,
+  meta       jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists system_events_created_idx
+  on public.system_events (created_at desc);
+create index if not exists system_events_row_idx
+  on public.system_events (table_name, row_id);
+
+alter table public.system_events enable row level security;
+
+-- Admins read it (the Team page); any signed-in writer may append — the
+-- cores run under a person's client from a server action as often as under
+-- the service role from the tick. Nobody updates or deletes a line.
+do $$
+begin
+  create policy system_events_admin_read on public.system_events
+    for select using (public.is_admin(auth.uid()));
+exception
+  when duplicate_object then null;
+end $$;
+
+do $$
+begin
+  create policy system_events_append on public.system_events
+    for insert with check (auth.uid() is not null);
+exception
+  when duplicate_object then null;
+end $$;

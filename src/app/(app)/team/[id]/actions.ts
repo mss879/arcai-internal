@@ -16,6 +16,7 @@ import { attachRepayments, loanBalance } from "@/lib/loans";
 import { notifyUsers } from "@/lib/notify";
 import { sendSmsToUser } from "@/lib/sms-alerts";
 import { createClient } from "@/lib/supabase/server";
+import { logSystemWrite } from "@/lib/system-audit";
 import { formatCurrency } from "@/lib/utils";
 import type { ActionResult, MemberLoanApproval } from "@/lib/types";
 
@@ -473,6 +474,17 @@ export async function runCommissionPayout(
   if (payoutError || !payout) {
     return { ok: false, error: payoutError?.message ?? "Could not record the payout." };
   }
+
+  // T5.3 — a payout is money leaving; it gets a line whoever ran it.
+  await logSystemWrite(supabase, {
+    job: "payout",
+    actor: `user:${admin.id}`,
+    table: "commission_payouts",
+    rowId: payout.id,
+    action: "created",
+    summary: `Commission payout to ${member.full_name} for ${periodLabel(period)} — ${formatCurrency(netPaid)}${loanDeduction > 0 ? ` (${formatCurrency(loanDeduction)} withheld against loan)` : ""}`,
+    meta: { user_id: userId, gross, loan_deduction: loanDeduction, net_paid: netPaid, commissions: rows.length },
+  });
 
   // --- 2. Every approved commission → paid, in one statement --------------
   const { error: markError } = await supabase

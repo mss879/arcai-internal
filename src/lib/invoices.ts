@@ -6,6 +6,7 @@ import type { Database, InvoiceItem, InvoiceStatus } from "@/lib/database.types"
 import { allocateDocumentNumber } from "@/lib/document-number";
 import { nextInvoiceNumber } from "@/lib/invoice";
 import { invoiceStatusFor } from "@/lib/projects";
+import { logSystemWrite } from "@/lib/system-audit";
 
 type DB = SupabaseClient<Database>;
 
@@ -399,6 +400,18 @@ export async function createRecurringInvoice(
     .from("recurring_income_entries")
     .update({ invoice_id: invoice.id })
     .eq("id", entry.id);
+
+  // T5.3 — an invoice the tick raised is exactly the kind of write that
+  // needs a line to point at.
+  await logSystemWrite(db, {
+    job: "recurringIncome",
+    actor: opts.actorId ? `user:${opts.actorId}` : null,
+    table: "invoices",
+    rowId: invoice.id,
+    action: "created",
+    summary: `Invoice ${number} raised for ${income.label} — ${monthLabel}${client?.name ? ` (${client.name})` : ""}`,
+    meta: { entry_id: entry.id, income_id: income.id, amount, currency: entry.currency || null },
+  });
 
   let emailed = false;
   if (opts.email !== false && client?.email) {

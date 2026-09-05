@@ -565,6 +565,14 @@ export type EmailStatus =
   | "delivered"
   | "bounced"
   | "complained";
+/** 0121 — what a system write did. */
+export type SystemEventAction =
+  | "created"
+  | "updated"
+  | "deleted"
+  | "sent"
+  | "published"
+  | "unpublished";
 export type EmailKind =
   | "compose"
   | "invoice"
@@ -6268,6 +6276,34 @@ export type Database = {
           updated_at?: Timestamp;
         };
         Update: Partial<Database["public"]["Tables"]["document_counters"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0121 — what the system wrote on its own (src/lib/system-audit.ts)
+      system_events: {
+        Row: {
+          id: UUID;
+          job: string;
+          /** system:<job> | assistant | automation:<id> | user:<uuid> */
+          actor: string;
+          table_name: string;
+          row_id: string | null;
+          action: SystemEventAction;
+          summary: string;
+          meta: Record<string, unknown>;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          job: string;
+          actor: string;
+          table_name: string;
+          row_id?: string | null;
+          action: SystemEventAction;
+          summary: string;
+          meta?: Record<string, unknown>;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["system_events"]["Insert"]>;
         Relationships: [];
       };
     };

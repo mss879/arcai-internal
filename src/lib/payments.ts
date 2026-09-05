@@ -9,6 +9,7 @@ import { buildPaymentEvent, logDeliveryEvent } from "@/lib/delivery";
 import { openInvoicesForProject, reconcileInvoice } from "@/lib/invoices";
 import { notifyUsers } from "@/lib/notify";
 import { allocatePayment } from "@/lib/projects";
+import { logSystemWrite } from "@/lib/system-audit";
 
 type DB = SupabaseClient<Database>;
 
@@ -160,6 +161,16 @@ export async function recordPayment(db: DB, input: RecordPaymentInput): Promise<
       link: "/finance",
       actorId: input.actorId,
     });
+    if (!input.actorId) {
+      await logSystemWrite(db, {
+        job: `payments:${input.source}`,
+        table: "recurring_income_entries",
+        rowId: entry.id,
+        action: "updated",
+        summary: `${entry.currency || currency || "LKR"} ${amount.toLocaleString()} received (recurring) via ${input.source}`,
+        meta: { invoice_id: entry.invoice_id, status },
+      });
+    }
     return {
       ok: true,
       paymentId: null,
@@ -311,6 +322,19 @@ export async function recordPayment(db: DB, input: RecordPaymentInput): Promise<
     link: projectId ? `/projects/${projectId}?tab=money` : "/finance",
     actorId: input.actorId,
   });
+
+  // T5.3 — a payment nobody clicked for (a slip, a gateway, a backfill)
+  // leaves a line the Team page can show.
+  if (!input.actorId) {
+    await logSystemWrite(db, {
+      job: `payments:${input.source}`,
+      table: paymentId ? "payments" : input.companyPaymentId ? "company_payments" : "payment_installments",
+      rowId: paymentId ?? input.companyPaymentId ?? installment?.id ?? null,
+      action: paymentId ? "created" : "updated",
+      summary: `${amountText} received via ${input.source}${invoiceStatus ? ` — invoice ${invoiceStatus.replace("_", " ")}` : ""}`,
+      meta: { source: input.source, project_id: projectId, invoice_ids: invoiceIds, slip_id: input.slipId ?? null },
+    });
+  }
 
   return { ok: true, paymentId, invoiceIds, invoiceStatus, firstPayment };
 }

@@ -9,6 +9,7 @@ import { STORAGE_BUCKETS } from "@/lib/constants";
 import type { Database, PaymentSlipMatch, PaymentSlipSource, SlipParsed } from "@/lib/database.types";
 import { notifyUsers } from "@/lib/notify";
 import { recordPayment } from "@/lib/payments";
+import { logSystemWrite } from "@/lib/system-audit";
 
 type DB = SupabaseClient<Database>;
 
@@ -198,6 +199,18 @@ export async function createSlip(db: DB, input: CreateSlipInput): Promise<Create
     .select("id")
     .single();
   if (error || !row) return { ok: false, error: error?.message ?? "Could not file the slip." };
+
+  // T5.3 — a slip nobody uploaded by hand (the WhatsApp classifier filed it).
+  if (input.source === "whatsapp") {
+    await logSystemWrite(db, {
+      job: "slips:whatsapp",
+      table: "payment_slips",
+      rowId: row.id,
+      action: "created",
+      summary: `Bank slip filed from WhatsApp${merged.amount ? ` — ${merged.currency ?? invoice?.currency ?? "LKR"} ${merged.amount.toLocaleString()}` : ""}${invoice ? " against an open invoice" : ""}${duplicate ? " (duplicate)" : ""}`,
+      meta: { invoice_id: invoice?.id ?? null, client_id: clientId, match, duplicate },
+    });
+  }
 
   // Finance hears about it; the queue does the rest.
   await notifyFinance(db, {

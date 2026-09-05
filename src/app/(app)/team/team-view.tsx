@@ -51,6 +51,7 @@ import {
   updateMemberRole,
 } from "./actions";
 import { ActivityModal } from "./activity-modal";
+import { SystemActivity, type SystemActivityRow } from "./system-activity";
 import { PingModal } from "./ping-modal";
 
 type MemberCommission = Commission & {
@@ -77,8 +78,11 @@ export function TeamView({
   currentUserId,
   currentUserName,
   appBaseUrl,
+  activity = [],
 }: {
   members: Profile[];
+  /** T5.3 — the merged people + system trail. */
+  activity?: SystemActivityRow[];
   invitations: Invitation[];
   commissions: MemberCommission[];
   /** 0088 — advances, so each card can show commission net of what's owed. */
@@ -508,6 +512,9 @@ export function TeamView({
           })}
         </div>
       </div>
+
+      {/* T5.3 — what people changed, beside what the system wrote */}
+      <SystemActivity rows={activity} />
 
       <EditMemberModal member={toEdit} onClose={() => setToEdit(null)} />
 

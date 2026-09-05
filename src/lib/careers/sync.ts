@@ -2,6 +2,7 @@ import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { logSystemWrite } from "@/lib/system-audit";
 import type { Database } from "@/lib/database.types";
 import { createWebsiteClient, isWebsiteSourceConfigured } from "@/lib/web-analytics/source";
 
@@ -135,6 +136,16 @@ export async function publishVacancy(
         synced_at: now,
       })
       .eq("id", vacancyId);
+
+    // T5.3 — the only writer of the website's vacancies leaves a line.
+    await logSystemWrite(crm, {
+      job: "careers",
+      table: "careers_vacancies",
+      rowId: vacancyId,
+      action: isActive ? "published" : "unpublished",
+      summary: `${row.title} ${isActive ? "published to" : "taken off"} the website`,
+      meta: { source_id: sourceId },
+    });
 
     return { ok: true, sourceId: sourceId as string };
   } catch (e) {

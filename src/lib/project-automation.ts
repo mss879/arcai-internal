@@ -6,6 +6,7 @@ import { AFTERCARE_TASKS } from "@/lib/constants";
 import type { Database } from "@/lib/database.types";
 import { nextInvoiceNumber } from "@/lib/invoice";
 import { settledAmount } from "@/lib/projects";
+import { logSystemWrite } from "@/lib/system-audit";
 import { isSmsConfigured, sendSms } from "@/lib/sms";
 import { countSmsSegments, normalizePhone } from "@/lib/sms-utils";
 
@@ -605,6 +606,16 @@ export async function generateProjectInvoice(
     .single();
 
   if (error || !invoice) return { ok: false, detail: error?.message ?? "Insert failed." };
+
+  // T5.3 — raised by the automation, not a person.
+  await logSystemWrite(db, {
+    job: "projects:autoInvoice",
+    table: "invoices",
+    rowId: invoice.id,
+    action: "created",
+    summary: `Invoice ${invoiceNumber} generated for ${project.name} — ${project.currency || "LKR"} ${balance.toLocaleString()} outstanding`,
+    meta: { project_id: projectId, grand_total: grandTotal, received, balance },
+  });
 
   if (extras?.length) {
     await db

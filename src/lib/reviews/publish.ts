@@ -2,6 +2,7 @@ import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { logSystemWrite } from "@/lib/system-audit";
 import type { Database } from "@/lib/database.types";
 import { createWebsiteClient } from "@/lib/web-analytics/source";
 
@@ -119,6 +120,16 @@ export async function publishReview(
         publish_error: null,
       })
       .eq("id", review.id);
+
+    // T5.3 — the only writer of the website's reviews leaves a line.
+    await logSystemWrite(db, {
+      job: "reviews",
+      table: "project_reviews",
+      rowId: review.id,
+      action: "published",
+      summary: `Review by ${row.client_name} published to the website`,
+      meta: { website_review_id: websiteReviewId, rating: row.rating },
+    });
 
     return { ok: true, websiteReviewId: websiteReviewId! };
   } catch (e) {

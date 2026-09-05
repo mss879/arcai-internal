@@ -2,6 +2,7 @@ import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { logSystemWrite } from "@/lib/system-audit";
 import type { Database, SocialMediaItem } from "@/lib/database.types";
 import { notifyUsers } from "@/lib/notify";
 import { decryptToken } from "@/lib/social/crypto";
@@ -99,6 +100,15 @@ export async function processDueSocialPosts(db: DB): Promise<SocialPublishResult
           .update({ status: "published" })
           .eq("id", post.carousel_post_id);
       }
+      // T5.3 — a post that went out to the world gets a line.
+      await logSystemWrite(db, {
+        job: "socialPublish",
+        table: "social_posts",
+        rowId: post.id,
+        action: "published",
+        summary: `Post published${outcome.permalink ? ` — ${outcome.permalink}` : dryRunEnabled() ? " (dry run)" : ""}`,
+        meta: { external_post_id: outcome.externalId ?? null, permalink: outcome.permalink ?? null, carousel_post_id: post.carousel_post_id ?? null },
+      });
       result.published += 1;
       continue;
     }

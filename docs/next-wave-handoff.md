@@ -1,20 +1,22 @@
-# Next Wave — handoff (third edition)
+# Next Wave — handoff (fourth edition — the wave is built)
 
 **Read this first, then `AGENTS.md` and `docs/projects-roadmap-handoff.md` §2/§4.**
-Updated 2026-09-06 at commit `HEAD` (see `git log -1`; last feature commit:
-"the right to be forgotten, and the right to a copy"). Paste this into a new chat, or say:
-*"Read `docs/next-wave-handoff.md` and continue from step 46."*
+Updated 2026-09-06 at commit `90b884d` ("backups written down, dead code out,
+the public surface documented"). **All 46 build steps are done.** There is
+nothing left to build in this wave; what remains is the push checklist in
+§1. Paste this into a new chat, or say:
+*"Read `docs/next-wave-handoff.md` — the wave is built; help me apply the
+migrations and push."*
 
-This file is refreshed after EVERY committed step, so it is always the
-current handover — if a chat is cut off, the previous step's entry here is
-complete and the next step has not started.
+This file was refreshed after every committed step, so each step's entry
+below is complete.
 
 ---
 
 ## 1. Where things stand
 
-**45 of 46 build steps are done (Track 4 is complete), plus an audit-and-fix
-pass over the first 26. 54 commits on `arc_ai_crm_system` `main` ahead of
+**46 of 46 build steps are done — all five tracks — plus an audit-and-fix
+pass over the first 26. 56 commits on `arc_ai_crm_system` `main` ahead of
 `origin/main`, plus 2 on `arc_ai_website`. Nothing is pushed to either
 remote.**
 
@@ -62,8 +64,25 @@ the file as it is now, not a copy taken earlier.
 holds §1 (the `expenses` category CHECK widened with `commission`) and §2
 (`profiles.capabilities` + CHECK + the all-four backfill for members, and
 the `capabilities_enforced` seed row), §3 (`system_events` + policies) and
-§4 (`error_events` + policies) and §5 (`clients.anonymised_at`). Step 46
-needs no SQL.
+§4 (`error_events` + policies) and §5 (`clients.anonymised_at`). It is
+complete; nothing else in the wave needs SQL.
+
+### The push checklist
+
+1. Apply `0112` → … → `0121` in the Supabase SQL editor, in order (`0120` on
+   a branch database first — see above). Every one is additive except the
+   documented backfills in `0120` and the members' capability backfill in
+   `0121` §2.
+2. Set the two new environment variables when you want the features:
+   `SOCIAL_TOKEN_KEY` (before connecting a social account on `/settings`)
+   and `SENTRY_DSN` (optional — errors are recorded in `error_events`
+   either way).
+3. Push `arc_ai_crm_system` `main` (CI runs the four-command check), then
+   `arc_ai_website` `main` on its own remote.
+4. Point an uptime monitor at `GET /api/health`.
+5. Leave `capabilities_enforced` OFF for a week (the sidebar already hides
+   areas members are not ticked for); switch it on from `/settings` once the
+   Team page's ticks look right.
 Apply it last, as the file stands when you push.
 
 `arc_ai_website` has its own two commits (`39cb034` UTM capture, `d2b9d1c`
@@ -131,7 +150,7 @@ client-login link) and needs no migration.
 
 ---
 
-### Track 5 — platform foundation (5 of 6)
+### Track 5 — platform foundation (COMPLETE)
 
 | Commit | Feature |
 | --- | --- |
@@ -140,6 +159,7 @@ client-login link) and needs no migration.
 | `(step 43)` | **T5.3** `system_events` (0121 §3) + `src/lib/system-audit.ts` `logSystemWrite()` (best-effort) / `listSystemEvents()`; called from `recordPayment()` (null actor), `generateProjectInvoice()`, `createRecurringInvoice()`, `processDueSocialPosts()`, `publishReview()`, `publishVacancy()`, `createSlip()` (whatsapp), `runCommissionPayout()`. Team page "System activity" (`team/system-activity.tsx`) merges `member_changes` + `system_events`, 7 days, people/system filter. |
 | `(step 44)` | **T5.5** `/api/health` (public + machine, rate-limited; DB ping, `automation_tick` + new `wa_agent_tick` stamps, env booleans, open-fault count → 200/503). `error_events` (0121 §4) + `src/lib/errors.ts` `captureError()` (fingerprinted, counted, admin notify on first sighting / 6h, raw Sentry envelope when `SENTRY_DSN`), hooked into the three tick routes; `src/app/error.tsx` + `global-error.tsx` → `POST /api/errors`; Errors panel on `/settings` (resolve / reopen); `docs/ops.md` runbook paragraph. |
 | `(step 45)` | **T5.7** `src/lib/client-erasure.ts`: `eraseClient(db, id, mode, {actorId})` (anonymise scrubs clients + wa_contacts/wa_messages + sms_messages + leads + email_messages + meeting_bookings + agreements + payment_slips objects/parse + client_login_codes, re-mints `statement_token`, stamps `anonymised_at`; delete refused with invoices/payments) and `exportClientData()` (zip via jszip). `GET /api/clients/[id]/export` (admin). `deleteClient()` on the list is now the erasure; `eraseClientAction()` with the typed name; "Export data" / "Erase…" on the client page. Both logged to `system_events` (job `gdpr`). |
+| `90b884d` | **T5.8** `docs/ops.md` backups section (daily backups + PITR; storage is not in `pg_dump`; the private `payment-slips` bucket holds images of bank-account details; secrets live in Netlify); `docs/api.md` (every public URL, its guard and its rate limit, the two public slip uploads); `sendCredentialsEmail()` removed; root `zz_*.mjs` and the untracked `mobile-voice-screen.tsx` deleted. |
 
 ## 3. The audit of steps 0–26
 
@@ -168,22 +188,14 @@ UI — the plan puts it under `/settings` (step 41).
 
 ---
 
-## 4. What remains — step 46
+## 4. What remains
 
-Numbers are the original plan's sequencing table.
-
-### Track 5 — platform foundation (migration **0121** exists — add sections to it)
-
-**46 · T5.8 Backups, dead code, `docs/api.md`** — S. `docs/ops.md`
-(Supabase daily backups / PITR; storage is not in `pg_dump`; the
-`payment-slips` bucket is private and holds bank-account images — say so).
-Delete `src/components/assistant/mobile-voice-screen.tsx` (untracked),
-`email.ts`'s `sendCredentialsEmail` (zero callers), root `zz_*.mjs` (grep
-first). `docs/api.md` for `/api/public/v1/*`, hooks, forms (incl. `utm`,
-`ref`), track, webhooks, `/api/health`, the rate limits, and the two
-assistant-free public POSTs added this wave (slip uploads).
-
----
+Nothing to build. The push checklist is in §1. Two things a later wave may
+want, both deliberately left: the WhatsApp admin tabs are gated by role, not
+by the `marketing` capability (an admin has every capability, so there was
+nothing to gate); and `agreements.pdf_path` objects are not removed on
+erasure (the bucket is not recorded on the row — the signature image inside
+the row IS nulled).
 
 ## 5. Corrections to the original plan
 
@@ -304,7 +316,7 @@ Five things the plan got wrong. They are all silent failures.
 
 - **Meta app review** for `instagram_content_publish` / `pages_manage_posts`
   takes weeks. `SOCIAL_DRY_RUN=1` runs the whole publish queue without calling
-  Meta. No `social_accounts` row can be created until step 41 builds the form.
+  Meta. Accounts are connected on `/settings` (needs `SOCIAL_TOKEN_KEY`).
 - **WhatsApp template approvals** are needed for slip confirmations and
   recurring reminders outside the 24h window. `notifyClient()` has no
   template rung on purpose (the only approved template is the portal link);

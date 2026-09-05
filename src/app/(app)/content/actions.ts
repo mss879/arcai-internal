@@ -25,6 +25,7 @@ import {
   processPendingCarousels,
   startCarouselGeneration,
 } from "@/lib/carousels";
+import { listActiveSocialAccounts, queueSocialPost } from "@/lib/social/queue";
 import type {
   ActionResult,
   CarouselSlide,
@@ -550,7 +551,8 @@ export async function sendForClientApproval(
  *
  * Only ever queues: the publisher owns the actual send, re-checks the
  * client's approval immediately before it, and holds a lease so two ticks
- * can't post the same thing twice.
+ * can't post the same thing twice. The rules live in queueSocialPost() so
+ * the assistant's card and this button can never disagree.
  */
 export async function scheduleSocialPost(input: {
   postId: string;
@@ -559,80 +561,64 @@ export async function scheduleSocialPost(input: {
 }): Promise<ActionResult<{ queued: number }>> {
   const profile = await getProfile();
   if (!profile) return { ok: false, error: "Not signed in." };
-  if (!input.accountIds.length) {
-    return { ok: false, error: "Pick at least one account." };
-  }
 
   const supabase = await createClient();
-  const { data: post } = await supabase
-    .from("carousel_posts")
-    .select("id, topic, caption, hashtags, chosen_option_id, client_id, client_status")
-    .eq("id", input.postId)
-    .maybeSingle();
-  if (!post) return { ok: false, error: "That post no longer exists." };
-  if (!post.chosen_option_id) {
-    return { ok: false, error: "Pick a design first." };
-  }
-  if (post.client_id && post.client_status !== "approved") {
-    return {
-      ok: false,
-      error: "The client hasn't approved this one yet.",
-    };
-  }
-
-  const { data: option } = await supabase
-    .from("carousel_options")
-    .select("slides")
-    .eq("id", post.chosen_option_id)
-    .maybeSingle();
-  const media = (option?.slides ?? [])
-    .filter((s) => s.image_url)
-    .sort((a, b) => a.index - b.index)
-    .map((s) => ({ url: s.image_url! }));
-  if (!media.length) {
-    return { ok: false, error: "That design has no rendered slides yet." };
-  }
-
-  const { data: accounts } = await supabase
-    .from("social_accounts")
-    .select("id, platform")
-    .in("id", input.accountIds)
-    .eq("active", true);
-  if (!accounts?.length) {
-    return { ok: false, error: "Those accounts aren't connected." };
-  }
-
-  const caption = [
-    post.caption,
-    post.hashtags.length
-      ? post.hashtags.map((h) => (h.startsWith("#") ? h : `#${h}`)).join(" ")
-      : null,
-  ]
-    .filter(Boolean)
-    .join("\n\n");
-
-  const { error } = await supabase.from("social_posts").insert(
-    accounts.map((a) => ({
-      platform: a.platform,
-      account_id: a.id,
-      carousel_post_id: post.id,
-      client_id: post.client_id,
-      caption,
-      media,
-      scheduled_for: input.scheduledFor,
-      status: "scheduled" as const,
-      created_by: profile.id,
-    })),
-  );
-  if (error) return { ok: false, error: error.message };
-
-  await supabase
-    .from("carousel_posts")
-    .update({ status: "scheduled" })
-    .eq("id", post.id);
+  const res = await queueSocialPost(supabase, {
+    postId: input.postId,
+    accountIds: input.accountIds,
+    scheduledFor: input.scheduledFor,
+    createdBy: profile.id,
+  });
+  if (!res.ok) return res;
 
   revalidatePath("/content");
-  return { ok: true, queued: accounts.length };
+  return { ok: true, queued: res.queued };
+}
+
+/** Take a post back off the queue before it goes out. */
+export async function cancelSocialPost(id: string): Promise<ActionResult> {
+  const profile = await getProfile();
+  if (!profile) return { ok: false, error: "Not signed in." };
+
+  const supabase = await createClient();
+  // Only from the states where nothing has left the building yet. A row that
+  // is `publishing` holds a lease — cancelling under it would race the send.
+  const { data, error } = await supabase
+    .from("social_posts")
+    .update({ status: "cancelled", locked_at: null })
+    .eq("id", id)
+    .in("status", ["draft", "scheduled", "failed"])
+    .select("id");
+  if (error) return { ok: false, error: error.message };
+  if (!data?.length) return { ok: false, error: "That one is already on its way." };
+
+  revalidatePath("/content");
+  return { ok: true };
+}
+
+/** Put a failed post back on the queue with a fresh set of attempts. */
+export async function retrySocialPost(id: string): Promise<ActionResult> {
+  const profile = await getProfile();
+  if (!profile) return { ok: false, error: "Not signed in." };
+
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("social_posts")
+    .update({
+      status: "scheduled",
+      attempts: 0,
+      error: null,
+      locked_at: null,
+      scheduled_for: new Date().toISOString(),
+    })
+    .eq("id", id)
+    .in("status", ["failed", "cancelled"])
+    .select("id");
+  if (error) return { ok: false, error: error.message };
+  if (!data?.length) return { ok: false, error: "Only a failed or cancelled post can be retried." };
+
+  revalidatePath("/content");
+  return { ok: true };
 }
 
 /** The accounts a post can go to. Never returns the token, encrypted or not. */
@@ -641,21 +627,5 @@ export async function listSocialAccounts(): Promise<
 > {
   const profile = await getProfile();
   if (!profile) return [];
-  const supabase = await createClient();
-  try {
-    const { data } = await supabase
-      .from("social_accounts")
-      .select("id, platform, name, client_id")
-      .eq("active", true)
-      .order("name");
-    return (data ?? []).map((a) => ({
-      id: a.id,
-      platform: a.platform,
-      name: a.name,
-      clientId: a.client_id,
-    }));
-  } catch {
-    // 0118 not applied yet.
-    return [];
-  }
+  return listActiveSocialAccounts(await createClient());
 }

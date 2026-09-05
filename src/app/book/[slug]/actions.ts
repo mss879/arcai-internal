@@ -1,7 +1,9 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
 
+import { clientIp, enforceRateLimit } from "@/lib/rate-limit";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { generateTimeSlots } from "@/lib/utils";
 
@@ -24,6 +26,16 @@ export async function submitBooking(input: {
   }
 
   const admin = createAdminClient();
+
+  // 0116 — the booking form is public. Six an hour from one connection is
+  // generous for a person and a low ceiling for a script filling the diary.
+  const limited = await enforceRateLimit(admin, `booking:${clientIp(await headers())}`, {
+    limit: 6,
+    windowSec: 3600,
+  });
+  if (!limited.ok) {
+    return { ok: false, error: "Too many bookings from this connection. Please try again later." };
+  }
 
   const { data: link } = await admin
     .from("meeting_links")

@@ -36,6 +36,7 @@ import {
   FolderKanban,
   KanbanSquare,
   LayoutList,
+  LayoutTemplate,
   ListChecks,
   MoreVertical,
   Pencil,
@@ -51,7 +52,9 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dropdown, DropdownItem } from "@/components/ui/dropdown";
 import { EmptyState } from "@/components/ui/empty-state";
+import { Field, Input } from "@/components/ui/input";
 import { MentionText } from "@/components/ui/mention-text";
+import { Modal } from "@/components/ui/modal";
 import { PageHeader } from "@/components/ui/page-header";
 import { TodoFormModal } from "@/components/todos/todo-form-modal";
 import {
@@ -70,8 +73,10 @@ import type {
 } from "@/lib/types";
 
 import {
+  applyTodoTemplate,
   deleteTodo,
   saveTodo,
+  saveTodoTemplate,
   setSubtaskDone,
   setTodoStatus,
   updateTodoPositions,
@@ -79,6 +84,8 @@ import {
 import { useRealtimeSyncTables } from "@/hooks/use-realtime-sync";
 
 type ProjectLite = { id: string; name: string };
+/** 0119 — a set of to-dos that can be raised at once. */
+type TemplateLite = { id: string; name: string; description: string | null; count: number };
 type ViewMode = "list" | "board";
 type SortKey = "smart" | "due" | "newest";
 type Bucket = "overdue" | "today" | "week" | "later" | "nodate" | "done";
@@ -126,11 +133,13 @@ export function TodosView({
   members,
   projects = [],
   currentUserId = null,
+  templates = [],
 }: {
   todos: TodoWithRelations[];
   members: MemberLite[];
   projects?: ProjectLite[];
   currentUserId?: string | null;
+  templates?: TemplateLite[];
 }) {
   useRealtimeSyncTables(["todos", "todo_subtasks"]);
 
@@ -180,6 +189,17 @@ export function TodosView({
   const [assigneeF, setAssigneeF] = React.useState("");
   const [priorityF, setPriorityF] = React.useState<TodoPriority | "">("");
   const [projectF, setProjectF] = React.useState("");
+  // 0119
+  const [labelF, setLabelF] = React.useState("");
+  const [applyingTemplate, setApplyingTemplate] = React.useState(false);
+  const [templateModal, setTemplateModal] = React.useState(false);
+  const [templateName, setTemplateName] = React.useState("");
+  const [savingTemplate, setSavingTemplate] = React.useState(false);
+
+  const allLabels = React.useMemo(
+    () => Array.from(new Set(tasks.flatMap((t) => t.labels ?? []))).sort(),
+    [tasks],
+  );
 
   // --- Selection (list bulk actions) ------------------------------
   const [selectMode, setSelectMode] = React.useState(false);
@@ -233,10 +253,11 @@ export function TodosView({
       if (assigneeF && t.assigned_to !== assigneeF) return false;
       if (priorityF && t.priority !== priorityF) return false;
       if (projectF && t.project_id !== projectF) return false;
+      if (labelF && !(t.labels ?? []).includes(labelF)) return false;
       if (mine && t.assigned_to !== currentUserId) return false;
       return true;
     });
-  }, [tasks, search, assigneeF, priorityF, projectF, mine, currentUserId]);
+  }, [tasks, search, assigneeF, priorityF, projectF, labelF, mine, currentUserId]);
 
   const taskMap = React.useMemo(() => {
     const m: Record<string, TodoWithRelations> = {};
@@ -490,8 +511,38 @@ export function TodosView({
     setCollapsed((prev) => ({ ...prev, [key]: !prev[key] }));
   }
 
+  // 0119 — raise a whole set, dated from today and filed under the project
+  // the board is currently filtered to.
+  async function applyTemplate(templateId: string) {
+    if (!templateId) return;
+    setApplyingTemplate(true);
+    const res = await applyTodoTemplate(templateId, {
+      projectId: projectF || null,
+      assignedTo: mine ? currentUserId : null,
+    });
+    setApplyingTemplate(false);
+    if (res.ok) {
+      toast.success(`${res.created} to-do${res.created === 1 ? "" : "s"} raised.`);
+      router.refresh();
+    } else toast.error(res.error);
+  }
+
+  async function saveSelectionAsTemplate() {
+    setSavingTemplate(true);
+    const res = await saveTodoTemplate({ name: templateName, todoIds: [...selected] });
+    setSavingTemplate(false);
+    if (res.ok) {
+      toast.success("Template saved — it's in the Apply menu now.");
+      setTemplateModal(false);
+      setTemplateName("");
+      setSelected(new Set());
+      setSelectMode(false);
+      router.refresh();
+    } else toast.error(res.error);
+  }
+
   const hasFilters =
-    !!search || !!assigneeF || !!priorityF || !!projectF || mine;
+    !!search || !!assigneeF || !!priorityF || !!projectF || !!labelF || mine;
   const activeTask = activeId ? taskMap[activeId] : null;
 
   // --- Render -----------------------------------------------------
@@ -622,6 +673,39 @@ export function TodosView({
             </select>
           )}
 
+          {allLabels.length > 0 && (
+            <select
+              value={labelF}
+              onChange={(e) => setLabelF(e.target.value)}
+              className={selectCls}
+              title="Label"
+            >
+              <option value="">Any label</option>
+              {allLabels.map((l) => (
+                <option key={l} value={l}>
+                  {l}
+                </option>
+              ))}
+            </select>
+          )}
+
+          {templates.length > 0 && (
+            <select
+              value=""
+              disabled={applyingTemplate}
+              onChange={(e) => void applyTemplate(e.target.value)}
+              className={selectCls}
+              title="Raise a saved set of to-dos"
+            >
+              <option value="">{applyingTemplate ? "Raising…" : "Apply template…"}</option>
+              {templates.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name} ({t.count})
+                </option>
+              ))}
+            </select>
+          )}
+
           {view === "list" && (
             <>
               <select
@@ -660,6 +744,7 @@ export function TodosView({
                 setAssigneeF("");
                 setPriorityF("");
                 setProjectF("");
+                setLabelF("");
                 setMine(false);
               }}
               className="inline-flex h-9 items-center rounded-lg px-2.5 text-xs font-medium text-slate-400 hover:text-slate-700"
@@ -696,6 +781,9 @@ export function TodosView({
             {selected.size} selected
           </span>
           <div className="ml-auto flex items-center gap-2">
+            <Button size="sm" variant="outline" onClick={() => setTemplateModal(true)}>
+              <LayoutTemplate className="h-4 w-4" /> Save as template
+            </Button>
             <Button size="sm" variant="outline" onClick={bulkMarkDone}>
               <Check className="h-4 w-4" /> Mark done
             </Button>
@@ -842,6 +930,37 @@ export function TodosView({
         description={`Delete ${selected.size} selected task(s)? This can't be undone.`}
         onConfirm={bulkDeleteConfirmed}
       />
+
+      {/* 0119 — the selection becomes a reusable set */}
+      <Modal
+        open={templateModal}
+        onClose={() => setTemplateModal(false)}
+        title="Save as a template"
+        description={`The ${selected.size} selected to-do${selected.size === 1 ? "" : "s"} — titles, priorities, labels and the gaps between their due dates. Applying it later raises fresh copies dated from that day.`}
+        footer={
+          <>
+            <Button variant="outline" onClick={() => setTemplateModal(false)} disabled={savingTemplate}>
+              Cancel
+            </Button>
+            <Button
+              onClick={saveSelectionAsTemplate}
+              loading={savingTemplate}
+              disabled={!templateName.trim()}
+            >
+              <LayoutTemplate className="h-4 w-4" /> Save template
+            </Button>
+          </>
+        }
+      >
+        <Field label="Template name" required>
+          <Input
+            value={templateName}
+            onChange={(e) => setTemplateName(e.target.value)}
+            placeholder="e.g. Website launch checklist"
+            autoFocus
+          />
+        </Field>
+      </Modal>
     </div>
   );
 }

@@ -103,6 +103,8 @@ export type PortalProject = {
   }[];
   /** 0117 — "book a call", when a booking link is configured. */
   bookingUrl: string | null;
+  /** 0117 — the client's own referral code and the link that carries it. */
+  referral: { code: string; link: string } | null;
   payments: {
     id: string;
     amount: number;
@@ -493,6 +495,11 @@ export function PortalClient({
               </a>
             )}
           </div>
+        )}
+
+        {/* ---- 0117: refer a friend ---- */}
+        {project.referral && (
+          <ReferralBlock referral={project.referral} copy={copy} />
         )}
 
         {/* ---- Asset timeline ---- */}
@@ -1252,6 +1259,55 @@ function Figure({
       >
         {value}
       </p>
+    </div>
+  );
+}
+
+/**
+ * Word of mouth, with a link so it can be counted (0117).
+ *
+ * The code is the client's own; the link lands on the website with `?ref=`
+ * and the contact form carries it into the CRM, where winning that lead
+ * credits this client. Nothing here promises a reward — that is a
+ * conversation, not a formula.
+ */
+function ReferralBlock({
+  referral,
+  copy,
+}: {
+  referral: { code: string; link: string };
+  copy: PortalCopy;
+}) {
+  const [copied, setCopied] = React.useState(false);
+
+  async function copyLink() {
+    try {
+      await navigator.clipboard.writeText(referral.link);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast.error(referral.link);
+    }
+  }
+
+  return (
+    <div className="rounded-3xl border border-white/30 bg-white/70 p-6 shadow-lg backdrop-blur-xl saturate-150">
+      <h3 className="text-sm font-bold uppercase tracking-wider text-slate-400">
+        {copy.referTitle}
+      </h3>
+      <p className="mt-2 text-sm text-slate-600">{copy.referBlurb}</p>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <span className="rounded-lg bg-white/80 px-2.5 py-1 font-mono text-xs text-slate-700 ring-1 ring-slate-200">
+          {referral.code}
+        </span>
+        <button
+          type="button"
+          onClick={copyLink}
+          className="rounded-xl bg-slate-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-slate-800"
+        >
+          {copied ? copy.referCopied : copy.referCopy}
+        </button>
+      </div>
     </div>
   );
 }

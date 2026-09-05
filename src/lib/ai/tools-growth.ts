@@ -885,10 +885,29 @@ type LeadRow = {
   lost_reason: string | null;
   expected_close_date: string | null;
   probability: number | null;
+  /** 0117 — what the form, the ad or the referral link said. */
+  utm: Record<string, unknown> | null;
 };
 
 const LEAD_COLUMNS =
-  "id, title, company, contact_name, value, stage_id, pipeline_id, status, score, source, assigned_to, last_activity_at, created_at, won_at, lost_at, lost_reason, expected_close_date, probability";
+  "id, title, company, contact_name, value, stage_id, pipeline_id, status, score, source, assigned_to, last_activity_at, created_at, won_at, lost_at, lost_reason, expected_close_date, probability, utm";
+
+/**
+ * 0117 — where a lead came from, for the "what is working" question. The
+ * campaign (utm_source) when the form recorded one, else the free-text source
+ * somebody typed, so a walk-in and a Facebook ad both land in a bucket.
+ */
+function leadOrigin(lead: LeadRow): string {
+  const utm = lead.utm ?? {};
+  const source = utm.utm_source;
+  if (typeof source === "string" && source.trim()) {
+    const medium = utm.utm_medium;
+    return typeof medium === "string" && medium.trim()
+      ? `${source.trim()} / ${medium.trim()}`
+      : source.trim();
+  }
+  return lead.source?.trim() || "unknown";
+}
 
 /** The lead activity kinds that count as "something moved". */
 const MOVEMENT_KINDS: LeadActivityKind[] = [
@@ -1144,6 +1163,55 @@ async function pipelineReport(
     );
   }
 
+  // 0117 — the same window, grouped by origin. New leads and wins per source
+  // is the number a marketing spend decision actually turns on.
+  const origins = new Map<string, { fresh: number; open: number; won: number; value: number }>();
+  const bump = (key: string, field: "fresh" | "open" | "won", value = 0) => {
+    const row = origins.get(key) ?? { fresh: 0, open: 0, won: 0, value: 0 };
+    row[field] += 1;
+    row.value += value;
+    origins.set(key, row);
+  };
+  for (const l of fresh) bump(leadOrigin(l), "fresh");
+  for (const l of open) bump(leadOrigin(l), "open", num(l.value));
+  for (const l of won) bump(leadOrigin(l), "won");
+  const bySource = [...origins.entries()]
+    .map(([origin, row]) => ({ origin, ...row }))
+    .sort((a, b) => b.fresh - a.fresh || b.open - a.open);
+
+  if (bySource.length > 1) {
+    const sourceColumns: ArtifactColumn[] = [
+      { key: "origin", label: "Source" },
+      { key: "fresh", label: `New in ${days}d`, format: "number", align: "right" },
+      { key: "open", label: "Open now", format: "number", align: "right" },
+      { key: "value", label: "Open value", format: "money", align: "right" },
+      { key: "won", label: `Won in ${days}d`, format: "number", align: "right" },
+    ];
+    artifacts.push(
+      tableArtifact({
+        title: "Where the leads came from",
+        subtitle: "utm_source when the form recorded one, otherwise the source typed on the lead",
+        href: `${boardHref}&utm=1`,
+        area: "crm",
+        columns: sourceColumns,
+        rows: rowsToTable(bySource, sourceColumns, (r) => ({
+          id: r.origin,
+          href: boardHref,
+          tone: (r.won > 0 ? "positive" : r.fresh > 0 ? "info" : "neutral") as ArtifactTone,
+          cells: {
+            origin: r.origin,
+            fresh: r.fresh,
+            open: r.open,
+            value: money(r.value),
+            won: r.won,
+          },
+        })),
+        footnote:
+          "A source with new leads and no wins is not necessarily failing — check the window. Attribution only exists for leads that arrived through the website form, a hook or the audit page.",
+      }),
+    );
+  }
+
   if (won.length || lost.length) {
     const closeColumns: ArtifactColumn[] = [
       { key: "lead", label: "Deal" },
@@ -1188,6 +1256,7 @@ async function pipelineReport(
       pipeline: pipeline.name,
       window_days: days,
       currency: "LKR",
+      by_source: bySource.slice(0, 12),
       open_deals: open.length,
       open_pipeline_value: money(openValue),
       basis: "open, untrashed leads only — won, lost and deleted deals excluded",

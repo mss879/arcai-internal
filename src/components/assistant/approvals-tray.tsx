@@ -25,12 +25,13 @@ import type {
   VoiceChat,
 } from "@/components/assistant/use-voice-chat";
 import type { AssistantCard } from "@/lib/assistant-cards";
+import type { AssistantApprovalKind } from "@/lib/database.types";
 import { useArcusRealtime } from "@/components/assistant/use-arcus-realtime";
 import { cn } from "@/lib/utils";
 
 type Approval = {
   id: string;
-  kind: "invoice_email" | "sms";
+  kind: AssistantApprovalKind;
   card: AssistantCard;
   mission_id: string | null;
   created_at: string;
@@ -109,6 +110,13 @@ export function ApprovalsTray({
           <div className="mb-2 flex items-center justify-between">
             <p className="text-sm font-semibold text-slate-900">
               Waiting for your OK
+              {/* 0119 — the rest of the queues live on one page. */}
+              <a
+                href="/approvals"
+                className="ml-2 text-[11px] font-medium text-primary-600 hover:underline"
+              >
+                All approvals →
+              </a>
             </p>
             <button
               type="button"
@@ -171,6 +179,18 @@ export function ApprovalsTray({
                       chat.sendWhatsApp &&
                       (async (whatsapp) => {
                         const res = await chat.sendWhatsApp!(whatsapp);
+                        await record(
+                          approval.id,
+                          res.ok ? "sent" : "failed",
+                          res.error,
+                        );
+                        return res;
+                      })
+                    }
+                    onScheduleSocial={
+                      chat.scheduleSocial &&
+                      (async (social) => {
+                        const res = await chat.scheduleSocial!(social);
                         await record(
                           approval.id,
                           res.ok ? "sent" : "failed",

@@ -16,6 +16,7 @@ import {
   ScrollText,
   Send,
   MessageCircle,
+  CalendarClock,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -27,6 +28,7 @@ import type {
   InvoiceCardData,
   ProposalCardData,
   SmsCardData,
+  SocialPostCardData,
   WhatsAppCardData,
 } from "@/lib/assistant-cards";
 import { cardArtifactId } from "@/lib/assistant-artifacts";
@@ -688,6 +690,102 @@ function ConfirmSendWhatsApp({
   );
 }
 
+/** A post lined up for the publish queue (0118). Queued only on a tap. */
+function ConfirmSocialPost({
+  social,
+  resolution,
+  onScheduleSocial,
+}: {
+  social: SocialPostCardData;
+  resolution?: CardResolution;
+  onScheduleSocial?: (social: SocialPostCardData) => Promise<SendInvoiceResult>;
+}) {
+  const [localState, setLocalState] = React.useState<SendState>("idle");
+  const [localError, setLocalError] = React.useState<string | null>(null);
+  const state = resolution?.state ?? localState;
+  const error = resolution?.error ?? localError;
+
+  const send = async () => {
+    setLocalState("sending");
+    setLocalError(null);
+    if (!onScheduleSocial) return;
+    const res = await onScheduleSocial(social);
+    if (res.ok) setLocalState("sent");
+    else {
+      setLocalError(res.error || "Could not schedule it.");
+      setLocalState("error");
+    }
+  };
+
+  const when = new Date(social.scheduled_for);
+  const whenLabel = Number.isNaN(when.getTime())
+    ? social.scheduled_for
+    : when.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+
+  return (
+    <>
+      <div className="flex items-center gap-2.5">
+        <div className="grid h-9 w-9 place-items-center rounded-xl bg-violet-50 text-violet-600">
+          <CalendarClock className="h-4.5 w-4.5" />
+        </div>
+        <div className="leading-tight">
+          <p className="text-sm font-semibold text-slate-900">Schedule a post</p>
+          <p className="text-[11px] text-slate-400">
+            {social.accounts
+              .map((a) => `${a.platform === "instagram" ? "IG" : "FB"} · ${a.name}`)
+              .join(", ")}
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-3 rounded-xl bg-slate-50 px-3 py-2.5">
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+          {social.topic} · {social.media_count} image{social.media_count === 1 ? "" : "s"}
+        </p>
+        <p className="mt-0.5 line-clamp-6 whitespace-pre-line text-[13px] leading-relaxed text-slate-800">
+          {social.caption}
+        </p>
+        <p className="mt-2 text-[11px] text-slate-500">Goes out {whenLabel}</p>
+      </div>
+
+      {social.client_name && (
+        <p
+          className={
+            social.client_approved
+              ? "mt-2 text-[11px] text-emerald-600"
+              : "mt-2 flex items-start gap-1.5 text-[11px] text-amber-600"
+          }
+        >
+          {social.client_approved ? (
+            `Approved by ${social.client_name}.`
+          ) : (
+            <>
+              <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              {social.client_name} hasn&apos;t approved this yet — it will be refused.
+            </>
+          )}
+        </p>
+      )}
+
+      {onScheduleSocial ? (
+        <ConfirmFooter
+          state={state}
+          error={error ?? null}
+          sentLabel="On the queue"
+          sendLabel="Schedule it"
+          hint="Queued now, posted at that time. The publisher re-checks the client's approval first."
+          onSend={send}
+          onCancel={() => setLocalState("cancelled")}
+        />
+      ) : (
+        <p className="mt-2.5 text-[13px] text-slate-400">
+          Open Arcus to schedule this.
+        </p>
+      )}
+    </>
+  );
+}
+
 /**
  * A saved proposal, with the branded PDF a tap away. Nothing here sends
  * anything — the proposal is already stored under Proposals; this is the
@@ -850,6 +948,7 @@ export function AssistantCardView({
   onApproveMission,
   onSendEmail,
   onSendWhatsApp,
+  onScheduleSocial,
 }: {
   card: AssistantCard;
   onSend: (
@@ -865,6 +964,8 @@ export function AssistantCardView({
    */
   onSendEmail?: (email: EmailCardData) => Promise<SendInvoiceResult>;
   onSendWhatsApp?: (whatsapp: WhatsAppCardData) => Promise<SendInvoiceResult>;
+  /** 0118 — put a prepared post on the publish queue. */
+  onScheduleSocial?: (social: SocialPostCardData) => Promise<SendInvoiceResult>;
   /**
    * Approve a planned mission. Omitted on surfaces that cannot start one —
    * the card then shows the plan without an Approve button rather than a
@@ -903,6 +1004,13 @@ export function AssistantCardView({
           whatsapp={card.whatsapp}
           resolution={card.resolution}
           onSendWhatsApp={onSendWhatsApp}
+        />
+      )}
+      {card.type === "confirm_social_post" && (
+        <ConfirmSocialPost
+          social={card.social}
+          resolution={card.resolution}
+          onScheduleSocial={onScheduleSocial}
         />
       )}
       {card.type === "proposal" && (

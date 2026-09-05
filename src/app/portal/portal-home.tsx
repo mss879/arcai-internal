@@ -13,14 +13,19 @@ import Link from "next/link";
 import { format, parseISO } from "date-fns";
 import {
   ArrowUpRight,
+  CalendarDays,
+  Download,
   FileText,
+  Gift,
   LogOut,
   OctagonPause,
+  PenLine,
   Receipt,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/ui/copy-button";
 import { DELIVERY_STAGES, DELIVERY_STAGE_META } from "@/lib/constants";
 import type { DeliveryStage } from "@/lib/types";
 import { cn, formatCurrency } from "@/lib/utils";
@@ -65,18 +70,58 @@ export type PortalQuote = {
   validUntil: string | null;
 };
 
+/** 0117 — a file the team shared, with a link minted for this page load. */
+export type PortalFile = {
+  id: string;
+  title: string;
+  url: string;
+  version: number;
+  project: string;
+  createdAt: string;
+};
+
+export type PortalAgreement = {
+  id: string;
+  kind: string;
+  title: string;
+  status: string;
+  url: string;
+  signedAt: string | null;
+};
+
+export type PortalMeeting = {
+  id: string;
+  title: string;
+  at: string;
+  durationMinutes: number;
+  location: string | null;
+  joinUrl: string | null;
+  icsUrl: string | null;
+};
+
 export function PortalHome({
   clientName,
   company,
   projects,
   invoices,
   quotes,
+  files = [],
+  agreements = [],
+  meetings = [],
+  bookingUrl = null,
+  referral = null,
 }: {
   clientName: string;
   company: string | null;
   projects: PortalProject[];
   invoices: PortalInvoice[];
   quotes: PortalQuote[];
+  /** 0117 — the same things the per-project portal shows, across all of them. */
+  files?: PortalFile[];
+  agreements?: PortalAgreement[];
+  meetings?: PortalMeeting[];
+  bookingUrl?: string | null;
+  referral?: { code: string; link: string } | null;
   appUrl: string;
 }) {
   const [signingOut, setSigningOut] = React.useState(false);
@@ -269,6 +314,118 @@ export function PortalHome({
           </Section>
         )}
 
+        {/* 0117 — files, signatures and the diary, across every project */}
+        {files.length > 0 && (
+          <Section title="Your files" icon={<Download className="h-4 w-4" />}>
+            {files.map((f) => (
+              <Row
+                key={f.id}
+                href={f.url}
+                title={f.version > 1 ? `${f.title} (v${f.version})` : f.title}
+                subtitle={f.project}
+                right={format(parseISO(f.createdAt), "d MMM yyyy")}
+              />
+            ))}
+            <li className="px-5 py-2 text-[11px] text-slate-400">
+              Download links expire after an hour — reopen this page for fresh ones.
+            </li>
+          </Section>
+        )}
+
+        {agreements.length > 0 && (
+          <Section title="To sign" icon={<PenLine className="h-4 w-4" />}>
+            {agreements.map((a) => (
+              <Row
+                key={a.id}
+                href={a.url}
+                title={a.title}
+                subtitle={a.kind.toUpperCase()}
+                badge={
+                  a.signedAt ? (
+                    <Badge className="bg-emerald-50 text-emerald-700 ring-emerald-200">
+                      Signed
+                    </Badge>
+                  ) : a.status === "declined" ? (
+                    <Badge className="bg-rose-50 text-rose-600 ring-rose-200">Declined</Badge>
+                  ) : (
+                    <Badge className="bg-amber-50 text-amber-700 ring-amber-200">
+                      Needs your signature
+                    </Badge>
+                  )
+                }
+              />
+            ))}
+          </Section>
+        )}
+
+        {(meetings.length > 0 || bookingUrl) && (
+          <section>
+            <h2 className="mb-2 flex items-center gap-1.5 px-1 text-xs font-semibold uppercase tracking-wider text-slate-500">
+              <CalendarDays className="h-4 w-4" />
+              Coming up
+            </h2>
+            <div className="space-y-2">
+              {meetings.map((m) => (
+                <div
+                  key={m.id}
+                  className="rounded-2xl border border-slate-200 bg-white px-5 py-3 shadow-sm"
+                >
+                  <p className="text-sm font-medium text-slate-900">{m.title}</p>
+                  <p className="text-xs text-slate-500">
+                    {format(parseISO(m.at), "EEE d MMM, h:mm a")} · {m.durationMinutes} min
+                    {m.location ? ` · ${m.location}` : ""}
+                  </p>
+                  <div className="mt-1.5 flex flex-wrap gap-3 text-xs font-medium">
+                    {m.icsUrl && (
+                      <a href={m.icsUrl} className="text-primary-600 hover:underline">
+                        Add to calendar
+                      </a>
+                    )}
+                    {m.joinUrl && (
+                      <a
+                        href={m.joinUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-primary-600 hover:underline"
+                      >
+                        Join
+                      </a>
+                    )}
+                  </div>
+                </div>
+              ))}
+              {bookingUrl && (
+                <Link
+                  href={bookingUrl}
+                  className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800"
+                >
+                  <CalendarDays className="h-4 w-4" />
+                  Book a call with us
+                </Link>
+              )}
+            </div>
+          </section>
+        )}
+
+        {/* 0117 — word of mouth, with a link so it can be counted */}
+        {referral && (
+          <section className="rounded-2xl border border-primary-100 bg-primary-50/60 p-5">
+            <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+              <Gift className="h-4 w-4 text-primary-600" />
+              Know someone who needs this?
+            </h2>
+            <p className="mt-1 text-sm text-slate-600">
+              Share your link — when they become a client, we&apos;ll thank you properly.
+            </p>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <span className="rounded-lg bg-white px-2.5 py-1 font-mono text-xs text-slate-700 ring-1 ring-slate-200">
+                {referral.code}
+              </span>
+              <CopyButton value={referral.link} label="Copy your link" />
+            </div>
+          </section>
+        )}
+
         <p className="pb-6 text-center text-xs text-slate-400">
           Questions about any of this? Just reply on WhatsApp — we&apos;re there.
         </p>
@@ -372,7 +529,7 @@ function Row({
   href: string | null;
   title: string;
   subtitle: string;
-  right: string;
+  right?: string;
   badge?: React.ReactNode;
 }) {
   const inner = (
@@ -383,9 +540,11 @@ function Row({
       </div>
       <div className="flex shrink-0 items-center gap-2">
         {badge}
-        <span className="text-sm font-semibold tabular-nums text-slate-700">
-          {right}
-        </span>
+        {right && (
+          <span className="text-sm font-semibold tabular-nums text-slate-700">
+            {right}
+          </span>
+        )}
       </div>
     </div>
   );

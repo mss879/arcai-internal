@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 
+import { approvalsCount } from "@/lib/approvals";
 import { getProfile } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import type { ActionResult } from "@/lib/types";
@@ -119,4 +120,12 @@ export async function decideApproval(
   revalidatePath("/approvals");
   revalidatePath("/dashboard");
   return { ok: true };
+}
+
+/** The topbar badge's number — every queue, one round-trip (approvals_count). */
+export async function getApprovalsCount(): Promise<number> {
+  const profile = await getProfile();
+  if (!profile) return 0;
+  const supabase = await createClient();
+  return approvalsCount(supabase).catch(() => 0);
 }

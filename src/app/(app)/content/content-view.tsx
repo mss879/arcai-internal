@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { CalendarDays, History, Images, Sparkles } from "lucide-react";
+import { CalendarDays, History, Images, Send, Sparkles } from "lucide-react";
 
 import { PageHeader } from "@/components/ui/page-header";
 import { cn } from "@/lib/utils";
@@ -17,8 +17,9 @@ import { GenerateTab } from "./generate-tab";
 import { CalendarTab } from "./calendar-tab";
 import { ReferencesTab } from "./references-tab";
 import { HistoryTab } from "./history-tab";
+import { PublishingTab, type SocialPostRow } from "./publishing-tab";
 
-type Tab = "generate" | "calendar" | "references" | "history";
+type Tab = "generate" | "calendar" | "references" | "history" | "publishing";
 
 export function ContentView({
   references,
@@ -26,6 +27,8 @@ export function ContentView({
   carouselPosts,
   carouselOptions,
   clients,
+  socialPosts = [],
+  socialDryRun = false,
   geminiReady,
   carouselReady,
 }: {
@@ -35,6 +38,9 @@ export function ContentView({
   carouselOptions: CarouselOption[];
   /** 0118 — for the client picker on a post. */
   clients: { id: string; name: string }[];
+  /** 0118 — the publish queue, newest first. */
+  socialPosts?: SocialPostRow[];
+  socialDryRun?: boolean;
   geminiReady: boolean;
   carouselReady: boolean;
 }) {
@@ -43,7 +49,11 @@ export function ContentView({
     "content_generations",
     "carousel_posts",
     "carousel_options",
+    "social_posts",
   ]);
+  const queued = socialPosts.filter(
+    (p) => p.status === "scheduled" || p.status === "publishing",
+  ).length;
   const [tab, setTab] = React.useState<Tab>("generate");
 
   return (
@@ -68,6 +78,14 @@ export function ContentView({
           count={carouselPosts.length}
         >
           Calendar
+        </TabButton>
+        <TabButton
+          active={tab === "publishing"}
+          onClick={() => setTab("publishing")}
+          icon={<Send className="h-4 w-4" />}
+          count={queued}
+        >
+          Publishing
         </TabButton>
         <TabButton
           active={tab === "references"}
@@ -101,6 +119,9 @@ export function ContentView({
           clients={clients}
           carouselReady={carouselReady}
         />
+      )}
+      {tab === "publishing" && (
+        <PublishingTab posts={socialPosts} dryRun={socialDryRun} />
       )}
       {tab === "references" && <ReferencesTab references={references} />}
       {tab === "history" && <HistoryTab generations={generations} />}

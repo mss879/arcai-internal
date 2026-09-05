@@ -738,6 +738,8 @@ export type SegmentFilters = {
   q?: string;
   tag?: string;
   source?: string;
+  /** 0117 — leads.utm.utm_source. */
+  utm_source?: string;
   assigned_to?: string;
   score?: string;
   status?: string;

@@ -7,6 +7,7 @@ import { format } from "date-fns";
 import { toast } from "sonner";
 import {
   Download,
+  FileSignature,
   FolderKanban,
   Link2,
   Mail,
@@ -30,6 +31,20 @@ import { downloadProposalPdf } from "./download-pdf";
 import { ProposalPdfFrame } from "./proposal-pdf-frame";
 import { ComposeEmailModal } from "@/components/email/compose-email-modal";
 import { firstNameOf } from "@/lib/email-templates";
+
+/**
+ * 0117 — raise the contract behind an accepted proposal, already linked to
+ * it and to the client, so the agreement page needs nothing re-found.
+ */
+function agreementHref(p: Proposal): string {
+  const params = new URLSearchParams({
+    new: "1",
+    proposal: p.id,
+    title: `${p.project_name} — services agreement`,
+  });
+  if (p.client_id) params.set("client", p.client_id);
+  return `/agreements?${params.toString()}`;
+}
 
 /** Where the client signs. Absolute, because it gets pasted into a message. */
 function shareUrl(token: string): string {
@@ -166,6 +181,12 @@ export function PastProposals({
                       <Mail className="h-4 w-4" />
                       Email
                     </Button>
+                    <Link href={agreementHref(p)}>
+                      <Button size="sm" variant="ghost" title="Raise the contract behind this proposal">
+                        <FileSignature className="h-4 w-4" />
+                        Agreement
+                      </Button>
+                    </Link>
                     <Button size="sm" variant="ghost" onClick={() => onEdit(p)}>
                       <Pencil className="h-4 w-4" />
                       Edit

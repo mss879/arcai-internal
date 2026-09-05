@@ -9,6 +9,7 @@ import type {
   CardResolution,
   EmailCardData,
   SmsCardData,
+  SocialPostCardData,
   WhatsAppCardData,
 } from "@/lib/assistant-cards";
 import {
@@ -182,6 +183,8 @@ const CONFIRM_CARD_TYPES = new Set<AssistantCard["type"]>([
   // 0115
   "confirm_send_email",
   "confirm_send_whatsapp",
+  // 0118
+  "confirm_social_post",
 ]);
 
 /** Narrows to the cards that carry a `resolution`. */
@@ -336,6 +339,8 @@ export type VoiceChat = {
    */
   sendEmail?: (email: EmailCardData) => Promise<SendInvoiceResult>;
   sendWhatsApp?: (whatsapp: WhatsAppCardData) => Promise<SendInvoiceResult>;
+  /** 0118 — put a prepared post on the publish queue. Optional like the two above. */
+  scheduleSocial?: (social: SocialPostCardData) => Promise<SendInvoiceResult>;
   /** Start a mission the user approved (0103). */
   approveMission: (missionId: string) => Promise<SendInvoiceResult>;
   /** True while the mic re-opens itself after every reply (0104). */
@@ -1336,6 +1341,31 @@ export function useVoiceChat(): VoiceChat {
     [],
   );
 
+  const scheduleSocial = React.useCallback(
+    async (social: SocialPostCardData): Promise<SendInvoiceResult> => {
+      pendingConfirmRef.current = null;
+      try {
+        const res = await fetch("/api/assistant/schedule-social-post", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            postId: social.post_id,
+            accountIds: social.accounts.map((a) => a.id),
+            scheduledFor: social.scheduled_for,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data?.ok) {
+          return { ok: false, error: data?.error || "Could not schedule the post." };
+        }
+        return { ok: true };
+      } catch {
+        return { ok: false, error: "Could not reach the server." };
+      }
+    },
+    [],
+  );
+
   /**
    * If a confirm card is pending and the user's words are a clear yes or no,
    * resolve it right here — the send still happens through the same
@@ -1385,9 +1415,11 @@ export function useVoiceChat(): VoiceChat {
             ? await sendEmail(card.email)
             : card.type === "confirm_send_whatsapp"
               ? await sendWhatsApp(card.whatsapp)
-              : card.type === "confirm_send"
-                ? await sendInvoice(card.invoice.id, card.emails, card.message)
-                : { ok: false as const, error: "Nothing to send." };
+              : card.type === "confirm_social_post"
+                ? await scheduleSocial(card.social)
+                : card.type === "confirm_send"
+                  ? await sendInvoice(card.invoice.id, card.emails, card.message)
+                  : { ok: false as const, error: "Nothing to send." };
 
       let reply: string;
       if (res.ok) {
@@ -1399,9 +1431,11 @@ export function useVoiceChat(): VoiceChat {
               ? `Done — the email is on its way to ${card.email.to.join(", ")}.`
               : card.type === "confirm_send_whatsapp"
                 ? `Done — sent to ${card.whatsapp.to_display}. I've stepped back from that chat.`
-                : card.type === "confirm_send"
-                  ? `Done — the invoice is on its way to ${card.emails.join(", ")}.`
-                  : "Done.";
+                : card.type === "confirm_social_post"
+                  ? `Done — “${card.social.topic}” is on the queue for ${card.social.accounts.length} account${card.social.accounts.length === 1 ? "" : "s"}.`
+                  : card.type === "confirm_send"
+                    ? `Done — the invoice is on its way to ${card.emails.join(", ")}.`
+                    : "Done.";
       } else {
         updateCardResolution(pending, { state: "error", error: res.error });
         reply = `That didn't go through — ${res.error ?? "the send failed"}. You can tap Try again on the card.`;
@@ -1412,6 +1446,7 @@ export function useVoiceChat(): VoiceChat {
     },
     [
       appendThreadMessages,
+      scheduleSocial,
       sendEmail,
       sendInvoice,
       sendSms,
@@ -2203,6 +2238,7 @@ export function useVoiceChat(): VoiceChat {
     sendSms,
     sendEmail,
     sendWhatsApp,
+    scheduleSocial,
     approveMission,
     handsFree,
     setHandsFree,

@@ -7,6 +7,8 @@ import type {
   Database,
   KbVisibility,
   ProjectStatus,
+  SocialPostStatus,
+  TargetKind,
   TodoPriority,
   TodoStatus,
 } from "@/lib/database.types";
@@ -18,6 +20,7 @@ import type {
   ProposalCardData,
   SmsCardData,
   WhatsAppCardData,
+  SocialPostCardData,
 } from "@/lib/assistant-cards";
 import type {
   Artifact,
@@ -27,6 +30,8 @@ import type {
 import { rowsToTable, tableArtifact } from "@/lib/assistant-artifacts";
 import { DELIVERY_STAGES } from "@/lib/constants";
 import { notifyUsers } from "@/lib/notify";
+import { listActiveSocialAccounts } from "@/lib/social/queue";
+import { periodFor, targetsProgress, upsertTarget } from "@/lib/targets";
 import { isWhatsAppConfigured } from "@/lib/whatsapp";
 import { topLeadPosition } from "@/lib/crm";
 import { nextInvoiceNumber } from "@/lib/invoice";
@@ -1435,6 +1440,121 @@ export const ASSISTANT_TOOLS: ToolSchema[] = [
           },
         },
         required: ["title", "body"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "kb_page",
+      description:
+        "Read one knowledge-base page in full, by its title or slug. Use after kb_search when the snippet isn't enough, or when the user names a page ('open the refund policy page').",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "The page's title or slug." },
+        },
+        required: ["query"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "targets_report",
+      description:
+        "This month's targets and how they're going — revenue, deals won, deliveries, new leads, hours — for the team and per person. Use for 'are we on target', 'how is Musa doing against his number', 'what did we aim for this month'. Reads the same numbers as the Team page and Finance.",
+      parameters: {
+        type: "object",
+        properties: {
+          period: {
+            type: "string",
+            description: "Month as YYYY-MM. Defaults to the current month.",
+          },
+        },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "set_target",
+      description:
+        "Set (or clear, with amount 0) a monthly target — for the whole team, or for one person when `member` is given. Admins only. Use for 'set this month's revenue target to 2 million', 'give Musa a target of 5 deals in October'.",
+      parameters: {
+        type: "object",
+        properties: {
+          kind: {
+            type: "string",
+            enum: ["revenue", "deals_won", "deliveries", "leads", "hours"],
+          },
+          amount: { type: "number", description: "The target. 0 removes it." },
+          period: {
+            type: "string",
+            description: "Month as YYYY-MM. Defaults to the current month.",
+          },
+          member: {
+            type: "string",
+            description: "Team member's name for a personal target. Omit for the team.",
+          },
+          note: { type: "string" },
+        },
+        required: ["kind", "amount"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "content_queue",
+      description:
+        "What's on the social publish queue — scheduled, published, failed — and which posts are still waiting for a client's approval. Use for 'what's going out this week', 'did the Colombo post go up', 'anything stuck', 'who hasn't approved their post'.",
+      parameters: {
+        type: "object",
+        properties: {
+          status: {
+            type: "string",
+            enum: ["scheduled", "publishing", "published", "failed", "cancelled"],
+            description: "Only this state. Omit for everything recent.",
+          },
+        },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "schedule_social_post",
+      description:
+        "Line up a Content Studio carousel post for Instagram and/or Facebook and show the user a confirmation. Use for 'schedule the Colombo post for Friday 9am', 'post that on Instagram tomorrow'. IMPORTANT: this does NOT queue it — the user must tap Schedule. The post must already have a chosen design; a post attached to a client must be approved by them first.",
+      parameters: {
+        type: "object",
+        properties: {
+          topic_query: {
+            type: "string",
+            description: "Words from the post's topic, to find it on the calendar.",
+          },
+          platform: {
+            type: "string",
+            enum: ["instagram", "facebook", "both"],
+            description: "Where to post. Defaults to every connected account.",
+          },
+          account_query: {
+            type: "string",
+            description: "Part of an account name, when there is more than one per platform.",
+          },
+          when: {
+            type: "string",
+            description:
+              "When it should go out, as an ISO timestamp or 'YYYY-MM-DD HH:mm' in Sri Lanka time. Defaults to the post's calendar date at 9am.",
+          },
+        },
+        required: ["topic_query"],
         additionalProperties: false,
       },
     },
@@ -4174,6 +4294,343 @@ export async function executeTool(
           label: `Knowledge: ${title}`,
           href: "/kb",
         },
+      };
+    }
+
+    case "kb_page": {
+      const query = String(args.query ?? "").trim();
+      if (!query) return { content: { ok: false, error: "Which page?" } };
+      const slug = query
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+      const safe = query.replace(/[%,()]/g, " ").trim();
+      try {
+        const { data } = await supabase
+          .from("kb_pages")
+          .select("id, slug, title, category, visibility, body_md, updated_at")
+          .or(`slug.eq.${slug},title.ilike.%${safe}%`)
+          .order("updated_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (!data) return { content: { ok: false, error: `No page called "${query}".` } };
+        return {
+          content: {
+            ok: true,
+            title: data.title,
+            category: data.category,
+            visibility: data.visibility,
+            updated_at: data.updated_at,
+            body: data.body_md.slice(0, 8_000),
+            note: "This is what the team wrote down. Quote it; don't improve on it.",
+          },
+          event: { kind: "read", label: `Knowledge: ${data.title}`, href: "/kb" },
+        };
+      } catch {
+        return { content: { ok: false, error: "The knowledge base isn't set up yet." } };
+      }
+    }
+
+    case "targets_report": {
+      const asked = String(args.period ?? "").trim();
+      const period = /^\d{4}-\d{2}$/.test(asked)
+        ? `${asked}-01`
+        : periodFor(new Date(`${ctx.today}T00:00:00.000Z`));
+      const rows = await targetsProgress(supabase, period).catch(() => []);
+      if (!rows.length)
+        return {
+          content: {
+            ok: true,
+            period: period.slice(0, 7),
+            targets: [],
+            note: "No targets set for that month. An admin can set one with set_target.",
+          },
+        };
+      return {
+        content: {
+          ok: true,
+          period: period.slice(0, 7),
+          currency: "LKR",
+          targets: rows.map((r) => ({
+            kind: r.kind,
+            who: r.name ?? "Team",
+            target: r.target,
+            actual: r.actual,
+            percent: r.percent,
+            behind: r.percent < 100,
+          })),
+          note: "Revenue here is the same 'money in' the Finance page shows.",
+        },
+        event: { kind: "read", label: "Targets", href: "/team" },
+      };
+    }
+
+    case "set_target": {
+      const kinds: TargetKind[] = ["revenue", "deals_won", "deliveries", "leads", "hours"];
+      const kind = kinds.find((k) => k === args.kind);
+      if (!kind) return { content: { ok: false, error: "Which kind of target?" } };
+      const amount = Number(args.amount);
+      if (!Number.isFinite(amount) || amount < 0)
+        return { content: { ok: false, error: "The amount has to be a number." } };
+
+      // A target somebody sets for themselves is a note, not a target.
+      const { data: me } = await supabase
+        .from("profiles")
+        .select("role")
+        .eq("id", ctx.userId)
+        .maybeSingle();
+      if (me?.role !== "admin")
+        return { content: { ok: false, error: "Only an admin can set targets." } };
+
+      const asked = String(args.period ?? "").trim();
+      const period = /^\d{4}-\d{2}$/.test(asked)
+        ? `${asked}-01`
+        : periodFor(new Date(`${ctx.today}T00:00:00.000Z`));
+
+      const memberName = String(args.member ?? "").trim();
+      const userId = memberName ? await resolveMemberId(ctx, memberName) : null;
+      if (memberName && !userId)
+        return { content: { ok: false, error: `No team member called "${memberName}".` } };
+
+      const res = await upsertTarget(supabase, {
+        userId,
+        period,
+        kind,
+        amount,
+        note: typeof args.note === "string" ? args.note : null,
+        createdBy: ctx.userId,
+      });
+      if (!res.ok) return { content: { ok: false, error: res.error } };
+
+      return {
+        content: {
+          ok: true,
+          kind,
+          who: memberName || "Team",
+          period: period.slice(0, 7),
+          amount,
+          note: amount === 0 ? "Target removed." : "Saved. The dashboard and Team page show it now.",
+        },
+        event: {
+          kind: "updated" as const,
+          label: amount === 0 ? `Removed ${kind} target` : `Target: ${kind} ${amount}`,
+          href: "/team",
+        },
+      };
+    }
+
+    case "content_queue": {
+      const statuses: SocialPostStatus[] = [
+        "scheduled",
+        "publishing",
+        "published",
+        "failed",
+        "cancelled",
+      ];
+      const status = statuses.find((v) => v === args.status) ?? null;
+      try {
+        let query = supabase
+          .from("social_posts")
+          .select(
+            "id, platform, caption, scheduled_for, status, permalink, error, attempts, client_id, carousel_post_id",
+          )
+          .order("scheduled_for", { ascending: false })
+          .limit(20);
+        if (status) query = query.eq("status", status);
+        const [{ data: posts }, { data: awaiting }] = await Promise.all([
+          query,
+          supabase
+            .from("carousel_posts")
+            .select("id, topic, scheduled_for, client_id")
+            .eq("client_status", "sent")
+            .order("scheduled_for", { ascending: true })
+            .limit(20),
+        ]);
+
+        const clientIds = [
+          ...new Set(
+            [...(posts ?? []), ...(awaiting ?? [])]
+              .map((r) => r.client_id)
+              .filter((id): id is string => Boolean(id)),
+          ),
+        ];
+        const clientName = new Map<string, string>();
+        if (clientIds.length) {
+          const { data: clients } = await supabase
+            .from("clients")
+            .select("id, name")
+            .in("id", clientIds);
+          for (const c of clients ?? []) clientName.set(c.id, c.name);
+        }
+        const topicIds = [
+          ...new Set((posts ?? []).map((p) => p.carousel_post_id).filter(Boolean)),
+        ] as string[];
+        const topicById = new Map<string, string>();
+        if (topicIds.length) {
+          const { data: topics } = await supabase
+            .from("carousel_posts")
+            .select("id, topic")
+            .in("id", topicIds);
+          for (const t of topics ?? []) topicById.set(t.id, t.topic);
+        }
+
+        return {
+          content: {
+            ok: true,
+            queue: (posts ?? []).map((p) => ({
+              id: p.id,
+              topic: p.carousel_post_id ? (topicById.get(p.carousel_post_id) ?? null) : null,
+              platform: p.platform,
+              scheduled_for: p.scheduled_for,
+              status: p.status,
+              permalink: p.permalink,
+              error: p.error,
+              attempts: p.attempts,
+              client: p.client_id ? (clientName.get(p.client_id) ?? null) : null,
+              caption: p.caption.slice(0, 140),
+            })),
+            awaiting_client_approval: (awaiting ?? []).map((a) => ({
+              topic: a.topic,
+              date: a.scheduled_for,
+              client: a.client_id ? (clientName.get(a.client_id) ?? null) : null,
+            })),
+            dry_run: process.env.SOCIAL_DRY_RUN === "1",
+            note:
+              process.env.SOCIAL_DRY_RUN === "1"
+                ? "Dry run is on: 'published' here means the queue ran, not that Meta received it."
+                : "Published rows carry the permalink when Meta returned one.",
+          },
+          event: { kind: "read", label: "Publish queue", href: "/content" },
+        };
+      } catch {
+        return { content: { ok: false, error: "The publish queue isn't set up yet (0118)." } };
+      }
+    }
+
+    case "schedule_social_post": {
+      const topic = String(args.topic_query ?? "").trim();
+      if (!topic) return { content: { ok: false, error: "Which post?" } };
+      const term = `%${topic.replace(/[%,()]/g, " ").trim()}%`;
+      const { data: matches } = await supabase
+        .from("carousel_posts")
+        .select(
+          "id, topic, caption, hashtags, chosen_option_id, client_id, client_status, status, scheduled_for",
+        )
+        .ilike("topic", term)
+        .order("scheduled_for", { ascending: false })
+        .limit(2);
+      if (!matches?.length)
+        return { content: { ok: false, error: `No post on the calendar matching "${topic}".` } };
+      if (matches.length > 1)
+        return {
+          content: {
+            ok: false,
+            error: `More than one post matches "${topic}". Be more specific.`,
+            candidates: matches.map((m) => `${m.topic} (${m.scheduled_for})`),
+          },
+        };
+      const post = matches[0];
+      if (!post.chosen_option_id)
+        return {
+          content: {
+            ok: false,
+            error: "No design has been picked for that post yet — choose one in Content Studio first.",
+          },
+        };
+      const clientName = post.client_id
+        ? ((
+            await supabase
+              .from("clients")
+              .select("name")
+              .eq("id", post.client_id)
+              .maybeSingle()
+          ).data?.name ?? null)
+        : null;
+      const approved = !post.client_id || post.client_status === "approved";
+      if (!approved)
+        return {
+          content: {
+            ok: false,
+            error: `${clientName ?? "The client"} hasn't approved that post yet (${post.client_status.replace("_", " ")}). It can't be scheduled until they do.`,
+          },
+        };
+
+      const { data: option } = await supabase
+        .from("carousel_options")
+        .select("slides")
+        .eq("id", post.chosen_option_id)
+        .maybeSingle();
+      const mediaCount = (option?.slides ?? []).filter((sl) => sl.image_url).length;
+      if (!mediaCount)
+        return { content: { ok: false, error: "That design has no rendered slides yet." } };
+
+      // Accounts: the platform asked for, narrowed by name when given.
+      const platform =
+        args.platform === "instagram" || args.platform === "facebook" ? args.platform : null;
+      const accountQuery = String(args.account_query ?? "").trim().toLowerCase();
+      let accounts = await listActiveSocialAccounts(supabase);
+      if (platform) accounts = accounts.filter((a) => a.platform === platform);
+      if (accountQuery)
+        accounts = accounts.filter((a) => a.name.toLowerCase().includes(accountQuery));
+      // A client's own connected account wins for their post; the agency's
+      // for everything else.
+      if (post.client_id && accounts.some((a) => a.clientId === post.client_id)) {
+        accounts = accounts.filter((a) => a.clientId === post.client_id);
+      } else {
+        accounts = accounts.filter((a) => !a.clientId || a.clientId === post.client_id);
+      }
+      if (!accounts.length)
+        return {
+          content: {
+            ok: false,
+            error: "No Instagram or Facebook account is connected for that. The ZIP download in Content Studio still works for posting by hand.",
+          },
+        };
+
+      // When: an explicit time, else the calendar date at 9am Colombo.
+      const whenRaw = String(args.when ?? "").trim();
+      let when: Date;
+      if (whenRaw) {
+        const iso = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(whenRaw)
+          ? `${whenRaw.replace(" ", "T")}:00+05:30`
+          : whenRaw;
+        when = new Date(iso);
+      } else {
+        when = new Date(`${post.scheduled_for}T09:00:00+05:30`);
+      }
+      if (Number.isNaN(when.getTime()))
+        return { content: { ok: false, error: `I couldn't read "${whenRaw}" as a time.` } };
+
+      const caption = [
+        post.caption,
+        post.hashtags.length
+          ? post.hashtags.map((h) => (h.startsWith("#") ? h : `#${h}`)).join(" ")
+          : null,
+      ]
+        .filter(Boolean)
+        .join("\n\n");
+
+      const social: SocialPostCardData = {
+        post_id: post.id,
+        topic: post.topic,
+        caption,
+        media_count: mediaCount,
+        accounts: accounts.map((a) => ({ id: a.id, platform: a.platform, name: a.name })),
+        scheduled_for: when.toISOString(),
+        client_name: clientName,
+        client_approved: approved,
+      };
+
+      return {
+        content: {
+          ok: true,
+          awaiting_user_confirmation: true,
+          topic: post.topic,
+          accounts: social.accounts.map((a) => `${a.platform}: ${a.name}`),
+          scheduled_for: social.scheduled_for,
+          note: "Shown to the user for confirmation. Nothing is queued until the user taps Schedule. Do not say it has been scheduled.",
+        },
+        card: { type: "confirm_social_post", social },
       };
     }
 

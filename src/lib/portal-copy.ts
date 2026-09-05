@@ -80,6 +80,11 @@ type Copy = {
   previewSite: string;
   visitLiveSite: string;
   launchedOn: string;
+  /** 0117 — the referral block */
+  referTitle: string;
+  referBlurb: string;
+  referCopy: string;
+  referCopied: string;
   stages: Record<DeliveryStage, string>;
 };
 
@@ -144,6 +149,11 @@ const EN: Copy = {
   previewSite: "Preview your site",
   visitLiveSite: "Visit your live site",
   launchedOn: "Launched on",
+  referTitle: "Know someone who needs this?",
+  referBlurb:
+    "Share your link — when they become a client, we'll thank you properly.",
+  referCopy: "Copy your link",
+  referCopied: "Copied",
   stages: {
     onboarding: "Getting started",
     assets: "Collecting your content",
@@ -214,6 +224,11 @@ const SI: Copy = {
   previewSite: "ඔබේ වෙබ් අඩවියේ පෙරදසුන බලන්න",
   visitLiveSite: "ඔබේ සජීවී වෙබ් අඩවියට යන්න",
   launchedOn: "දියත් කළ දිනය",
+  referTitle: "මෙවැනි සේවාවක් අවශ්‍ය කෙනෙකු දන්නවාද?",
+  referBlurb:
+    "ඔබේ සබැඳිය බෙදාගන්න — ඔවුන් අපගේ සේවාදායකයෙකු වූ විට අපි ඔබට නිසි ලෙස ස්තූති කරන්නෙමු.",
+  referCopy: "ඔබේ සබැඳිය පිටපත් කරන්න",
+  referCopied: "පිටපත් කළා",
   stages: {
     onboarding: "පටන් ගනිමු",
     assets: "ඔබේ අන්තර්ගතය එකතු කිරීම",
@@ -286,6 +301,11 @@ const TA: Copy = {
   previewSite: "உங்கள் தளத்தை முன்னோட்டமாகப் பாருங்கள்",
   visitLiveSite: "உங்கள் நேரலை தளத்திற்குச் செல்லுங்கள்",
   launchedOn: "தொடங்கப்பட்ட நாள்",
+  referTitle: "இது தேவைப்படும் யாரையாவது தெரியுமா?",
+  referBlurb:
+    "உங்கள் இணைப்பைப் பகிருங்கள் — அவர்கள் எங்கள் வாடிக்கையாளராகும் போது, உங்களுக்கு முறையாக நன்றி சொல்வோம்.",
+  referCopy: "உங்கள் இணைப்பை நகலெடுக்கவும்",
+  referCopied: "நகலெடுக்கப்பட்டது",
   stages: {
     onboarding: "தொடங்குகிறோம்",
     assets: "உங்கள் உள்ளடக்கம் சேகரிக்கிறோம்",

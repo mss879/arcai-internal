@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { Menu } from "lucide-react";
 
 import { Avatar } from "@/components/ui/avatar";
+import { ApprovalsBadge } from "@/components/layout/approvals-badge";
 import { NotificationsBell } from "@/components/layout/notifications-bell";
 import { titleForPath } from "@/components/layout/nav";
 import { GlobalSearch } from "@/components/layout/global-search";
@@ -13,10 +14,13 @@ import type { NotificationLite, Profile } from "@/lib/types";
 export function Topbar({
   profile,
   notifications,
+  approvalsCount = 0,
   onOpenMobile,
 }: {
   profile: Profile;
   notifications: NotificationLite[];
+  /** 0119 — things waiting on a decision, across every queue. */
+  approvalsCount?: number;
   onOpenMobile: () => void;
 }) {
   const pathname = usePathname();
@@ -37,6 +41,8 @@ export function Topbar({
 
       <div className="ml-auto flex items-center gap-1.5 sm:gap-2">
         <GlobalSearch />
+
+        <ApprovalsBadge initial={approvalsCount} />
 
         <NotificationsBell initial={notifications} />
 

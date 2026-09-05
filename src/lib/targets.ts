@@ -35,6 +35,63 @@ export function periodFor(date: Date): string {
   return `${date.toISOString().slice(0, 7)}-01`;
 }
 
+export type TargetUpsert = {
+  /** null = the whole team. */
+  userId: string | null;
+  /** Any date in the month; stored as its first day. */
+  period: string;
+  kind: TargetKind;
+  /** Zero removes the target — keeping it would show a permanent 0%. */
+  amount: number;
+  note?: string | null;
+  createdBy: string;
+};
+
+/**
+ * Set (or clear) one target. The only writer: the team page's modal and the
+ * assistant's set_target both come through here.
+ *
+ * Upsert by hand: the unique index is partial (team targets have a NULL
+ * user_id, and NULL never equals NULL), so onConflict can't express it.
+ */
+export async function upsertTarget(
+  db: DB,
+  input: TargetUpsert,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const period = `${input.period.slice(0, 7)}-01`;
+  const amount = Math.max(0, Number(input.amount) || 0);
+
+  const scope = <T extends { eq: (c: string, v: string) => T; is: (c: string, v: null) => T }>(
+    query: T,
+  ): T => (input.userId ? query.eq("user_id", input.userId) : query.is("user_id", null));
+
+  if (amount === 0) {
+    const { error } = await scope(
+      db.from("targets").delete().eq("period", period).eq("kind", input.kind),
+    );
+    return error ? { ok: false, error: error.message } : { ok: true };
+  }
+
+  const { data: found } = await scope(
+    db.from("targets").select("id").eq("period", period).eq("kind", input.kind),
+  ).maybeSingle();
+
+  const { error } = found
+    ? await db
+        .from("targets")
+        .update({ amount, note: input.note?.trim() || null })
+        .eq("id", found.id)
+    : await db.from("targets").insert({
+        user_id: input.userId,
+        period,
+        kind: input.kind,
+        amount,
+        note: input.note?.trim() || null,
+        created_by: input.createdBy,
+      });
+  return error ? { ok: false, error: error.message } : { ok: true };
+}
+
 /**
  * Every target for a month, with what has actually happened against it.
  *

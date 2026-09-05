@@ -24,10 +24,12 @@ import {
 import { Calendar } from "@/components/dashboard/calendar";
 import { MeetingAttendancePrompt } from "@/components/dashboard/meeting-attendance-prompt";
 import { QuickAddTask } from "@/components/dashboard/quick-add-task";
+import { TargetsTile } from "@/components/dashboard/targets-tile";
 import { PRIORITY_META } from "@/lib/constants";
 import { requireProfile } from "@/lib/auth";
 import { getMembers } from "@/lib/data";
 import { projectHealth } from "@/lib/projects";
+import { periodFor, targetsProgress } from "@/lib/targets";
 import { createClient } from "@/lib/supabase/server";
 import { cn, formatCurrency, formatTime12 } from "@/lib/utils";
 import type { DashboardSummary } from "@/lib/database.types";
@@ -81,8 +83,15 @@ export default async function DashboardPage() {
   const windowStart = format(addDays(new Date(), -31), "yyyy-MM-dd");
   const windowEnd = format(addDays(new Date(), 62), "yyyy-MM-dd");
 
-  const [todosRes, members, summaryRes, bookingsRes, meetingsRes, notificationsRes] =
-    await Promise.all([
+  const [
+    todosRes,
+    members,
+    summaryRes,
+    bookingsRes,
+    meetingsRes,
+    notificationsRes,
+    targetProgress,
+  ] = await Promise.all([
       // Every open task, plus finished ones due inside the calendar's window.
       supabase
         .from("todos")
@@ -117,6 +126,9 @@ export default async function DashboardPage() {
         .eq("user_id", profile.id)
         .order("created_at", { ascending: false })
         .limit(6),
+      // 0119 — what the month was supposed to look like. Empty when none are
+      // set, or when 0119 hasn't been applied.
+      targetsProgress(supabase, periodFor(new Date())).catch(() => []),
     ]);
 
   if (summaryRes.error) {
@@ -506,6 +518,13 @@ export default async function DashboardPage() {
           </div>
         ))}
       </div>
+
+      {/* 0119 — targets, beside the numbers they are measured against */}
+      {targetProgress.length > 0 && (
+        <div className="animate-rise-in" style={rise(250)}>
+          <TargetsTile progress={targetProgress} />
+        </div>
+      )}
 
       {/* Money & pipeline analytics */}
       <div

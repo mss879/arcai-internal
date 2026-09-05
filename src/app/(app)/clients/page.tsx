@@ -37,6 +37,24 @@ export default async function ClientsPage({
   }
   const { data, count } = await query;
 
+  // 0117 — how many introductions each client on this page has made. One
+  // grouped read for the page, and an empty map when 0117 isn't applied.
+  const referralCounts: Record<string, number> = {};
+  const ids = (data ?? []).map((c) => c.id);
+  if (ids.length) {
+    const { data: referrals } = await supabase
+      .from("referrals")
+      .select("referrer_client_id")
+      .in("referrer_client_id", ids)
+      .limit(5000)
+      .then((r) => r, () => ({ data: null }));
+    for (const r of referrals ?? []) {
+      if (r.referrer_client_id) {
+        referralCounts[r.referrer_client_id] = (referralCounts[r.referrer_client_id] ?? 0) + 1;
+      }
+    }
+  }
+
   return (
     <ClientsView
       clients={data ?? []}
@@ -44,6 +62,7 @@ export default async function ClientsPage({
       page={page}
       pageSize={PAGE_SIZE}
       total={count ?? 0}
+      referralCounts={referralCounts}
     />
   );
 }

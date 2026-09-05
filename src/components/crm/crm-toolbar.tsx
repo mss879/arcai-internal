@@ -55,6 +55,8 @@ export type LeadFilters = {
   tag: string;
   assigned_to: string;
   source: string;
+  /** 0117 — the campaign that actually produced them (leads.utm.utm_source). */
+  utm_source: string;
   score: string;
   status: string;
   stale: boolean;
@@ -65,10 +67,18 @@ export const EMPTY_FILTERS: LeadFilters = {
   tag: "",
   assigned_to: "",
   source: "",
+  utm_source: "",
   score: "",
   status: "",
   stale: false,
 };
+
+/** What `leads.utm.utm_source` says, or "" when the lead arrived without one. */
+export function leadUtmSource(lead: Pick<LeadWithAssignee, "utm">): string {
+  const utm = (lead.utm ?? {}) as Record<string, unknown>;
+  const value = utm.utm_source;
+  return typeof value === "string" ? value.trim() : "";
+}
 
 export function applyFilters(
   leads: LeadWithAssignee[],
@@ -95,6 +105,7 @@ export function applyFilters(
     if (filters.tag && !(lead.tags ?? []).includes(filters.tag)) return false;
     if (filters.assigned_to && lead.assigned_to !== filters.assigned_to) return false;
     if (filters.source && lead.source !== filters.source) return false;
+    if (filters.utm_source && leadUtmSource(lead) !== filters.utm_source) return false;
     if (filters.score && lead.score !== filters.score) return false;
     if (filters.status && lead.status !== filters.status) return false;
     if (filters.stale && !(lead.status === "open" && daysInactive(lead) >= staleAfterDays))
@@ -105,7 +116,14 @@ export function applyFilters(
 
 export function filtersActive(f: LeadFilters): boolean {
   return Boolean(
-    f.q || f.tag || f.assigned_to || f.source || f.score || f.status || f.stale,
+    f.q ||
+      f.tag ||
+      f.assigned_to ||
+      f.source ||
+      f.utm_source ||
+      f.score ||
+      f.status ||
+      f.stale,
   );
 }
 
@@ -116,6 +134,7 @@ export function CrmToolbar({
   onView,
   segments,
   allTags,
+  utmSources = [],
   members,
   tasks,
   currentUserId,
@@ -127,6 +146,8 @@ export function CrmToolbar({
   onView: (v: ViewMode) => void;
   segments: CrmSegment[];
   allTags: string[];
+  /** 0117 — every utm_source seen on the board, for the campaign filter. */
+  utmSources?: string[];
   members: MemberLite[];
   tasks: CrmTask[];
   currentUserId?: string;
@@ -151,6 +172,7 @@ export function CrmToolbar({
       tag: f.tag ?? "",
       assigned_to: f.assigned_to ?? "",
       source: f.source ?? "",
+      utm_source: f.utm_source ?? "",
       score: f.score ?? "",
       status: f.status ?? "",
       stale: Boolean(f.no_activity_days),
@@ -167,6 +189,7 @@ export function CrmToolbar({
       tag: filters.tag || undefined,
       assigned_to: filters.assigned_to || undefined,
       source: filters.source || undefined,
+      utm_source: filters.utm_source || undefined,
       score: filters.score || undefined,
       status: filters.status || undefined,
       no_activity_days: filters.stale ? 7 : undefined,
@@ -378,6 +401,21 @@ export function CrmToolbar({
               </option>
             ))}
           </Select>
+          {utmSources.length > 0 && (
+            <Select
+              value={filters.utm_source}
+              onChange={(e) => set({ utm_source: e.target.value })}
+              className="w-40"
+              title="utm_source — which campaign produced the enquiry"
+            >
+              <option value="">Any campaign</option>
+              {utmSources.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </Select>
+          )}
           <Select
             value={filters.score}
             onChange={(e) => set({ score: e.target.value })}

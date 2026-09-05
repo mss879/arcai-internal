@@ -191,12 +191,23 @@ async function recordEngagement(
   const supabase = createAdminClient();
   const { data: row } = await supabase
     .from("email_messages")
-    .select("id, status, opened_at, open_count, clicked_at, click_count")
+    .select("id, status, opened_at, open_count, clicked_at, click_count, lead_id, subject")
     .eq("provider_id", providerId)
     .maybeSingle();
   if (!row) return;
 
   const now = new Date().toISOString();
+
+  // 0117 — the FIRST open or click of an outreach email is a fact worth a
+  // line on the lead's timeline; the fifth is not. Best-effort: the count on
+  // the message is the record, the activity is the headline.
+  const noteOnLead = async (title: string) => {
+    if (!row.lead_id) return;
+    await supabase
+      .from("lead_activities")
+      .insert({ lead_id: row.lead_id, kind: "email", title, actor_id: null })
+      .then(() => undefined, () => undefined);
+  };
 
   if (type === "email.delivered") {
     await supabase
@@ -218,6 +229,7 @@ async function recordEngagement(
         open_count: (row.open_count ?? 0) + 1,
       })
       .eq("id", row.id);
+    if (!row.opened_at) await noteOnLead(`Opened: ${row.subject || "our email"}`);
     return;
   }
 
@@ -230,4 +242,5 @@ async function recordEngagement(
       click_count: (row.click_count ?? 0) + 1,
     })
     .eq("id", row.id);
+  if (!row.clicked_at) await noteOnLead(`Clicked a link in: ${row.subject || "our email"}`);
 }

@@ -2,10 +2,19 @@ import { redirect } from "next/navigation";
 
 import { appLink } from "@/lib/app-url";
 import { currentClientId } from "@/lib/client-auth";
+import { STORAGE_BUCKETS } from "@/lib/constants";
 import { balanceDue, settledAmount } from "@/lib/projects";
+import { referralCodeFor, referralLink } from "@/lib/referrals";
 import { createAdminClient } from "@/lib/supabase/admin";
 
-import { PortalHome, type PortalProject, type PortalInvoice } from "./portal-home";
+import {
+  PortalHome,
+  type PortalAgreement,
+  type PortalFile,
+  type PortalInvoice,
+  type PortalMeeting,
+  type PortalProject,
+} from "./portal-home";
 
 export const metadata = { title: "Your projects · ARC AI" };
 
@@ -39,7 +48,7 @@ export default async function PortalHomePage() {
       .from("projects")
       // Hand-picked. Nothing internal crosses this line.
       .select(
-        "id, name, description, status, delivery_stage, delivery_stage_changed_at, start_date, due_date, currency, total_value, deposit_paid, share_token, blocked_reason, payments(amount, status), company_payments(price_lkr, is_paid)",
+        "id, name, description, status, delivery_stage, delivery_stage_changed_at, start_date, due_date, currency, total_value, deposit_paid, share_token, portal_revoked_at, blocked_reason, payments(amount, status), company_payments(price_lkr, is_paid)",
       )
       .eq("client_id", clientId)
       .is("deleted_at", null)
@@ -68,7 +77,105 @@ export default async function PortalHomePage() {
       .limit(20),
   ]);
 
-  const projects: PortalProject[] = (projectsRes.data ?? []).map((row) => {
+  // 0117 — what they can download, sign and book, across every project.
+  // Each read tolerates its table being absent (migration not yet applied)
+  // by degrading to an empty section rather than a failed page.
+  const projectRows = projectsRes.data ?? [];
+  const projectIds = projectRows.map((p) => p.id);
+  const [deliverablesRes, agreementsRes, meetingsRes, bookingRes, referralCode] =
+    await Promise.all([
+      projectIds.length
+        ? supabase
+            .from("project_deliverables")
+            .select("id, project_id, title, file_path, version, created_at")
+            .in("project_id", projectIds)
+            .eq("visible_to_client", true)
+            .order("created_at", { ascending: false })
+            .limit(50)
+            .then((r) => r, () => ({ data: null }))
+        : Promise.resolve({ data: null }),
+      supabase
+        .from("agreements")
+        .select("id, kind, title, status, share_token, signed_at")
+        .eq("client_id", clientId)
+        .in("status", ["sent", "viewed", "signed", "declined"])
+        .order("created_at", { ascending: false })
+        .limit(20)
+        .then((r) => r, () => ({ data: null })),
+      supabase
+        .from("meetings")
+        .select("id, title, meeting_at, duration_minutes, location, meeting_url")
+        .eq("client_id", clientId)
+        .gte("meeting_at", new Date().toISOString())
+        .order("meeting_at", { ascending: true })
+        .limit(10)
+        .then((r) => r, () => ({ data: null })),
+      supabase
+        .from("meeting_links")
+        .select("slug")
+        .eq("active", true)
+        .order("created_at", { ascending: true })
+        .limit(1)
+        .maybeSingle()
+        .then((r) => r, () => ({ data: null })),
+      referralCodeFor(supabase, clientId).catch(() => null),
+    ]);
+
+  // One Storage call for every file, not one each. Signed for an hour.
+  const deliverableRows = deliverablesRes.data ?? [];
+  const signedByPath = new Map<string, string>();
+  if (deliverableRows.length) {
+    const { data: signed } = await supabase.storage
+      .from(STORAGE_BUCKETS.projectDocs)
+      .createSignedUrls(
+        deliverableRows.map((d) => d.file_path),
+        3600,
+      );
+    for (const row of signed ?? []) {
+      if (row.path && row.signedUrl) signedByPath.set(row.path, row.signedUrl);
+    }
+  }
+  const projectNameById = new Map(projectRows.map((p) => [p.id, p.name] as const));
+
+  // The calendar file is served by the share-token route, scoped to a project
+  // this client owns — any live portal of theirs will do.
+  const icsToken =
+    projectRows.find((p) => p.share_token && !p.portal_revoked_at)?.share_token ?? null;
+
+  const files: PortalFile[] = deliverableRows
+    .filter((d) => signedByPath.has(d.file_path))
+    .map((d) => ({
+      id: d.id,
+      title: d.title,
+      url: signedByPath.get(d.file_path)!,
+      version: d.version,
+      project: projectNameById.get(d.project_id) ?? "Your project",
+      createdAt: d.created_at,
+    }));
+
+  const agreements: PortalAgreement[] = (agreementsRes.data ?? []).map((a) => ({
+    id: a.id,
+    kind: a.kind,
+    title: a.title,
+    status: a.status,
+    url: `/a/${a.share_token}`,
+    signedAt: a.signed_at,
+  }));
+
+  const meetings: PortalMeeting[] = (meetingsRes.data ?? []).map((m) => ({
+    id: m.id,
+    title: m.title,
+    at: m.meeting_at,
+    durationMinutes: m.duration_minutes,
+    location: m.location,
+    joinUrl: m.meeting_url,
+    icsUrl: icsToken ? `/api/public/meeting/${icsToken}/ics?meeting=${m.id}` : null,
+  }));
+
+  const bookingUrl = bookingRes.data?.slug ? `/book/${bookingRes.data.slug}` : null;
+  const referralUrl = referralCode ? referralLink(referralCode) : null;
+
+  const projects: PortalProject[] = projectRows.map((row) => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const p = row as any;
     const money = {
@@ -125,6 +232,11 @@ export default async function PortalHomePage() {
         link: q.share_token ? `/q/${q.share_token}` : null,
         validUntil: q.valid_until,
       }))}
+      files={files}
+      agreements={agreements}
+      meetings={meetings}
+      bookingUrl={bookingUrl}
+      referral={referralCode && referralUrl ? { code: referralCode, link: referralUrl } : null}
       appUrl={appLink("") ?? ""}
     />
   );

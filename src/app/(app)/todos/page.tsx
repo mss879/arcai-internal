@@ -25,7 +25,7 @@ export default async function TodosPage({
     data: { user },
   } = await supabase.auth.getUser();
 
-  const [todosRes, projectsRes, members] = await Promise.all([
+  const [todosRes, projectsRes, members, templatesRes] = await Promise.all([
     (all === "1"
       ? supabase
           .from("todos")
@@ -47,6 +47,12 @@ export default async function TodosPage({
       .is("deleted_at", null)
       .order("created_at", { ascending: false }),
     getMembers(),
+    // 0119 — sets of to-dos raised at once. Empty until 0119 is applied.
+    supabase
+      .from("todo_templates")
+      .select("id, name, description, items")
+      .order("name")
+      .then((r) => r, () => ({ data: null })),
   ]);
 
   return (
@@ -55,6 +61,12 @@ export default async function TodosPage({
       members={members}
       projects={projectsRes.data ?? []}
       currentUserId={user?.id ?? null}
+      templates={(templatesRes.data ?? []).map((t) => ({
+        id: t.id,
+        name: t.name,
+        description: t.description,
+        count: Array.isArray(t.items) ? t.items.length : 0,
+      }))}
     />
   );
 }

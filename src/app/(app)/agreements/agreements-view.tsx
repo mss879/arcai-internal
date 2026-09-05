@@ -39,6 +39,8 @@ export type AgreementRow = {
   shareToken: string;
   clientId: string | null;
   clientName: string | null;
+  projectId: string | null;
+  proposalId: string | null;
   signerEmail: string | null;
   signedName: string | null;
   signedAt: string | null;
@@ -48,6 +50,14 @@ export type AgreementRow = {
 };
 
 type Template = { id: string; name: string; kind: string; body_md: string };
+
+/** Links the editor opens with, when raised from a project or a proposal. */
+export type AgreementPrefill = {
+  clientId: string | null;
+  projectId: string | null;
+  proposalId: string | null;
+  title: string | null;
+};
 
 const STATUS: Record<string, { label: string; className: string }> = {
   draft: { label: "Draft", className: "bg-slate-100 text-slate-600 ring-slate-200" },
@@ -76,15 +86,18 @@ export function AgreementsView({
   agreements,
   templates,
   clients,
+  prefill = null,
 }: {
   agreements: AgreementRow[];
   templates: Template[];
   clients: { id: string; name: string }[];
+  prefill?: AgreementPrefill | null;
 }) {
   useRealtimeSync("agreements");
   const router = useRouter();
   const [editing, setEditing] = React.useState<AgreementRow | null>(null);
-  const [creating, setCreating] = React.useState(false);
+  // Arriving with `?new=1` opens the editor straight away, links made.
+  const [creating, setCreating] = React.useState(Boolean(prefill));
 
   async function download(id: string) {
     const url = await agreementPdfUrl(id);
@@ -220,6 +233,7 @@ export function AgreementsView({
         agreement={editing}
         templates={templates}
         clients={clients}
+        prefill={editing ? null : prefill}
         onClose={() => {
           setCreating(false);
           setEditing(null);
@@ -234,12 +248,14 @@ function AgreementModal({
   agreement,
   templates,
   clients,
+  prefill,
   onClose,
 }: {
   open: boolean;
   agreement: AgreementRow | null;
   templates: Template[];
   clients: { id: string; name: string }[];
+  prefill: AgreementPrefill | null;
   onClose: () => void;
 }) {
   const router = useRouter();
@@ -248,6 +264,8 @@ function AgreementModal({
     title: "",
     bodyMd: "",
     clientId: "",
+    projectId: "",
+    proposalId: "",
     signerEmail: "",
   });
   const [saving, setSaving] = React.useState(false);
@@ -258,14 +276,17 @@ function AgreementModal({
     if (!open) return;
     setForm({
       kind: agreement?.kind ?? "contract",
-      title: agreement?.title ?? "",
+      title: agreement?.title ?? prefill?.title ?? "",
       // Load the real body, or editing would silently blank the agreement.
       bodyMd: agreement?.bodyMd ?? "",
-      clientId: agreement?.clientId ?? "",
+      clientId: agreement?.clientId ?? prefill?.clientId ?? "",
+      // Carried through every save: an edit must not drop the project link.
+      projectId: agreement?.projectId ?? prefill?.projectId ?? "",
+      proposalId: agreement?.proposalId ?? prefill?.proposalId ?? "",
       signerEmail: agreement?.signerEmail ?? "",
     });
     setPreview(false);
-  }, [open, agreement]);
+  }, [open, agreement, prefill]);
 
   async function save() {
     setSaving(true);
@@ -275,6 +296,8 @@ function AgreementModal({
       title: form.title,
       bodyMd: form.bodyMd,
       clientId: form.clientId || null,
+      projectId: form.projectId || null,
+      proposalId: form.proposalId || null,
       signerEmail: form.signerEmail || null,
     });
     setSaving(false);
@@ -360,6 +383,12 @@ function AgreementModal({
               placeholder="Who receives the signing link"
             />
           </Field>
+          {(form.projectId || form.proposalId) && (
+            <p className="text-xs text-slate-500">
+              Linked to {form.projectId ? "the project" : "the proposal"} it was raised
+              from — it will show on that record and on the client&apos;s portal.
+            </p>
+          )}
 
           {templates.length > 0 && (
             <Field label="Start from a template">

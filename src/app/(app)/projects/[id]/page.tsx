@@ -35,6 +35,7 @@ import {
   type ProjectExpenseRow,
 } from "@/components/projects/expenses-section";
 import { DeliverablesCard } from "@/components/projects/deliverables-card";
+import { AgreementsCard } from "@/components/projects/agreements-card";
 import { FilesSection, type ProjectFile } from "@/components/projects/files-section";
 import { LedgerSection } from "@/components/projects/ledger-section";
 import { MarginCard } from "@/components/projects/margin-card";
@@ -114,6 +115,7 @@ export default async function ProjectDetailPage({
     automationRunsRes,
     allStepsRes,
     deliverablesRes,
+    agreementsRes,
   ] = await Promise.all([
     requireProfile(),
     (supabase as any)
@@ -265,6 +267,14 @@ export default async function ProjectDetailPage({
       .eq("project_id", id)
       .order("created_at", { ascending: false })
       .limit(100),
+    // 0117 — the contract, SOW or NDA behind the work.
+    supabase
+      .from("agreements")
+      .select("id, kind, title, status, share_token, signed_at, created_at")
+      .eq("project_id", id)
+      .neq("status", "void")
+      .order("created_at", { ascending: false })
+      .limit(20),
   ]);
 
   const project = projectRes.data;
@@ -891,6 +901,19 @@ export default async function ProjectDetailPage({
                   lastSentAt: project.portal_last_sent_at,
                   language: project.portal_language ?? "en",
                 }}
+              />
+              <AgreementsCard
+                projectId={id}
+                projectName={project.name}
+                clientId={project.client_id ?? null}
+                agreements={(agreementsRes.data ?? []).map((a) => ({
+                  id: a.id,
+                  kind: a.kind,
+                  title: a.title,
+                  status: a.status,
+                  shareToken: a.share_token,
+                  signedAt: a.signed_at,
+                }))}
               />
             </div>
             <div className="space-y-6">

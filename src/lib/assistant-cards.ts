@@ -106,6 +106,22 @@ export type WhatsAppCardData = {
   within_window: boolean;
 };
 
+/** A prepared social post (0118) — exactly what would be queued, and where. */
+export type SocialPostCardData = {
+  /** carousel_posts row. */
+  post_id: string;
+  topic: string;
+  /** Caption plus hashtags, as the publisher will send it. */
+  caption: string;
+  media_count: number;
+  accounts: { id: string; platform: "instagram" | "facebook"; name: string }[];
+  /** ISO timestamp. */
+  scheduled_for: string;
+  client_name: string | null;
+  /** Approval was checked when the card was built AND is re-checked on tap. */
+  client_approved: boolean;
+};
+
 export type CardSendState = "idle" | "sending" | "sent" | "error" | "cancelled";
 
 /**
@@ -152,6 +168,16 @@ export type AssistantCard =
   | {
       type: "confirm_send_whatsapp";
       whatsapp: WhatsAppCardData;
+      resolution?: CardResolution;
+    }
+  /**
+   * A post waiting to be put on the publish queue (0118). Same promise:
+   * the model can line it up, only a person can schedule it — and the
+   * publisher re-checks the client's approval before it ever goes out.
+   */
+  | {
+      type: "confirm_social_post";
+      social: SocialPostCardData;
       resolution?: CardResolution;
     }
   /** A saved proposal shown for review, with a PDF download (no send action). */

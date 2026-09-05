@@ -38,6 +38,7 @@ export function ClientsView({
   page = 1,
   pageSize = 100,
   total = clients.length,
+  referralCounts = {},
 }: {
   clients: Client[];
   /** 0114 — the server filtered on this; the box is seeded with it. */
@@ -45,6 +46,8 @@ export function ClientsView({
   page?: number;
   pageSize?: number;
   total?: number;
+  /** 0117 — introductions made, by client id. */
+  referralCounts?: Record<string, number>;
 }) {
   useRealtimeSync("clients");
   const router = useRouter();
@@ -128,6 +131,9 @@ export function ClientsView({
                 <th className="hidden px-5 py-3.5 font-semibold md:table-cell">
                   Location
                 </th>
+                <th className="hidden px-5 py-3.5 font-semibold lg:table-cell">
+                  Referrals
+                </th>
                 <th className="px-5 py-3.5 font-semibold">Status</th>
                 <th className="px-5 py-3.5" />
               </tr>
@@ -178,6 +184,18 @@ export function ClientsView({
                       <span className="flex items-center gap-1.5">
                         <MapPin className="h-3.5 w-3.5 text-slate-400" />
                         {c.city}
+                      </span>
+                    ) : (
+                      <span className="text-slate-300">—</span>
+                    )}
+                  </td>
+                  <td className="hidden px-5 py-3.5 text-slate-500 lg:table-cell">
+                    {referralCounts[c.id] ? (
+                      <span
+                        className="font-medium text-slate-700"
+                        title={c.referral_code ? `Code ${c.referral_code}` : undefined}
+                      >
+                        {referralCounts[c.id]} introduced
                       </span>
                     ) : (
                       <span className="text-slate-300">—</span>

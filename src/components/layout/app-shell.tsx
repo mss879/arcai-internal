@@ -24,11 +24,14 @@ const VoiceAssistant = dynamic(
 export function AppShell({
   profile,
   notifications,
+  approvalsCount = 0,
   isTerminal = false,
   children,
 }: {
   profile: Profile;
   notifications: NotificationLite[];
+  /** 0119 — the topbar badge's starting number. */
+  approvalsCount?: number;
   /** This browser is the Arcus terminal (0104): always signed in, always listening. */
   isTerminal?: boolean;
   children: React.ReactNode;
@@ -126,6 +129,7 @@ export function AppShell({
         <Topbar
           profile={profile}
           notifications={notifications}
+          approvalsCount={approvalsCount}
           onOpenMobile={() => setMobileOpen(true)}
         />
 

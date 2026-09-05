@@ -183,6 +183,13 @@ const TOOL_LABELS: Record<string, string> = {
   create_proposal: "Writing the proposal",
   update_proposal: "Revising the proposal",
 
+  // 0119 / 0118 — the rest of this wave's workspace tools
+  kb_page: "Opening the handbook page",
+  targets_report: "Reading this month's targets",
+  set_target: "Setting the target",
+  content_queue: "Reading the publish queue",
+  schedule_social_post: "Lining the post up",
+
   // Finance — @/lib/ai/tools-finance
   finance_overview: "Reading the month's money",
   finance_query: "Reading the books",

@@ -359,6 +359,8 @@ export async function submitChangeRequest(
   // Worth interrupting someone for: an unanswered change request is either a
   // frustrated client or money left on the table.
   await notifyEveryone(supabase, {
+    // 0119 — it sits in the approvals queue until somebody quotes or declines it.
+    type: "approval",
     title: `Change requested — ${opened.project.name}`,
     body: text.length > 120 ? `${text.slice(0, 117)}…` : text,
     link: `/projects/${opened.project.id}`,

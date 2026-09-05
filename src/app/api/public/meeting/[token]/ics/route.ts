@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { buildIcs, icsFilename } from "@/lib/ics";
 import { INVOICE_COMPANY } from "@/lib/invoice";
+import { clientIp, enforceRateLimit, tooManyRequests } from "@/lib/rate-limit";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
@@ -25,6 +26,14 @@ export async function GET(
   }
 
   const supabase = createAdminClient();
+
+  // 0116 — a calendar file is cheap, but a token guess is not something to
+  // offer unlimited tries at.
+  const limited = await enforceRateLimit(supabase, `meeting-ics:${clientIp(request.headers)}`, {
+    limit: 30,
+    windowSec: 600,
+  });
+  if (!limited.ok) return tooManyRequests(limited.retryAfter);
 
   const { data: project } = await supabase
     .from("projects")

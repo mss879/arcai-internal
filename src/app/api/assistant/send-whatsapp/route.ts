@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { revalidatePath } from "next/cache";
 
 import { getAssistantProfile } from "@/lib/auth";
+import { withinWaWindow } from "@/lib/delivery";
 import { createClient } from "@/lib/supabase/server";
 import { sendAndLogWa } from "@/lib/wa-agent";
 import { isWhatsAppConfigured } from "@/lib/whatsapp";
@@ -51,7 +52,7 @@ export async function POST(request: Request) {
   const supabase = await createClient();
   const { data: contact } = await supabase
     .from("wa_contacts")
-    .select("id, wa_id, do_not_contact")
+    .select("id, wa_id, do_not_contact, last_inbound_at")
     .eq("id", contactId)
     .maybeSingle();
   if (!contact) {
@@ -63,6 +64,19 @@ export async function POST(request: Request) {
   if (contact.do_not_contact) {
     return NextResponse.json(
       { ok: false, error: "They have opted out of WhatsApp messages." },
+      { status: 400 },
+    );
+  }
+  // Outside Meta's 24-hour customer-service window free text is refused at
+  // the API, and the attempt would still land in the thread as a failed
+  // message. Say why up front, so the person reaches for a template instead.
+  if (!withinWaWindow(contact.last_inbound_at)) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error:
+          "They haven't written in the last 24 hours, so WhatsApp will reject free text. Send an approved template from the WhatsApp page instead.",
+      },
       { status: 400 },
     );
   }

@@ -15,7 +15,7 @@ import {
   isGeminiConfigured,
   type InlineImage,
 } from "@/lib/ai/gemini";
-import { sendPushToUser } from "@/lib/push";
+import { notifyUsers } from "@/lib/notify";
 
 type DB = SupabaseClient<Database>;
 
@@ -278,8 +278,11 @@ export async function advanceCarouselPost(
       if (rendered === "none-left") {
         await commit({ status: "ready", error: null, analysis: {} });
         if (post.created_by) {
-          await sendPushToUser({
-            userId: post.created_by,
+          // 0119 — a row as well as a push: picking a design is a decision,
+          // and the approvals queue is where decisions wait.
+          await notifyUsers(supabase, {
+            userIds: [post.created_by],
+            type: "approval",
             title: "Carousel designs ready 🎨",
             body: `2 design options for “${post.topic}” are waiting for review.`,
             link: "/content",

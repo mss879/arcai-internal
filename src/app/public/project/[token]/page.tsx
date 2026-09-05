@@ -8,6 +8,7 @@ import { DELIVERY_STAGES, STORAGE_BUCKETS } from "@/lib/constants";
 import { checkPortalGate } from "@/lib/portal-access";
 import { computeProjectProgress } from "@/lib/project-progress";
 import { buildLedger, settledAmount } from "@/lib/projects";
+import { referralCodeFor, referralLink } from "@/lib/referrals";
 import type {
   DeliveryStage,
   PortalLanguage,
@@ -209,7 +210,7 @@ export default async function PublicProjectPortal({
   // page: download what we made, sign what we sent, see what's booked, and
   // book more time. Each degrades to an empty list rather than failing the
   // page, because 0117 may not have been applied yet.
-  const [deliverablesRes, agreementsRes, meetingsRes, bookingRes] =
+  const [deliverablesRes, agreementsRes, meetingsRes, bookingRes, referralCode] =
     await Promise.all([
       supabase
         .from("project_deliverables")
@@ -252,6 +253,11 @@ export default async function PublicProjectPortal({
             .limit(1)
             .maybeSingle()
             .then((r) => r, () => ({ data: null })),
+      // 0117 — minted on first sight, so only a client who reaches their
+      // portal ever gets a code. Null when there is no client or no 0117.
+      project.client_id
+        ? referralCodeFor(supabase, project.client_id).catch(() => null)
+        : Promise.resolve(null),
     ]);
 
   // One Storage call for every deliverable, not one each.
@@ -364,6 +370,10 @@ export default async function PublicProjectPortal({
     bookingUrl: bookingRes.data?.slug
       ? `/book/${bookingRes.data.slug}?project=${token}`
       : null,
+    referral: (() => {
+      const link = referralCode ? referralLink(referralCode) : null;
+      return referralCode && link ? { code: referralCode, link } : null;
+    })(),
     askForPulse: !pulseAskedRecently && stage !== null,
     // 0112
     progressPercent: progress.percent,

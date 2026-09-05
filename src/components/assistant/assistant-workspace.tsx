@@ -48,6 +48,7 @@ import type {
   EmailCardData,
   SmsCardData,
   WhatsAppCardData,
+  SocialPostCardData,
 } from "@/lib/assistant-cards";
 import { AssistantCardView } from "@/components/assistant/assistant-card";
 import { ActivityTrail } from "@/components/assistant/activity-trail";
@@ -153,6 +154,7 @@ type ConversationProps = {
   onSendSms: (sms: SmsCardData) => Promise<SendInvoiceResult>;
   onSendEmail?: (email: EmailCardData) => Promise<SendInvoiceResult>;
   onSendWhatsApp?: (whatsapp: WhatsAppCardData) => Promise<SendInvoiceResult>;
+  onScheduleSocial?: (social: SocialPostCardData) => Promise<SendInvoiceResult>;
   onApproveMission: (missionId: string) => Promise<SendInvoiceResult>;
   className?: string;
 };
@@ -173,6 +175,7 @@ function ConversationImpl({
   onSendSms,
   onSendEmail,
   onSendWhatsApp,
+  onScheduleSocial,
   onApproveMission,
   className,
 }: ConversationProps): React.ReactElement {
@@ -317,6 +320,7 @@ function ConversationImpl({
                         onSendSms={onSendSms}
                         onSendEmail={onSendEmail}
                         onSendWhatsApp={onSendWhatsApp}
+                        onScheduleSocial={onScheduleSocial}
                         onApproveMission={onApproveMission}
                         onOpenPreview={onOpenArtifact}
                       />
@@ -1159,6 +1163,7 @@ export function AssistantWorkspace({
                 onSendSms={chat.sendSms}
                 onSendEmail={chat.sendEmail}
                 onSendWhatsApp={chat.sendWhatsApp}
+                onScheduleSocial={chat.scheduleSocial}
                 onApproveMission={chat.approveMission}
               />
               <div

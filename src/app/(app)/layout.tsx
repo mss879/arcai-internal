@@ -5,6 +5,7 @@ import { PingListener } from "@/components/layout/ping-listener";
 import { ScreenshotSentry } from "@/components/layout/screenshot-sentry";
 import { Skeleton } from "@/components/ui/skeleton";
 import { bumpActivity } from "@/lib/activity";
+import { approvalsCount } from "@/lib/approvals";
 import { requireProfile } from "@/lib/auth";
 import { getDeviceStatus, isTerminalDevice } from "@/lib/device-trust";
 import { createClient } from "@/lib/supabase/server";
@@ -34,7 +35,7 @@ async function AuthenticatedShell({
   const profile = await requireProfile();
   const supabase = await createClient();
 
-  const [{ data: notifications }, deviceStatus, isTerminal] = await Promise.all([
+  const [{ data: notifications }, deviceStatus, isTerminal, waiting] = await Promise.all([
     supabase
       .from("notifications")
       .select("id, type, title, body, link, read, created_at")
@@ -45,6 +46,8 @@ async function AuthenticatedShell({
     // The Arcus terminal (0104): this machine never idles out and keeps the
     // wake word armed. Fail-closed inside the helper.
     isTerminalDevice(profile.id),
+    // 0119 — the approvals badge. Zero when 0119 isn't applied yet.
+    approvalsCount(supabase).catch(() => 0),
     // Activity heartbeat for the admin login monitor (members only) —
     // stretches the current login session's last_active_at, max once/minute.
     profile.role === "member" ? bumpActivity(profile.id) : null,
@@ -54,6 +57,7 @@ async function AuthenticatedShell({
     <AppShell
       profile={profile}
       notifications={notifications ?? []}
+      approvalsCount={waiting}
       isTerminal={isTerminal}
     >
       {profile.role === "member" && <ScreenshotSentry />}

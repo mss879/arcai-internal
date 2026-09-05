@@ -46,6 +46,7 @@ import {
   EMPTY_FILTERS,
   type LeadFilters,
   type ViewMode,
+  leadUtmSource,
 } from "@/components/crm/crm-toolbar";
 import { LeadTable } from "@/components/crm/lead-table";
 import { ForecastView } from "@/components/crm/forecast-view";
@@ -116,6 +117,12 @@ export function CrmBoard({
 
   const allTags = React.useMemo(
     () => Array.from(new Set(allLeads.flatMap((l) => l.tags ?? []))).sort(),
+    [allLeads],
+  );
+  // 0117 — every campaign that has produced a lead on this board.
+  const utmSources = React.useMemo(
+    () =>
+      Array.from(new Set(allLeads.map((l) => leadUtmSource(l)).filter(Boolean))).sort(),
     [allLeads],
   );
 
@@ -350,6 +357,7 @@ export function CrmBoard({
         onView={setView}
         segments={segments}
         allTags={allTags}
+        utmSources={utmSources}
         members={members}
         tasks={openTasks}
         matchCount={leads.length}

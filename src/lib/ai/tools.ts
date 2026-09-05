@@ -5,6 +5,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type {
   ClientStatus,
   Database,
+  KbVisibility,
   ProjectStatus,
   TodoPriority,
   TodoStatus,
@@ -1391,6 +1392,49 @@ export const ASSISTANT_TOOLS: ToolSchema[] = [
           },
         },
         required: ["message"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "kb_search",
+      description:
+        "Search the team's knowledge base — how we do things, what to say, what things include. Use this BEFORE answering any 'how do we…', 'what do we charge for…', 'what's our policy on…' question, so the answer is what the team actually wrote down rather than a guess.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "What you're looking for." },
+        },
+        required: ["query"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "kb_save_page",
+      description:
+        "Write something down in the knowledge base, or update a page. Use when the user says 'note that down', 'add that to the handbook', 'remember how we do X'. Defaults to team-only — only mark it agent-visible if the user says the WhatsApp agent should be able to quote it.",
+      parameters: {
+        type: "object",
+        properties: {
+          title: { type: "string" },
+          body: {
+            type: "string",
+            description: "The page, in Markdown: # headings, - bullets, **bold**.",
+          },
+          category: { type: "string", description: "e.g. sales, delivery, money." },
+          visibility: {
+            type: "string",
+            enum: ["team", "agent", "both"],
+            description:
+              "Who may read it. Anything but 'team' can be quoted to a customer by the WhatsApp agent.",
+          },
+        },
+        required: ["title", "body"],
         additionalProperties: false,
       },
     },
@@ -4036,6 +4080,100 @@ export async function executeTool(
           note: "Shown to the user for confirmation. Nothing is sent until the user taps Send, and sending pauses the AI for that chat. Do not say it has been sent.",
         },
         card: { type: "confirm_send_whatsapp", whatsapp },
+      };
+    }
+
+    case "kb_search": {
+      const query = String(args.query ?? "").trim();
+      if (!query) return { content: { ok: false, error: "Search for what?" } };
+      try {
+        const { data } = await supabase.rpc("kb_search", { q: query, lim: 5 });
+        if (!data?.length)
+          return {
+            content: {
+              ok: true,
+              hits: [],
+              note: "Nothing written down about that yet. Say so rather than inventing an answer.",
+            },
+          };
+        return {
+          content: {
+            ok: true,
+            hits: data.map((h) => ({
+              title: h.title,
+              category: h.category,
+              snippet: String(h.snippet ?? "").replace(/<\/?b>/g, ""),
+            })),
+            note: "Answer from these. They are what the team actually wrote down.",
+          },
+        };
+      } catch {
+        return {
+          content: { ok: false, error: "The knowledge base isn't set up yet." },
+        };
+      }
+    }
+
+    case "kb_save_page": {
+      const title = String(args.title ?? "").trim();
+      const body = String(args.body ?? "").trim();
+      if (!title || !body)
+        return { content: { ok: false, error: "Need a title and the words." } };
+
+      // Defaults to team-only: anything else can be quoted to a customer,
+      // and that has to be a deliberate choice, not a fallback.
+      const visibility: KbVisibility =
+        args.visibility === "agent" || args.visibility === "both"
+          ? args.visibility
+          : "team";
+      const slug =
+        title
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-+|-+$/g, "")
+          .slice(0, 60) || "page";
+
+      // Same title = the same page updated, not a second one beside it.
+      const { data: existing } = await supabase
+        .from("kb_pages")
+        .select("id")
+        .ilike("title", title)
+        .maybeSingle();
+
+      const row = {
+        title,
+        body_md: body,
+        category: String(args.category ?? "general").trim() || "general",
+        visibility,
+        updated_by: ctx.userId,
+      };
+
+      const { error } = existing
+        ? await supabase.from("kb_pages").update(row).eq("id", existing.id)
+        : await supabase
+            .from("kb_pages")
+            .insert({ ...row, slug, created_by: ctx.userId });
+      if (error) return { content: { ok: false, error: error.message } };
+
+      const { invalidateAgentKnowledge } = await import("@/lib/wa-knowledge");
+      invalidateAgentKnowledge();
+
+      return {
+        content: {
+          ok: true,
+          title,
+          visibility,
+          updated: Boolean(existing),
+          note:
+            visibility === "team"
+              ? "Saved for the team only. The WhatsApp agent will NOT quote it."
+              : "Saved — the WhatsApp agent can now answer from this.",
+        },
+        event: {
+          kind: existing ? ("updated" as const) : ("created" as const),
+          label: `Knowledge: ${title}`,
+          href: "/kb",
+        },
       };
     }
 

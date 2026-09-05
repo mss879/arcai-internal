@@ -2,6 +2,7 @@ import {
   BadgeDollarSign,
   BriefcaseBusiness,
   BarChart3,
+  BookOpen,
   BrainCircuit,
   CalendarClock,
   CreditCard,
@@ -145,6 +146,9 @@ export const NAV_GROUPS: NavGroup[] = [
         adminOnly: true,
       },
       { label: "Resources", href: "/resources", icon: FolderOpen },
+      // 0119 — how we do things, written down. The WhatsApp agent reads
+      // the pages marked for it.
+      { label: "Knowledge", href: "/kb", icon: BookOpen },
       // Was its own one-item "Admin" section pinned to the bottom of the
       // sidebar. `adminOnly` is what hides it now that the section is gone —
       // dropping this flag would show every member the team's access list.

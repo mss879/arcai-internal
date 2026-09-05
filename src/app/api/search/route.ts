@@ -40,6 +40,7 @@ export async function GET(request: Request) {
       { data: invoices, error: invoicesErr },
       { data: proposals, error: proposalsErr },
       { data: emails, error: emailsErr },
+      { data: kb, error: kbErr },
     ] = await Promise.all([
       supabase
         .from("clients")
@@ -96,6 +97,13 @@ export async function GET(request: Request) {
         .ilike("subject", term)
         .order("created_at", { ascending: false })
         .limit(5),
+      // 0119 — the handbook. Title and body, since "how do we handle refunds"
+      // is as likely to be a sentence inside a page as its heading.
+      supabase
+        .from("kb_pages")
+        .select("id, slug, title, category")
+        .or(`title.ilike.${term},body_md.ilike.${term}`)
+        .limit(5),
     ]);
 
     // Log errors if any, but don't fail the whole search if one table fails
@@ -109,6 +117,7 @@ export async function GET(request: Request) {
     if (invoicesErr) console.error("Search invoices error:", invoicesErr);
     if (proposalsErr) console.error("Search proposals error:", proposalsErr);
     if (emailsErr) console.error("Search emails error:", emailsErr);
+    if (kbErr) console.error("Search knowledge error:", kbErr);
 
     const results = [
       ...(clients || []).map((c) => ({
@@ -159,6 +168,13 @@ export async function GET(request: Request) {
         subtitle: `${pr.client_name} · ${Number(pr.grand_total).toLocaleString()} · ${pr.proposal_date}`,
         category: "Proposals",
         href: `/proposals`,
+      })),
+      ...(kb || []).map((k) => ({
+        id: k.id,
+        title: k.title,
+        subtitle: k.category,
+        category: "Knowledge",
+        href: `/kb?page=${k.slug}`,
       })),
       ...(emails || []).map((e) => ({
         id: e.id,

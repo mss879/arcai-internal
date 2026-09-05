@@ -3,6 +3,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { Database } from "@/lib/database.types";
+import { markdownToText } from "@/lib/markdown";
 import {
   applyOverrides,
   formatPriceField,
@@ -106,10 +107,13 @@ export async function buildAgentKnowledge(supabase: DB): Promise<string> {
   return promise;
 }
 
+/** How much of the knowledge base may ride on every agent reply. */
+const KB_CHAR_BUDGET = 8_000;
+
 async function renderAgentKnowledge(supabase: DB): Promise<string> {
   // Both reads are independent — fetch concurrently, degrade independently
   // (allSettled preserves the old per-query error isolation).
-  const [pricingRes, faqRes] = await Promise.allSettled([
+  const [pricingRes, faqRes, kbRes] = await Promise.allSettled([
     supabase.from("pricing_config").select("overrides").eq("id", 1).maybeSingle(),
     supabase
       .from("wa_lessons")
@@ -118,6 +122,15 @@ async function renderAgentKnowledge(supabase: DB): Promise<string> {
       .eq("kind", "faq")
       .order("decided_at", { ascending: false })
       .limit(12),
+    // 0119 — the pages the team wrote and marked as quotable. Anything left
+    // at the default 'team' visibility never reaches the agent: an internal
+    // process note is not something to read out to a customer.
+    supabase
+      .from("kb_pages")
+      .select("title, body_md, category")
+      .in("visibility", ["agent", "both"])
+      .order("updated_at", { ascending: false })
+      .limit(30),
   ]);
   const overrides: PricingOverrides =
     pricingRes.status === "fulfilled"
@@ -164,5 +177,26 @@ async function renderAgentKnowledge(supabase: DB): Promise<string> {
       .join("\n")}`;
   }
 
-  return `${STATIC_KNOWLEDGE}\n\n${priceLines.join("\n")}${learnedFaqs}`;
+  // 0119 — the written-down way of doing things. Capped hard: this text is
+  // prepended to every single agent reply, so an unbounded knowledge base
+  // would quietly become the token bill.
+  let handbook = "";
+  const pages = kbRes.status === "fulfilled" ? (kbRes.value.data ?? []) : [];
+  if (pages.length) {
+    const sections: string[] = [];
+    let budget = KB_CHAR_BUDGET;
+    for (const page of pages) {
+      const body = markdownToText(page.body_md).trim();
+      if (!body) continue;
+      const section = `## ${page.title}${page.category ? ` (${page.category})` : ""}\n${body}`;
+      if (section.length > budget) break;
+      budget -= section.length;
+      sections.push(section);
+    }
+    if (sections.length) {
+      handbook = `\n\nHOW WE DO THINGS (written by the team — answer from these before improvising)\n${sections.join("\n\n")}`;
+    }
+  }
+
+  return `${STATIC_KNOWLEDGE}\n\n${priceLines.join("\n")}${learnedFaqs}${handbook}`;
 }

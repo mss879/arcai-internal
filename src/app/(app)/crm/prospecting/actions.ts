@@ -14,6 +14,7 @@ import {
 import { sendAndLogEmail } from "@/lib/email-outbox";
 import { isEmailOutreachConfigured, processDueOutreach } from "@/lib/lead-outreach";
 import { launchScanCampaign } from "@/lib/outreach-campaign";
+import { MAX_SCAN_CATEGORIES } from "@/lib/prospect-categories";
 import { isSmsConfigured, sendSms } from "@/lib/sms";
 import { countSmsSegments, normalizePhone } from "@/lib/sms-utils";
 import type { ActionResult } from "@/lib/types";
@@ -54,7 +55,22 @@ export async function startProspectScan(
   }
   const city = input.city.trim();
   if (!city) return { ok: false, error: "Pick a city or area to scan." };
-  if (!input.categories.length) {
+
+  // Types can be typed in freehand, so trim, drop blanks and de-duplicate
+  // case-insensitively — two spellings of one type would otherwise run the
+  // same Places search twice and bill for both.
+  const seen = new Set<string>();
+  const categories: string[] = [];
+  for (const raw of input.categories) {
+    const type = String(raw ?? "").trim().replace(/\s+/g, " ");
+    if (!type) continue;
+    const key = type.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    categories.push(type);
+    if (categories.length >= MAX_SCAN_CATEGORIES) break;
+  }
+  if (!categories.length) {
     return { ok: false, error: "Pick at least one business category." };
   }
 
@@ -63,7 +79,7 @@ export async function startProspectScan(
     .insert({
       country: input.country.trim() || "Sri Lanka",
       city,
-      categories: input.categories.slice(0, 12),
+      categories,
       max_results: Math.min(Math.max(input.max_results, 5), 120),
       min_score: Math.min(Math.max(input.min_score, 20), 90),
       fire_automations: input.fire_automations,

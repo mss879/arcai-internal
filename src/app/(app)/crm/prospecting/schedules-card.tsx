@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Input, Select } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
+import { PROSPECT_CATEGORIES } from "@/lib/prospect-categories";
 import { cn } from "@/lib/utils";
 import type { ProspectScanSchedule } from "@/lib/types";
 
@@ -170,9 +171,18 @@ export function SchedulesCard({ schedules }: { schedules: ProspectScanSchedule[]
               <label className="space-y-1.5 text-xs font-medium text-slate-600">
                 Categories (comma-separated)
                 <Input
+                  list="prospect-schedule-categories"
                   value={editing.category}
                   onChange={(e) => setEditing({ ...editing, category: e.target.value })}
+                  placeholder="Vehicle dealerships, Watch stores"
                 />
+                {/* Suggestions only — a schedule can name any business type,
+                    the same as a manual scan. */}
+                <datalist id="prospect-schedule-categories">
+                  {PROSPECT_CATEGORIES.map((c) => (
+                    <option key={c} value={c} />
+                  ))}
+                </datalist>
               </label>
             </div>
             <div className="grid gap-3 sm:grid-cols-3">

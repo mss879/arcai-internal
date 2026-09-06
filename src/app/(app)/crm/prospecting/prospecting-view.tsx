@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import {
   AlertTriangle,
   ChevronDown,
+  Check,
   ExternalLink,
   Globe,
   Mail,
@@ -15,11 +16,13 @@ import {
   Phone,
   Radar,
   RefreshCw,
+  Search,
   Send,
   ShieldCheck,
   Sparkles,
   Star,
   Trash2,
+  X,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -29,6 +32,11 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Field, Input, Select } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { useRealtimeSyncTables } from "@/hooks/use-realtime-sync";
+import {
+  MAX_SCAN_CATEGORIES,
+  PROSPECT_CATEGORIES,
+  PROSPECT_CATEGORY_GROUPS,
+} from "@/lib/prospect-categories";
 import { cn } from "@/lib/utils";
 import type {
   ProspectCandidate,
@@ -332,30 +340,6 @@ const SL_CITIES = [
   "Ratnapura",
 ];
 
-/** Business types that genuinely need websites — the scan's search queries. */
-const CATEGORIES = [
-  "Restaurants",
-  "Cafes & bakeries",
-  "Hotels & guest houses",
-  "Salons & spas",
-  "Dental clinics",
-  "Medical clinics",
-  "Law firms",
-  "Real estate agencies",
-  "Construction companies",
-  "Gyms & fitness centers",
-  "Car repair & service",
-  "Travel agencies",
-  "Clothing stores",
-  "Furniture stores",
-  "Photographers",
-  "Event planners",
-  "Tuition & training centers",
-  "Printing services",
-  "Jewellery stores",
-  "Pet care & vets",
-];
-
 const PHASES: { key: ProspectScanStatus; label: string }[] = [
   { key: "searching", label: "Finding businesses" },
   { key: "qualifying", label: "Checking websites" },
@@ -465,6 +449,211 @@ export function ProspectingView({
   );
 }
 
+// ---- business-type picker -----------------------------------------------------
+
+/**
+ * ~135 built-in types is more than a flat chip wall can carry, so the picker
+ * groups them, filters as you type, and keeps what's selected pinned at the
+ * top where it stays visible while you browse.
+ *
+ * The "add your own" box is not a convenience — a type is just the text of a
+ * Places query, so anything the user can name ("bridal car hire", "solar
+ * panel cleaners") is a valid scan. The built-in list is a starting point,
+ * not the limit.
+ */
+function CategoryPicker({
+  cats,
+  onToggle,
+  onClear,
+}: {
+  cats: string[];
+  onToggle: (c: string) => void;
+  onClear: () => void;
+}) {
+  const [query, setQuery] = React.useState("");
+  const [custom, setCustom] = React.useState("");
+  const q = query.trim().toLowerCase();
+
+  const groups = React.useMemo(
+    () =>
+      PROSPECT_CATEGORY_GROUPS.map((g) => ({
+        label: g.label,
+        items: q
+          ? g.items.filter(
+              (i) => i.toLowerCase().includes(q) || g.label.toLowerCase().includes(q),
+            )
+          : g.items,
+      })).filter((g) => g.items.length > 0),
+    [q],
+  );
+
+  /** Types the user typed in themselves — shown so they can be unpicked. */
+  const extra = cats.filter((c) => !PROSPECT_CATEGORIES.includes(c));
+  const full = cats.length >= MAX_SCAN_CATEGORIES;
+
+  function addCustom() {
+    const value = custom.trim().replace(/\s+/g, " ");
+    if (!value) return;
+    const match = PROSPECT_CATEGORIES.find(
+      (c) => c.toLowerCase() === value.toLowerCase(),
+    );
+    const type = match ?? value;
+    if (cats.some((c) => c.toLowerCase() === type.toLowerCase())) {
+      toast.error(`"${type}" is already picked.`);
+      return;
+    }
+    onToggle(type);
+    setCustom("");
+  }
+
+  return (
+    <Field
+      label={`Business types · ${cats.length}/${MAX_SCAN_CATEGORIES} selected`}
+      hint="Each type is a separate search of the area. Pick a few, or add your own."
+      className="mt-4"
+    >
+      <div className="rounded-xl border border-slate-200 bg-slate-50/60">
+        {/* Picked, pinned — never scrolls out of sight. */}
+        <div className="flex flex-wrap items-center gap-1.5 border-b border-slate-200 px-3 py-2.5">
+          {cats.length === 0 ? (
+            <span className="py-1 text-xs text-slate-400">
+              Nothing picked yet — choose at least one type below.
+            </span>
+          ) : (
+            <>
+              {cats.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => onToggle(c)}
+                  title="Remove"
+                  className="inline-flex items-center gap-1 rounded-full border border-primary-300 bg-primary-50 px-2.5 py-1 text-xs font-medium text-primary-700 transition hover:border-rose-300 hover:bg-rose-50 hover:text-rose-700"
+                >
+                  {c}
+                  <X className="h-3 w-3" />
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={onClear}
+                className="ml-1 text-xs font-medium text-slate-400 underline-offset-2 hover:text-slate-600 hover:underline"
+              >
+                Clear all
+              </button>
+            </>
+          )}
+        </div>
+
+        <div className="flex flex-col gap-2 px-3 py-2.5 sm:flex-row">
+          <div className="relative flex-1">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+            <Input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search types — watch, dealership, dentist…"
+              className="pl-8"
+            />
+          </div>
+          <div className="flex gap-2 sm:w-64">
+            <Input
+              value={custom}
+              onChange={(e) => setCustom(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  addCustom();
+                }
+              }}
+              placeholder="Add your own type"
+            />
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={addCustom}
+              disabled={!custom.trim() || full}
+            >
+              Add
+            </Button>
+          </div>
+        </div>
+
+        <div className="max-h-72 space-y-3 overflow-y-auto border-t border-slate-200 px-3 py-3">
+          {extra.length > 0 && !q && (
+            <TypeGroup
+              label="Your own types"
+              items={extra}
+              cats={cats}
+              full={full}
+              onToggle={onToggle}
+            />
+          )}
+          {groups.map((g) => (
+            <TypeGroup
+              key={g.label}
+              label={g.label}
+              items={g.items}
+              cats={cats}
+              full={full}
+              onToggle={onToggle}
+            />
+          ))}
+          {groups.length === 0 && (
+            <p className="py-4 text-center text-xs text-slate-500">
+              No built-in type matches “{query.trim()}”. Add it as your own type
+              — the scan searches for whatever you name.
+            </p>
+          )}
+        </div>
+      </div>
+    </Field>
+  );
+}
+
+function TypeGroup({
+  label,
+  items,
+  cats,
+  full,
+  onToggle,
+}: {
+  label: string;
+  items: string[];
+  cats: string[];
+  full: boolean;
+  onToggle: (c: string) => void;
+}) {
+  return (
+    <div>
+      <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+        {label}
+      </p>
+      <div className="flex flex-wrap gap-1.5">
+        {items.map((c) => {
+          const active = cats.includes(c);
+          return (
+            <button
+              key={c}
+              type="button"
+              onClick={() => onToggle(c)}
+              className={cn(
+                "inline-flex items-center gap-1 rounded-full border px-3 py-1.5 text-xs font-medium transition",
+                active
+                  ? "border-primary-300 bg-primary-50 text-primary-700 ring-1 ring-primary-100"
+                  : full
+                    ? "border-slate-200 text-slate-300"
+                    : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50",
+              )}
+            >
+              {active && <Check className="h-3 w-3" />}
+              {c}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ---- launcher -----------------------------------------------------------------
 
 function Launcher({
@@ -487,10 +676,22 @@ function Launcher({
 
   const stages = pipelines.find((p) => p.id === pipelineId)?.stages ?? [];
 
+  /**
+   * Selecting is capped at the number the server keeps (12). Silently
+   * slicing a 30-type selection down to 12 on the server would run a scan
+   * the user didn't ask for, so refuse the 13th here and say why.
+   */
   function toggleCat(c: string) {
-    setCats((prev) =>
-      prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c],
-    );
+    setCats((prev) => {
+      if (prev.includes(c)) return prev.filter((x) => x !== c);
+      if (prev.length >= MAX_SCAN_CATEGORIES) {
+        toast.error(
+          `Up to ${MAX_SCAN_CATEGORIES} business types per scan — each one is its own search. Unpick one first.`,
+        );
+        return prev;
+      }
+      return [...prev, c];
+    });
   }
 
   function launch() {
@@ -582,28 +783,7 @@ function Launcher({
         </Field>
       </div>
 
-      <Field label={`Business types · ${cats.length} selected`} className="mt-4">
-        <div className="flex flex-wrap gap-1.5">
-          {CATEGORIES.map((c) => {
-            const active = cats.includes(c);
-            return (
-              <button
-                key={c}
-                type="button"
-                onClick={() => toggleCat(c)}
-                className={cn(
-                  "rounded-full border px-3 py-1.5 text-xs font-medium transition",
-                  active
-                    ? "border-primary-300 bg-primary-50 text-primary-700 ring-1 ring-primary-100"
-                    : "border-slate-200 text-slate-500 hover:bg-slate-50",
-                )}
-              >
-                {c}
-              </button>
-            );
-          })}
-        </div>
-      </Field>
+      <CategoryPicker cats={cats} onToggle={toggleCat} onClear={() => setCats([])} />
 
       <div className="mt-4 flex flex-wrap items-end gap-4">
         {pipelines.length > 0 && (

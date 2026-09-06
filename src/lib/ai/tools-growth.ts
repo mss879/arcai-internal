@@ -514,7 +514,7 @@ export const GROWTH_TOOLS: ToolSchema[] = [
             type: "array",
             items: { type: "string" },
             description:
-              "The kinds of business to look for, e.g. ['salon'] or ['gym','fitness studio']. Keep it to one or two — each extra kind multiplies the search time.",
+              "The kinds of business to look for — any type the user names works, e.g. ['salon'], ['vehicle dealerships'], ['watch stores','jewellery stores']. Keep it to one or two — each extra kind multiplies the search time.",
           },
           count: {
             type: "integer",

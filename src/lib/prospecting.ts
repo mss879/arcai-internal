@@ -34,6 +34,7 @@ import { probeSite } from "@/lib/ai/site-probe";
 import { fireAutomationTrigger } from "@/lib/automation";
 import { topLeadPosition } from "@/lib/crm";
 import { enqueueLeadOutreach, outreachSettings } from "@/lib/lead-outreach";
+import { MAX_SCAN_CATEGORIES } from "@/lib/prospect-categories";
 
 type DB = SupabaseClient<Database>;
 type ScanRow = Database["public"]["Tables"]["prospect_scans"]["Row"];
@@ -92,7 +93,10 @@ const DENY_TYPES = new Set([
   "atm",
   "hospital",
   "public_bathroom",
-  "school",
+  // NOT bare "school": Places tags private tuition, language, music, dance
+  // and driving schools with it, and those are prime prospects. The public
+  // institutions this rule is about are the specific levels below, and the
+  // batched relevance pass catches whatever slips through.
   "primary_school",
   "secondary_school",
   "university",
@@ -380,21 +384,54 @@ async function runSearch(supabase: DB, scan: ScanRow): Promise<void> {
   const area = `${scan.city}, ${scan.country}`;
 
   // Enumerate businesses category by category until the cap is met.
+  //
+  // Each type gets a FAIR SHARE of the result budget rather than the whole
+  // remainder. Handing the first type everything is what a naive loop does,
+  // and with a multi-type scan the result is 40 restaurants and nothing from
+  // the other eleven types the user picked — the types further down the list
+  // are never searched at all. The share is recomputed each pass, so what a
+  // thin type doesn't use rolls forward to the next one.
   const seen = new Set<string>();
   const businesses: (PlaceBusiness & { category: string })[] = [];
   let placesError = "";
   if (isPlacesConfigured()) {
-    for (const category of categories) {
-      if (businesses.length >= scan.max_results) break;
+    /** How deep the first pass went per type, so a top-up can go deeper. */
+    const depth = new Map<string, number>();
+    for (const [i, category] of categories.entries()) {
+      const room = scan.max_results - businesses.length;
+      if (room <= 0) break;
+      const want = Math.min(60, Math.ceil(room / (categories.length - i)));
       const { businesses: found, error } = await placesSearchAll(
         `${category} in ${area}`,
-        Math.min(60, scan.max_results - businesses.length),
+        want,
       );
       if (error && !placesError) placesError = error;
+      // A type that returned everything it was asked for has more to give;
+      // one that came up short is exhausted and worth no second call.
+      depth.set(category, found.length >= want ? want : 0);
       for (const b of found) {
         if (seen.has(b.placeId)) continue;
         seen.add(b.placeId);
         businesses.push({ ...b, category });
+      }
+    }
+    // Budget left over because some types were thin: spend it going deeper
+    // into the ones that weren't. Places always paginates from the start of
+    // a query, so ask past the depth already covered — the repeated prefix
+    // is dropped by `seen` and only the deeper pages add anything.
+    for (const [category, covered] of depth) {
+      const room = scan.max_results - businesses.length;
+      if (room <= 0) break;
+      if (!covered || covered >= 60) continue;
+      const { businesses: found } = await placesSearchAll(
+        `${category} in ${area}`,
+        Math.min(60, covered + room),
+      );
+      for (const b of found) {
+        if (seen.has(b.placeId)) continue;
+        seen.add(b.placeId);
+        businesses.push({ ...b, category });
+        if (businesses.length >= scan.max_results) break;
       }
     }
     // An API failure must never masquerade as "this area has no businesses" —
@@ -409,10 +446,13 @@ async function runSearch(supabase: DB, scan: ScanRow): Promise<void> {
     // Firecrawl-only fallback: web search can only surface businesses that
     // HAVE websites — "no website" discovery needs the Places key.
     const country = countryCode(scan.country);
-    for (const category of categories) {
-      if (businesses.length >= scan.max_results) break;
+    for (const [i, category] of categories.entries()) {
+      const room = scan.max_results - businesses.length;
+      if (room <= 0) break;
+      // The same fair share as the Places path, so the last type picked is
+      // still searched rather than starved by the first.
       const hits = await firecrawlSearch(`${category} in ${area}`, {
-        limit: 10,
+        limit: Math.min(10, Math.ceil(room / (categories.length - i))),
         withoutContent: true,
         ...(country ? { country } : {}),
       });
@@ -1535,7 +1575,7 @@ export async function processDueProspectSchedules(supabase: DB): Promise<number>
       .split(",")
       .map((c) => c.trim())
       .filter(Boolean)
-      .slice(0, 12);
+      .slice(0, MAX_SCAN_CATEGORIES);
     const { data: scan, error } = await supabase
       .from("prospect_scans")
       .insert({

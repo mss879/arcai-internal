@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { isOpenAIConfigured } from "@/lib/ai/openai";
 import type { WebInsight, WebInsightTask } from "@/lib/types";
 import { readPendingScan } from "@/lib/web-analytics/insights";
+import { ledgerEntries, ledgerSummary } from "@/lib/web-analytics/ledger";
 import { readJobStatus, syncIntervalHours } from "@/lib/web-analytics/run";
 import { isWebsiteSourceConfigured, SITE, SITE_URL } from "@/lib/web-analytics/source";
 import {
@@ -67,6 +68,8 @@ export default async function WebAnalyticsPage({
     scanPending,
     insightRes,
     tasksRes,
+    ledger,
+    ledgerTotals,
   ] = await Promise.all([
     getDaily(supabase, range),
     getDaily(supabase, prior),
@@ -102,6 +105,10 @@ export default async function WebAnalyticsPage({
       .order("done", { ascending: true })
       .order("sort_order", { ascending: true })
       .limit(60),
+    // 0125 — the reconciled list every conversion figure is computed from.
+    // Null until migration 0125 exists; the Leads tab then says what to run.
+    ledgerEntries(supabase, range, 200).catch(() => null),
+    ledgerSummary(supabase, range).catch(() => null),
   ]);
 
   return (
@@ -133,6 +140,8 @@ export default async function WebAnalyticsPage({
       scanPending={scanPending}
       insight={(insightRes.data as WebInsight | null) ?? null}
       insightTasks={(tasksRes.data ?? []) as WebInsightTask[]}
+      ledger={ledger}
+      ledgerSummary={ledgerTotals}
       sourceReady={isWebsiteSourceConfigured()}
       aiReady={isOpenAIConfigured()}
     />

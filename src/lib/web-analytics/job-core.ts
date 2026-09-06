@@ -12,7 +12,7 @@
  * mid-way loses only that step's work, never the job.
  */
 
-export type JobPhase = "sync" | "rollup" | "chats" | "report" | "done";
+export type JobPhase = "sync" | "ledger" | "rollup" | "chats" | "report" | "done";
 
 export type ReportKind = "daily" | "weekly" | "monthly";
 
@@ -38,6 +38,8 @@ export type ActiveJob = {
   /** Steps that started in the current phase and never finished — the kill counter. */
   killed: number;
   rows: number;
+  /** Conversion events reconciled into the lead ledger by this job. */
+  leads: number;
   days_done: number;
   chats: number;
   report_id: string | null;
@@ -49,6 +51,7 @@ export type LastRun = {
   finished_at: string;
   ok: boolean;
   rows: number;
+  leads: number;
   days: number;
   chats: number;
   report_id: string | null;
@@ -80,7 +83,7 @@ export type JobRequest = {
 /** After this many consecutive killed steps, the phase is abandoned. */
 export const MAX_KILLED_STEPS = 3;
 
-const PHASES: JobPhase[] = ["sync", "rollup", "chats", "report", "done"];
+const PHASES: JobPhase[] = ["sync", "ledger", "rollup", "chats", "report", "done"];
 
 const phaseIndex = (p: JobPhase): number => PHASES.indexOf(p);
 
@@ -120,6 +123,7 @@ function defaultJobFields(): Omit<ActiveJob, "started_at" | "phase" | "sync_star
     steps: 0,
     killed: 0,
     rows: 0,
+    leads: 0,
     days_done: 0,
     chats: 0,
     report_id: null,
@@ -188,6 +192,11 @@ export function mergeRequest(job: ActiveJob, req: JobRequest): { job: ActiveJob;
 export function nextPhase(job: ActiveJob): JobPhase {
   switch (job.phase) {
     case "sync":
+      // The ledger sits between the mirror and the rollup on purpose: every
+      // conversion figure the rollup writes is read FROM the ledger, so the
+      // ledger has to be current first.
+      return "ledger";
+    case "ledger":
       return "rollup";
     case "rollup":
       return job.analyse_chats ? "chats" : job.report ? "report" : "done";
@@ -238,6 +247,7 @@ export function finishJob(state: JobState, job: ActiveJob, nowIso: string, inter
     finished_at: nowIso,
     ok: job.errors.length === 0,
     rows: job.rows,
+    leads: job.leads,
     days: job.days_done,
     chats: job.chats,
     report_id: job.report_id,
@@ -337,6 +347,7 @@ export type JobSummary = {
   started_at: string | null;
   steps: number;
   rows: number;
+  leads: number;
   days_done: number;
   days_left: number;
   chats: number;
@@ -355,6 +366,7 @@ export function summarise(state: JobState, nowIso: string): JobSummary {
     started_at: job?.started_at ?? null,
     steps: job?.steps ?? 0,
     rows: job?.rows ?? 0,
+    leads: job?.leads ?? 0,
     days_done: job?.days_done ?? 0,
     days_left: job?.pending_days?.length ?? 0,
     chats: job?.chats ?? 0,

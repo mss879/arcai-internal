@@ -60,6 +60,15 @@ export type InboundLeadInput = {
   tags?: string[];
   /** Payload passed to the automation triggers. */
   meta?: Record<string, unknown>;
+  /**
+   * 0125 — the website conversion this enquiry IS. The site's contact form
+   * mints `lead_…` before it sends and records the same id on its analytics
+   * conversion; storing it here is what lets the lead ledger join the two
+   * exactly instead of guessing by time and email.
+   */
+  websiteLeadId?: string | null;
+  webSessionId?: string | null;
+  webVisitorId?: string | null;
 };
 
 export type InboundLeadResult =
@@ -205,6 +214,11 @@ export async function createInboundLead(
         referral_code: open.referral_code ?? attribution.referral_code,
         referred_by_client_id:
           open.referred_by_client_id ?? attribution.referred_by_client_id,
+        // The first website conversion keeps the lead's key; later ones are
+        // still reconciled — the ledger row for each carries this lead's id.
+        website_lead_id: open.website_lead_id ?? input.websiteLeadId?.trim() ?? null,
+        web_session_id: open.web_session_id ?? input.webSessionId?.trim() ?? null,
+        web_visitor_id: open.web_visitor_id ?? input.webVisitorId?.trim() ?? null,
       })
       .eq("id", open.id)
       .select("*")
@@ -253,6 +267,9 @@ export async function createInboundLead(
       client_id: client?.id ?? null,
       tags: [...new Set(["inbound", ...(input.tags ?? [])])],
       ...attribution,
+      website_lead_id: input.websiteLeadId?.trim() || null,
+      web_session_id: input.webSessionId?.trim() || null,
+      web_visitor_id: input.webVisitorId?.trim() || null,
       // Land at the top of the stage column, above existing cards.
       position: where.stageId ? await topLeadPosition(db, where.stageId) : 0,
       created_by: null,

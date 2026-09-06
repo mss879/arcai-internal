@@ -4,6 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { Database } from "@/lib/database.types";
 
+import { countingSessions, intentSessions, ledgerRowsForRange } from "./ledger";
 import { SITE } from "./source";
 
 type DB = SupabaseClient<Database>;
@@ -67,6 +68,10 @@ export type Totals = {
   pagesPerSession: number;
   conversions: number;
   conversionRate: number;
+  /** WhatsApp / tel: / mailto: clicks — intent, shown beside conversions. */
+  contactClicks: number;
+  /** Conversion events the lead ledger set aside as spam or tests. */
+  excludedConversions: number;
   chatSessions: number;
   chatMessages: number;
   formsStarted: number;
@@ -132,6 +137,8 @@ export function totalsFrom(rows: DailyRow[]): Totals {
     pagesPerSession: weighted("avg_pages_per_session"),
     conversions,
     conversionRate: sessions ? Number(((conversions / sessions) * 100).toFixed(2)) : 0,
+    contactClicks: sum(rows, "contact_clicks"),
+    excludedConversions: sum(rows, "excluded_conversions"),
     chatSessions: sum(rows, "chat_sessions"),
     chatMessages: sum(rows, "chat_messages"),
     formsStarted: sum(rows, "forms_started"),
@@ -329,12 +336,42 @@ export async function getRecentSessions(supabase: DB, limit = 100): Promise<WebS
   return (data ?? []) as WebSession[];
 }
 
-/** Visits that turned into something, newest first. */
+/**
+ * Visits that turned into something, newest first.
+ *
+ * "Something" is decided by the lead ledger: a confirmed lead or an
+ * unreviewed enquiry. A visit the tracker flagged converted whose only
+ * conversion the ledger filed as spam is not in this list — it is the
+ * highest-trust list on the page, and the one a person acts on.
+ */
 export async function getConvertingSessions(
   supabase: DB,
   range: Range,
   limit = 50,
 ): Promise<WebSession[]> {
+  const ledger = await ledgerRowsForRange(
+    supabase,
+    `${range.from}T00:00:00.000Z`,
+    `${range.to}T23:59:59.999Z`,
+  );
+  if (ledger) {
+    const ids = [...countingSessions(ledger)];
+    if (!ids.length) return [];
+    const out: WebSession[] = [];
+    for (let i = 0; i < ids.length && out.length < limit * 2; i += 150) {
+      const { data } = await supabase
+        .from("web_sessions")
+        .select("*")
+        .eq("site", SITE)
+        .eq("is_bot", false)
+        .in("session_id", ids.slice(i, i + 150));
+      out.push(...((data ?? []) as WebSession[]));
+    }
+    return out
+      .sort((a, b) => (a.first_seen_at < b.first_seen_at ? 1 : -1))
+      .slice(0, limit);
+  }
+
   const { data } = await supabase
     .from("web_sessions")
     .select("*")
@@ -416,7 +453,7 @@ export async function getFunnel(
   // count of what it excludes rides along in `totals.legacySessions`.
   const { data } = await supabase
     .from("web_sessions")
-    .select("page_count, engaged_seconds, forms_started, converted, chat_engaged")
+    .select("session_id, page_count, engaged_seconds, forms_started, converted, chat_engaged")
     .eq("site", SITE)
     .eq("is_bot", false)
     .not("session_id", "like", "legacy:%")
@@ -424,19 +461,43 @@ export async function getFunnel(
     .lte("first_seen_at", `${range.to}T23:59:59.999Z`)
     .limit(20_000);
 
+  // The two bottom stages come from the lead ledger. "Converted" used to be
+  // the tracker's session flag, which counted a spam script's newsletter
+  // signups, and "Showed intent" knew nothing about WhatsApp or call
+  // clicks — so 17 sessions had converted while only 2 had shown intent,
+  // an impossible funnel. Now intent is a form start, a chat, or any
+  // genuine ledger row (a contact click included), and converted is a
+  // ledger row that counts — a strict subset, by construction. Before
+  // migration 0125 the ledger is null and the flag is used as before.
+  const ledger = await ledgerRowsForRange(
+    supabase,
+    `${range.from}T00:00:00.000Z`,
+    `${range.to}T23:59:59.999Z`,
+  );
+  const counting = ledger ? countingSessions(ledger) : null;
+  const intent = ledger ? intentSessions(ledger) : null;
+
   const rows = data ?? [];
   const all = rows.length;
   const engaged = rows.filter((r) => r.engaged_seconds >= 10).length;
   const explored = rows.filter((r) => r.page_count >= 2).length;
-  const interested = rows.filter((r) => r.forms_started > 0 || r.chat_engaged).length;
-  const converted = rows.filter((r) => r.converted).length;
+  const didConvert = (r: { session_id: string; converted: boolean }) =>
+    counting ? counting.has(r.session_id) : r.converted;
+  const interested = rows.filter(
+    (r) =>
+      r.forms_started > 0 ||
+      r.chat_engaged ||
+      (intent ? intent.has(r.session_id) : false) ||
+      didConvert(r),
+  ).length;
+  const converted = rows.filter(didConvert).length;
 
   const stages: [string, number][] = [
     ["Visited", all],
     ["Engaged (10s+)", engaged],
     ["Explored (2+ pages)", explored],
-    ["Showed intent (form or chat)", interested],
-    ["Converted", converted],
+    ["Showed intent (form, chat or contact click)", interested],
+    ["Converted (confirmed or unreviewed enquiry)", converted],
   ];
 
   return stages.map(([stage, sessions]) => ({

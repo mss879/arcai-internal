@@ -6,10 +6,12 @@ import type { Database } from "@/lib/database.types";
 import {
   AI_MODELS,
   isOpenAIConfigured,
+  openaiChatJSON,
   openaiResponsePoll,
   openaiResponseStart,
 } from "@/lib/ai/openai";
 
+import { ledgerSummary, type LedgerSummary } from "./ledger";
 import { collectReportStats, type ReportStats } from "./report";
 import { rangeForDays } from "./queries";
 import { SITE } from "./source";
@@ -149,6 +151,14 @@ export type InsightEvidence = ReportStats & {
   buying_signal_count: number;
   recent_errors: { page: string; message: string; count: number }[];
   identified_visitors: number;
+  /**
+   * 0125 — the lead ledger's reconciliation of every conversion in the
+   * window: counted, spam, test, unreviewed, matched to a CRM lead, qualified,
+   * won. Null until migration 0125 has been applied.
+   */
+  lead_ledger: LedgerSummary | null;
+  /** WhatsApp / tel: / mailto: clicks — intent, deliberately not inside `conversions`. */
+  contact_clicks: number;
   data_quality: {
     days_with_data: number;
     days_requested: number;
@@ -184,7 +194,7 @@ export async function collectInsightEvidence(
   const from = `${range.from}T00:00:00.000Z`;
   const to = `${range.to}T23:59:59.999Z`;
 
-  const [dailyRes, sessionsRes, pageRes, chatRes, errorRes, legacyRes] = await Promise.all([
+  const [dailyRes, sessionsRes, pageRes, chatRes, errorRes, legacyRes, ledger] = await Promise.all([
     supabase
       .from("web_daily")
       .select(
@@ -240,6 +250,9 @@ export async function collectInsightEvidence(
       .gte("first_seen_at", from)
       .lte("first_seen_at", to)
       .like("session_id", "legacy:%"),
+    // The reconciled truth about conversions. Null before migration 0125,
+    // in which case the kinds below fall back to the session flag.
+    ledgerSummary(supabase, range).catch(() => null),
   ]);
 
   // ---- device split: the cross-cut that most often explains a bad number --
@@ -314,9 +327,18 @@ export async function collectInsightEvidence(
       bounce_rate: Number(d.bounce_rate),
       avg_engaged_seconds: Number(d.avg_engaged_seconds),
     })),
-    conversions_by_kind: Object.entries(conversionKinds)
-      .map(([kind, count]) => ({ kind, count }))
-      .sort((a, b) => b.count - a.count),
+    // From the ledger when it exists — counted rows only, so a kind whose
+    // every row was the spam script does not appear at all.
+    conversions_by_kind: ledger
+      ? ledger.by_kind
+          .filter((k) => k.counted > 0)
+          .map((k) => ({ kind: k.kind, count: k.counted }))
+          .sort((a, b) => b.count - a.count)
+      : Object.entries(conversionKinds)
+          .map(([kind, count]) => ({ kind, count }))
+          .sort((a, b) => b.count - a.count),
+    lead_ledger: ledger,
+    contact_clicks: base.totals.contactClicks,
     friction_pages: [...byPath.entries()]
       .map(([path, f]) => ({
         path,
@@ -389,6 +411,8 @@ HARD RULES
 6. Distinguish severity (what it is costing) from impact and effort (whether to do it next). A critical issue that takes a month is not the first thing to start on.
 7. Say what is WORKING as well as what is broken. Something to do more of is as actionable as something to fix.
 8. health_score is a 0-100 read on the site's commercial performance, weighing conversion, engagement, traffic trend and technical health. Be honest — a site with traffic and no conversions is not healthy. If the data is too thin to score fairly, score conservatively and say so in the summary.
+
+10. CONVERSIONS ARE RECONCILED. "lead_ledger" is the source of truth for what a "conversion" was: every conversion event is one row there, filed as a confirmed lead, an unreviewed enquiry (counted), a contact click (WhatsApp / call / email — intent, not counted unless a person confirms it), spam, or a test. "totals.conversions", the funnel's Converted stage and "conversions_by_kind" have ALREADY excluded spam and tests and never include bare contact clicks, so do not re-derive a conversion count from sessions or events, and do not report that conversions exceed intent — by construction they cannot. If "lead_ledger" is null the ledger table has not been created yet: say so once, and treat the conversion figures as the older unreconciled ones. Where "lead_ledger.unreviewed_enquiries" or "unreviewed_contact_clicks" is above zero, the action is "review them on the Leads tab", not "fix the tracking". "contact_clicks" is intent worth reporting on its own.
 
 9. The checklist is the deliverable. Findings explain; the checklist is what someone opens on Monday and works through. Every item must be a single concrete action a person can start and finish — "cut the contact form from 9 fields to 4" not "improve the form". Order it so the top item is the one to do first. Each item carries the metric that motivates it and what good looks like, so it can be checked off honestly rather than by feel.
 
@@ -944,4 +968,171 @@ export async function processInsightScan(supabase: DB): Promise<ScanPoll | null>
   const pending = await readPending(supabase);
   if (!pending) return null;
   return pollInsightScan(supabase);
+}
+
+// ── did we actually do it? ─────────────────────────────────────────────────
+
+export type ProgressCheckResult = {
+  checked: number;
+  done: number;
+  in_progress: number;
+  not_done: number;
+  cannot_tell: number;
+  model: string;
+};
+
+const CHECK_STATUSES = new Set(["done", "in_progress", "not_done", "cannot_tell"]);
+
+/**
+ * The evidence a progress check needs, cut down to what a checklist item
+ * can be judged against. The full export is built for a high-effort
+ * reasoning model with minutes to think; this runs inside one request on
+ * the chat model, so it gets the headline numbers, the funnel, the ledger,
+ * the friction pages and the vitals — the things a target is ever about.
+ */
+function compactEvidence(e: InsightEvidence) {
+  return {
+    range: e.range,
+    totals: e.totals,
+    previous: e.previous,
+    deltas: e.deltas,
+    funnel: e.funnel,
+    conversions_by_kind: e.conversions_by_kind,
+    lead_ledger: e.lead_ledger,
+    contact_clicks: e.contact_clicks,
+    friction_pages: e.friction_pages.slice(0, 10),
+    device_split: e.device_split,
+    webVitals: e.webVitals,
+    topPages: e.topPages.slice(0, 15),
+    entryPages: e.entryPages.slice(0, 10),
+    channels: e.channels.slice(0, 10),
+    chat: e.chat,
+    chat_intents: e.chat_intents,
+    buying_signal_count: e.buying_signal_count,
+    identified_visitors: e.identified_visitors,
+    recent_errors: e.recent_errors.slice(0, 5),
+    data_quality: e.data_quality,
+  };
+}
+
+/**
+ * Read the CURRENT numbers against every open checklist item and record a
+ * verdict on each — done, in progress, not done, or cannot tell — ticking
+ * off the ones the data shows are done.
+ *
+ * The checklist is written by a scan and then sits there; the only way to
+ * know whether an item was actually finished was to re-run the whole scan
+ * and compare by eye. This is the cheap middle step: one request on the
+ * chat model, run before a re-scan, so the list can be trusted first. A
+ * verdict is recorded on the item (`check_status`, `check_note`,
+ * `checked_at`) rather than replacing it, and "done" is the only verdict
+ * that changes the item's state — reversibly, the tick can be undone.
+ */
+export async function checkInsightProgress(
+  supabase: DB,
+  opts: { days: number; userId: string | null },
+): Promise<ProgressCheckResult> {
+  if (!isOpenAIConfigured()) {
+    throw new Error("OPENAI_API_KEY is not set — the check needs a model to read the numbers against each item.");
+  }
+
+  const { data: tasks, error } = await supabase
+    .from("web_insight_tasks")
+    .select("id, title, detail, area, metric, target, priority, first_seen_at")
+    .eq("site", SITE)
+    .eq("done", false)
+    .eq("dismissed", false)
+    .order("sort_order", { ascending: true })
+    .limit(30);
+  if (error) throw new Error(error.message);
+
+  const empty: ProgressCheckResult = {
+    checked: 0,
+    done: 0,
+    in_progress: 0,
+    not_done: 0,
+    cannot_tell: 0,
+    model: AI_MODELS.chat,
+  };
+  if (!tasks?.length) return empty;
+
+  const evidence = compactEvidence(await collectInsightEvidence(supabase, opts.days));
+
+  const raw = await openaiChatJSON(
+    [
+      {
+        role: "system",
+        content:
+          "You audit an improvement checklist for a website (arcai.agency) against its CURRENT analytics. " +
+          "For each item you get the title, what it asked for, the metric as it stood when the item was " +
+          "raised (\"metric\") and what good looks like (\"target\"). Using ONLY the current data provided, " +
+          "decide for each item:\n" +
+          "- \"done\": the current data shows the target met, or shows the described change is in place " +
+          "(for example an internal consistency the item demanded — starts ≥ submits, converted ≤ intent — now holds).\n" +
+          "- \"in_progress\": clear movement toward the target, not there yet.\n" +
+          "- \"not_done\": no movement, or the situation is unchanged or worse.\n" +
+          "- \"cannot_tell\": the data cannot show it — a copy or design change, an offline task, no relevant " +
+          "metric in the export, or too little data since the item was raised.\n" +
+          "Be conservative: \"done\" needs evidence in the numbers. Never invent a figure. Read lead_ledger " +
+          "as the truth about conversions (spam and tests are already excluded from the conversion totals). " +
+          "Each note is ONE sentence in British English citing the current number(s) that decided it.\n" +
+          "Return ONLY JSON: { \"verdicts\": [ { \"id\": \"…\", \"status\": \"done\" | \"in_progress\" | \"not_done\" | \"cannot_tell\", \"note\": \"…\" } ] } " +
+          "with exactly one entry per item id given.",
+      },
+      {
+        role: "user",
+        content: JSON.stringify({
+          items: tasks.map((t) => ({
+            id: t.id,
+            title: t.title,
+            detail: t.detail,
+            area: t.area,
+            metric_when_raised: t.metric,
+            target: t.target,
+            raised_at: t.first_seen_at,
+          })),
+          current_data: evidence,
+        }).slice(0, MAX_EVIDENCE_CHARS),
+      },
+    ],
+    { model: AI_MODELS.chat, temperature: 0.1, timeoutMs: 22_000 },
+  );
+
+  let parsed: { verdicts?: unknown } = {};
+  try {
+    parsed = JSON.parse(raw) as { verdicts?: unknown };
+  } catch {
+    throw new Error("The model did not return readable JSON for the progress check.");
+  }
+  const verdicts = new Map<string, { status: string; note: string }>();
+  for (const item of Array.isArray(parsed.verdicts) ? parsed.verdicts : []) {
+    if (!item || typeof item !== "object") continue;
+    const v = item as Record<string, unknown>;
+    const id = text(v.id, 80);
+    const status = text(v.status, 20).toLowerCase();
+    if (!id || !CHECK_STATUSES.has(status)) continue;
+    verdicts.set(id, { status, note: text(v.note, 400) });
+  }
+
+  const now = new Date().toISOString();
+  const result: ProgressCheckResult = { ...empty };
+  for (const task of tasks) {
+    const verdict = verdicts.get(task.id);
+    if (!verdict) continue;
+    const status = verdict.status as "done" | "in_progress" | "not_done" | "cannot_tell";
+    result.checked += 1;
+    result[status] += 1;
+    await supabase
+      .from("web_insight_tasks")
+      .update({
+        check_status: status,
+        check_note: verdict.note || null,
+        checked_at: now,
+        ...(status === "done"
+          ? { done: true, done_at: now, done_by: opts.userId }
+          : {}),
+      })
+      .eq("id", task.id);
+  }
+  return result;
 }

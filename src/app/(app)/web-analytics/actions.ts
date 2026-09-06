@@ -5,10 +5,18 @@ import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
-import type { ActionResult } from "@/lib/types";
+import type { ActionResult, WebLeadStatus } from "@/lib/types";
 import { generateWebReport, analyseChatSessions } from "@/lib/web-analytics/report";
-import { pollInsightScan, startInsightScan, type ScanPoll } from "@/lib/web-analytics/insights";
+import {
+  checkInsightProgress as runProgressCheck,
+  pollInsightScan,
+  startInsightScan,
+  type ProgressCheckResult,
+  type ScanPoll,
+} from "@/lib/web-analytics/insights";
+import { setLedgerStatus } from "@/lib/web-analytics/ledger";
 import { rebuildWebAnalytics } from "@/lib/web-analytics/rebuild";
+import { rollupDay } from "@/lib/web-analytics/rollup";
 import { FULL_STEP_MS, runWebAnalyticsStep, type StepResult } from "@/lib/web-analytics/run";
 import { pingWebsiteSource } from "@/lib/web-analytics/source";
 
@@ -323,4 +331,55 @@ export async function sendInsightToTodos(
   revalidatePath("/web-analytics");
   revalidatePath("/todos");
   return { ok: true, created };
+}
+
+/**
+ * 0125 — a person's verdict on a lead-ledger row: lead, spam, test, or back
+ * to needs-review. Final — the ledger's rules never overwrite it.
+ *
+ * The day's rollup reads its conversion count from the ledger, so it is
+ * stale the moment a verdict changes; that one day is recomputed here so the
+ * totals and the funnel move with the decision rather than on the next sync.
+ */
+export async function setWebLeadStatus(
+  id: string,
+  status: WebLeadStatus,
+): Promise<ActionResult<{ day: string }>> {
+  await requireAdmin();
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  const admin = createAdminClient();
+  const result = await setLedgerStatus(admin, id, status, user?.id ?? null);
+  if (!result.ok) return { ok: false, error: result.error };
+  await rollupDay(admin, result.day).catch(() => undefined);
+  revalidatePath("/web-analytics");
+  return { ok: true, day: result.day };
+}
+
+/**
+ * 0125 — read the current numbers against every open checklist item and
+ * tick off the ones the data shows are done. One request on the chat model,
+ * meant to be pressed before a re-scan so the list can be trusted first.
+ */
+export async function checkInsightProgress(
+  days: number,
+): Promise<ActionResult<ProgressCheckResult>> {
+  await requireAdmin();
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  try {
+    const result = await runProgressCheck(createAdminClient(), {
+      days,
+      userId: user?.id ?? null,
+    });
+    revalidatePath("/web-analytics");
+    return { ok: true, ...result };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "The check failed." };
+  }
 }

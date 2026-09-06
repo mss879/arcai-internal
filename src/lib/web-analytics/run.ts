@@ -21,6 +21,7 @@ import {
   type JobState,
   type JobSummary,
 } from "./job-core";
+import { ledgerStep } from "./ledger";
 import { generateWebReport, analyseChatSessions } from "./report";
 import { daysTouchedSince, findUnrolledDays, rollupDay, rollupJourneys } from "./rollup";
 import { SITE, isWebsiteSourceConfigured } from "./source";
@@ -32,6 +33,7 @@ type DB = SupabaseClient<Database>;
  * The whole pipeline, as a job that advances in bounded steps.
  *
  *   sync    → the raw mirror is brought up to date, a page at a time
+ *   ledger  → every conversion event becomes a reconciled lead-ledger row
  *   rollup  → the days that changed are recomputed, a day at a time
  *   chats   → the AI labels new conversations, a few at a time
  *   report  → the daily/weekly report is written from the fresh rollups
@@ -83,6 +85,8 @@ export type StepResult = {
   summary: JobSummary;
   step?: {
     rows: number;
+    /** Conversion events reconciled into the lead ledger. */
+    leads: number;
     days: number;
     chats: number;
     reportId: string | null;
@@ -269,6 +273,7 @@ export async function runWebAnalyticsStep(
   const deadline = started + Math.max(1_000, opts.budgetMs);
   const stats = {
     rows: 0,
+    leads: 0,
     days: 0,
     chats: 0,
     reportId: null as string | null,
@@ -371,6 +376,40 @@ export async function runWebAnalyticsStep(
     return true;
   };
 
+  // ---- ledger ---------------------------------------------------------------
+  // Every conversion event the sync just mirrored becomes, or updates, a
+  // row in the lead ledger, and every session flagged converted without one
+  // gets a row of its own. The rollup reads its conversion figures FROM the
+  // ledger, so this has to be current before a single day is recomputed.
+  const ledgerPhase = async (): Promise<boolean> => {
+    let exhausted = false;
+    try {
+      while (Date.now() < deadline) {
+        const result = await ledgerStep(db, { deadline, rebuild: job!.rebuild });
+        job = { ...job!, leads: job!.leads + result.rows };
+        stats.leads += result.rows;
+        await save();
+        if (result.exhausted) {
+          exhausted = true;
+          break;
+        }
+      }
+    } catch (e) {
+      // A missing table (migration 0125 not applied yet) or a bad page is
+      // recorded and the job moves on. The rollup falls back to the session
+      // flag while the ledger is unavailable, so the dashboard still updates
+      // and the Setup tab says exactly what is missing.
+      fail(`ledger: ${describe(e)}`);
+      job = advance(job!);
+      await save();
+      return true;
+    }
+    if (!exhausted) return false;
+    job = advance(job!);
+    await save();
+    return true;
+  };
+
   // ---- rollup ---------------------------------------------------------------
   const rollupPhase = async (): Promise<boolean> => {
     const days = [...(job!.pending_days ?? [])];
@@ -461,11 +500,13 @@ export async function runWebAnalyticsStep(
       const progressed =
         job.phase === "sync"
           ? await syncPhase()
-          : job.phase === "rollup"
-            ? await rollupPhase()
-            : job.phase === "chats"
-              ? await chatsPhase()
-              : await reportPhase();
+          : job.phase === "ledger"
+            ? await ledgerPhase()
+            : job.phase === "rollup"
+              ? await rollupPhase()
+              : job.phase === "chats"
+                ? await chatsPhase()
+                : await reportPhase();
       if (!progressed) break;
     }
   } catch (e) {

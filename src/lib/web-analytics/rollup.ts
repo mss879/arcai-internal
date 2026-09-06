@@ -4,6 +4,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { Database } from "@/lib/database.types";
 
+import { countsAsConversion, isGenuine } from "./ledger-core";
+import { ledgerRowsForRange } from "./ledger";
 import { SITE } from "./source";
 
 type DB = SupabaseClient<Database>;
@@ -230,7 +232,24 @@ export async function rollupDay(
   }
 
   const bounces = sessions.filter((s) => s.is_bounce).length;
-  const conversions = sessions.filter((s) => s.converted).length;
+
+  // Conversions are read from the lead ledger, not from the session flag.
+  // The flag says "the tracker marked this visit converted"; the ledger says
+  // what that conversion turned out to be — a lead, a spam script, a test —
+  // and only the first of those counts. Before migration 0125 the ledger
+  // is null and the flag is used as it always was.
+  const ledger = await ledgerRowsForRange(supabase, start, end);
+  const ledgerRows = ledger?.filter((r) => !botSessionIds.has(r.session_id)) ?? null;
+  const countingRows = ledgerRows?.filter(countsAsConversion) ?? null;
+  const conversions = countingRows
+    ? new Set(countingRows.map((r) => r.session_id)).size
+    : sessions.filter((s) => s.converted).length;
+  const contactClicks = ledgerRows
+    ? ledgerRows.filter((r) => r.category === "contact_click" && isGenuine(r)).length
+    : 0;
+  const excludedConversions = ledgerRows
+    ? ledgerRows.filter((r) => !isGenuine(r)).length
+    : 0;
 
   const { data: chatRows } = await supabase
     .from("web_chat_sessions")
@@ -301,6 +320,8 @@ export async function rollupDay(
       avg_scroll_pct: avg(measured.map((s) => s.max_scroll_pct)),
       conversions,
       conversion_rate: pct(conversions, sessions.length),
+      contact_clicks: contactClicks,
+      excluded_conversions: excludedConversions,
       forms_started: sessions.reduce((n, s) => n + s.forms_started, 0),
       forms_abandoned: sessions.reduce((n, s) => n + s.forms_abandoned, 0),
       // Counted from the conversations themselves, not from the browsing
@@ -393,7 +414,11 @@ export async function rollupDay(
       // with none of them as unmeasured.
       time_samples: exits.length,
       scroll_samples: scrolls.length,
-      conversions: onPage.filter((e) => e.kind === "conversion").length,
+      // The ledger's verdicts apply per page too: a page whose only
+      // "conversions" were the spam script's shows zero, not fifteen.
+      conversions: countingRows
+        ? countingRows.filter((r) => r.path === path).length
+        : onPage.filter((e) => e.kind === "conversion").length,
       form_starts: onPage.filter((e) => e.kind === "form_start").length,
       form_abandons: onPage.filter((e) => e.kind === "form_abandon").length,
       rage_clicks: onPage.filter((e) => e.kind === "rage_click").length,
@@ -472,18 +497,28 @@ export async function rollupJourneys(
     bySession.set(v.session_id, list);
   }
 
+  // "Converted" on a route means the ledger counts it — see rollupDay.
   const converted = new Set<string>();
-  const convertedRows = await fetchAll<{ session_id: string }>((from, to) =>
-    supabase
-      .from("web_sessions")
-      .select("session_id")
-      .eq("site", SITE)
-      .eq("converted", true)
-      .gte("first_seen_at", `${periodStart}T00:00:00.000Z`)
-      .lte("first_seen_at", `${periodEnd}T23:59:59.999Z`)
-      .range(from, to),
+  const ledger = await ledgerRowsForRange(
+    supabase,
+    `${periodStart}T00:00:00.000Z`,
+    `${periodEnd}T23:59:59.999Z`,
   );
-  for (const r of convertedRows) converted.add(r.session_id);
+  if (ledger) {
+    for (const r of ledger) if (countsAsConversion(r)) converted.add(r.session_id);
+  } else {
+    const convertedRows = await fetchAll<{ session_id: string }>((from, to) =>
+      supabase
+        .from("web_sessions")
+        .select("session_id")
+        .eq("site", SITE)
+        .eq("converted", true)
+        .gte("first_seen_at", `${periodStart}T00:00:00.000Z`)
+        .lte("first_seen_at", `${periodEnd}T23:59:59.999Z`)
+        .range(from, to),
+    );
+    for (const r of convertedRows) converted.add(r.session_id);
+  }
 
   type Agg = { sessions: number; conversions: number; drop_offs: number };
   const transitions = new Map<string, Agg>();

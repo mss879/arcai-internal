@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { enrollAutomationRun, fireAutomationTrigger } from "@/lib/automation";
 import { createInboundLead } from "@/lib/lead-intake";
+import { recordHookConversion } from "@/lib/web-analytics/ledger";
 
 /**
  * Inbound webhooks: POST /api/public/hooks/<token>
@@ -119,6 +120,9 @@ const CONSUMED = new Set(
   [
     ...Object.values(ALIAS).flat(),
     "source", "title", "firstname", "lastname", "endpointid", "site", "sessionid",
+    // 0125 — the website's analytics ids ride along with an enquiry; they
+    // are keys for the lead ledger, not notes for a person to read.
+    "leadid", "websiteleadid", "analyticssessionid", "analyticsvisitorid", "test",
   ],
 );
 
@@ -243,6 +247,9 @@ export async function POST(
         landingUrl: pick(payload, ["landingurl", "landingpage", "pageurl"]) || null,
         referralCode: pick(payload, ["ref", "referralcode"]) || null,
         meta: { endpoint_id: endpoint.id, endpoint: endpoint.name },
+        websiteLeadId: pick(payload, ["leadid", "websiteleadid"]) || null,
+        webSessionId: pick(payload, ["analyticssessionid", "sessionid"]) || null,
+        webVisitorId: pick(payload, ["analyticsvisitorid", "visitorid"]) || null,
       });
       if (!created.ok) {
         return NextResponse.json(
@@ -251,6 +258,26 @@ export async function POST(
         );
       }
       const lead = created.lead;
+
+      // 0125 — the ledger's side of the key, written the moment the lead
+      // exists. The analytics event for the same conversion arrives on the
+      // next sync and merges into this row; this side is written first
+      // because it is the side that cannot be lost. Never fails the hook.
+      const websiteLeadId = pick(payload, ["leadid", "websiteleadid"]);
+      if (/^lead_/.test(websiteLeadId)) {
+        const testFlag = payload.test === true || payload.test === "true";
+        await recordHookConversion(supabase, {
+          leadKey: websiteLeadId,
+          sessionId: pick(payload, ["analyticssessionid", "sessionid"]) || null,
+          visitorId: pick(payload, ["analyticsvisitorid", "visitorid"]) || null,
+          crmLeadId: lead.id,
+          kind: "contact_form",
+          test: testFlag,
+          contact: { name: name || null, email: email || null, phone: phone || null },
+          landingUrl: pick(payload, ["landingurl", "landingpage", "pageurl"]) || null,
+          utm: utmFrom(payload),
+        }).catch((e) => console.error("[hooks] lead ledger write failed:", e));
+      }
 
       await fireAutomationTrigger(supabase, {
         trigger: "webhook",

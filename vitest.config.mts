@@ -60,6 +60,9 @@ export default defineConfig({
       // cursor moves, when a killed step is given up on. Every bug here is a
       // sync that silently stops — or one that never stops.
       "src/lib/web-analytics/job-core.test.ts",
+      // 0125 — the rules that decide which website conversions are leads and
+      // which are the newsletter script. Every conversion figure rests on them.
+      "src/lib/web-analytics/ledger-core.test.ts",
     ],
   },
 });

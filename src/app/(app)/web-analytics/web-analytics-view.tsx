@@ -6,6 +6,7 @@ import { formatDistanceToNow } from "date-fns";
 import { toast } from "sonner";
 import {
   BarChart3,
+  ClipboardList,
   FileText,
   Globe2,
   History,
@@ -33,14 +34,17 @@ import type {
   WebJourney,
   WebInsight,
   WebInsightTask,
+  WebLeadStatus,
   WebReport,
   WebSession,
 } from "@/lib/types";
 import type { JobSummary } from "@/lib/web-analytics/job-core";
+import type { LedgerEntry, LedgerSummary } from "@/lib/web-analytics/ledger";
 import type { Range, Totals } from "@/lib/web-analytics/queries";
 
 import {
   analyseChats,
+  checkInsightProgress,
   continueSync,
   deleteReport,
   dismissInsightTask,
@@ -49,11 +53,13 @@ import {
   pollScan,
   rebuildNow,
   scanInsights,
+  setWebLeadStatus,
   toggleInsightTask,
   syncNow,
   testConnection,
   type SyncStepView,
 } from "./actions";
+import { LedgerPanel } from "./ledger-panel";
 import {
   BarList,
   ChatPanel,
@@ -76,6 +82,7 @@ type Tab =
   | "pages"
   | "journeys"
   | "visitors"
+  | "leads"
   | "chat"
   | "reports"
   | "setup";
@@ -119,6 +126,8 @@ export function WebAnalyticsView({
   scanPending,
   insight,
   insightTasks,
+  ledger,
+  ledgerSummary,
   sourceReady,
   aiReady,
 }: {
@@ -156,6 +165,9 @@ export function WebAnalyticsView({
   scanPending: { started_at: string; model: string; days: number } | null;
   insight: WebInsight | null;
   insightTasks: WebInsightTask[];
+  /** 0125 — the lead ledger; null until its migration has been applied. */
+  ledger: LedgerEntry[] | null;
+  ledgerSummary: LedgerSummary | null;
   sourceReady: boolean;
   aiReady: boolean;
 }) {
@@ -166,6 +178,7 @@ export function WebAnalyticsView({
   const [busy, setBusy] = React.useState<string | null>(null);
   const [openReport, setOpenReport] = React.useState<string | null>(reports[0]?.id ?? null);
   const [scanning, setScanning] = React.useState(Boolean(scanPending));
+  const [checking, setChecking] = React.useState(false);
   const [scanStartedAt, setScanStartedAt] = React.useState<string | null>(
     scanPending?.started_at ?? null,
   );
@@ -180,6 +193,45 @@ export function WebAnalyticsView({
     const result = await dismissInsightTask(id);
     if (!result.ok) toast.error(result.error);
     else router.refresh();
+  };
+
+  const onSetLeadStatus = async (id: string, status: WebLeadStatus) => {
+    const result = await setWebLeadStatus(id, status);
+    if (!result.ok) {
+      toast.error(result.error);
+      return;
+    }
+    toast.success(
+      status === "lead"
+        ? "Counted as a lead — the day's totals have been recomputed."
+        : status === "unreviewed"
+          ? "Back to needs review."
+          : `Filed as ${status} — it no longer counts, and the day's totals have been recomputed.`,
+    );
+    router.refresh();
+  };
+
+  /** Read the current numbers against every open checklist item. */
+  const runCheck = async () => {
+    setChecking(true);
+    try {
+      const result = await checkInsightProgress(days);
+      if (!result.ok) {
+        toast.error(result.error);
+        return;
+      }
+      if (!result.checked) {
+        toast.message("Nothing open to check.");
+        return;
+      }
+      toast.success(
+        `${result.checked} checked — ${result.done} done, ${result.in_progress} in progress, ` +
+          `${result.not_done} not done, ${result.cannot_tell} the data can't show.`,
+      );
+      router.refresh();
+    } finally {
+      setChecking(false);
+    }
   };
 
   const onSendTaskToTodos = async (id: string) => {
@@ -441,6 +493,9 @@ export function WebAnalyticsView({
         <TabButton active={tab === "visitors"} onClick={() => setTab("visitors")} icon={<Users className="h-4 w-4" />}>
           Visitors
         </TabButton>
+        <TabButton active={tab === "leads"} onClick={() => setTab("leads")} icon={<ClipboardList className="h-4 w-4" />}>
+          Leads
+        </TabButton>
         <TabButton active={tab === "chat"} onClick={() => setTab("chat")} icon={<MessageSquare className="h-4 w-4" />}>
           AI Chat
         </TabButton>
@@ -465,6 +520,9 @@ export function WebAnalyticsView({
             scanning={scanning}
             scanStartedAt={scanStartedAt}
             onScan={runScan}
+            onCheck={runCheck}
+            checking={checking}
+            openTasks={insightTasks.filter((t) => !t.done).length}
             aiReady={aiReady}
             hasData={hasData}
             days={days}
@@ -496,7 +554,11 @@ export function WebAnalyticsView({
               value={totals.conversions.toLocaleString()}
               current={totals.conversions}
               previous={previousTotals.conversions}
-              hint={`${totals.conversionRate}% of visits`}
+              hint={`${totals.conversionRate}% of visits · ${totals.contactClicks} contact clicks${
+                totals.excludedConversions
+                  ? ` · ${totals.excludedConversions} set aside as spam or test`
+                  : ""
+              }`}
             />
             <Stat
               label="Engaged time"
@@ -563,7 +625,7 @@ export function WebAnalyticsView({
             <SessionsPanel
               sessions={convertingSessions}
               emptyTitle="No conversions in this window"
-              emptyDescription="A visit counts as converted when it submits a form, clicks to call or opens WhatsApp."
+              emptyDescription="A visit counts as converted when its enquiry is on the Leads tab as a lead or an unreviewed enquiry — contact clicks count once you confirm them there."
             />
           </div>
           <div>
@@ -577,6 +639,16 @@ export function WebAnalyticsView({
             />
           </div>
         </div>
+      )}
+
+      {tab === "leads" && (
+        <LedgerPanel
+          entries={ledger}
+          summary={ledgerSummary}
+          days={days}
+          siteUrl={siteUrl}
+          onSetStatus={onSetLeadStatus}
+        />
       )}
 
       {tab === "chat" && (

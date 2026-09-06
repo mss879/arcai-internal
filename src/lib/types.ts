@@ -132,6 +132,8 @@ export type WebChatMessage = Tables["web_chat_messages"]["Row"];
 export type WebReport = Tables["web_reports"]["Row"];
 export type WebSyncState = Tables["web_sync_state"]["Row"];
 export type WebSyncRun = Tables["web_sync_runs"]["Row"];
+/** 0125 — one website conversion, reconciled to a lead, a test or spam. */
+export type WebLead = Tables["web_leads"]["Row"];
 
 // 0106 — Careers: hiring for the agency's own site, run from the CRM.
 export type CareerVacancy = Tables["careers_vacancies"]["Row"];
@@ -198,6 +200,10 @@ export type {
   VacancyStatus,
   ApplicationStage,
   InsightStatus,
+  InsightCheckStatus,
+  WebLeadCategory,
+  WebLeadStatus,
+  WebLeadStatusSource,
   TaskPriority,
   TaskLevel,
   LeadResearchStatus,

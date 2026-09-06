@@ -5,6 +5,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/lib/database.types";
 
 import { daysInWindow } from "./job-core";
+import { resetLedgerCursor } from "./ledger";
 import { FULL_STEP_MS, runWebAnalyticsStep, type StepResult } from "./run";
 import { isWebsiteSourceConfigured } from "./source";
 import { purgeLegacyMirror, resetSyncCursors } from "./sync";
@@ -32,7 +33,9 @@ type DB = SupabaseClient<Database>;
  *   1. winds every stream watermark back to zero,
  *   2. re-pulls the source, rewriting each mirrored row through today's
  *      mapping (channel classification, the legacy cutover, session length),
- *   3. recomputes every single day in the window, whether or not anything
+ *   3. rebuilds the lead ledger from the first conversion event, keeping
+ *      every verdict a person set by hand,
+ *   4. recomputes every single day in the window, whether or not anything
  *      changed, clearing each day's per-page rows as it goes.
  *
  * It is a JOB, not a call: it re-reads the whole source and rescans ninety
@@ -65,6 +68,7 @@ export async function rebuildWebAnalytics(
         started_at: null,
         steps: 0,
         rows: 0,
+        leads: 0,
         days_done: 0,
         days_left: 0,
         chats: 0,
@@ -90,6 +94,9 @@ export async function rebuildWebAnalytics(
       before: async () => {
         await resetSyncCursors(supabase);
         await purgeLegacyMirror(supabase);
+        // The ledger re-reads every conversion event; manual verdicts survive
+        // because the merge never overwrites them.
+        await resetLedgerCursor(supabase);
       },
     },
   });

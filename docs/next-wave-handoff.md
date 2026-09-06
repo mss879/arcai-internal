@@ -46,6 +46,16 @@ Apply these by hand in the Supabase SQL editor, **in this order**:
 0112 → 0113 → 0114 → 0115 → 0116 → 0117 → 0118 → 0119 → 0120 → 0121
 ```
 
+**Added 2026-09-07 (after the wave): `0125_web_lead_ledger.sql`.** The lead
+ledger behind Web Analytics → Leads, the `leads.website_lead_id` key the
+website's contact form now sends, and the checklist's *Check progress*
+columns. Safe to run at any time and idempotent; the code degrades to the old
+session-flag conversions until it is applied and records
+`ledger: The lead ledger table (web_leads) does not exist yet` on the Setup
+tab. After applying it, press **Rebuild history** once so every past
+conversion (including the 15 newsletter-script "conversions") is reconciled.
+See `docs/web-analytics.md` → *The lead ledger*.
+
 `0112`–`0114` predate this wave and were already outstanding. The code degrades
 quietly without them (empty lists, unassigned threads, in-process-only rate
 limiting, invoices with no status column) rather than crashing — which is

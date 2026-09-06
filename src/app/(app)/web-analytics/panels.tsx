@@ -7,6 +7,7 @@ import {
   ArrowRight,
   CheckCircle2,
   Globe,
+  ListChecks,
   MessageSquare,
   Check,
   RefreshCw,
@@ -1027,6 +1028,9 @@ export function InsightsPanel({
   scanning,
   scanStartedAt,
   onScan,
+  onCheck,
+  checking,
+  openTasks,
   aiReady,
   hasData,
   days,
@@ -1040,6 +1044,10 @@ export function InsightsPanel({
   /** When the scan in flight was started, for the header. */
   scanStartedAt?: string | null;
   onScan: () => void;
+  /** 0125 — read the current numbers against every open checklist item. */
+  onCheck: () => void;
+  checking: boolean;
+  openTasks: number;
   aiReady: boolean;
   hasData: boolean;
   days: number;
@@ -1081,6 +1089,32 @@ export function InsightsPanel({
           </div>
         </div>
 
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Before a re-scan rewrites the list: which of the items already on it
+              did we actually do? One cheap model read of the current numbers
+              against each item's target, recorded on the item. */}
+          <button
+            type="button"
+            onClick={onCheck}
+            disabled={checking || scanning || !aiReady || openTasks === 0}
+            title="Read the current numbers against every open item and tick off the ones that are done"
+            className={cn(
+              "inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50",
+              "disabled:cursor-not-allowed disabled:opacity-50",
+            )}
+          >
+            {checking ? (
+              <>
+                <RefreshCw className="h-4 w-4 animate-spin" />
+                Checking…
+              </>
+            ) : (
+              <>
+                <ListChecks className="h-4 w-4" />
+                Check progress
+              </>
+            )}
+          </button>
         <button
           type="button"
           onClick={onScan}
@@ -1103,6 +1137,7 @@ export function InsightsPanel({
             </>
           )}
         </button>
+        </div>
       </header>
 
       <div className="px-5 py-5">
@@ -1273,6 +1308,20 @@ const PRIORITY_TONE: Record<string, string> = {
  * seeing what you have already cleared is most of why a checklist works, and
  * a list that empties itself gives no sense of progress.
  */
+/** 0125 — how a "Check progress" verdict reads on the list. */
+const CHECK_LABEL: Record<string, string> = {
+  done: "Verified done",
+  in_progress: "In progress",
+  not_done: "Not done yet",
+  cannot_tell: "Can't tell from the data",
+};
+const CHECK_TONE: Record<string, string> = {
+  done: "bg-emerald-50 text-emerald-700",
+  in_progress: "bg-sky-50 text-sky-700",
+  not_done: "bg-rose-50 text-rose-700",
+  cannot_tell: "bg-slate-100 text-slate-600",
+};
+
 function ChecklistBlock({
   tasks,
   onToggle,
@@ -1370,7 +1419,34 @@ function ChecklistBlock({
                   <p className="mt-1 text-[11px] uppercase tracking-wide text-slate-400">
                     impact {task.impact} · effort {task.effort}
                   </p>
+                  {task.check_status && (
+                    <p className="mt-1.5 text-xs">
+                      <span
+                        className={cn(
+                          "rounded px-1.5 py-0.5 font-medium",
+                          CHECK_TONE[task.check_status] ?? CHECK_TONE.cannot_tell,
+                        )}
+                      >
+                        {CHECK_LABEL[task.check_status] ?? task.check_status}
+                      </span>
+                      {task.check_note && (
+                        <span className="ml-1.5 text-slate-500">{task.check_note}</span>
+                      )}
+                      {task.checked_at && (
+                        <span className="ml-1.5 text-slate-400">
+                          · checked{" "}
+                          {formatDistanceToNow(new Date(task.checked_at), { addSuffix: true })}
+                        </span>
+                      )}
+                    </p>
+                  )}
                 </>
+              )}
+              {task.done && task.check_status === "done" && task.check_note && (
+                <p className="mt-1 text-xs text-slate-400">
+                  <span className="font-medium text-emerald-600">Verified by Check progress</span>{" "}
+                  — {task.check_note}
+                </p>
               )}
             </div>
 

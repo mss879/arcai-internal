@@ -14,6 +14,7 @@ import {
   rangeForDays,
   totalsFrom,
 } from "@/lib/web-analytics/queries";
+import { ledgerEntries, ledgerSummary } from "@/lib/web-analytics/ledger";
 import { runWebAnalyticsStep } from "@/lib/web-analytics/run";
 import { isWebsiteSourceConfigured, SITE } from "@/lib/web-analytics/source";
 
@@ -154,6 +155,30 @@ export const WEB_ANALYTICS_TOOLS: ToolSchema[] = [
         },
         required: [],
         additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "website_lead_ledger",
+      description:
+        "The reconciled list of website conversions — every enquiry, chat lead and WhatsApp / call / " +
+        "email click, each filed as a confirmed lead, an unreviewed enquiry, spam or a test, and matched " +
+        "to the CRM lead it became with its outcome. This is the truth about conversions: use it for " +
+        "'how many real leads did the website produce', 'were any conversions spam', 'which enquiries " +
+        "are unmatched or unreviewed', and qualified / won totals.",
+      parameters: {
+        type: "object",
+        properties: {
+          days: { type: "number", description: "Window length in days. Default 30. Max 365." },
+          status: {
+            type: "string",
+            enum: ["unreviewed", "lead", "spam", "test"],
+            description: "Only rows with this verdict.",
+          },
+          limit: { type: "number", description: "How many rows to list. Default 25, max 100." },
+        },
       },
     },
   },
@@ -431,6 +456,60 @@ async function generateReportTool(
   }
 }
 
+async function leadLedgerTool(
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+): Promise<ToolResult> {
+  if (!isWebsiteSourceConfigured()) return { content: NOT_CONFIGURED };
+  const days = Math.min(365, Math.max(1, Math.round(Number(args.days) || 30)));
+  const limit = Math.min(100, Math.max(1, Math.round(Number(args.limit) || 25)));
+  const status = typeof args.status === "string" ? args.status : null;
+  const range = rangeForDays(days);
+
+  const [summary, entries] = await Promise.all([
+    ledgerSummary(ctx.supabase, range),
+    ledgerEntries(ctx.supabase, range, 200),
+  ]);
+  if (!summary || !entries) {
+    return {
+      content: {
+        error:
+          "The lead ledger table has not been created yet — run migration 0125 " +
+          "(supabase/migrations/0125_web_lead_ledger.sql) in the CRM project, then Rebuild history.",
+      },
+    };
+  }
+  const rows = (status ? entries.filter((e) => e.status === status) : entries).slice(0, limit);
+  return {
+    content: {
+      window: range,
+      summary,
+      note:
+        "counted = confirmed leads + unreviewed enquiries; contact clicks are intent and count only " +
+        "once confirmed as a lead; spam and tests are excluded from every conversion figure.",
+      rows: rows.map((e) => ({
+        when: e.occurred_at,
+        kind: e.kind,
+        category: e.category,
+        status: e.status,
+        status_reason: e.status_reason,
+        page: e.path,
+        landing_page: e.entry_path,
+        channel: e.channel,
+        campaign: e.utm_campaign ?? e.utm_source ?? e.referrer_domain,
+        country: e.country,
+        contact: e.contact_name ?? e.contact_email ?? e.identified_email ?? null,
+        crm_lead: e.lead ? { id: e.lead.id, title: e.lead.title, status: e.lead.status, score: e.lead.score, href: `/crm/lead/${e.lead.id}` } : null,
+        qualified: e.qualified,
+        outcome: e.outcome,
+        occurrences: e.occurrences,
+      })),
+      href: "/web-analytics",
+    },
+    event: { kind: "read", label: "Website lead ledger", href: "/web-analytics" },
+  };
+}
+
 async function syncNowTool(ctx: ToolContext): Promise<ToolResult> {
   if (!isWebsiteSourceConfigured()) return { content: NOT_CONFIGURED };
 
@@ -475,6 +554,8 @@ export async function executeWebAnalyticsTool(
       return chatReview(args, ctx);
     case "website_generate_report":
       return generateReportTool(args, ctx);
+    case "website_lead_ledger":
+      return leadLedgerTool(args, ctx);
     case "website_sync_now":
       return syncNowTool(ctx);
     default:

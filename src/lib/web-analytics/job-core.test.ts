@@ -42,9 +42,16 @@ describe("the schedule", () => {
   });
 
   it("records the finished job with its counters and outcome", () => {
-    const job = { ...openJob({}, NOW), rows: 12, days_done: 3, chats: 2, errors: ["x"] };
+    const job = { ...openJob({}, NOW), rows: 12, leads: 4, days_done: 3, chats: 2, errors: ["x"] };
     const state = finishJob(emptyState(), job, NOW, 1);
-    expect(state.last).toMatchObject({ rows: 12, days: 3, chats: 2, ok: false, errors: ["x"] });
+    expect(state.last).toMatchObject({
+      rows: 12,
+      leads: 4,
+      days: 3,
+      chats: 2,
+      ok: false,
+      errors: ["x"],
+    });
   });
 });
 
@@ -59,8 +66,15 @@ describe("the lease", () => {
 describe("phases", () => {
   it("skips the optional phases nobody asked for", () => {
     const plain = openJob({}, NOW);
-    expect(nextPhase(plain)).toBe("rollup");
+    expect(nextPhase(plain)).toBe("ledger");
+    expect(nextPhase({ ...plain, phase: "ledger" })).toBe("rollup");
     expect(nextPhase({ ...plain, phase: "rollup" })).toBe("done");
+  });
+
+  it("always reconciles the ledger before the rollup that reads from it", () => {
+    const job = openJob({ report: "daily", analyse_chats: true }, NOW);
+    expect(nextPhase(job)).toBe("ledger");
+    expect(advance(advance(job)).phase).toBe("rollup");
   });
 
   it("visits chats and report when they were requested", () => {
@@ -77,7 +91,7 @@ describe("phases", () => {
 
   it("advancing resets the kill counter", () => {
     const job = { ...openJob({}, NOW), killed: 2 };
-    expect(advance(job)).toMatchObject({ phase: "rollup", killed: 0 });
+    expect(advance(job)).toMatchObject({ phase: "ledger", killed: 0 });
   });
 });
 
@@ -96,7 +110,7 @@ describe("a killed step", () => {
     expect(job.killed).toBe(MAX_KILLED_STEPS);
     const { job: next, abandonedPhase } = beginStep(job);
     expect(abandonedPhase).toBe("sync");
-    expect(next.phase).toBe("rollup");
+    expect(next.phase).toBe("ledger");
     expect(next.killed).toBe(1);
     expect(next.errors[0]).toMatch(/sync: abandoned after 3 steps/);
   });
@@ -189,7 +203,13 @@ describe("windows and state", () => {
     expect(coerceState(null)).toEqual(emptyState());
     expect(coerceState({ version: "7", job: { phase: "nowhere" } }).job).toBeNull();
     const ok = coerceState({ version: 2, job: { phase: "rollup", started_at: NOW, sync_started_at: NOW } });
-    expect(ok.job).toMatchObject({ phase: "rollup", killed: 0, errors: [], failed_streams: [] });
+    expect(ok.job).toMatchObject({
+      phase: "rollup",
+      killed: 0,
+      leads: 0,
+      errors: [],
+      failed_streams: [],
+    });
   });
 
   it("summarises what the page needs to show", () => {

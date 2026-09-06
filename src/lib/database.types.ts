@@ -42,6 +42,12 @@ export type InsightStatus = "complete" | "failed";
 // whether it is the next thing to pick up.
 export type TaskPriority = "critical" | "high" | "medium" | "low";
 export type TaskLevel = "high" | "medium" | "low";
+/** 0125 — what "Check progress" concluded about a checklist item. */
+export type InsightCheckStatus = "done" | "in_progress" | "not_done" | "cannot_tell";
+/** 0125 — lead ledger. */
+export type WebLeadCategory = "enquiry" | "contact_click" | "other";
+export type WebLeadStatus = "unreviewed" | "lead" | "test" | "spam";
+export type WebLeadStatusSource = "none" | "rule" | "manual";
 export type ApplicationStage =
   | "new"
   | "screening"
@@ -2772,6 +2778,10 @@ export type Database = {
           ai_next_action: string | null;
           // 0038 — research anchor
           company_website: string | null;
+          // 0125 — the website conversion this lead came from (lead ledger).
+          website_lead_id: string | null;
+          web_session_id: string | null;
+          web_visitor_id: string | null;
         };
         Insert: {
           id?: UUID;
@@ -2814,6 +2824,9 @@ export type Database = {
           ai_summary?: string | null;
           ai_next_action?: string | null;
           company_website?: string | null;
+          website_lead_id?: string | null;
+          web_session_id?: string | null;
+          web_visitor_id?: string | null;
         };
         Update: Partial<Database["public"]["Tables"]["leads"]["Insert"]>;
         Relationships: [];
@@ -4093,6 +4106,10 @@ export type Database = {
           rage_clicks: number;
           outbound_clicks: number;
           errors: number;
+          /** 0125 — WhatsApp / tel: / mailto: clicks that day: intent, shown beside conversions. */
+          contact_clicks: number;
+          /** 0125 — conversion events the lead ledger filed as spam or test that day. */
+          excluded_conversions: number;
           by_channel: Record<string, number>;
           by_device: Record<string, number>;
           by_country: Record<string, number>;
@@ -4133,6 +4150,8 @@ export type Database = {
           rage_clicks?: number;
           outbound_clicks?: number;
           errors?: number;
+          contact_clicks?: number;
+          excluded_conversions?: number;
           by_channel?: Record<string, number>;
           by_device?: Record<string, number>;
           by_country?: Record<string, number>;
@@ -4402,6 +4421,89 @@ export type Database = {
         Relationships: [];
       };
 
+      // ===== 0125 — the lead ledger ======================================
+      // One row per website conversion, reconciled to a CRM lead, a test or
+      // spam. Every conversion figure on the Web Analytics page is computed
+      // from this table. See @/lib/web-analytics/ledger.
+      web_leads: {
+        Row: {
+          id: UUID;
+          site: string;
+          lead_key: string;
+          session_id: string;
+          visitor_id: string | null;
+          kind: string;
+          category: WebLeadCategory;
+          occurred_at: Timestamp;
+          day: string;
+          path: string | null;
+          entry_path: string | null;
+          landing_page_title: string | null;
+          channel: string | null;
+          utm_source: string | null;
+          utm_medium: string | null;
+          utm_campaign: string | null;
+          referrer_domain: string | null;
+          country: string | null;
+          device_type: string | null;
+          identified_email: string | null;
+          contact_name: string | null;
+          contact_email: string | null;
+          contact_phone: string | null;
+          crm_lead_id: UUID | null;
+          match_method: string | null;
+          status: WebLeadStatus;
+          status_source: WebLeadStatusSource;
+          status_reason: string | null;
+          status_set_by: UUID | null;
+          status_set_at: Timestamp | null;
+          source_event_id: number | null;
+          occurrences: number;
+          flags: Record<string, boolean>;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          site?: string;
+          lead_key: string;
+          session_id: string;
+          visitor_id?: string | null;
+          kind: string;
+          category?: WebLeadCategory;
+          occurred_at: Timestamp;
+          day: string;
+          path?: string | null;
+          entry_path?: string | null;
+          landing_page_title?: string | null;
+          channel?: string | null;
+          utm_source?: string | null;
+          utm_medium?: string | null;
+          utm_campaign?: string | null;
+          referrer_domain?: string | null;
+          country?: string | null;
+          device_type?: string | null;
+          identified_email?: string | null;
+          contact_name?: string | null;
+          contact_email?: string | null;
+          contact_phone?: string | null;
+          crm_lead_id?: UUID | null;
+          match_method?: string | null;
+          status?: WebLeadStatus;
+          status_source?: WebLeadStatusSource;
+          status_reason?: string | null;
+          status_set_by?: UUID | null;
+          status_set_at?: Timestamp | null;
+          source_event_id?: number | null;
+          occurrences?: number;
+          flags?: Record<string, boolean>;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["web_leads"]["Insert"]>;
+        Relationships: [];
+      };
+
       // ===== 0106 — Careers (hiring for www.arcai.agency) ================
       // Vacancies flow CRM -> website; applications flow website -> CRM.
       // See @/lib/careers/sync.
@@ -4583,6 +4685,10 @@ export type Database = {
           seen_count: number;
           // 0117 — the to-do this insight was sent to, if any.
           todo_id: UUID | null;
+          // 0125 — the last "Check progress" verdict on this item.
+          check_status: InsightCheckStatus | null;
+          check_note: string | null;
+          checked_at: Timestamp | null;
           created_at: Timestamp;
           updated_at: Timestamp;
         };
@@ -4608,6 +4714,9 @@ export type Database = {
           last_seen_at?: Timestamp;
           seen_count?: number;
           todo_id?: UUID | null;
+          check_status?: InsightCheckStatus | null;
+          check_note?: string | null;
+          checked_at?: Timestamp | null;
           created_at?: Timestamp;
           updated_at?: Timestamp;
         };

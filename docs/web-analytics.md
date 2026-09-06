@@ -107,8 +107,9 @@ nothing interactive).
 **Forms** — start, which fields were touched, abandon with seconds spent, and
 submit. Any email typed into any form identifies the session.
 
-**Conversions** — form submits, call clicks and WhatsApp clicks, with the
-conversion kind inferred from the page.
+**Conversions** — confirmed outcomes only, each with a lead id. See *The lead
+ledger* below: enquiries count, contact clicks are intent, spam and tests are
+set aside, and nothing is inferred from the page a form happened to be on.
 
 **The AI agent** — chat opened, every message with its length, and the full
 transcripts pulled from `chat_messages` and `chat_logs`.
@@ -143,10 +144,12 @@ taken under a 90-second lease so two callers can never run a step at once.
 | Every 5 minutes | The automation tick does one more step of whatever job is running (≈6s of work), and starts a job on its own if `WEB_ANALYTICS_SYNC_INTERVAL_HOURS` (default 12) have passed since the last one finished. |
 | On demand | **Sync now** on the page starts a job and keeps stepping it while the page is open; `GET /api/web-analytics/sync?budget=18000` does one step per call. |
 
-A job runs `sync → rollup → chats → report → done`. The sync phase pulls
-all five streams a page at a time, writing each stream's watermark after
-every page; the rollup phase recomputes one day per iteration, newest
-first, from the days the sync actually touched (`synced_at` on the mirror
+A job runs `sync → ledger → rollup → chats → report → done`. The sync phase
+pulls all five streams a page at a time, writing each stream's watermark after
+every page; the ledger phase turns every new conversion event into a
+reconciled `web_leads` row (see below) — it sits before the rollup because the
+rollup reads its conversion figures from it; the rollup phase recomputes one
+day per iteration, newest first, from the days the sync actually touched (`synced_at` on the mirror
 rows, read back — nothing is kept in memory between steps). A step the
 platform kills loses one page or one day of work; three killed steps in a
 row and the phase is abandoned with a recorded error rather than retried
@@ -181,8 +184,79 @@ the chat model before a failed row is written.
 | `web_chat_sessions` | The website agent's conversations, with AI topic/intent/sentiment/buying signals |
 | `web_chat_messages` | Every message in those conversations |
 | `web_reports` | Generated reports — markdown, plus the stats they were written from |
-| `web_sync_state` | The incremental cursor per stream |
+| `web_sync_state` | The incremental cursor per stream (the ledger's is the `ledger` row) |
 | `web_sync_runs` | Audit trail of every pull |
+| `web_leads` | **0125** — the lead ledger: one row per website conversion, reconciled to a CRM lead, a test or spam |
+
+---
+
+## The lead ledger (0125)
+
+The Web Analytics page once reported **17 conversions in a month: 15 footer
+newsletter signups from one spam script, 2 WhatsApp clicks, 0 enquiries** —
+next to a funnel in which only 2 sessions had shown any intent. A conversion
+count that cannot be walked back to a list of people is not a number to decide
+with, so now there is the list.
+
+`web_leads` holds one row per conversion the website recorded, keyed by the
+**lead id** the site's tracker mints (`lead_…`) — the same id the contact form
+posts to the inbound webhook, which stores it on `leads.website_lead_id`. One
+key on both sides is what makes "this conversion is this lead" a join rather
+than a guess by time and email. Contact clicks are keyed `<kind>:<session>` so
+ten clicks on one WhatsApp button are one row with `occurrences = 10`; a
+session flagged converted whose event never arrived gets a `session:<id>` row.
+
+Every row carries a **category** and a **verdict**:
+
+| Category | Kinds | Counts as a conversion when |
+| --- | --- | --- |
+| `enquiry` | contact form, chat lead, project request | verdict is `lead`, or `unreviewed` (believed until someone says otherwise) |
+| `contact_click` | WhatsApp, `tel:`, `mailto:` | verdict is `lead` — a person confirmed the conversation happened |
+| `other` | newsletter, job application, review | never |
+
+Verdicts are `unreviewed | lead | test | spam`, with a `status_source` of
+`rule` (the classifier), `manual` (a person, on the **Leads** tab) or `none`.
+**A person's verdict is final** — the classifier never overwrites `manual`.
+The rules that set the first verdict live in `src/lib/web-analytics/ledger-core.ts`
+and are unit-tested against the real spam signature: a user agent stored with
+literal quote characters, a form submitted with zero engaged seconds and no
+form interaction, a success reported for a form nobody focused, and
+dot-obfuscated Gmail addresses; `?arc_test=1` on the site and test-looking
+addresses file as `test`.
+
+**Every conversion figure reads from the ledger once it exists**:
+`web_daily.conversions` (distinct sessions with a counting row that day),
+`web_page_daily.conversions`, the funnel's *Showed intent* (form start, chat,
+or any genuine ledger row — contact clicks included) and *Converted* (a
+counting row — a strict subset, by construction), *Visits that converted*, the
+journeys' converted routes, and the AI scan's evidence (`lead_ledger`). Two new
+daily columns sit beside it: `contact_clicks` (intent, never inside
+conversions) and `excluded_conversions` (spam + test set aside that day).
+
+Changing a verdict on the Leads tab recomputes that day's rollup immediately.
+Before migration 0125 is applied every reader returns null and the pipeline
+falls back to the tracker's session flag, recording `ledger: The lead ledger
+table … does not exist yet` on the Setup tab. After applying it, press
+**Rebuild history** once so every past conversion is reconciled.
+
+The webhook writes its side of the row the moment the lead exists
+(`recordHookConversion`), so an enquiry whose analytics event was lost — a
+browser with storage blocked, a beacon that never landed — is still on the
+ledger, matched to its lead.
+
+---
+
+## Check progress (0125)
+
+The improvement checklist is written by a scan and then sits there; the only
+way to know whether an item was actually finished used to be another full
+scan and a comparison by eye. **Check progress** (beside Re-scan) is the
+cheap middle step: one request on the chat model reads the *current* numbers
+against every open item's metric and target and records a verdict on the item
+— `done`, `in_progress`, `not_done` or `cannot_tell` — with a one-sentence
+note citing the figures. Items the data shows are done are ticked off
+(reversibly); the others show their verdict on the list. Press it before a
+re-scan so the list can be trusted first.
 
 ---
 
@@ -198,7 +272,7 @@ value attached.
 
 ## Asking Arcus
 
-The assistant has six tools over this data:
+The assistant has seven tools over this data:
 
 - `website_traffic_report` — visits, sources, devices, geography, conversions,
   always against the previous period
@@ -206,6 +280,8 @@ The assistant has six tools over this data:
   abandons, rage clicks
 - `website_journeys` — common routes, next steps, where visits end
 - `website_chat_review` — what visitors are asking the bot, with buying signals
+- `website_lead_ledger` — the reconciled conversions: real leads, spam, tests,
+  unmatched enquiries, qualified and won totals
 - `website_generate_report` — write and save a report
 - `website_sync_now` — pull immediately
 

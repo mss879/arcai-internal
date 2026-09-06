@@ -30,6 +30,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DELIVERY_STAGES, SERVICE_TYPE_LABELS } from "@/lib/constants";
 import { SlipUploadForm } from "@/components/public/slip-upload-form";
+import { paymentDue } from "@/lib/payment-terms";
 import { portalCopy, type PortalCopy } from "@/lib/portal-copy";
 import type {
   DeliveryStage,
@@ -58,6 +59,10 @@ import {
 export type PortalProject = {
   name: string;
   description: string | null;
+  /** 0124 — this project's own deposit share, off its invoice; null = standard. */
+  depositPercent: number | null;
+  /** 0124 — what the proposal says is being built. */
+  brief: { summary: string | null; deliverables: string[] } | null;
   status: string;
   serviceType: string | null;
   stage: DeliveryStage | null;
@@ -178,6 +183,20 @@ export function PortalClient({
   const fileInputs = React.useRef<{ [key: string]: HTMLInputElement | null }>({});
 
   const isCompleted = project.status === "completed";
+  /**
+   * What to send TODAY, rather than what is outstanding overall.
+   *
+   * "Balance due: Rs 200,000" on day one of a project is a true figure and a
+   * wrong instruction — the sum that actually starts the work is the 70%
+   * upfront. The split lives in one place so this page, the contract and the
+   * proposal cannot disagree about it.
+   */
+  const due = paymentDue({
+    totalValue: project.totalValue,
+    received: project.received,
+    completed: isCompleted,
+    upfrontPercent: project.depositPercent,
+  });
   const outstanding = requests.filter((r) => r.status !== "submitted").length;
   const pendingApproval = project.approvals.find((a) => a.status === "pending");
 
@@ -240,14 +259,32 @@ export function PortalClient({
             )}
           </div>
 
-          {project.description && (
+          {(project.description || project.brief?.summary) && (
             <div className="mt-4 border-t border-slate-100 pt-4">
               <h2 className="text-xs font-bold uppercase tracking-wider text-slate-400">
                 {copy.whatWereBuilding}
               </h2>
               <p className="mt-1 whitespace-pre-wrap text-sm text-slate-600">
-                {project.description}
+                {project.description || project.brief?.summary}
               </p>
+            </div>
+          )}
+
+          {/* 0124 — straight off the proposal, so the page reads like THEIR
+              project rather than a generic tracker. */}
+          {project.brief && project.brief.deliverables.length > 0 && (
+            <div className="mt-4 border-t border-slate-100 pt-4">
+              <h2 className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                {copy.whatsIncluded}
+              </h2>
+              <ul className="mt-2 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+                {project.brief.deliverables.map((d, i) => (
+                  <li key={i} className="flex items-start gap-2 text-sm text-slate-600">
+                    <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-primary-400" />
+                    <span>{d}</span>
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
 
@@ -331,8 +368,44 @@ export function PortalClient({
             </div>
           )}
 
-          {/* 0120 — the slip is the "pay" button */}
-          {project.balance > 0 && !isCompleted && (
+          {/* ---- 0124: what to send today, under the 70/30 terms ---- */}
+          {due.kind !== "settled" && (
+            <div
+              className={cn(
+                "mt-5 rounded-2xl border p-4",
+                // Muted while it is not yet payable: a figure the client is
+                // told about must not look like a figure they owe now.
+                due.kind === "on_completion"
+                  ? "border-slate-200 bg-slate-50/80"
+                  : "border-amber-200 bg-amber-50/70",
+              )}
+            >
+              <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                {due.kind === "on_completion" ? copy.payLater : copy.payNow}
+              </p>
+              <p
+                className={cn(
+                  "mt-1 text-2xl font-extrabold tabular-nums",
+                  due.kind === "on_completion" ? "text-slate-700" : "text-amber-700",
+                )}
+              >
+                {formatCurrency(due.amount, project.currency)}
+              </p>
+              <p className="mt-1 text-sm leading-relaxed text-slate-600">
+                {due.kind === "upfront"
+                  ? copy.payNowUpfrontNote(due.percent)
+                  : due.kind === "final"
+                    ? copy.payNowFinalNote
+                    : copy.payLaterNote(due.percent)}
+              </p>
+            </div>
+          )}
+
+          {/* 0120 — the slip is the "pay" button.
+              Not gated on `!isCompleted` any more: the final 30% falls due ON
+              completion, so hiding the upload exactly then took the pay button
+              away at the one moment the client needs it. */}
+          {project.balance > 0 && (
             <div className="mt-5">
               <SlipUploadForm
                 onUpload={(fd) => uploadPortalPaymentSlip(token, fd)}

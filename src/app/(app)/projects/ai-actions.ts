@@ -12,6 +12,7 @@
 import { revalidatePath } from "next/cache";
 
 import { draftProjectBrief, type ProjectBrief } from "@/lib/ai/project-brief";
+import { readProjectDocuments, type ReadDocumentsResult } from "@/lib/document-brief-reader";
 import { estimateForService, type ProjectEstimate } from "@/lib/ai/project-estimate";
 import { runProjectPostMortem } from "@/lib/ai/project-postmortem";
 import { readProgressScreenshot, type ProgressNote } from "@/lib/ai/progress-note";
@@ -40,6 +41,23 @@ export async function draftBrief(input: {
   const { supabase, user } = await authed();
   if (!user) return { ok: false, error: "Not authenticated." };
   return draftProjectBrief(supabase, input);
+}
+
+// ---------------------------------------------------------------------------
+// 0124 — read the attached proposal and invoice into the project
+// ---------------------------------------------------------------------------
+
+/**
+ * The one reader that WRITES: `total_value` and `deposit_required_percent`
+ * come off the invoice. It still never bills or messages anyone, and every
+ * figure it fills in is shown with where it came from.
+ */
+export async function readDocuments(projectId: string): Promise<ReadDocumentsResult> {
+  const { supabase, user } = await authed();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const res = await readProjectDocuments(supabase, projectId);
+  if (res.ok) revalidatePath(`/projects/${projectId}`);
+  return res;
 }
 
 // ---------------------------------------------------------------------------

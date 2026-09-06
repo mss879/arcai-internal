@@ -1,0 +1,227 @@
+ARC AI AGENCY (PVT) LTD · www.arcai.agency · support@arcai.agency Page 1 of 5
+PROPOSAL
+ARC AI AGENCY (PVT) LTD
++44 7466 368427 (UK), +94 771852522
+(LK)
+support@arcai.agency
+www.arcai.agency
+Colombo 4, Sri Lanka
+Birmingham, UK
+PREPARED FOR
+AARAA & AAti
+PROPOSAL
+Project: Gem Sourcing & E-Commerce
+Platform
+Date: 03 Sept 2026
+01 OVERVIEW
+Sri Lanka's gem trade runs on relationships and physical inspection. Buyers come to Colombo or travel up to Ratnapura, sit with a
+dealer, and judge a stone in daylight. That works beautifully in person and almost not at all online, which is why most gem businesses
+here are still selling through WhatsApp photographs and a catalogue that lives in someone's head.
+This proposal covers a complete, custom-built website for your gem business: a storefront with a proper stone catalogue, a structured
+sourcing request system, an interactive map that lets a buyer choose where in Sri Lanka their stones are sourced from, and a secure
+payment gateway so a sale closes on the site rather than across three channels.
+It is built as a real application — a fast public front end and a full back end you log into — not a template with a contact form bolted on.
+Every enquiry, every stone, every order and every customer lands in one place that you control.
+02 OBJECTIVES
+Commercial
+• Turn the website into a channel that closes sales, not just one that collects enquiries.
+• Accept deposits and full payments online, in local and international currency, through a secure gateway.
+• Capture qualified sourcing briefs from buyers abroad who cannot fly in to view stones.
+• Present the inventory in a way that stands up next to international gem dealers online.
+Trust & Provenance
+• Make Sri Lankan origin the centrepiece — buyers pay a premium for Ceylon provenance, so the site must prove it.
+• Let a buyer see, on a map, exactly where in the island their stone comes from.
+• Attach certification, treatment disclosure and origin detail to every stone in the catalogue.
+Operational
+• Replace scattered WhatsApp threads and spreadsheets with one back office.
+• Give you full control to add, edit, price and retire stones without calling a developer.
+• Track every sourcing request from submission through to fulfilment.
+03 KEY FEATURES
+Gem Catalogue & Storefront
+The public face of the business — a fast, image-led catalogue built for stones rather than for generic products.
+• Individual stone pages with high-resolution gallery, video support, and a zoom view that does justice to colour and clarity.
+• Structured gem attributes: type, carat weight, cut, colour, clarity, treatment, origin, certification body and certificate number.
+• Filter and search by any attribute — a buyer looking for an unheated 3–5ct Ceylon blue sapphire finds it in two clicks.
+• Availability states: available, on hold, reserved and sold, so the catalogue never sells the same stone twice.
+• Collections and featured sets for curating parcels, new arrivals or a signature range.
+Sourcing Request System
+ARC AI AGENCY (PVT) LTD · www.arcai.agency · support@arcai.agency Page 2 of 5
+A structured brief replaces the back-and-forth. The buyer tells you precisely what they want and where they want it from, in one
+submission.
+• Multi-step sourcing form: stone type, carat range, colour, clarity, cut, treatment tolerance, certification and budget.
+• Sourcing region selected directly on the interactive map — Colombo, Ratnapura, or any region you choose to offer.
+• Reference image upload so a buyer can show the exact look they are chasing.
+• Timeline and intended-use fields (investment, bespoke jewellery, resale) so you can qualify an enquiry before spending time on it.
+• Every submission lands in the admin back office with a status pipeline: new, in sourcing, options sent, closed.
+• Automatic acknowledgement email to the buyer and instant notification to you.
+Secure Payments
+Payments are taken on the site, through an established gateway, with the transaction record kept against the order.
+• Payment gateway integration — PayHere or Stripe, whichever suits your card mix and settlement preference.
+• Card payments plus local options, and international card acceptance for overseas buyers.
+• Full payment or deposit-and-balance flows, so a buyer can secure a stone while sourcing completes.
+• Order confirmation, receipts and payment status stored against every transaction.
+• PCI-compliant by design: card details are handled by the gateway and never touch your server.
+Admin Back Office
+The back end you log into — the reason this is an application rather than a brochure.
+• Full inventory management: add, edit, price, publish, hold and retire stones with image upload.
+• Sourcing request pipeline with notes, assignment and status tracking.
+• Order and payment records with filtering and export.
+• Customer records showing enquiry and purchase history for each buyer.
+• Content control over homepage, collections, about and policy pages.
+• Role-based access so staff see only what they need to.
+04 THE INTERACTIVE SOURCING MAP
+This is the piece that will set the site apart, and it is included in the base price. Instead of a dropdown asking a buyer to pick a city, the
+sourcing journey happens on an interactive, animated model of Sri Lanka.
+How It Works
+• A stylised three-dimensional map of the island sits at the centre of the sourcing page — no plugin, no download.
+• Sourcing regions are marked as glowing points — Colombo and Ratnapura first, with room to add Beruwala, Elahera or Balangoda.
+• Hovering a region lifts and highlights it; the surrounding terrain settles back so attention goes exactly where you want it.
+• Clicking a region opens a panel: what the area is known for, the stones found there, and the mining tradition behind it.
+• The selection carries straight into the sourcing form — the region arrives pre-filled, so the map is part of the enquiry.
+• Smooth camera movement, subtle depth and considered motion — the interaction should feel like handling something valuable.
+Why It Matters Commercially
+Provenance is the single strongest selling point Sri Lankan gems have. Ratnapura is a name international buyers already recognise,
+and a site that lets them choose it on a map is telling a story no competitor's dropdown can match.
+It also does real commercial work: it educates the buyer, qualifies the enquiry before it reaches you, and gives visitors a reason to stay
+on the page and to send the link to someone else.
+Performance & Accessibility
+Built with performance as a hard constraint: progressive loading, a lightweight fallback map on slow connections and low-power devices,
+and full keyboard and screen-reader access to every region — so the experience is impressive without costing you mobile traffic or
+search ranking.
+05 ADD-ON — PROPOSAL, QUOTATION & INVOICING SYSTEM
+Requested separately by you and quoted as an optional add-on, this turns the back office into a document system: raise a quotation
+for a buyer, convert it to a proposal, and issue the invoice — all from the same place the stone and the enquiry already live.
+• Quotation builder — assemble a quote from catalogue stones or free-text lines, with quantity, rate, discount and validity date.
+• Proposal documents for larger or bespoke commissions, presented under your own branding.
+• Invoice generation with automatic sequential numbering, deposit and balance handling, and your bank details printed on every
+document.
+ARC AI AGENCY (PVT) LTD · www.arcai.agency · support@arcai.agency Page 3 of 5
+• Branded PDF output for all three document types, downloadable and emailable directly to the client from the system.
+• Status tracking — draft, sent, accepted, paid, overdue — with a filterable list of everything issued.
+• One-click conversion: quotation to proposal, proposal to invoice, with no re-typing.
+• Payment recording against each invoice, with deposit-paid and paid-in-full states reflected on the document.
+Priced at Rs 50,000 as an add-on to the platform above. It can be commissioned now or added later, though building it alongside the main platform is meaningfully
+cheaper than returning to it as a separate project.
+06 TECHNOLOGY & ARCHITECTURE
+LAYER WHAT WE USE
+Front end Next.js with React — server-rendered for speed and search visibility, with the interactive map
+layer running on WebGL.
+Back end Supabase: PostgreSQL database, authentication, row-level security and media storage for gem
+imagery.
+Payments PayHere or Stripe gateway integration, chosen with you during kickoff based on your settlement
+and currency needs.
+Hosting Netlify or Vercel edge hosting with automatic SSL, global CDN delivery and continuous
+deployment.
+Media Automatic image optimisation and modern formats, so high-resolution gem photography loads
+fast on mobile.
+Security HTTPS throughout, hardened admin authentication, role-based access control and daily
+database backups.
+07 SEO & DISCOVERABILITY
+• Technical SEO from the ground up: clean URL structure, server-side rendering, sitemap, robots and structured data.
+• Product schema markup on every stone page, so gems can surface in rich results with price and availability.
+• Dedicated landing pages for the terms buyers actually search: Ceylon blue sapphire, Ratnapura sapphire, unheated padparadscha,
+Sri Lankan gem sourcing.
+• Page titles, meta descriptions and heading structure written for each key page rather than generated.
+• Core Web Vitals treated as a build requirement, not an afterthought — image weight, script size and layout stability all budgeted.
+• Google Analytics and Search Console connected and verified at launch.
+Why Dedicated Pages Matter
+International gem buyers search by stone and by origin, not by company name. A single catalogue page cannot rank for all of it.
+Dedicated, well-written pages for each high-value search term give the site multiple independent entry points from Google, and each
+one lands the buyer on a page built to convert them into a sourcing request.
+08 TIMELINE & KEY DATES
+01 Discovery & Kickoff
+Confirm scope, gem attribute structure, sourcing regions and payment gateway. Collect branding, photography and initial
+inventory data.
+W E E K 1
+02 Design & Direction
+Full UI design for the storefront, stone pages, sourcing journey and admin. Interactive map concept presented and signed off
+before build.
+W E E K 1 – 2
+ARC AI AGENCY (PVT) LTD · www.arcai.agency · support@arcai.agency Page 4 of 5
+03 Front End & Interactive Map Build
+Storefront, catalogue, filtering and stone pages built. The interactive sourcing map developed, animated and tuned for
+performance on mobile.
+W E E K 2 – 4
+04 Back End, Payments & Admin
+Database, authentication, admin back office, sourcing request pipeline and payment gateway integration, tested end to end in
+sandbox.
+W E E K 4 – 5
+05 QA, Content Load & Launch
+Cross-browser and device testing, accessibility checks, performance tuning, live payment testing, inventory load, go-live and
+handover training.
+W E E K 6
+Approximately six weeks from receipt of the deposit and project assets. Option A completes on the same schedule; the invoicing add-on is built alongside the
+back office and does not extend the timeline.
+09 INVESTMENT
+DESCRIPTION AMOUNT
+Gem Sourcing & E-Commerce Platform — Front End, Back End & Payment Gateway
+• Custom front end: storefront, gem catalogue, filtering and individual stone pages
+• Full back end with admin dashboard, inventory, orders and customer records
+• Structured multi-step sourcing request system with reference image upload
+• Interactive 3D sourcing map of Sri Lanka — Colombo, Ratnapura and further regions
+• Secure payment gateway integration with deposit and full-payment flows
+• SEO foundation, analytics, responsive build and launch
+Rs 150,000
+Add-On — Proposal, Quotation & Invoicing System
+• Quotation builder with catalogue and free-text line items
+• Branded proposal documents for bespoke commissions
+• Sequential invoice numbering with deposit and balance handling
+• Branded PDF generation, download and email delivery
+• Document status tracking and one-click quotation to invoice conversion
+Rs 50,000
+Pricing Options
+OPTION WHAT IT INCLUDES TOTAL 70% DEPOSIT 30% BALANCE
+Option A The platform only — front end, back
+end, sourcing request forms, interactive
+sourcing map and payment gateway.
+Rs 150,000 Rs 105,000 Rs 45,000
+Option B Everything in Option A, plus the Proposal,
+Quotation & Invoicing System add-on.
+Rs 200,000 Rs 140,000 Rs 60,000
+OPTION B — FULL SCOPE: Rs 200,000
+PAYABLE ON SIGNING (70%): Rs 140,000
+All figures in Sri Lankan Rupees (LKR). A 70% deposit is payable before work
+commences; the 30% balance falls due on completion, before launch and
+handover.
+10 TERMS OF PAYMENT
+• 70% deposit is payable before the project commences. On Option A that is Rs 105,000; on Option B, Rs 140,000.
+• The remaining 30% is due on completion, before launch, handover, admin access, credentials or transfer of final files.
+• Work begins only once the 70% deposit has been received.
+• The website will not be launched, published, transferred or handed over until the final payment has been received in full.
+ARC AI AGENCY (PVT) LTD · www.arcai.agency · support@arcai.agency Page 5 of 5
+• All figures are in Sri Lankan Rupees (LKR) and exclusive of third-party costs listed below.
+• This quotation is valid for 30 days from the date of this proposal.
+Hosting, Domain & Third-Party Costs
+Hosting is included under the agreed setup, subject to normal usage limits.
+Supabase includes 500MB free backend storage. High-resolution gem photography and video can exceed this over time; if the project
+passes the free limits, any required upgrade or additional backend cost will be discussed and approved before billing.
+Domain purchase and renewal are not included. The domain must be provided or purchased by the client.
+Payment gateway account setup, merchant approval and per-transaction fees are charged by the gateway provider (PayHere or Stripe)
+directly to the client. ARC AI builds and configures the integration; we do not mark up or resell transaction fees.
+11 MAINTENANCE & SUPPORT
+• Website Protection plans — 3 months Rs 40,000 · 6 months Rs 60,000 · 12 months Rs 90,000.
+• Includes security & dependency updates, uptime monitoring & backups, minor text/image updates, and priority bug fixes.
+• Pay-Per-Fix — Rs 5,000 per fix for small bugs, UI tweaks, text/image updates, or broken links.
+• New pages, additional sourcing regions and custom feature development are quoted separately based on scope.
+• 30 days of post-launch support for defects is included at no charge with either option.
+12 QUALITY STANDARDS
+• Performance: optimised imagery, clean code, and the sourcing map progressively loaded so it never blocks first paint.
+• SEO: clear page structure, proper titles, meta data and product schema across the catalogue.
+• Usability: mobile-first design with simple navigation and clear calls to action on every page.
+• Accessibility: keyboard navigation and screen-reader support throughout, including a non-visual path through the sourcing map.
+• Security: hardened admin authentication, role-based access and no card data ever stored on your server.
+Assumptions & Exclusions
+• Client provides logo, brand colours and fonts where available.
+• Client provides gem inventory data and photography in a usable format.
+• Client holds or opens the payment gateway merchant account; ARC AI configures the integration.
+• Client provides or approves policy text (returns, shipping, certification and treatment disclosure).
+• Scope covers the sourcing regions agreed at kickoff; further regions are quoted as an addition.
+Next Steps
+• Confirm Option A or Option B.
+• Approve this proposal and scope.
+• Settle the 70% deposit to secure the build slot.
+• Share branding, inventory data and imagery; confirm gateway preference.
+• Kickoff and build commence.
+Prepared by
+Shahid Shamir
+Email — support@arcai.agency

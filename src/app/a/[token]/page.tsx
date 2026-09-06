@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 
-import { INVOICE_COMPANY } from "@/lib/invoice";
+import { AGREEMENT_COMPANY } from "@/lib/agreement-templates";
 import { markdownToHtml } from "@/lib/markdown";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -70,7 +70,7 @@ export default async function AgreementPublicPage({
       signedAt={agreement.signed_at}
       declinedReason={agreement.declined_reason}
       date={agreement.created_at.slice(0, 10)}
-      company={INVOICE_COMPANY}
+      company={AGREEMENT_COMPANY}
     />
   );
 }

@@ -1045,6 +1045,9 @@ export type Database = {
           package_key: string | null;
           // 0117 — overrides the workspace booking link for this project.
           booking_slug: string | null;
+          /** 0124 — what the uploaded proposal and invoice say (DocumentBrief). */
+          document_brief: Record<string, unknown> | null;
+          document_brief_read_at: Timestamp | null;
         };
         Insert: {
           id?: UUID;
@@ -1135,6 +1138,8 @@ export type Database = {
           client_note_at?: Timestamp | null;
           package_key?: string | null;
           booking_slug?: string | null;
+          document_brief?: Record<string, unknown> | null;
+          document_brief_read_at?: Timestamp | null;
         };
         Update: Partial<Database["public"]["Tables"]["projects"]["Insert"]>;
         Relationships: [];
@@ -2388,6 +2393,8 @@ export type Database = {
           file_type: string | null;
           file_size: number | null;
           link_url: string | null;
+          // 0123 — NULL means the top level, which is every pre-0123 row.
+          folder_id: UUID | null;
           uploaded_by: UUID | null;
           created_at: Timestamp;
         };
@@ -2401,10 +2408,33 @@ export type Database = {
           file_type?: string | null;
           file_size?: number | null;
           link_url?: string | null;
+          folder_id?: UUID | null;
           uploaded_by?: UUID | null;
           created_at?: Timestamp;
         };
         Update: Partial<Database["public"]["Tables"]["resources"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0123 — a named box resources sit in. One level deep; a folder is not
+      // a resource and deliberately does not live in `resources.kind`.
+      resource_folders: {
+        Row: {
+          id: UUID;
+          name: string;
+          description: string | null;
+          created_by: UUID | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          name: string;
+          description?: string | null;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["resource_folders"]["Insert"]>;
         Relationships: [];
       };
       meeting_links: {

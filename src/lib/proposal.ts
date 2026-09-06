@@ -24,11 +24,17 @@ import type {
   PricingGroup,
   PricingPackage,
 } from "@/lib/pricing-catalog";
+import { FINAL_PERCENT, UPFRONT_PERCENT } from "@/lib/payment-terms";
 
 // ---- Company / sign-off (printed on the proposal) ------------------------
 
 export const PROPOSAL_COMPANY = {
-  name: "ARC AI AGENCY (PVT) LTD",
+  // The REGISTERED name, confirmed 2026-09-06 — not "ARC AI AGENCY (PVT) LTD",
+  // which this printed until then and which matches no incorporation record.
+  // "ARC AI Agency" is a trading name and is fine in prose; a document that
+  // quotes a price and is signed against has to name the entity. Same string
+  // as INVOICE_COMPANY.name, deliberately: one company, one name on paper.
+  name: "ARC AI (PVT) LTD",
   phones: "+44 7466 368427 (UK), +94 771852522 (LK)",
   email: "support@arcai.agency",
   website: "www.arcai.agency",
@@ -1014,8 +1020,11 @@ export function defaultContent(): ProposalContent {
       { title: "QA, Launch, Optimize", description: "Accessibility, responsive checks, bug-fixing, performance tuning, go-live", duration: "Day 8-10" },
     ],
     paymentTerms: [
-      "70% upfront payment required before project commencement.",
-      "30% final payment due upon project completion and before launch, handover, admin access, credentials, or transfer of final files.",
+      // The percentages come from payment-terms.ts, which is also what the
+      // client portal counts with — the prose and the arithmetic that tells a
+      // client what to send today can no longer drift apart.
+      `${UPFRONT_PERCENT}% upfront payment required before project commencement.`,
+      `${FINAL_PERCENT}% final payment due upon project completion and before launch, handover, admin access, credentials, or transfer of final files.`,
       "Work will begin only after the upfront payment is received.",
       "The website will not be launched, published, transferred, or handed over until the final payment has been received in full.",
     ],

@@ -2,32 +2,29 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { FileDown, FileSignature, Plus, Send, Trash2 } from "lucide-react";
+import { FileDown, FilePlus2, FileSignature, History, Send, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/copy-button";
 import { EmptyState } from "@/components/ui/empty-state";
-import { Field, Input, Select, Textarea } from "@/components/ui/input";
-import { Modal } from "@/components/ui/modal";
-import { PageHeader } from "@/components/ui/page-header";
 import { useRealtimeSync } from "@/hooks/use-realtime-sync";
-import { markdownToHtml } from "@/lib/markdown";
+import { cn } from "@/lib/utils";
 
-import {
-  agreementPdfUrl,
-  saveAgreement,
-  sendAgreement,
-  voidAgreement,
-} from "./actions";
+import { agreementPdfUrl, sendAgreement, voidAgreement } from "./actions";
+import { AgreementEditor } from "./agreement-editor";
 
 /**
- * Contracts, SOWs and NDAs — raised here, signed on a link.
+ * Contracts and NDAs — written here, signed on a link.
  *
  * Before this the agency's contracts lived in a Google Doc and a chase: a PDF
  * was emailed, printed, signed with a pen, photographed and sent back, and
  * nobody could say from the CRM whether a given project had one.
+ *
+ * Shaped like /proposals — a Write tab holding the editor and its live PDF
+ * preview, and a list tab for everything raised so far — because they are the
+ * same job, done twice, and the contract is the one that gets signed.
  */
 
 export type AgreementRow = {
@@ -49,7 +46,7 @@ export type AgreementRow = {
   createdAt: string;
 };
 
-type Template = { id: string; name: string; kind: string; body_md: string };
+export type Template = { id: string; name: string; kind: string; body_md: string };
 
 /** Links the editor opens with, when raised from a project or a proposal. */
 export type AgreementPrefill = {
@@ -70,13 +67,6 @@ const STATUS: Record<string, { label: string; className: string }> = {
   declined: { label: "Declined", className: "bg-rose-50 text-rose-600 ring-rose-200" },
 };
 
-const KINDS = [
-  { value: "contract", label: "Contract" },
-  { value: "sow", label: "Scope of work" },
-  { value: "nda", label: "NDA" },
-  { value: "custom", label: "Other" },
-] as const;
-
 function shareUrl(token: string): string {
   const origin = typeof window !== "undefined" ? window.location.origin : "";
   return `${origin}/a/${token}`;
@@ -95,9 +85,11 @@ export function AgreementsView({
 }) {
   useRealtimeSync("agreements");
   const router = useRouter();
+  // Arriving with `?new=1` lands straight in the editor, links already made.
+  const [tab, setTab] = React.useState<"write" | "all">(
+    prefill || agreements.length === 0 ? "write" : "all",
+  );
   const [editing, setEditing] = React.useState<AgreementRow | null>(null);
-  // Arriving with `?new=1` opens the editor straight away, links made.
-  const [creating, setCreating] = React.useState(Boolean(prefill));
 
   async function download(id: string) {
     const url = await agreementPdfUrl(id);
@@ -125,25 +117,62 @@ export function AgreementsView({
   }
 
   return (
-    <div className="space-y-5">
-      <PageHeader
-        title="Agreements"
-        description="Contracts, scopes of work and NDAs — sent as a link and signed online."
-        actions={
-          <Button onClick={() => setCreating(true)}>
-            <Plus className="h-4 w-4" /> New agreement
-          </Button>
-        }
-      />
+    <div className="space-y-6">
+      <div className="inline-flex rounded-xl border border-slate-200 bg-white p-1 shadow-sm">
+        <TabButton
+          active={tab === "write"}
+          onClick={() => setTab("write")}
+          icon={<FilePlus2 className="h-4 w-4" />}
+        >
+          {editing ? "Editing" : "Write"}
+        </TabButton>
+        <TabButton
+          active={tab === "all"}
+          onClick={() => setTab("all")}
+          icon={<History className="h-4 w-4" />}
+        >
+          All agreements
+          {agreements.length > 0 && (
+            <span
+              className={cn(
+                "ml-1.5 rounded-full px-1.5 py-0.5 text-[11px] font-semibold",
+                tab === "all" ? "bg-white/20 text-white" : "bg-slate-100 text-slate-500",
+              )}
+            >
+              {agreements.length}
+            </span>
+          )}
+        </TabButton>
+      </div>
 
-      {agreements.length === 0 ? (
+      {tab === "write" ? (
+        <AgreementEditor
+          // Remount on switch: the editor reads the row once, at mount, so the
+          // form state and the agreement it belongs to can never drift.
+          key={editing?.id ?? "new"}
+          agreement={editing}
+          templates={templates}
+          clients={clients}
+          prefill={editing ? null : prefill}
+          onExitEdit={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            setTab("all");
+          }}
+        />
+      ) : agreements.length === 0 ? (
         <EmptyState
           icon={<FileSignature className="h-6 w-6" />}
           title="No agreements yet"
           description="Write one here and send the client a link — they read it and sign it in the browser."
           action={
-            <Button onClick={() => setCreating(true)}>
-              <Plus className="h-4 w-4" /> New agreement
+            <Button
+              onClick={() => {
+                setEditing(null);
+                setTab("write");
+              }}
+            >
+              <FilePlus2 className="h-4 w-4" /> New agreement
             </Button>
           }
         />
@@ -168,7 +197,10 @@ export function AgreementsView({
                   >
                     <td className="px-4 py-3">
                       <button
-                        onClick={() => setEditing(a)}
+                        onClick={() => {
+                          setEditing(a);
+                          setTab("write");
+                        }}
                         className="text-left font-semibold text-slate-900 hover:text-primary-600"
                       >
                         {a.title}
@@ -227,220 +259,31 @@ export function AgreementsView({
           </table>
         </div>
       )}
-
-      <AgreementModal
-        open={creating || Boolean(editing)}
-        agreement={editing}
-        templates={templates}
-        clients={clients}
-        prefill={editing ? null : prefill}
-        onClose={() => {
-          setCreating(false);
-          setEditing(null);
-        }}
-      />
     </div>
   );
 }
 
-function AgreementModal({
-  open,
-  agreement,
-  templates,
-  clients,
-  prefill,
-  onClose,
+function TabButton({
+  active,
+  onClick,
+  icon,
+  children,
 }: {
-  open: boolean;
-  agreement: AgreementRow | null;
-  templates: Template[];
-  clients: { id: string; name: string }[];
-  prefill: AgreementPrefill | null;
-  onClose: () => void;
+  active: boolean;
+  onClick: () => void;
+  icon: React.ReactNode;
+  children: React.ReactNode;
 }) {
-  const router = useRouter();
-  const [form, setForm] = React.useState({
-    kind: "contract",
-    title: "",
-    bodyMd: "",
-    clientId: "",
-    projectId: "",
-    proposalId: "",
-    signerEmail: "",
-  });
-  const [saving, setSaving] = React.useState(false);
-  const [preview, setPreview] = React.useState(false);
-  const signed = agreement?.status === "signed";
-
-  React.useEffect(() => {
-    if (!open) return;
-    setForm({
-      kind: agreement?.kind ?? "contract",
-      title: agreement?.title ?? prefill?.title ?? "",
-      // Load the real body, or editing would silently blank the agreement.
-      bodyMd: agreement?.bodyMd ?? "",
-      clientId: agreement?.clientId ?? prefill?.clientId ?? "",
-      // Carried through every save: an edit must not drop the project link.
-      projectId: agreement?.projectId ?? prefill?.projectId ?? "",
-      proposalId: agreement?.proposalId ?? prefill?.proposalId ?? "",
-      signerEmail: agreement?.signerEmail ?? "",
-    });
-    setPreview(false);
-  }, [open, agreement, prefill]);
-
-  async function save() {
-    setSaving(true);
-    const res = await saveAgreement({
-      id: agreement?.id ?? null,
-      kind: form.kind as "contract",
-      title: form.title,
-      bodyMd: form.bodyMd,
-      clientId: form.clientId || null,
-      projectId: form.projectId || null,
-      proposalId: form.proposalId || null,
-      signerEmail: form.signerEmail || null,
-    });
-    setSaving(false);
-    if (res.ok) {
-      toast.success("Saved.");
-      onClose();
-      router.refresh();
-    } else toast.error(res.error);
-  }
-
   return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title={agreement ? agreement.title : "New agreement"}
-      description={
-        signed
-          ? "This one is signed — the wording is now evidence and can't be edited."
-          : "Markdown: # headings, - bullets, **bold**. It renders the same on the page and in the PDF."
-      }
-      size="xl"
-      footer={
-        <div className="flex items-center justify-end gap-2">
-          <Button variant="ghost" onClick={onClose}>
-            Close
-          </Button>
-          {!signed && (
-            <Button onClick={save} loading={saving} disabled={saving}>
-              Save
-            </Button>
-          )}
-        </div>
-      }
-    >
-      {signed ? (
-        <p className="text-sm text-slate-500">
-          Signed by {agreement?.signedName} on{" "}
-          {agreement?.signedAt
-            ? new Date(agreement.signedAt).toLocaleDateString()
-            : "—"}
-          . Raise a new agreement if the terms need to change.
-        </p>
-      ) : (
-        <div className="space-y-3">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Kind">
-              <Select
-                value={form.kind}
-                onChange={(e) => setForm((f) => ({ ...f, kind: e.target.value }))}
-              >
-                {KINDS.map((k) => (
-                  <option key={k.value} value={k.value}>
-                    {k.label}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-            <Field label="Client">
-              <Select
-                value={form.clientId}
-                onChange={(e) => setForm((f) => ({ ...f, clientId: e.target.value }))}
-              >
-                <option value="">Not linked</option>
-                {clients.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-          </div>
-          <Field label="Title" required>
-            <Input
-              value={form.title}
-              onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
-              placeholder="Website build — services agreement"
-            />
-          </Field>
-          <Field label="Signer's email">
-            <Input
-              value={form.signerEmail}
-              onChange={(e) => setForm((f) => ({ ...f, signerEmail: e.target.value }))}
-              placeholder="Who receives the signing link"
-            />
-          </Field>
-          {(form.projectId || form.proposalId) && (
-            <p className="text-xs text-slate-500">
-              Linked to {form.projectId ? "the project" : "the proposal"} it was raised
-              from — it will show on that record and on the client&apos;s portal.
-            </p>
-          )}
-
-          {templates.length > 0 && (
-            <Field label="Start from a template">
-              <Select
-                defaultValue=""
-                onChange={(e) => {
-                  const template = templates.find((t) => t.id === e.target.value);
-                  if (template) {
-                    setForm((f) => ({
-                      ...f,
-                      kind: template.kind,
-                      bodyMd: template.body_md,
-                    }));
-                  }
-                }}
-              >
-                <option value="">Write from scratch</option>
-                {templates.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-          )}
-
-          <div>
-            <div className="mb-1.5 flex items-center justify-between">
-              <span className="text-sm font-medium text-slate-700">The agreement</span>
-              <button
-                onClick={() => setPreview((p) => !p)}
-                className="text-xs font-medium text-primary-600 hover:underline"
-              >
-                {preview ? "Edit" : "Preview"}
-              </button>
-            </div>
-            {preview ? (
-              <div
-                className="min-h-[16rem] rounded-xl border border-slate-200 px-4 py-3 text-sm leading-relaxed text-slate-700 [&_h1]:mb-2 [&_h1]:mt-4 [&_h1]:text-base [&_h1]:font-bold [&_h2]:mb-1 [&_h2]:mt-3 [&_h2]:font-bold [&_li]:mb-1 [&_ol]:mb-3 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:mb-3 [&_ul]:mb-3 [&_ul]:list-disc [&_ul]:pl-5"
-                dangerouslySetInnerHTML={{ __html: markdownToHtml(form.bodyMd) }}
-              />
-            ) : (
-              <Textarea
-                value={form.bodyMd}
-                onChange={(e) => setForm((f) => ({ ...f, bodyMd: e.target.value }))}
-                rows={16}
-                placeholder={"# Services\n\n1. What we will do\n2. What it costs\n\n## Term\n\nThis agreement runs until…"}
-              />
-            )}
-          </div>
-        </div>
+    <button
+      onClick={onClick}
+      className={cn(
+        "inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-colors",
+        active ? "bg-primary-600 text-white shadow-sm" : "text-slate-600 hover:bg-slate-100",
       )}
-    </Modal>
+    >
+      {icon}
+      {children}
+    </button>
   );
 }

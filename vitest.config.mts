@@ -27,6 +27,12 @@ export default defineConfig({
       // The automation engine's pure decisions — does it fire, what does the
       // message say. Extracted from the server-only engine so they can run.
       "src/lib/automation-core.test.ts",
+      // What the portal tells a client to send today. The figure is read
+      // before they pay; asking for the wrong number is expensive.
+      "src/lib/payment-terms.test.ts",
+      // What the uploaded invoice and proposal SAY, read against the real
+      // documents. A misread here fills the project value with the wrong number.
+      "src/lib/document-brief.test.ts",
       // Which channel a client's tracking link goes out on.
       "src/lib/portal-send-core.test.ts",
       // Templates render the same on the server and in the compose preview.

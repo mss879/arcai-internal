@@ -79,6 +79,22 @@ const EMPTY: ProjectInput = {
  * not) with a retry — so nobody has to go looking for the Client tab to find
  * out whether the customer was told.
  */
+/**
+ * 0124 — say what the documents filled in, once, right after the save. The
+ * figures arrived from the invoice rather than the form, so the person who
+ * just skipped typing them deserves to see them.
+ */
+function announceDocumentsRead(
+  read: { totalValue: number | null; depositPercent: number | null } | null,
+) {
+  if (!read || (!read.totalValue && read.depositPercent == null)) return;
+  const parts = [
+    read.totalValue ? `value Rs ${read.totalValue.toLocaleString("en-US")}` : null,
+    read.depositPercent != null ? `${read.depositPercent}% deposit` : null,
+  ].filter(Boolean);
+  toast.success(`Read the proposal and invoice — ${parts.join(", ")} filled in.`);
+}
+
 export function ProjectFormModal({
   open,
   onClose,
@@ -231,9 +247,11 @@ export function ProjectFormModal({
       router.refresh();
       if (res.created) {
         toast.success("Project created");
+        announceDocumentsRead(res.documentsRead);
         setCreated(res);
       } else {
         toast.success("Project updated");
+        announceDocumentsRead(res.documentsRead);
         onClose();
       }
     });

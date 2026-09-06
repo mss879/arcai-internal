@@ -119,16 +119,77 @@ export function parseMarkdown(source: string): MarkdownBlock[] {
 }
 
 /**
- * Inline formatting, applied to ALREADY-ESCAPED text.
+ * One run of inline text and the marks on it.
  *
- * The order matters: bold before italic, or `**word**` is read as an italic
- * inside an italic. Code last, so a backtick span isn't re-processed.
+ * Blocks were never the whole story: `parseMarkdown` leaves `**like this**`
+ * sitting in the text, which was fine while only `markdownToHtml` consumed it
+ * — and wrong the moment the PDF renderer did, because a contract then printed
+ * its own asterisks while the signing page showed bold. Both now read the same
+ * tokens, so the document somebody signs and the document that gets filed are
+ * marked up identically.
  */
-function inline(escaped: string): string {
-  return escaped
-    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-    .replace(/(^|[^*])\*([^*]+)\*/g, "$1<em>$2</em>")
-    .replace(/`([^`]+)`/g, "<code>$1</code>");
+export type InlineToken = {
+  text: string;
+  bold: boolean;
+  italic: boolean;
+  code: boolean;
+};
+
+/** Split the runs that match `re`, adding `mark` to the pieces inside it. */
+function markRuns(
+  runs: InlineToken[],
+  re: RegExp,
+  mark: "bold" | "italic" | "code",
+): InlineToken[] {
+  const out: InlineToken[] = [];
+  for (const run of runs) {
+    // An already-marked run is not re-scanned for the same mark.
+    if (run[mark]) {
+      out.push(run);
+      continue;
+    }
+    let last = 0;
+    re.lastIndex = 0;
+    for (let m = re.exec(run.text); m; m = re.exec(run.text)) {
+      if (m.index > last) out.push({ ...run, text: run.text.slice(last, m.index) });
+      out.push({ ...run, text: m[1], [mark]: true });
+      last = m.index + m[0].length;
+    }
+    if (last < run.text.length) out.push({ ...run, text: run.text.slice(last) });
+  }
+  return out;
+}
+
+/**
+ * Parse inline marks out of one line of text.
+ *
+ * The order matters and is the order this has always used: bold before italic,
+ * or `**word**` is read as an italic inside an italic. Code sits between them
+ * so a backtick span is found before its contents can be italicised.
+ */
+export function parseInline(source: string): InlineToken[] {
+  let runs: InlineToken[] = [
+    { text: String(source ?? ""), bold: false, italic: false, code: false },
+  ];
+  runs = markRuns(runs, /\*\*([^*]+)\*\*/g, "bold");
+  runs = markRuns(runs, /`([^`]+)`/g, "code");
+  // Not preceded by a `*`, so the leftovers of an unmatched bold run don't
+  // become a stray italic.
+  runs = markRuns(runs, /(?<!\*)\*([^*]+)\*/g, "italic");
+  return runs.filter((r) => r.text !== "");
+}
+
+/** Inline formatting as HTML. Every value is escaped before markup is added. */
+function inline(raw: string): string {
+  return parseInline(raw)
+    .map((t) => {
+      let html = escapeHtml(t.text);
+      if (t.code) html = `<code>${html}</code>`;
+      if (t.italic) html = `<em>${html}</em>`;
+      if (t.bold) html = `<strong>${html}</strong>`;
+      return html;
+    })
+    .join("");
 }
 
 /** Render to HTML. Safe to inject: every value was escaped before markup. */
@@ -137,15 +198,15 @@ export function markdownToHtml(source: string): string {
   for (const block of parseMarkdown(source)) {
     switch (block.kind) {
       case "heading":
-        out.push(`<h${block.level}>${inline(escapeHtml(block.text))}</h${block.level}>`);
+        out.push(`<h${block.level}>${inline(block.text)}</h${block.level}>`);
         break;
       case "paragraph":
-        out.push(`<p>${inline(escapeHtml(block.text))}</p>`);
+        out.push(`<p>${inline(block.text)}</p>`);
         break;
       case "list": {
         const tag = block.ordered ? "ol" : "ul";
         const items = block.items
-          .map((i) => `<li>${inline(escapeHtml(i))}</li>`)
+          .map((i) => `<li>${inline(i)}</li>`)
           .join("");
         out.push(`<${tag}>${items}</${tag}>`);
         break;

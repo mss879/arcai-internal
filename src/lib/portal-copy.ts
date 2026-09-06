@@ -21,6 +21,8 @@ import type { DeliveryStage, PortalLanguage } from "@/lib/types";
 type Copy = {
   workspace: string;
   whatWereBuilding: string;
+  /** 0124 — the deliverables list, read off the proposal. */
+  whatsIncluded: string;
   targetCompletion: string;
   whereYouAre: string;
   waitingOnYouOne: string;
@@ -31,6 +33,16 @@ type Copy = {
   paidSoFar: string;
   balanceDue: string;
   settledPercent: (n: number) => string;
+  /**
+   * 0124 — what to send NOW, under the 70/30 terms. "Balance due" is a fact;
+   * these are the instruction, and a client reading the page on day one needs
+   * the instruction.
+   */
+  payNow: string;
+  payNowUpfrontNote: (percent: number) => string;
+  payNowFinalNote: string;
+  payLater: string;
+  payLaterNote: (percent: number) => string;
   paymentsReceived: string;
   deposit: string;
   paymentReceived: string;
@@ -98,6 +110,7 @@ type Copy = {
 const EN: Copy = {
   workspace: "Your project workspace",
   whatWereBuilding: "What we're building",
+  whatsIncluded: "What's included",
   targetCompletion: "Target completion",
   whereYouAre: "Where your project is",
   waitingOnYouOne: "We're waiting on 1 item from you",
@@ -108,6 +121,14 @@ const EN: Copy = {
   paidSoFar: "Paid so far",
   balanceDue: "Balance due",
   settledPercent: (n) => `${n}% settled`,
+  payNow: "Due today",
+  payNowUpfrontNote: (percent) =>
+    `${percent}% of the project value, to get started. Work begins once this is received.`,
+  payNowFinalNote:
+    "The balance, now the work is complete — due before launch, handover and transfer of the final files.",
+  payLater: "Due on completion",
+  payLaterNote: (percent) =>
+    `The remaining ${percent}%, payable once the work is finished and before handover.`,
   paymentsReceived: "Payments received",
   deposit: "Deposit",
   paymentReceived: "Payment received",
@@ -181,6 +202,7 @@ const EN: Copy = {
 const SI: Copy = {
   workspace: "ඔබේ ව්‍යාපෘති අවකාශය",
   whatWereBuilding: "අපි ගොඩනඟන දේ",
+  whatsIncluded: "ඇතුළත් වන දේ",
   targetCompletion: "අවසන් කිරීමට නියමිත දිනය",
   whereYouAre: "ඔබේ ව්‍යාපෘතිය දැන් කොහෙද",
   waitingOnYouOne: "අපි ඔබෙන් එක් දෙයක් බලාපොරොත්තුවෙන් සිටිමු",
@@ -191,6 +213,14 @@ const SI: Copy = {
   paidSoFar: "මේ දක්වා ගෙවා ඇත",
   balanceDue: "ගෙවීමට ඉතිරි",
   settledPercent: (n) => `${n}% ගෙවා ඇත`,
+  payNow: "අද ගෙවිය යුතුයි",
+  payNowUpfrontNote: (percent) =>
+    `ව්‍යාපෘති වටිනාකමින් ${percent}%, වැඩ ආරම්භ කිරීමට. මෙය ලැබුණු පසු වැඩ ආරම්භ වේ.`,
+  payNowFinalNote:
+    "වැඩ අවසන් බැවින් ඉතිරි මුදල — දියත් කිරීම, භාර දීම සහ අවසාන ගොනු පැවරීමට පෙර ගෙවිය යුතුයි.",
+  payLater: "වැඩ අවසන් වූ පසු ගෙවිය යුතුයි",
+  payLaterNote: (percent) =>
+    `ඉතිරි ${percent}%, වැඩ අවසන් වූ පසු සහ භාර දීමට පෙර ගෙවිය යුතුයි.`,
   paymentsReceived: "ලැබුණු ගෙවීම්",
   deposit: "තැන්පතුව",
   paymentReceived: "ගෙවීම ලැබුණි",
@@ -263,6 +293,7 @@ const SI: Copy = {
 const TA: Copy = {
   workspace: "உங்கள் திட்டப் பணியிடம்",
   whatWereBuilding: "நாங்கள் உருவாக்குவது",
+  whatsIncluded: "உள்ளடங்குவது",
   targetCompletion: "நிறைவு செய்ய இலக்கு நாள்",
   whereYouAre: "உங்கள் திட்டம் இப்போது எங்கே",
   waitingOnYouOne: "உங்களிடமிருந்து ஒரு விஷயத்தை எதிர்பார்க்கிறோம்",
@@ -273,6 +304,14 @@ const TA: Copy = {
   paidSoFar: "இதுவரை செலுத்தியது",
   balanceDue: "செலுத்த வேண்டியது",
   settledPercent: (n) => `${n}% செலுத்தப்பட்டது`,
+  payNow: "இன்று செலுத்த வேண்டியது",
+  payNowUpfrontNote: (percent) =>
+    `திட்ட மதிப்பில் ${percent}%, வேலையைத் தொடங்க. இது கிடைத்ததும் வேலை தொடங்கும்.`,
+  payNowFinalNote:
+    "வேலை முடிந்துவிட்டதால் மீதித் தொகை — வெளியீடு, ஒப்படைப்பு மற்றும் இறுதிக் கோப்புகள் மாற்றத்திற்கு முன் செலுத்த வேண்டும்.",
+  payLater: "வேலை முடிந்ததும் செலுத்த வேண்டியது",
+  payLaterNote: (percent) =>
+    `மீதமுள்ள ${percent}%, வேலை முடிந்ததும் ஒப்படைப்புக்கு முன் செலுத்த வேண்டும்.`,
   paymentsReceived: "பெறப்பட்ட கட்டணங்கள்",
   deposit: "முன்பணம்",
   paymentReceived: "கட்டணம் பெறப்பட்டது",

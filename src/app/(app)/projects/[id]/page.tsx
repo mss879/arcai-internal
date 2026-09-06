@@ -12,6 +12,8 @@ import {
 import { AiToolsCard } from "@/components/projects/ai-tools-card";
 import { FinanceCostsCard } from "@/components/projects/finance-costs-card";
 import { ChainCard, type ChainLink } from "@/components/projects/chain-card";
+import { DocumentBriefCard } from "@/components/projects/document-brief-card";
+import { asDocumentBrief, documentBriefApplies } from "@/lib/document-brief";
 import {
   ClientMessageCard,
   type SentClientMessage,
@@ -74,6 +76,7 @@ import {
 import { computeProjectProgress } from "@/lib/project-progress";
 import { createClient } from "@/lib/supabase/server";
 import { cn, formatCurrency } from "@/lib/utils";
+import { paymentDue } from "@/lib/payment-terms";
 import type { DeliveryEvent, ProjectMilestone, ProjectStatus } from "@/lib/types";
 
 export default async function ProjectDetailPage({
@@ -792,6 +795,45 @@ export default async function ProjectDetailPage({
               />
             )}
           </div>
+
+          {/* What to CHASE, which is not the same as what is outstanding.
+              On day one of a Rs 200,000 project the sum that starts the work
+              is the 70% upfront, and the client's portal now prints exactly
+              this figure — team and client read the same number off the same
+              function. */}
+          {(() => {
+            const due = paymentDue({
+              totalValue,
+              received,
+              completed: project.status === "completed",
+              // The share this project's own invoice states, when read (0124).
+              upfrontPercent: project.deposit_required_percent,
+            });
+            if (due.kind === "settled") return null;
+            const payable = due.kind !== "on_completion";
+            return (
+              <p className="mt-3 text-right text-xs text-slate-500">
+                <span
+                  className={cn(
+                    "font-semibold uppercase tracking-wider",
+                    payable ? "text-amber-600" : "text-slate-400",
+                  )}
+                >
+                  {payable ? "Due today" : "Due on completion"}
+                </span>{" "}
+                <span className="font-semibold tabular-nums text-slate-800">
+                  {formatCurrency(due.amount, project.currency)}
+                </span>{" "}
+                <span>
+                  {due.kind === "upfront"
+                    ? `· ${due.percent}% upfront, before work begins`
+                    : due.kind === "final"
+                      ? "· the balance, before launch and handover"
+                      : `· the remaining ${due.percent}%`}
+                </span>
+              </p>
+            );
+          })()}
         </div>
       </div>
 
@@ -812,6 +854,21 @@ export default async function ProjectDetailPage({
                 quoted={chainQuote ? Number(chainQuote.grand_total) || 0 : null}
                 delivered={Number(project.total_value) || 0}
               />
+              {/* 0124 — what the documents say. Projects from September 2026
+                  only: older ones were set up by hand and have no proposal. */}
+              {documentBriefApplies(project.created_at) && (
+                <DocumentBriefCard
+                  projectId={id}
+                  brief={asDocumentBrief(project.document_brief)}
+                  readAt={project.document_brief_read_at ?? null}
+                  currency={project.currency || "LKR"}
+                  documents={{
+                    proposal: project.proposal_name ?? (project.proposal_path ? "Proposal" : null),
+                    invoice: project.invoice_name ?? (project.invoice_path ? "Invoice" : null),
+                    crmProposal: Boolean(project.proposal_id),
+                  }}
+                />
+              )}
               <LedgerSection
                 projectId={id}
                 rows={ledger}

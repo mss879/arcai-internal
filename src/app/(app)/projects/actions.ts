@@ -64,6 +64,11 @@ export type SaveProjectResult = {
   created: boolean;
   /** Creation only: what happened to the tracking link. null = not attempted. */
   send: PortalSendResult | null;
+  /**
+   * 0124 — the attached proposal/invoice were read and these were filled in.
+   * null = nothing was attached (or the project predates document reading).
+   */
+  documentsRead: { totalValue: number | null; depositPercent: number | null } | null;
 };
 
 export async function saveProject(
@@ -173,6 +178,25 @@ export async function saveProject(
     }
   }
 
+  // 0124 — a proposal or invoice was just attached (or linked): read it, and
+  // let the documents fill in the value and the deposit share rather than the
+  // form. Best-effort and gated to projects created from DOCUMENT_BRIEF_SINCE;
+  // a read that fails never fails the save.
+  let documentsRead: SaveProjectResult["documentsRead"] = null;
+  if (
+    ("proposal_path" in payload && payload.proposal_path) ||
+    ("invoice_path" in payload && payload.invoice_path) ||
+    (created && input.proposal_id)
+  ) {
+    try {
+      const { readProjectDocuments } = await import("@/lib/document-brief-reader");
+      const read = await readProjectDocuments(supabase, projectId);
+      if (read.ok) documentsRead = read.wrote;
+    } catch (e) {
+      console.error("[projects] document read failed:", e);
+    }
+  }
+
   revalidatePath("/projects");
   if (!created) revalidatePath(`/projects/${projectId}`);
   return {
@@ -181,6 +205,7 @@ export async function saveProject(
     shareToken: saved.data.share_token,
     created,
     send,
+    documentsRead,
   };
 }
 

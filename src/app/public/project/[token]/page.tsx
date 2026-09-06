@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { differenceInCalendarDays, startOfToday } from "date-fns";
 
+import { asDocumentBrief, documentBriefApplies } from "@/lib/document-brief";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { PortalClient, type PortalProject } from "./portal-client";
 import { PortalLock } from "./portal-lock";
@@ -99,7 +100,7 @@ export default async function PublicProjectPortal({
     .from("projects")
     // Explicit column list, never select("*") — see rule 2 above.
     .select(
-      "id, name, description, status, service_type, delivery_stage, currency, total_value, deposit_paid, start_date, due_date, proposal_url, proposal_name, invoice_url, invoice_name, progress_override, preview_url, live_url, launched_at, client_note, client_note_at, booking_slug, client_id, client:clients(name, company)",
+      "id, name, description, status, service_type, delivery_stage, currency, total_value, deposit_paid, deposit_required_percent, document_brief, created_at, start_date, due_date, proposal_url, proposal_name, invoice_url, invoice_name, progress_override, preview_url, live_url, launched_at, client_note, client_note_at, booking_slug, client_id, client:clients(name, company)",
     )
     .eq("id", access.id)
     .maybeSingle();
@@ -282,9 +283,26 @@ export default async function PublicProjectPortal({
     }
   }
 
+  // 0124 — the scope the proposal describes, for "what we're building" when
+  // nobody wrote a description, and a "what's included" list. Only what a
+  // client may see: the summary and the deliverables, never the warnings.
+  const storedBrief = documentBriefApplies(project.created_at)
+    ? asDocumentBrief(project.document_brief)
+    : null;
+  const brief =
+    storedBrief?.proposal && (storedBrief.proposal.summary || storedBrief.proposal.deliverables.length)
+      ? {
+          summary: storedBrief.proposal.summary,
+          deliverables: storedBrief.proposal.deliverables.slice(0, 8),
+        }
+      : null;
+
   const view: PortalProject = {
     name: project.name,
     description: project.description,
+    depositPercent:
+      project.deposit_required_percent != null ? Number(project.deposit_required_percent) : null,
+    brief,
     status: project.status,
     serviceType: project.service_type,
     stage,

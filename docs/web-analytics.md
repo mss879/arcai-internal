@@ -159,6 +159,14 @@ dies halfway is safe to retry and nothing is ever double-counted.
 Tuning: `WEB_ANALYTICS_SYNC_INTERVAL_HOURS` (default 12) and
 `WEB_ANALYTICS_STEP_MS` (the tick's per-step budget, default 6000).
 
+**The AI Insights scan** has the same constraint and the same answer. A
+high-effort reasoning read of the whole export takes minutes, so the model
+call is an OpenAI *background response*: **Re-scan** starts it and returns,
+the page polls every few seconds while open, and the automation tick stores
+the result if the page was closed. The scan in flight lives in
+`app_settings.web_insights_scan`; a reasoning-model failure falls back to
+the chat model before a failed row is written.
+
 ---
 
 ## The tables

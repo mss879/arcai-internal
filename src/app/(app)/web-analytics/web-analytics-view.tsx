@@ -46,6 +46,7 @@ import {
   dismissInsightTask,
   sendInsightToTodos,
   generateReport,
+  pollScan,
   rebuildNow,
   scanInsights,
   toggleInsightTask,
@@ -115,6 +116,7 @@ export function WebAnalyticsView({
   syncStatus,
   job,
   intervalHours,
+  scanPending,
   insight,
   insightTasks,
   sourceReady,
@@ -150,6 +152,8 @@ export function WebAnalyticsView({
   }[];
   job: JobSummary | null;
   intervalHours: number;
+  /** A scan still thinking at OpenAI when the page loaded. */
+  scanPending: { started_at: string; model: string; days: number } | null;
   insight: WebInsight | null;
   insightTasks: WebInsightTask[];
   sourceReady: boolean;
@@ -161,7 +165,10 @@ export function WebAnalyticsView({
   const [tab, setTab] = React.useState<Tab>("overview");
   const [busy, setBusy] = React.useState<string | null>(null);
   const [openReport, setOpenReport] = React.useState<string | null>(reports[0]?.id ?? null);
-  const [scanning, setScanning] = React.useState(false);
+  const [scanning, setScanning] = React.useState(Boolean(scanPending));
+  const [scanStartedAt, setScanStartedAt] = React.useState<string | null>(
+    scanPending?.started_at ?? null,
+  );
 
   const onToggleTask = async (id: string, done: boolean) => {
     const result = await toggleInsightTask(id, done);
@@ -185,6 +192,32 @@ export function WebAnalyticsView({
     router.refresh();
   };
 
+  /**
+   * Wait for the scan thinking at OpenAI to land.
+   *
+   * The model runs in the background — a high-effort read takes minutes,
+   * and a server call here is cut off at ~26 seconds — so the page asks
+   * every few seconds whether it is done. Leaving the page is fine: the
+   * automation tick stores the result instead, and it shows on the next load.
+   */
+  const waitForScan = async () => {
+    for (let i = 0; i < 90; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 8_000));
+      const poll = await pollScan().catch(() => null);
+      if (!poll || poll.state === "pending") continue;
+      // "idle" means nothing is in flight any more — either this tab lost
+      // the race to store it (the tick got there first) or it is already
+      // saved. Either way the answer is on the server; refresh and stop.
+      if (poll.state === "complete") toast.success("Scan complete.");
+      else if (poll.state === "failed") toast.error(poll.error);
+      router.refresh();
+      return;
+    }
+    toast.info(
+      "The scan is still thinking. It finishes in the background and appears here on the next load.",
+    );
+  };
+
   const runScan = async () => {
     setScanning(true);
     try {
@@ -193,12 +226,25 @@ export function WebAnalyticsView({
         toast.error(result.error);
         return;
       }
-      toast.success("Scan complete.");
-      router.refresh();
+      setScanStartedAt(result.started_at);
+      await waitForScan();
     } finally {
       setScanning(false);
+      setScanStartedAt(null);
     }
   };
+
+  // A scan was already in flight when the page loaded: keep waiting for it.
+  const resumedRef = React.useRef(false);
+  React.useEffect(() => {
+    if (!scanPending || resumedRef.current) return;
+    resumedRef.current = true;
+    void waitForScan().finally(() => {
+      setScanning(false);
+      setScanStartedAt(null);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const hasData = totals.sessions > 0 || totals.pageviews > 0;
 
@@ -417,6 +463,7 @@ export function WebAnalyticsView({
             onDismissTask={onDismissTask}
             onSendTaskToTodos={onSendTaskToTodos}
             scanning={scanning}
+            scanStartedAt={scanStartedAt}
             onScan={runScan}
             aiReady={aiReady}
             hasData={hasData}

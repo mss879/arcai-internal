@@ -7,7 +7,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import type { ActionResult } from "@/lib/types";
 import { generateWebReport, analyseChatSessions } from "@/lib/web-analytics/report";
-import { runInsightScan } from "@/lib/web-analytics/insights";
+import { pollInsightScan, startInsightScan, type ScanPoll } from "@/lib/web-analytics/insights";
 import { rebuildWebAnalytics } from "@/lib/web-analytics/rebuild";
 import { FULL_STEP_MS, runWebAnalyticsStep, type StepResult } from "@/lib/web-analytics/run";
 import { pingWebsiteSource } from "@/lib/web-analytics/source";
@@ -180,26 +180,36 @@ export async function deleteReport(id: string): Promise<ActionResult> {
 /**
  * Read every metric available and have a reasoning model say what it means.
  *
- * Slow on purpose — it runs a high-effort model over the whole export, so
- * the caller shows a working state rather than expecting this back quickly.
+ * Starts the scan and returns at once: the model runs in the background at
+ * OpenAI (a high-effort read takes minutes, and a serverless call here is
+ * cut off at ~26 seconds). The page polls `pollScan` until it lands; if the
+ * page is closed, the automation tick stores it instead.
  */
 export async function scanInsights(
   days: number,
-): Promise<ActionResult<{ id: string }>> {
+): Promise<ActionResult<{ started_at: string }>> {
   await requireAdmin();
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
 
-  const result = await runInsightScan(createAdminClient(), {
+  const result = await startInsightScan(createAdminClient(), {
     days,
     createdBy: user?.id ?? null,
   });
   if (!result.ok) return { ok: false, error: result.error };
+  return { ok: true, started_at: result.started_at };
+}
 
-  revalidatePath("/web-analytics");
-  return { ok: true, id: result.id };
+/** Is the scan done yet? Stores it the moment it is. */
+export async function pollScan(): Promise<ScanPoll> {
+  await requireAdmin();
+  const result = await pollInsightScan(createAdminClient());
+  if (result.state === "complete" || result.state === "failed") {
+    revalidatePath("/web-analytics");
+  }
+  return result;
 }
 
 /** Tick an improvement off — or untick it. */

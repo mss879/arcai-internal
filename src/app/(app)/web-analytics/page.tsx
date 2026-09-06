@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { isOpenAIConfigured } from "@/lib/ai/openai";
 import type { WebInsight, WebInsightTask } from "@/lib/types";
+import { readPendingScan } from "@/lib/web-analytics/insights";
 import { readJobStatus, syncIntervalHours } from "@/lib/web-analytics/run";
 import { isWebsiteSourceConfigured, SITE, SITE_URL } from "@/lib/web-analytics/source";
 import {
@@ -63,6 +64,7 @@ export default async function WebAnalyticsPage({
     reports,
     syncStatus,
     job,
+    scanPending,
     insightRes,
     tasksRes,
   ] = await Promise.all([
@@ -79,6 +81,8 @@ export default async function WebAnalyticsPage({
     // Where the sync job is. Read with the service client: the job row lives
     // in app_settings, which the pipeline writes with the same client.
     readJobStatus(createAdminClient()).catch(() => null),
+    // A scan still thinking at OpenAI, so the page can keep polling for it.
+    readPendingScan(createAdminClient()).catch(() => null),
     // The newest scan, failed ones included — the panel needs to be able to
     // say a scan broke rather than silently showing the one before it.
     supabase
@@ -126,6 +130,7 @@ export default async function WebAnalyticsPage({
       syncStatus={syncStatus}
       job={job}
       intervalHours={syncIntervalHours()}
+      scanPending={scanPending}
       insight={(insightRes.data as WebInsight | null) ?? null}
       insightTasks={(tasksRes.data ?? []) as WebInsightTask[]}
       sourceReady={isWebsiteSourceConfigured()}

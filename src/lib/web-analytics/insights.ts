@@ -3,7 +3,12 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { Database } from "@/lib/database.types";
-import { AI_MODELS, isOpenAIConfigured, openaiChatJSON } from "@/lib/ai/openai";
+import {
+  AI_MODELS,
+  isOpenAIConfigured,
+  openaiResponsePoll,
+  openaiResponseStart,
+} from "@/lib/ai/openai";
 
 import { collectReportStats, type ReportStats } from "./report";
 import { rangeForDays } from "./queries";
@@ -35,10 +40,30 @@ type DB = SupabaseClient<Database>;
  */
 
 /** The reasoning model this runs on, overridable per install. */
-const INSIGHTS_MODEL = process.env.OPENAI_INSIGHTS_MODEL?.trim() || "gpt-5.6";
+const INSIGHTS_MODEL = process.env.OPENAI_INSIGHTS_MODEL?.trim() || "gpt-5.6-sol";
 /** Effort is worth paying for here — this runs on demand, not per request. */
 const INSIGHTS_EFFORT = process.env.OPENAI_INSIGHTS_EFFORT?.trim() || "high";
-const TIMEOUT_MS = 240_000;
+
+/**
+ * The models to try, in order.
+ *
+ * The configured reasoning model first; then the base `gpt-5`, which every
+ * key with any GPT-5 access has (a default that names a model the key
+ * cannot see used to drop straight to the small chat model, and a "scan"
+ * written by gpt-4o-mini is not the product); the chat model last, so an
+ * install with no reasoning access still gets an answer rather than a
+ * button that never works. The model actually used is recorded on the row.
+ */
+function modelChain(): { model: string; effort: string | null }[] {
+  const chain = [{ model: INSIGHTS_MODEL, effort: INSIGHTS_EFFORT as string | null }];
+  if (INSIGHTS_MODEL !== "gpt-5") chain.push({ model: "gpt-5", effort: INSIGHTS_EFFORT });
+  chain.push({ model: AI_MODELS.chat, effort: null });
+  return chain;
+}
+/** A background response older than this is given up on. */
+const PENDING_MAX_MS = 20 * 60_000;
+/** Where the in-flight scan is kept between invocations. */
+const PENDING_KEY = "web_insights_scan";
 
 /**
  * Ceiling on the evidence handed to the model, in characters.
@@ -566,17 +591,134 @@ async function saveChecklist(
 }
 
 /**
- * Run one scan and store it.
+ * The scan in flight, kept in `app_settings` between invocations.
  *
- * Falls back from the reasoning model to the ordinary chat model on failure —
- * an install whose key has no `gpt-5` access should still get an answer, just
- * a shallower one, rather than a button that never works. The model actually
- * used is recorded on the row so a thin-looking scan can be explained.
+ * A scan is a high-effort reasoning model reading the whole export — the
+ * one that produced the first result took 155 seconds. The deployed
+ * platform kills an invocation at ~26 seconds, so the button that ran the
+ * whole thing in one call was killed on every press, wrote nothing, and
+ * left the previous scan on screen looking like the answer. Now the call
+ * to the model is a BACKGROUND response: started from one invocation,
+ * polled from any other — the page while it is open, the automation tick
+ * when it is not — and stored the moment it completes.
  */
-export async function runInsightScan(
+type PendingScan = {
+  response_id: string;
+  model: string;
+  effort: string | null;
+  /** Index into `modelChain()` of the model currently thinking. */
+  attempt: number;
+  days: number;
+  range: { from: string; to: string };
+  created_by: string | null;
+  started_at: string;
+  /** The exact evidence handed to the model — provenance for the stored row. */
+  evidence: InsightEvidence;
+  payload: string;
+};
+
+export type ScanPoll =
+  | { state: "idle" }
+  | { state: "pending"; started_at: string; model: string; elapsed_ms: number }
+  | { state: "complete"; id: string }
+  | { state: "failed"; error: string };
+
+async function readPending(db: DB): Promise<PendingScan | null> {
+  const { data } = await db
+    .from("app_settings")
+    .select("value")
+    .eq("key", PENDING_KEY)
+    .maybeSingle();
+  const v = data?.value as Partial<PendingScan> | undefined;
+  return v?.response_id && v.started_at && v.evidence ? (v as PendingScan) : null;
+}
+
+async function writePending(db: DB, pending: PendingScan | null): Promise<void> {
+  if (!pending) {
+    await db.from("app_settings").delete().eq("key", PENDING_KEY);
+    return;
+  }
+  await db.from("app_settings").upsert(
+    { key: PENDING_KEY, value: pending, updated_at: new Date().toISOString() },
+    { onConflict: "key" },
+  );
+}
+
+/**
+ * Take ownership of the scan in flight.
+ *
+ * `DELETE ... RETURNING` is atomic, so of two pollers that reach a finished
+ * response at the same moment exactly one gets the row — and only that one
+ * writes the insight. Without it the page (polling every few seconds) and
+ * the automation tick could both store the same answer, producing two
+ * insight rows and two copies of the checklist.
+ */
+async function claimPending(db: DB, responseId: string): Promise<boolean> {
+  const { data } = await db
+    .from("app_settings")
+    .delete()
+    .eq("key", PENDING_KEY)
+    .eq("value->>response_id", responseId)
+    .select("key");
+  return Boolean(data?.length);
+}
+
+/** What the page needs to know about a scan in flight — never the evidence. */
+export async function readPendingScan(
+  db: DB,
+): Promise<{ started_at: string; model: string; days: number } | null> {
+  const pending = await readPending(db);
+  return pending
+    ? { started_at: pending.started_at, model: pending.model, days: pending.days }
+    : null;
+}
+
+function userPrompt(pending: Pick<PendingScan, "range" | "days" | "evidence" | "payload">): string {
+  return (
+    `Window: ${pending.range.from} to ${pending.range.to} (${pending.days} days).\n` +
+    `Site: ${pending.evidence.site}\n\nAnalytics export:\n${pending.payload}\n\n` +
+    // The Responses API refuses a JSON-object format unless the INPUT (not
+    // just the instructions) says "json" somewhere. Stated here so the
+    // request is accepted; the shape itself is spelled out in the system
+    // prompt, which is where the model actually reads it from.
+    "Answer with one JSON object in exactly the shape described in your instructions."
+  );
+}
+
+async function storeFailure(
+  db: DB,
+  pending: Pick<PendingScan, "range" | "days" | "created_by" | "started_at" | "model">,
+  error: string,
+): Promise<void> {
+  // Stored, not just returned: the panel needs to be able to say what went
+  // wrong rather than silently showing the previous scan as if it were new.
+  await db.from("web_insights").insert({
+    site: SITE,
+    period_start: pending.range.from,
+    period_end: pending.range.to,
+    range_days: pending.days,
+    headline: "The scan could not be completed.",
+    status: "failed",
+    error: error.slice(0, 1000),
+    model: pending.model,
+    duration_ms: Date.now() - new Date(pending.started_at).getTime(),
+    created_by: pending.created_by,
+  });
+}
+
+/**
+ * Start a scan: collect the evidence, hand it to the model in the
+ * background, and remember the response id. Returns immediately.
+ *
+ * Falls back from the reasoning model to the ordinary chat model when the
+ * reasoning model cannot even be started (an install whose key has no
+ * access to it) — and again, in `pollInsightScan`, if it fails midway. The
+ * model actually used is recorded on the row so a thin scan can be explained.
+ */
+export async function startInsightScan(
   supabase: DB,
   opts: { days?: number; createdBy?: string | null } = {},
-): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
+): Promise<{ ok: true; pending: true; started_at: string } | { ok: false; error: string }> {
   if (!isOpenAIConfigured()) {
     return {
       ok: false,
@@ -584,8 +726,14 @@ export async function runInsightScan(
     };
   }
 
+  // One at a time: a second press while the first is thinking must not
+  // pay for a second identical read.
+  const running = await readPending(supabase);
+  if (running && Date.now() - new Date(running.started_at).getTime() < PENDING_MAX_MS) {
+    return { ok: true, pending: true, started_at: running.started_at };
+  }
+
   const days = opts.days ?? 30;
-  const startedAt = Date.now();
   const range = rangeForDays(days);
 
   let evidence: InsightEvidence;
@@ -627,76 +775,134 @@ export async function runInsightScan(
     };
     payload = JSON.stringify(trimmed);
   }
-  const attempts: { model: string; effort?: string }[] = [
-    { model: INSIGHTS_MODEL, effort: INSIGHTS_EFFORT },
-    { model: AI_MODELS.chat },
-  ];
 
-  let result: InsightResult | null = null;
-  let usedModel = "";
+  const started_at = new Date().toISOString();
+  const base = {
+    days,
+    range,
+    created_by: opts.createdBy ?? null,
+    started_at,
+    evidence: trimmed,
+    payload,
+  };
+
+  const chain = modelChain();
   let lastError = "";
-
-  for (const attempt of attempts) {
+  for (let attempt = 0; attempt < chain.length; attempt++) {
+    const { model, effort } = chain[attempt];
     try {
-      const raw = await openaiChatJSON(
-        [
-          { role: "system", content: SYSTEM_PROMPT },
-          {
-            role: "user",
-            content:
-              `Window: ${range.from} to ${range.to} (${days} days).\n` +
-              `Site: ${evidence.site}\n\nAnalytics export:\n${payload}`,
-          },
-        ],
-        {
-          model: attempt.model,
-          reasoningEffort: attempt.effort,
-          timeoutMs: TIMEOUT_MS,
-        },
+      const { id } = await openaiResponseStart(
+        { instructions: SYSTEM_PROMPT, input: userPrompt(base) },
+        { model, reasoningEffort: effort ?? undefined, json: true },
       );
-      result = parseInsight(raw);
-      if (result) {
-        usedModel = attempt.model;
-        break;
-      }
-      lastError = `${attempt.model} returned something that was not a usable insight.`;
+      await writePending(supabase, { ...base, response_id: id, model, effort, attempt });
+      return { ok: true, pending: true, started_at };
     } catch (e) {
       lastError = e instanceof Error ? e.message : String(e);
     }
   }
 
-  const durationMs = Date.now() - startedAt;
+  await storeFailure(supabase, { ...base, model: INSIGHTS_MODEL }, lastError);
+  return { ok: false, error: lastError || "The model could not be started." };
+}
+
+/**
+ * Check on the scan in flight and store it the moment it is done.
+ *
+ * Safe to call from anywhere, as often as wanted: one GET to OpenAI while
+ * the model is thinking, and the answer is written exactly once because the
+ * pending row is claimed with an atomic delete before anything is stored.
+ * A reasoning-model failure falls back to the next model in the chain
+ * rather than to nothing.
+ */
+export async function pollInsightScan(supabase: DB): Promise<ScanPoll> {
+  const pending = await readPending(supabase);
+  if (!pending) return { state: "idle" };
+
+  const elapsed = Date.now() - new Date(pending.started_at).getTime();
+  const stillThinking: ScanPoll = {
+    state: "pending",
+    started_at: pending.started_at,
+    model: pending.model,
+    elapsed_ms: elapsed,
+  };
+  /** Claim first, then record — so the loser of a race writes nothing. */
+  const giveUp = async (error: string): Promise<ScanPoll> => {
+    if (!(await claimPending(supabase, pending.response_id))) return { state: "idle" };
+    await storeFailure(supabase, pending, error);
+    return { state: "failed", error };
+  };
+
+  if (elapsed > PENDING_MAX_MS) {
+    return giveUp(`The model did not answer within ${Math.round(PENDING_MAX_MS / 60_000)} minutes.`);
+  }
+
+  let polled: Awaited<ReturnType<typeof openaiResponsePoll>>;
+  try {
+    polled = await openaiResponsePoll(pending.response_id);
+  } catch {
+    // A transient poll failure is not a scan failure; ask again next time.
+    return stillThinking;
+  }
+
+  if (polled.status === "queued" || polled.status === "in_progress") return stillThinking;
+
+  const result = polled.status === "completed" && polled.text ? parseInsight(polled.text) : null;
 
   if (!result) {
-    // Stored, not just returned: the panel needs to be able to say what went
-    // wrong rather than silently showing the previous scan as if it were new.
-    const { data } = await supabase
-      .from("web_insights")
-      .insert({
-        site: SITE,
-        period_start: range.from,
-        period_end: range.to,
-        range_days: days,
-        headline: "The scan could not be completed.",
-        status: "failed",
-        error: lastError.slice(0, 1000),
-        model: INSIGHTS_MODEL,
-        duration_ms: durationMs,
-        created_by: opts.createdBy ?? null,
-      })
-      .select("id")
-      .maybeSingle();
-    void data;
-    return { ok: false, error: lastError || "The model did not return a usable insight." };
+    const reason =
+      polled.error ??
+      (polled.status === "completed"
+        ? `${pending.model} returned something that was not a usable insight.`
+        : `${pending.model} ${polled.status}.`);
+
+    // The next model in the chain gets the same evidence before a failure
+    // is recorded. Claimed first so two pollers cannot both pay for it.
+    const chain = modelChain();
+    const next = chain[pending.attempt + 1];
+    if (next) {
+      if (!(await claimPending(supabase, pending.response_id))) return { state: "idle" };
+      try {
+        const { id } = await openaiResponseStart(
+          { instructions: SYSTEM_PROMPT, input: userPrompt(pending) },
+          { model: next.model, reasoningEffort: next.effort ?? undefined, json: true },
+        );
+        await writePending(supabase, {
+          ...pending,
+          response_id: id,
+          model: next.model,
+          effort: next.effort,
+          attempt: pending.attempt + 1,
+        });
+        return {
+          state: "pending",
+          started_at: pending.started_at,
+          model: next.model,
+          elapsed_ms: elapsed,
+        };
+      } catch (e) {
+        await storeFailure(
+          supabase,
+          pending,
+          `${reason} Fallback failed too: ${e instanceof Error ? e.message : String(e)}`,
+        );
+        return { state: "failed", error: reason };
+      }
+    }
+    return giveUp(reason);
   }
+
+  // The answer is good. Claim it before writing: the loser returns idle and
+  // simply reads the row the winner is about to store.
+  if (!(await claimPending(supabase, pending.response_id))) return { state: "idle" };
 
   const { data, error } = await supabase
     .from("web_insights")
     .insert({
       site: SITE,
-      period_start: range.from,
-      period_end: range.to,
-      range_days: days,
+      period_start: pending.range.from,
+      period_end: pending.range.to,
+      range_days: pending.days,
       health_score: result.health_score,
       headline: result.headline,
       summary: result.summary,
@@ -704,16 +910,19 @@ export async function runInsightScan(
       quick_wins: result.quick_wins,
       what_is_working: result.what_is_working,
       watch_list: result.watch_list,
-      metrics: evidence as unknown as Record<string, unknown>,
-      model: usedModel,
+      metrics: pending.evidence as unknown as Record<string, unknown>,
+      model: pending.model,
       status: "complete",
-      duration_ms: durationMs,
-      created_by: opts.createdBy ?? null,
+      duration_ms: elapsed,
+      created_by: pending.created_by,
     })
     .select("id")
     .single();
 
-  if (error) return { ok: false, error: error.message };
+  if (error) {
+    await storeFailure(supabase, pending, error.message);
+    return { state: "failed", error: error.message };
+  }
 
   // The checklist is the deliverable, but a failure to write it must not
   // throw away the analysis that has already been paid for and stored.
@@ -723,5 +932,16 @@ export async function runInsightScan(
     console.error("[insights] checklist write failed:", e);
   }
 
-  return { ok: true, id: data.id };
+  return { state: "complete", id: data.id };
+}
+
+/**
+ * The automation tick's entry point: finish a scan whose page was closed.
+ * One cheap read when nothing is in flight.
+ */
+export async function processInsightScan(supabase: DB): Promise<ScanPoll | null> {
+  if (!isOpenAIConfigured()) return null;
+  const pending = await readPending(supabase);
+  if (!pending) return null;
+  return pollInsightScan(supabase);
 }

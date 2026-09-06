@@ -1025,6 +1025,7 @@ export function InsightsPanel({
   onDismissTask,
   onSendTaskToTodos,
   scanning,
+  scanStartedAt,
   onScan,
   aiReady,
   hasData,
@@ -1036,6 +1037,8 @@ export function InsightsPanel({
   onDismissTask: (id: string) => void;
   onSendTaskToTodos: (id: string) => void;
   scanning: boolean;
+  /** When the scan in flight was started, for the header. */
+  scanStartedAt?: string | null;
   onScan: () => void;
   aiReady: boolean;
   hasData: boolean;
@@ -1059,13 +1062,21 @@ export function InsightsPanel({
           <div>
             <h2 className="text-sm font-semibold text-slate-900">AI Insights</h2>
             <p className="text-xs text-slate-500">
-              {insight && !failed
-                ? `Last scanned ${formatDistanceToNow(new Date(insight.created_at), {
-                    addSuffix: true,
-                  })} over ${insight.range_days} days${
-                    insight.model ? ` · ${insight.model}` : ""
-                  }`
-                : `Reads every metric available and tells you what to change`}
+              {scanning
+                ? `Scan in progress${
+                    scanStartedAt
+                      ? ` — started ${formatDistanceToNow(new Date(scanStartedAt), {
+                          addSuffix: true,
+                        })}`
+                      : ""
+                  } · the result replaces what is shown below`
+                : insight && !failed
+                  ? `Last scanned ${formatDistanceToNow(new Date(insight.created_at), {
+                      addSuffix: true,
+                    })} over ${insight.range_days} days${
+                      insight.model ? ` · ${insight.model}` : ""
+                    }`
+                  : `Reads every metric available and tells you what to change`}
             </p>
           </div>
         </div>
@@ -1112,7 +1123,8 @@ export function InsightsPanel({
             </p>
             <p className="text-xs text-slate-400">
               This runs a high-effort reasoning model over the whole export, so it takes a
-              minute or two. You can leave the page — the result is saved.
+              few minutes. The model thinks in the background — you can leave the page, and
+              the result is saved and shown here when it lands.
             </p>
           </div>
         ) : failed ? (

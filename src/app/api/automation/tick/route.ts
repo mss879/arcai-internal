@@ -39,6 +39,7 @@ import { processWaRevival } from "@/lib/wa-revival";
 import { processWaCoaching } from "@/lib/wa-coaching";
 import { processAgentDigest, processWaInsights } from "@/lib/wa-insights";
 import { isSmsConfigured } from "@/lib/sms";
+import { processInsightScan } from "@/lib/web-analytics/insights";
 import { processWebAnalytics } from "@/lib/web-analytics/run";
 import { processCareers } from "@/lib/careers/sync";
 
@@ -176,6 +177,9 @@ const PASSES: ReadonlyArray<readonly [string, (db: DB) => Promise<unknown>]> = [
   // unconfigured; the daily report + chat labelling belong to the 06:15
   // scheduled function.
   ["webAnalytics", processWebAnalytics],
+  // The AI Insights scan thinks in the background at OpenAI; this stores it
+  // when it lands if nobody has the page open. One read when idle.
+  ["webInsights", processInsightScan],
   // 0106 — pull job applications and any website-side vacancy changes.
   // Self-gated to every 15 minutes: an application is somebody waiting for
   // a reply.

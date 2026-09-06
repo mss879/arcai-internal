@@ -202,6 +202,104 @@ export async function openaiChatJSON(
   return content as string;
 }
 
+// ---- Background responses (long reasoning, polled) ------------------------
+
+/**
+ * Start a Responses API call in background mode and return at once.
+ *
+ * For the calls that take minutes — a high-effort reasoning model over a
+ * whole analytics export — a synchronous request is impossible here: the
+ * deployed platform kills the invocation at ~26s, and a killed call is
+ * billed for the tokens with nothing persisted. Background mode hands the
+ * work to OpenAI and gives back an id; `openaiResponsePoll` reads the
+ * answer later, from any invocation — the tick, a page poll, a retry.
+ */
+export async function openaiResponseStart(
+  input: { instructions: string; input: string },
+  opts: {
+    model: string;
+    /** Only used by reasoning models: minimal | low | medium | high | xhigh. */
+    reasoningEffort?: string;
+    /** Ask for a JSON object back (the prompt must mention JSON). */
+    json?: boolean;
+    timeoutMs?: number;
+  },
+): Promise<{ id: string; status: string }> {
+  const model = opts.model.trim();
+  const res = await fetch(`${BASE_URL}/responses`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey()}`,
+    },
+    signal: AbortSignal.timeout(Math.max(1_000, opts.timeoutMs ?? 15_000)),
+    body: JSON.stringify({
+      model,
+      background: true,
+      store: true,
+      instructions: input.instructions,
+      input: input.input,
+      ...(isReasoningModel(model) && opts.reasoningEffort
+        ? { reasoning: { effort: opts.reasoningEffort } }
+        : {}),
+      ...(opts.json ? { text: { format: { type: "json_object" } } } : {}),
+    }),
+  });
+
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(`OpenAI responses failed (${res.status}): ${detail}`);
+  }
+  const json = await res.json();
+  if (!json?.id) throw new Error("OpenAI responses returned no id.");
+  return { id: String(json.id), status: String(json.status ?? "queued") };
+}
+
+export type BackgroundResponseStatus =
+  | "queued"
+  | "in_progress"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "incomplete";
+
+/** Read a background response: its status, and its text once it has one. */
+export async function openaiResponsePoll(
+  id: string,
+  opts?: { timeoutMs?: number },
+): Promise<{ status: BackgroundResponseStatus; text: string | null; error: string | null }> {
+  const res = await fetch(`${BASE_URL}/responses/${encodeURIComponent(id)}`, {
+    headers: { Authorization: `Bearer ${apiKey()}` },
+    signal: AbortSignal.timeout(Math.max(1_000, opts?.timeoutMs ?? 15_000)),
+  });
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(`OpenAI responses poll failed (${res.status}): ${detail}`);
+  }
+  const json = await res.json();
+  const status = String(json?.status ?? "failed") as BackgroundResponseStatus;
+
+  // The REST body carries the answer as message items; `output_text` is an
+  // SDK convenience that is not on the wire.
+  let text: string | null = null;
+  if (Array.isArray(json?.output)) {
+    for (const item of json.output) {
+      if (item?.type !== "message" || !Array.isArray(item.content)) continue;
+      for (const part of item.content) {
+        if (part?.type === "output_text" && typeof part.text === "string") {
+          text = (text ?? "") + part.text;
+        }
+      }
+    }
+  }
+  const error =
+    (typeof json?.error?.message === "string" && json.error.message) ||
+    (typeof json?.incomplete_details?.reason === "string" &&
+      `incomplete: ${json.incomplete_details.reason}`) ||
+    null;
+  return { status, text, error };
+}
+
 // ---- Vision (image -> structured JSON) ------------------------------------
 
 /**

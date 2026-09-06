@@ -798,6 +798,18 @@ async function syncPageVisits(
     if (sessErr) throw new Error(`page_visits sessions upsert: ${sessErr.message}`);
   }
 
+  // Once the table is exhausted, step PAST the last row rather than
+  // resting on it. Everywhere else the `>=` re-read of a tied row is a
+  // harmless no-op, but here rows are grouped into a visitor-day before
+  // they are written — so re-reading the final row alone would rebuild that
+  // visitor's day from that one row, and a full day of reading became a
+  // one-page bounce on every run after the first. The legacy log is frozen
+  // history bounded by the cutover, so nothing can arrive behind the nudge.
+  if (exhausted && batch.length) {
+    const last = s(batch[batch.length - 1].created_at, 40);
+    if (last) since = new Date(new Date(last).getTime() + 1).toISOString();
+  }
+
   total += mapped.length;
   await writeCursor(crm, "page_visits", { cursor_ts: since, rowsTotal: total });
   return { rows: mapped.length, exhausted };

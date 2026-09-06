@@ -9,7 +9,7 @@ import type { ActionResult } from "@/lib/types";
 import { generateWebReport, analyseChatSessions } from "@/lib/web-analytics/report";
 import { runInsightScan } from "@/lib/web-analytics/insights";
 import { rebuildWebAnalytics } from "@/lib/web-analytics/rebuild";
-import { runWebAnalyticsPipeline } from "@/lib/web-analytics/run";
+import { FULL_STEP_MS, runWebAnalyticsStep, type StepResult } from "@/lib/web-analytics/run";
 import { pingWebsiteSource } from "@/lib/web-analytics/source";
 
 /**
@@ -25,23 +25,68 @@ import { pingWebsiteSource } from "@/lib/web-analytics/source";
  * client that carries it out.
  */
 
-/** Pull now: sync, roll up, and label any new conversations. */
-export async function syncNow(): Promise<
-  ActionResult<{ rows: number; days: number; errors: string[] }>
-> {
+/** What one step of the job looked like, for the page to show and to decide whether to call again. */
+export type SyncStepView = {
+  /** No job is active any more — nothing left to continue. */
+  done: boolean;
+  status: StepResult["status"];
+  phase: string | null;
+  rows: number;
+  days: number;
+  chats: number;
+  daysLeft: number;
+  errors: string[];
+};
+
+const NOT_CONFIGURED =
+  "Website source not configured — add WEBSITE_SUPABASE_URL and " +
+  "WEBSITE_SUPABASE_SERVICE_ROLE_KEY to the environment.";
+
+function stepView(result: StepResult): SyncStepView {
+  return {
+    done: result.done,
+    status: result.status,
+    phase: result.summary.phase,
+    rows: result.step?.rows ?? 0,
+    days: result.step?.days ?? 0,
+    chats: result.step?.chats ?? 0,
+    daysLeft: result.summary.days_left,
+    errors: result.step?.errors ?? [],
+  };
+}
+
+/**
+ * Pull now: start a sync job (or join the one running) and do its first
+ * bounded step — sync, roll up, label new conversations.
+ *
+ * One step is all a serverless call can safely do, so this returns with
+ * `done: false` when there is more to do. The page then calls
+ * `continueSync` until it is finished; if the page is closed instead, the
+ * automation tick finishes the job on its own within a few ticks.
+ */
+export async function syncNow(): Promise<ActionResult<SyncStepView>> {
   await requireAdmin();
   try {
-    const result = await runWebAnalyticsPipeline(createAdminClient(), {
-      analyseChats: true,
+    const result = await runWebAnalyticsStep(createAdminClient(), {
+      budgetMs: FULL_STEP_MS,
+      request: { start: true, analyse_chats: true },
     });
-    if (result.skipped) return { ok: false, error: result.skipped };
+    if (result.status === "unconfigured") return { ok: false, error: NOT_CONFIGURED };
     revalidatePath("/web-analytics");
-    return {
-      ok: true,
-      rows: result.sync?.totalRows ?? 0,
-      days: result.daysRolledUp,
-      errors: result.errors,
-    };
+    return { ok: true, ...stepView(result) };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Sync failed." };
+  }
+}
+
+/** One more bounded step of whatever job is running. Idle if there is none. */
+export async function continueSync(): Promise<ActionResult<SyncStepView>> {
+  await requireAdmin();
+  try {
+    const result = await runWebAnalyticsStep(createAdminClient(), { budgetMs: FULL_STEP_MS });
+    if (result.status === "unconfigured") return { ok: false, error: NOT_CONFIGURED };
+    revalidatePath("/web-analytics");
+    return { ok: true, ...stepView(result) };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Sync failed." };
   }
@@ -59,25 +104,22 @@ export async function syncNow(): Promise<
  *
  * This is the other button: wind the cursors back, re-mirror the source
  * through the current mapping, and recompute every day in the window
- * whether or not anything about it changed.
+ * whether or not anything about it changed. It opens a rebuild job and does
+ * its first step; the page keeps stepping with `continueSync`.
  */
-export async function rebuildNow(
-  days: number,
-): Promise<
-  ActionResult<{ rows: number; days: number; incomplete: boolean; errors: string[] }>
-> {
+export async function rebuildNow(days: number): Promise<ActionResult<SyncStepView>> {
   await requireAdmin();
   try {
     const result = await rebuildWebAnalytics(createAdminClient(), { days });
     if (result.skipped) return { ok: false, error: result.skipped };
+    if (result.status === "busy") {
+      return {
+        ok: false,
+        error: "A sync step is running right now — try again in a minute.",
+      };
+    }
     revalidatePath("/web-analytics");
-    return {
-      ok: true,
-      rows: result.rowsPulled,
-      days: result.daysRebuilt,
-      incomplete: result.incomplete,
-      errors: result.errors,
-    };
+    return { ok: true, ...stepView(result) };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Rebuild failed." };
   }

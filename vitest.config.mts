@@ -56,6 +56,10 @@ export default defineConfig({
       // letterhead their accountant reconciles against; the ways it can be
       // wrong (money counted twice, money missed) are all silent.
       "src/lib/statement.test.ts",
+      // The web-analytics job's state machine: which phase comes next, how a
+      // cursor moves, when a killed step is given up on. Every bug here is a
+      // sync that silently stops — or one that never stops.
+      "src/lib/web-analytics/job-core.test.ts",
     ],
   },
 });

@@ -14,7 +14,7 @@ import {
   rangeForDays,
   totalsFrom,
 } from "@/lib/web-analytics/queries";
-import { runWebAnalyticsPipeline } from "@/lib/web-analytics/run";
+import { runWebAnalyticsStep } from "@/lib/web-analytics/run";
 import { isWebsiteSourceConfigured, SITE } from "@/lib/web-analytics/source";
 
 /**
@@ -434,20 +434,25 @@ async function generateReportTool(
 async function syncNowTool(ctx: ToolContext): Promise<ToolResult> {
   if (!isWebsiteSourceConfigured()) return { content: NOT_CONFIGURED };
 
-  const result = await runWebAnalyticsPipeline(ctx.supabase, { analyseChats: true });
+  // One bounded step: the job carries on by itself on the automation tick.
+  const result = await runWebAnalyticsStep(ctx.supabase, {
+    budgetMs: 15_000,
+    request: { start: true, analyse_chats: true },
+  });
   return {
     content: {
-      ok: result.ok,
-      rows_pulled: result.sync?.totalRows ?? 0,
-      days_recomputed: result.daysRolledUp,
-      conversations_read: result.chatsAnalysed,
-      per_stream: result.sync?.streams.map((s) => ({
-        stream: s.stream,
-        rows: s.rows,
-        ok: s.ok,
-        error: s.error,
-      })),
-      warnings: result.errors,
+      ok: result.status !== "unconfigured",
+      done: result.done,
+      phase: result.summary.phase,
+      rows_pulled: result.step?.rows ?? 0,
+      days_recomputed: result.step?.days ?? 0,
+      days_queued: result.summary.days_left,
+      conversations_read: result.step?.chats ?? 0,
+      warnings: result.step?.errors ?? [],
+      note: result.done
+        ? "Sync complete — the dashboard is current."
+        : "The sync is continuing in the background (a step every five minutes on the " +
+          "automation tick). Ask again in a few minutes for the finished numbers.",
       href: "/web-analytics",
     },
     event: { kind: "updated", label: "Website sync", href: "/web-analytics" },

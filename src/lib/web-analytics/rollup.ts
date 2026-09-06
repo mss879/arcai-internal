@@ -141,7 +141,19 @@ async function fetchAll<T>(
  * computed over measured sessions only, and the count of everything left
  * out is stored alongside so nothing is hidden.
  */
-export async function rollupDay(supabase: DB, day: string): Promise<void> {
+export async function rollupDay(
+  supabase: DB,
+  day: string,
+  opts: {
+    /**
+     * Delete the day's per-page rows before writing the new ones. The upsert
+     * only rewrites the keys it still produces, so on a rebuild a path whose
+     * duplicate legacy events were just pruned would otherwise keep its old
+     * row and keep being summed into the page table.
+     */
+    clearPages?: boolean;
+  } = {},
+): Promise<void> {
   const { start, end } = dayBounds(day);
 
   const allSessions = await fetchAll<SessionRow>((from, to) =>
@@ -390,6 +402,9 @@ export async function rollupDay(supabase: DB, day: string): Promise<void> {
     });
   }
 
+  if (opts.clearPages) {
+    await supabase.from("web_page_daily").delete().eq("site", SITE).eq("day", day);
+  }
   if (rows.length) {
     await supabase.from("web_page_daily").upsert(rows, { onConflict: "site,day,path" });
   }
@@ -559,68 +574,86 @@ export async function rollupJourneys(
 }
 
 /**
- * Recompute everything the sync disturbed.
- *
- * Capped at 60 days so a first run that pulls two years of history does
- * not try to roll all of it up inside one function invocation. The rest
- * catches up on subsequent ticks, newest days first — which is the order
- * that matters, because nobody is staring at last March.
- */
-/**
- * Days that have events but no `web_daily` row yet.
+ * Days that have sessions but no `web_daily` row yet.
  *
  * The first sync backfills two years of legacy history in one go, and a
- * single run can only roll up so many days before its time budget is gone.
- * Without this the remaining days keep their events but never get a daily
- * row, so the totals (read from `web_daily`) and the funnel (read from raw
- * sessions) disagree — which is exactly the "775 visited vs 673 sessions"
+ * single job can only roll up so many days before it is done. Without this
+ * the remaining days keep their events but never get a daily row, so the
+ * totals (read from `web_daily`) and the funnel (read from raw sessions)
+ * disagree — which is exactly the "775 visited vs 673 sessions"
  * contradiction that made every other number look untrustworthy.
  *
- * Newest first: a gap in last week matters, a gap in 2024 can wait.
+ * Newest first: a gap in last week matters, a gap in 2024 can wait. Paged,
+ * because PostgREST caps a select at 1000 rows whatever `limit` asks for,
+ * and the old single query silently saw only the newest thousand sessions.
  */
-async function findUnrolledDays(supabase: DB, limit: number): Promise<string[]> {
+export async function findUnrolledDays(supabase: DB, limit: number): Promise<string[]> {
   const { data: rolled } = await supabase
     .from("web_daily")
     .select("day")
     .eq("site", SITE);
   const have = new Set((rolled ?? []).map((r) => r.day));
 
-  const { data: sessionDays } = await supabase
-    .from("web_sessions")
-    .select("first_seen_at")
-    .eq("site", SITE)
-    .order("first_seen_at", { ascending: false })
-    .limit(20_000);
+  const sessionDays = await fetchAll<{ first_seen_at: string }>(
+    (from, to) =>
+      supabase
+        .from("web_sessions")
+        .select("first_seen_at")
+        .eq("site", SITE)
+        .order("first_seen_at", { ascending: false })
+        .order("session_id", { ascending: true })
+        .range(from, to),
+    20_000,
+  );
 
   const missing = new Set<string>();
-  for (const row of sessionDays ?? []) {
+  for (const row of sessionDays) {
     const day = row.first_seen_at.slice(0, 10);
     if (!have.has(day)) missing.add(day);
   }
   return [...missing].sort().reverse().slice(0, limit);
 }
 
-export async function rollupTouchedDays(supabase: DB, days: string[]): Promise<number> {
-  const ordered = [...new Set(days)].sort().reverse().slice(0, 60);
-  for (const day of ordered) {
-    await rollupDay(supabase, day);
-  }
+/**
+ * The days a sync disturbed, read back from the mirror itself.
+ *
+ * Every mirrored row carries `synced_at`, so "which days did the job just
+ * touch" is a question the tables can answer — which matters because the
+ * job runs in steps that can be killed, and a set of dirty days kept in
+ * memory dies with the step that held it. A session row is rewritten on
+ * every flush the tracker makes, so its day covers its events too; the
+ * chat table is read separately because a conversation is not a session.
+ */
+export async function daysTouchedSince(supabase: DB, sinceIso: string): Promise<string[]> {
+  const days = new Set<string>();
 
-  // Whatever the backfill left behind, a slice at a time, so the gap closes
-  // over a few runs instead of never.
-  const backlog = await findUnrolledDays(supabase, 40);
-  for (const day of backlog) {
-    if (ordered.includes(day)) continue;
-    await rollupDay(supabase, day);
-  }
-
-  const end = new Date();
-  const start = new Date(end.getTime() - 29 * 86_400_000);
-  await rollupJourneys(
-    supabase,
-    start.toISOString().slice(0, 10),
-    end.toISOString().slice(0, 10),
+  const sessions = await fetchAll<{ first_seen_at: string }>(
+    (from, to) =>
+      supabase
+        .from("web_sessions")
+        .select("first_seen_at")
+        .eq("site", SITE)
+        .gte("synced_at", sinceIso)
+        .order("first_seen_at", { ascending: false })
+        .order("session_id", { ascending: true })
+        .range(from, to),
+    20_000,
   );
+  for (const row of sessions) days.add(row.first_seen_at.slice(0, 10));
 
-  return ordered.length + backlog.length;
+  const chats = await fetchAll<{ started_at: string }>(
+    (from, to) =>
+      supabase
+        .from("web_chat_sessions")
+        .select("started_at")
+        .eq("site", SITE)
+        .gte("synced_at", sinceIso)
+        .order("started_at", { ascending: false })
+        .order("id", { ascending: true })
+        .range(from, to),
+    5_000,
+  );
+  for (const row of chats) days.add(row.started_at.slice(0, 10));
+
+  return [...days].sort().reverse();
 }

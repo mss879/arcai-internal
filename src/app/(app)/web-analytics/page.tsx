@@ -1,7 +1,9 @@
 import { requireAdmin } from "@/lib/auth";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { isOpenAIConfigured } from "@/lib/ai/openai";
 import type { WebInsight, WebInsightTask } from "@/lib/types";
+import { readJobStatus, syncIntervalHours } from "@/lib/web-analytics/run";
 import { isWebsiteSourceConfigured, SITE, SITE_URL } from "@/lib/web-analytics/source";
 import {
   getChatSessions,
@@ -60,6 +62,7 @@ export default async function WebAnalyticsPage({
     chats,
     reports,
     syncStatus,
+    job,
     insightRes,
     tasksRes,
   ] = await Promise.all([
@@ -73,6 +76,9 @@ export default async function WebAnalyticsPage({
     getChatSessions(supabase, 60),
     getReports(supabase, 20),
     getSyncStatus(supabase),
+    // Where the sync job is. Read with the service client: the job row lives
+    // in app_settings, which the pipeline writes with the same client.
+    readJobStatus(createAdminClient()).catch(() => null),
     // The newest scan, failed ones included — the panel needs to be able to
     // say a scan broke rather than silently showing the one before it.
     supabase
@@ -118,6 +124,8 @@ export default async function WebAnalyticsPage({
       chats={chats}
       reports={reports}
       syncStatus={syncStatus}
+      job={job}
+      intervalHours={syncIntervalHours()}
       insight={(insightRes.data as WebInsight | null) ?? null}
       insightTasks={(tasksRes.data ?? []) as WebInsightTask[]}
       sourceReady={isWebsiteSourceConfigured()}

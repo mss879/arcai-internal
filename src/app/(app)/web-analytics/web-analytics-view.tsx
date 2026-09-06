@@ -25,7 +25,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
-import { useRealtimeSync } from "@/hooks/use-realtime-sync";
+import { useRealtimeSyncTables } from "@/hooks/use-realtime-sync";
 import { cn } from "@/lib/utils";
 import type {
   WebChatSession,
@@ -36,10 +36,12 @@ import type {
   WebReport,
   WebSession,
 } from "@/lib/types";
+import type { JobSummary } from "@/lib/web-analytics/job-core";
 import type { Range, Totals } from "@/lib/web-analytics/queries";
 
 import {
   analyseChats,
+  continueSync,
   deleteReport,
   dismissInsightTask,
   sendInsightToTodos,
@@ -49,6 +51,7 @@ import {
   toggleInsightTask,
   syncNow,
   testConnection,
+  type SyncStepView,
 } from "./actions";
 import {
   BarList,
@@ -110,6 +113,8 @@ export function WebAnalyticsView({
   chats,
   reports,
   syncStatus,
+  job,
+  intervalHours,
   insight,
   insightTasks,
   sourceReady,
@@ -143,12 +148,15 @@ export function WebAnalyticsView({
     rowsSynced: number;
     lastError: string | null;
   }[];
+  job: JobSummary | null;
+  intervalHours: number;
   insight: WebInsight | null;
   insightTasks: WebInsightTask[];
   sourceReady: boolean;
   aiReady: boolean;
 }) {
-  useRealtimeSync("web_daily");
+  // The rollups land in web_daily; the job's progress lands in web_sync_state.
+  useRealtimeSyncTables(["web_daily", "web_sync_state"]);
   const router = useRouter();
   const [tab, setTab] = React.useState<Tab>("overview");
   const [busy, setBusy] = React.useState<string | null>(null);
@@ -213,6 +221,77 @@ export function WebAnalyticsView({
     }
   };
 
+  const [progress, setProgress] = React.useState<string | null>(null);
+
+  /**
+   * Drive a sync or rebuild job to completion while the page is open.
+   *
+   * Every server call is one bounded step — the platform kills a function at
+   * ~26s, and a pull plus ninety days of rollups does not fit in one. So the
+   * first call starts the job, and this keeps calling `continueSync` until
+   * it reports done, showing where it has got to on the button. Closing the
+   * page does not lose anything: the automation tick finishes the job.
+   */
+  const runJob = async (
+    key: "sync" | "rebuild",
+    first: () => Promise<{ ok: true; error?: undefined } & SyncStepView | { ok: false; error: string }>,
+  ) => {
+    setBusy(key);
+    const describe = (step: SyncStepView) => {
+      const phase =
+        step.status === "busy"
+          ? "waiting for the running step"
+          : step.phase === "sync"
+            ? "pulling"
+            : step.phase === "rollup"
+              ? `recomputing (${step.daysLeft} day${step.daysLeft === 1 ? "" : "s"} left)`
+              : step.phase === "chats"
+                ? "reading conversations"
+                : step.phase === "report"
+                  ? "writing the report"
+                  : "finishing";
+      return `${key === "rebuild" ? "Rebuilding" : "Syncing"} — ${phase}…`;
+    };
+    try {
+      let result = await first();
+      if (!result.ok) {
+        toast.error(result.error);
+        return;
+      }
+      let rows = result.rows;
+      let days = result.days;
+      let chats = result.chats;
+      const errors = new Set(result.errors);
+      for (let i = 0; i < 80 && !result.done; i++) {
+        setProgress(describe(result));
+        if (i % 3 === 2) router.refresh();
+        if (result.status === "busy") {
+          await new Promise((resolve) => setTimeout(resolve, 3_000));
+        }
+        const next = await continueSync();
+        if (!next.ok) {
+          toast.error(next.error);
+          return;
+        }
+        result = next;
+        rows += next.rows;
+        days += next.days;
+        chats += next.chats;
+        for (const e of next.errors) errors.add(e);
+      }
+      const summary =
+        `Pulled ${rows.toLocaleString()} rows and recomputed ${days} day${days === 1 ? "" : "s"}` +
+        (chats ? `, read ${chats} conversation${chats === 1 ? "" : "s"}` : "") +
+        (errors.size ? ` — ${errors.size} warning${errors.size === 1 ? "" : "s"}, see Setup.` : ".");
+      if (result.done) toast.success(summary);
+      else toast.info(`${summary} Still working — the automation tick finishes the rest within a few minutes.`);
+      router.refresh();
+    } finally {
+      setBusy(null);
+      setProgress(null);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -223,18 +302,10 @@ export function WebAnalyticsView({
             <Button
               variant="secondary"
               loading={busy === "sync"}
-              onClick={() =>
-                run(
-                  "sync",
-                  syncNow,
-                  (r: { rows: number; days: number; errors: string[] }) =>
-                    r.errors.length
-                      ? `Pulled ${r.rows} rows with ${r.errors.length} warning(s).`
-                      : `Pulled ${r.rows} rows and rebuilt ${r.days} day(s).`,
-                )
-              }
+              onClick={() => runJob("sync", syncNow)}
             >
-              <RefreshCw className="h-4 w-4" /> Sync now
+              <RefreshCw className="h-4 w-4" />{" "}
+              {busy === "sync" && progress ? progress : "Sync now"}
             </Button>
             <Button
               loading={busy === "report"}
@@ -606,22 +677,16 @@ export function WebAnalyticsView({
               variant="secondary"
               size="sm"
               loading={busy === "rebuild"}
-              onClick={() =>
-                run(
-                  "rebuild",
-                  () => rebuildNow(90),
-                  (r: { rows: number; days: number; incomplete: boolean; errors: string[] }) =>
-                    r.incomplete
-                      ? `Re-read ${r.rows.toLocaleString()} rows and recomputed ${r.days} days — more history is still queued and will finish on the next hourly runs.`
-                      : `Re-read ${r.rows.toLocaleString()} rows and recomputed ${r.days} days.`,
-                )
-              }
+              onClick={() => runJob("rebuild", () => rebuildNow(90))}
             >
-              <History className="h-4 w-4" /> Rebuild history
+              <History className="h-4 w-4" />{" "}
+              {busy === "rebuild" && progress ? progress : "Rebuild history"}
             </Button>
           </div>
           <SyncPanel
             status={syncStatus}
+            job={job}
+            intervalHours={intervalHours}
             site={site}
             siteUrl={siteUrl}
             sourceReady={sourceReady}

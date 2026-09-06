@@ -217,6 +217,13 @@ export async function GET(request: Request) {
     let done = 0;
     for (; done < PASSES.length && Date.now() < cutoff; done++) {
       const [key, run] = PASSES[(start + done) % PASSES.length];
+      // Point the ring PAST this pass before running it. The cursor used to
+      // be written only at the end, so a pass the platform killed was never
+      // recorded as started — and the next tick resumed at the same pass,
+      // ran it, was killed again, forever. Six days of that is how the web
+      // analytics pull ran 27,000 times without finishing once. One small
+      // write per pass buys a ring that always moves on.
+      await writeCursor(supabase, (start + done + 1) % PASSES.length);
       results[key] = await run(supabase).catch(async (e: unknown) => {
         // 0121 — one row per distinct fault, counted; an admin hears once.
         await captureError(e, { source: "tick", path: key });

@@ -5,6 +5,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/lib/database.types";
 import { createInboundLead } from "@/lib/lead-intake";
 
+import { chatCursorAfter, dedupeById, nudgeCursor } from "./job-core";
 import { SITE, createWebsiteClient, isWebsiteSourceConfigured } from "./source";
 
 type DB = SupabaseClient<Database>;
@@ -12,35 +13,44 @@ type DB = SupabaseClient<Database>;
 /**
  * The pull.
  *
- * Every stream is incremental and idempotent. Incremental because a
- * nightly job that re-reads a year of events would time out long before
- * it finished; idempotent because a serverless run that dies halfway
- * WILL be retried, and the retry must not double every number on the
- * dashboard.
+ * Every stream is incremental, idempotent, and — the part that was missing
+ * — BOUNDED. Incremental because a job that re-reads a year of events
+ * would time out long before it finished; idempotent because a serverless
+ * run that dies halfway WILL be retried, and the retry must not double
+ * every number on the dashboard; bounded because the platform kills a
+ * function at roughly 26 seconds, and a stream that needs longer than that
+ * has to be able to stop, record where it got to, and carry on next time.
  *
- * Those two together dictate the shape of each stream:
+ * Those three together dictate the shape of each stream:
  *
- *   • A watermark in `web_sync_state` says where the last run got to.
- *     Timestamp watermarks are read with `>=` rather than `>`, because
- *     two rows can share a millisecond and `>` would silently skip the
- *     second one forever. Re-reading a handful of rows is the cheap
- *     side of that trade.
+ *   • A watermark in `web_sync_state` says where the last page got to. It
+ *     is written after EVERY page, not at the end of the stream, so a
+ *     killed step loses one page of progress at most. Timestamp watermarks
+ *     are read with `>=` rather than `>`, because two rows can share a
+ *     millisecond and `>` would silently skip the second one forever.
  *
  *   • Every write is an upsert on a natural key from the source, so
  *     re-reading those rows changes nothing. `analytics_sessions` in
- *     particular MUST be re-read: a visit that was three pages deep
- *     when it was first pulled may be nine pages and a conversion by
- *     the time the visitor leaves, and only the source's `updated_at`
- *     moving brings the finished version across.
+ *     particular MUST be re-read: a visit that was three pages deep when
+ *     it was first pulled may be nine pages and a conversion by the time
+ *     the visitor leaves, and only the source's `updated_at` moving brings
+ *     the finished version across.
  *
- * Each run is bounded by MAX_PAGES so one stream with a large backlog
- * cannot starve the others or blow the function's time budget. Whatever
- * is left is picked up on the next tick, and the backlog drains over a
- * few runs rather than in one that never completes.
+ *   • Every stream takes a deadline and stops STARTING pages once it has
+ *     passed. It reports whether it ran out of rows (`exhausted`) or out
+ *     of time, and the job in `run.ts` calls it again on the next step
+ *     until every stream reports exhausted.
  */
 
 const PAGE = 1000;
-const MAX_PAGES = 20;
+/** A sanity cap on pages per step; the deadline is the real bound. */
+const MAX_PAGES_PER_STEP = 30;
+/** Chat messages are scanned in smaller pages: each page can fan out into
+ *  dozens of conversation rebuilds, and a rebuild is three round trips. */
+const CHAT_PAGE = 500;
+/** Conversations rebuilt per step, at ~1s each. */
+const MAX_CONVERSATIONS_PER_STEP = 12;
+const CHAT_LOG_PAGE = 25;
 
 export type StreamName =
   | "sessions"
@@ -53,47 +63,53 @@ export type StreamResult = {
   stream: StreamName;
   rows: number;
   ok: boolean;
+  /** True when the stream ran out of rows, false when it ran out of time. */
+  exhausted: boolean;
   error?: string;
   durationMs: number;
 };
 
-export type SyncResult = {
-  ok: boolean;
+export type SyncStepResult = {
   streams: StreamResult[];
   totalRows: number;
-  /** Days touched by this pull — exactly the days the rollup must redo. */
-  daysTouched: string[];
-  skipped?: string;
+  /** Every stream that ran is up to date — the sync phase can end. */
+  exhausted: boolean;
 };
+
+type StreamOutcome = { rows: number; exhausted: boolean };
 
 // ── watermarks ──────────────────────────────────────────────────────────────
 
-type Cursor = { cursor_ts: string | null; cursor_id: number | null };
+type Cursor = { cursor_ts: string | null; cursor_id: number | null; rows_synced: number };
 
 async function readCursor(supabase: DB, stream: StreamName): Promise<Cursor> {
   const { data } = await supabase
     .from("web_sync_state")
-    .select("cursor_ts, cursor_id")
+    .select("cursor_ts, cursor_id, rows_synced")
     .eq("stream", stream)
     .maybeSingle();
   return {
     cursor_ts: data?.cursor_ts ?? null,
     cursor_id: data?.cursor_id ?? null,
+    rows_synced: Number(data?.rows_synced ?? 0),
   };
 }
 
+/**
+ * One round trip per write. The running total comes in from the caller,
+ * which read it once with the cursor, rather than being re-read here —
+ * this is called after every page now, and a read-then-write per page
+ * would double the time the stream spends on bookkeeping.
+ */
 async function writeCursor(
   supabase: DB,
   stream: StreamName,
-  patch: Partial<Cursor> & { rows: number; error?: string | null },
+  patch: Partial<Pick<Cursor, "cursor_ts" | "cursor_id">> & {
+    rowsTotal: number;
+    error?: string | null;
+  },
 ): Promise<void> {
   const now = new Date().toISOString();
-  const { data: existing } = await supabase
-    .from("web_sync_state")
-    .select("rows_synced")
-    .eq("stream", stream)
-    .maybeSingle();
-
   await supabase.from("web_sync_state").upsert(
     {
       stream,
@@ -101,7 +117,7 @@ async function writeCursor(
       ...(patch.cursor_id !== undefined ? { cursor_id: patch.cursor_id } : {}),
       last_run_at: now,
       last_ok_at: patch.error ? undefined : now,
-      rows_synced: (existing?.rows_synced ?? 0) + patch.rows,
+      rows_synced: patch.rowsTotal,
       last_error: patch.error ?? null,
       updated_at: now,
     },
@@ -201,6 +217,7 @@ const n = (v: unknown): number | null => {
 
 const i = (v: unknown): number => Math.round(n(v) ?? 0);
 
+const timeLeft = (deadline: number): boolean => Date.now() < deadline;
 
 const SEARCH_ENGINES =
   /(google|bing|yahoo|duckduckgo|yandex|baidu|ecosia|brave|qwant|startpage|naver|seznam)\./i;
@@ -334,31 +351,34 @@ async function trackerCutover(site: SupabaseClient): Promise<string | null> {
 /**
  * Remove legacy rows that the cutover now says should never have existed.
  *
- * Runs on every sync rather than only on a rebuild, because the damage is
+ * Runs once per job rather than only on a rebuild, because the damage is
  * silent: a phantom twin looks exactly like a real quiet visit, and the
  * only way to notice is to reconcile two totals that nobody reconciles.
- * Both deletes are indexed and normally match nothing.
+ * Both deletes are indexed and normally match nothing. Returns the days
+ * that lost rows, because a day whose numbers change and never gets rolled
+ * up again keeps the wrong total forever.
  */
-async function pruneLegacyAfterCutover(
-  crm: DB,
-  cutover: string | null,
-  days: Set<string>,
-): Promise<void> {
-  if (!cutover) return;
+async function pruneLegacyAfterCutover(crm: DB, cutover: string | null): Promise<string[]> {
+  if (!cutover) return [];
 
   // Which days lose rows — read before the delete, because afterwards
-  // there is nothing left to ask. A day whose numbers change and never
-  // gets rolled up again keeps the wrong total forever.
-  const { data: staleEvents } = await crm
-    .from("web_events")
-    .select("occurred_at")
-    .eq("site", SITE)
-    .eq("source", "page_visits")
-    .gte("occurred_at", cutover)
-    .limit(20_000);
-  for (const row of staleEvents ?? []) {
-    const d = day(row.occurred_at);
-    if (d) days.add(d);
+  // there is nothing left to ask. Paged: PostgREST caps a select at 1000
+  // rows whatever `limit` asks for.
+  const days = new Set<string>();
+  for (let from = 0; from < 20_000; from += PAGE) {
+    const { data } = await crm
+      .from("web_events")
+      .select("occurred_at")
+      .eq("site", SITE)
+      .eq("source", "page_visits")
+      .gte("occurred_at", cutover)
+      .order("id", { ascending: true })
+      .range(from, from + PAGE - 1);
+    for (const row of data ?? []) {
+      const d = day(row.occurred_at);
+      if (d) days.add(d);
+    }
+    if (!data || data.length < PAGE) break;
   }
 
   await crm
@@ -373,6 +393,22 @@ async function pruneLegacyAfterCutover(
     .eq("site", SITE)
     .like("session_id", "legacy:%")
     .gte("first_seen_at", cutover);
+
+  return [...days];
+}
+
+/**
+ * The once-per-job preparation: read where the tracker starts and drop any
+ * legacy rows past it. Kept out of the per-step stream loop so a job that
+ * needs ten steps does not scan for phantom twins ten times.
+ */
+export async function prepareSync(
+  crm: DB,
+): Promise<{ cutover: string | null; prunedDays: string[] }> {
+  const site = createWebsiteClient();
+  const cutover = await trackerCutover(site).catch(() => null);
+  const prunedDays = await pruneLegacyAfterCutover(crm, cutover).catch(() => []);
+  return { cutover, prunedDays };
 }
 
 // ── sessions ────────────────────────────────────────────────────────────────
@@ -380,13 +416,15 @@ async function pruneLegacyAfterCutover(
 async function syncSessions(
   crm: DB,
   site: SupabaseClient,
-  days: Set<string>,
-): Promise<{ rows: number }> {
+  deadline: number,
+): Promise<StreamOutcome> {
   const cursor = await readCursor(crm, "sessions");
   let since = cursor.cursor_ts ?? initialSince();
+  let total = cursor.rows_synced;
   let rows = 0;
+  let exhausted = false;
 
-  for (let page = 0; page < MAX_PAGES; page++) {
+  for (let page = 0; page < MAX_PAGES_PER_STEP && timeLeft(deadline); page++) {
     const { data, error } = await site
       .from("analytics_sessions")
       .select("*")
@@ -396,7 +434,10 @@ async function syncSessions(
     if (error) {
       throw new Error(isMissingTable(error.message) ? MIGRATION_HINT : error.message);
     }
-    if (!data?.length) break;
+    if (!data?.length) {
+      exhausted = true;
+      break;
+    }
 
     const mapped = data.map((r: Record<string, unknown>) => ({
       session_id: s(r.session_id, 120)!,
@@ -464,24 +505,18 @@ async function syncSessions(
       .upsert(mapped, { onConflict: "session_id" });
     if (upErr) throw new Error(`sessions upsert: ${upErr.message}`);
 
-    for (const row of mapped) {
-      const d = day(row.first_seen_at);
-      if (d) days.add(d);
-    }
-
     rows += mapped.length;
-    const last = mapped[mapped.length - 1].source_updated_at;
-    // A full page whose rows all share one timestamp would loop forever
-    // on `>=`. Nudging past it costs at most those tied rows, which the
-    // upsert would have made a no-op anyway.
-    since = last === since && data.length === PAGE
-      ? new Date(new Date(last).getTime() + 1).toISOString()
-      : last;
-    if (data.length < PAGE) break;
+    total += mapped.length;
+    since = nudgeCursor(mapped[mapped.length - 1].source_updated_at, since, data.length === PAGE);
+    await writeCursor(crm, "sessions", { cursor_ts: since, rowsTotal: total });
+    if (data.length < PAGE) {
+      exhausted = true;
+      break;
+    }
   }
 
-  await writeCursor(crm, "sessions", { cursor_ts: since, rows });
-  return { rows };
+  if (exhausted) await writeCursor(crm, "sessions", { cursor_ts: since, rowsTotal: total });
+  return { rows, exhausted };
 }
 
 // ── events ──────────────────────────────────────────────────────────────────
@@ -489,13 +524,15 @@ async function syncSessions(
 async function syncEvents(
   crm: DB,
   site: SupabaseClient,
-  days: Set<string>,
-): Promise<{ rows: number }> {
+  deadline: number,
+): Promise<StreamOutcome> {
   const cursor = await readCursor(crm, "events");
   let lastId = cursor.cursor_id ?? 0;
+  let total = cursor.rows_synced;
   let rows = 0;
+  let exhausted = false;
 
-  for (let page = 0; page < MAX_PAGES; page++) {
+  for (let page = 0; page < MAX_PAGES_PER_STEP && timeLeft(deadline); page++) {
     const { data, error } = await site
       .from("analytics_events")
       .select("*")
@@ -505,7 +542,10 @@ async function syncEvents(
     if (error) {
       throw new Error(isMissingTable(error.message) ? MIGRATION_HINT : error.message);
     }
-    if (!data?.length) break;
+    if (!data?.length) {
+      exhausted = true;
+      break;
+    }
 
     const mapped = data.map((r: Record<string, unknown>) => ({
       source: "analytics_events",
@@ -532,18 +572,18 @@ async function syncEvents(
       .upsert(mapped, { onConflict: "source,source_id" });
     if (upErr) throw new Error(`events upsert: ${upErr.message}`);
 
-    for (const row of mapped) {
-      const d = day(row.occurred_at);
-      if (d) days.add(d);
-    }
-
     rows += mapped.length;
+    total += mapped.length;
     lastId = Number(data[data.length - 1].id);
-    if (data.length < PAGE) break;
+    await writeCursor(crm, "events", { cursor_id: lastId, rowsTotal: total });
+    if (data.length < PAGE) {
+      exhausted = true;
+      break;
+    }
   }
 
-  await writeCursor(crm, "events", { cursor_id: lastId, rows });
-  return { rows };
+  if (exhausted) await writeCursor(crm, "events", { cursor_id: lastId, rowsTotal: total });
+  return { rows, exhausted };
 }
 
 // ── legacy page_visits ──────────────────────────────────────────────────────
@@ -560,21 +600,21 @@ async function syncEvents(
 async function syncPageVisits(
   crm: DB,
   site: SupabaseClient,
-  days: Set<string>,
+  deadline: number,
   cutover: string | null,
-): Promise<{ rows: number }> {
+): Promise<StreamOutcome> {
   const cursor = await readCursor(crm, "page_visits");
   let since = cursor.cursor_ts ?? initialSince(730);
-  let rows = 0;
+  let total = cursor.rows_synced;
 
   // Anything the rich tracker also recorded is not history, it is a
   // duplicate. Stop the legacy stream dead at the cutover.
   if (cutover && since >= cutover) {
-    await writeCursor(crm, "page_visits", { cursor_ts: since, rows: 0 });
-    return { rows: 0 };
+    await writeCursor(crm, "page_visits", { cursor_ts: since, rowsTotal: total });
+    return { rows: 0, exhausted: true };
   }
 
-  // Read the whole run's worth of rows FIRST, then group.
+  // Read the whole step's worth of rows FIRST, then group.
   //
   // Grouping inside the pagination loop looks equivalent and is not: a
   // visitor-day whose rows straddle a 1000-row boundary produces the same
@@ -582,12 +622,12 @@ async function syncPageVisits(
   // upsert replaces the first wholesale. The surviving row then describes
   // only the tail of that visit — too few pages, the wrong entry path, a
   // duration that stops early, and a bounce flag that may have flipped.
-  // Assembling every page of the run before writing anything removes the
+  // Assembling every page of the step before writing anything removes the
   // boundary entirely.
-  const collected: Record<string, unknown>[] = [];
+  const raw: Record<string, unknown>[] = [];
   let exhausted = false;
 
-  for (let page = 0; page < MAX_PAGES; page++) {
+  for (let page = 0; page < MAX_PAGES_PER_STEP && timeLeft(deadline); page++) {
     let query = site
       .from("page_visits")
       .select("id, visitor_id, page_path, referrer, created_at")
@@ -598,7 +638,7 @@ async function syncPageVisits(
       .limit(PAGE);
     if (error) {
       // The table may not exist on a fresh project — that is not a failure.
-      if (isMissingTable(error.message)) return { rows: 0 };
+      if (isMissingTable(error.message)) return { rows: 0, exhausted: true };
       throw new Error(`page_visits: ${error.message}`);
     }
     if (!data?.length) {
@@ -606,39 +646,40 @@ async function syncPageVisits(
       break;
     }
 
-    collected.push(...(data as Record<string, unknown>[]));
+    raw.push(...(data as Record<string, unknown>[]));
 
     const last = s(data[data.length - 1].created_at, 40)!;
-    // A full page whose rows all share one timestamp would loop forever on
-    // `>=`. Nudging past it costs at most those tied rows, which the upsert
-    // would have made a no-op anyway.
-    since =
-      last === since && data.length === PAGE
-        ? new Date(new Date(last).getTime() + 1).toISOString()
-        : last;
+    since = nudgeCursor(last, since, data.length === PAGE);
     if (data.length < PAGE) {
       exhausted = true;
       break;
     }
   }
 
+  // The `>=` cursor re-reads the last row of each page at the top of the
+  // next. Assembled into ONE batch, that duplicate makes Postgres refuse the
+  // whole upsert — "ON CONFLICT DO UPDATE command cannot affect row a second
+  // time" — and refusing it meant the cursor never moved, so every run
+  // re-read the same seven thousand rows and failed the same way.
+  const collected = dedupeById(raw);
+
   if (!collected.length) {
-    await writeCursor(crm, "page_visits", { cursor_ts: since, rows: 0 });
-    return { rows: 0 };
+    await writeCursor(crm, "page_visits", { cursor_ts: since, rowsTotal: total });
+    return { rows: 0, exhausted };
   }
 
-  // If the run stopped on the page cap rather than on the end of the table,
-  // the newest UTC day it reached is almost certainly half-read. Holding it
-  // back — and winding the cursor to the start of that day — means the next
-  // run assembles it whole rather than writing a truncated session now and
-  // a replacement later.
+  // If the step stopped on the page cap or the deadline rather than on the
+  // end of the table, the newest UTC day it reached is almost certainly
+  // half-read. Holding it back — and winding the cursor to the start of that
+  // day — means the next step assembles it whole rather than writing a
+  // truncated session now and a replacement later.
   let batch = collected;
   if (!exhausted) {
     const lastDay = String(collected[collected.length - 1].created_at ?? "").slice(0, 10);
     const complete = collected.filter(
       (r) => String(r.created_at ?? "").slice(0, 10) < lastDay,
     );
-    // Unless a single day is bigger than the whole run, in which case there
+    // Unless a single day is bigger than the whole step, in which case there
     // is no way to assemble it whole and taking it as-is beats stalling.
     if (complete.length) {
       batch = complete;
@@ -739,7 +780,7 @@ async function syncPageVisits(
   }
 
   // Chunked: a single upsert of 20,000 rows is a request body large enough
-  // for PostgREST to refuse, and refusing it loses the whole run.
+  // for PostgREST to refuse, and refusing it loses the whole step.
   for (let i = 0; i < mapped.length; i += PAGE) {
     const { error: upErr } = await crm
       .from("web_events")
@@ -757,15 +798,9 @@ async function syncPageVisits(
     if (sessErr) throw new Error(`page_visits sessions upsert: ${sessErr.message}`);
   }
 
-  for (const row of mapped) {
-    const d = day(row.occurred_at);
-    if (d) days.add(d);
-  }
-
-  rows = mapped.length;
-
-  await writeCursor(crm, "page_visits", { cursor_ts: since, rows });
-  return { rows };
+  total += mapped.length;
+  await writeCursor(crm, "page_visits", { cursor_ts: since, rowsTotal: total });
+  return { rows: mapped.length, exhausted };
 }
 
 // ── the website's AI agent ──────────────────────────────────────────────────
@@ -814,140 +849,182 @@ function summariseTranscript(messages: ChatMsg[]): {
   };
 }
 
+/**
+ * Re-read one conversation whole and rewrite its mirror.
+ *
+ * A conversation is only meaningful as a unit — its counts, its transcript
+ * and the email buried in message six all change when a seventh arrives —
+ * so it is rebuilt from every message it has, not appended to.
+ */
+async function rebuildConversation(
+  crm: DB,
+  site: SupabaseClient,
+  sessionId: string,
+): Promise<number> {
+  const { data: msgs } = await site
+    .from("chat_messages")
+    .select("id, session_id, role, content, created_at")
+    .eq("session_id", sessionId)
+    .order("created_at", { ascending: true })
+    .limit(500);
+  if (!msgs?.length) return 0;
+
+  const typed: ChatMsg[] = msgs.map((m: Record<string, unknown>) => ({
+    id: String(m.id),
+    role: String(m.role ?? "user"),
+    content: String(m.content ?? ""),
+    created_at: s(m.created_at, 40) ?? new Date().toISOString(),
+  }));
+  const summary = summariseTranscript(typed);
+
+  const { data: chatRow } = await crm
+    .from("web_chat_sessions")
+    .upsert(
+      {
+        source_id: `chat_messages:${sessionId}`,
+        site: SITE,
+        source_table: "chat_messages",
+        started_at: typed[0].created_at,
+        last_message_at: typed[typed.length - 1].created_at,
+        message_count: typed.length,
+        user_messages: summary.user_messages,
+        assistant_messages: summary.assistant_messages,
+        first_user_message: summary.first_user_message,
+        transcript: summary.transcript,
+        captured_email: summary.captured_email,
+        captured_phone: summary.captured_phone,
+        web_session_id: sessionId,
+        synced_at: new Date().toISOString(),
+      },
+      { onConflict: "source_id" },
+    )
+    .select("id")
+    .maybeSingle();
+
+  if (chatRow?.id) {
+    await crm.from("web_chat_messages").upsert(
+      typed.map((m) => ({
+        source_id: `chat_messages:${m.id}`,
+        chat_id: chatRow.id,
+        session_id: sessionId,
+        role: m.role,
+        content: m.content.slice(0, 20_000),
+        char_count: m.content.length,
+        created_at: m.created_at,
+        synced_at: new Date().toISOString(),
+      })),
+      { onConflict: "source_id" },
+    );
+  }
+  return typed.length;
+}
+
+/**
+ * The message stream, bounded by conversations rather than by rows.
+ *
+ * A page of messages fans out into one rebuild per conversation it touches,
+ * and a rebuild is three round trips. Rewinding the cursor over the whole
+ * archive — 431 messages across 126 conversations — therefore meant
+ * several minutes of work inside a function killed at 26 seconds, and
+ * because the cursor was only written at the very end, the killed run
+ * recorded nothing and the next one started from the beginning again.
+ * This never finished, on any run, after the first rebuild.
+ *
+ * Now a step rebuilds a bounded number of conversations in order of first
+ * appearance and moves the cursor to the first one it did not reach.
+ */
 async function syncChatMessages(
   crm: DB,
   site: SupabaseClient,
-  days: Set<string>,
-): Promise<{ rows: number }> {
+  deadline: number,
+): Promise<StreamOutcome> {
   const cursor = await readCursor(crm, "chat_messages");
-  let since = cursor.cursor_ts ?? initialSince(730);
+  const since = cursor.cursor_ts ?? initialSince(730);
+  let total = cursor.rows_synced;
+
+  const { data, error } = await site
+    .from("chat_messages")
+    .select("id, session_id, created_at")
+    .gte("created_at", since)
+    .order("created_at", { ascending: true })
+    .limit(CHAT_PAGE);
+  if (error) {
+    if (isMissingTable(error.message)) return { rows: 0, exhausted: true };
+    throw new Error(`chat_messages: ${error.message}`);
+  }
+  if (!data?.length) {
+    await writeCursor(crm, "chat_messages", { cursor_ts: since, rowsTotal: total });
+    return { rows: 0, exhausted: true };
+  }
+
+  const order: string[] = [];
+  const firstAt = new Map<string, string>();
+  for (const r of data as Record<string, unknown>[]) {
+    const sid = s(r.session_id, 120);
+    const created = s(r.created_at, 40);
+    if (!sid || !created) continue;
+    if (!firstAt.has(sid)) {
+      firstAt.set(sid, created);
+      order.push(sid);
+    }
+  }
+
+  let processed = 0;
   let rows = 0;
-  const touchedSessions = new Set<string>();
-
-  for (let page = 0; page < MAX_PAGES; page++) {
-    const { data, error } = await site
-      .from("chat_messages")
-      .select("id, session_id, role, content, created_at")
-      .gte("created_at", since)
-      .order("created_at", { ascending: true })
-      .limit(PAGE);
-    if (error) {
-      if (isMissingTable(error.message)) return { rows: 0 };
-      throw new Error(`chat_messages: ${error.message}`);
-    }
-    if (!data?.length) break;
-
-    for (const r of data as Record<string, unknown>[]) {
-      const sid = s(r.session_id, 120);
-      if (sid) touchedSessions.add(sid);
-    }
-
-    rows += data.length;
-    const last = s(data[data.length - 1].created_at, 40)!;
-    since = last === since && data.length === PAGE
-      ? new Date(new Date(last).getTime() + 1).toISOString()
-      : last;
-    if (data.length < PAGE) break;
+  for (const sid of order) {
+    if (processed >= MAX_CONVERSATIONS_PER_STEP) break;
+    if (processed > 0 && !timeLeft(deadline)) break;
+    rows += await rebuildConversation(crm, site, sid);
+    processed++;
   }
 
-  // Rebuild each touched conversation whole rather than appending
-  // message by message. A conversation is only meaningful as a unit —
-  // its counts, its transcript and the email buried in message six all
-  // change when a seventh arrives.
-  for (const sessionId of touchedSessions) {
-    const { data: msgs } = await site
-      .from("chat_messages")
-      .select("id, session_id, role, content, created_at")
-      .eq("session_id", sessionId)
-      .order("created_at", { ascending: true })
-      .limit(500);
-    if (!msgs?.length) continue;
+  const next = chatCursorAfter({
+    since,
+    order,
+    firstAt,
+    processed,
+    lastCreatedAt: s(data[data.length - 1].created_at, 40) ?? since,
+    pageFull: data.length === CHAT_PAGE,
+  });
 
-    const typed: ChatMsg[] = msgs.map((m: Record<string, unknown>) => ({
-      id: String(m.id),
-      role: String(m.role ?? "user"),
-      content: String(m.content ?? ""),
-      created_at: s(m.created_at, 40) ?? new Date().toISOString(),
-    }));
-    const summary = summariseTranscript(typed);
-
-    const { data: chatRow } = await crm
-      .from("web_chat_sessions")
-      .upsert(
-        {
-          source_id: `chat_messages:${sessionId}`,
-          site: SITE,
-          source_table: "chat_messages",
-          started_at: typed[0].created_at,
-          last_message_at: typed[typed.length - 1].created_at,
-          message_count: typed.length,
-          user_messages: summary.user_messages,
-          assistant_messages: summary.assistant_messages,
-          first_user_message: summary.first_user_message,
-          transcript: summary.transcript,
-          captured_email: summary.captured_email,
-          captured_phone: summary.captured_phone,
-          web_session_id: sessionId,
-          synced_at: new Date().toISOString(),
-        },
-        { onConflict: "source_id" },
-      )
-      .select("id")
-      .maybeSingle();
-
-    // The day this conversation happened on has to be rolled up again, or
-    // `web_daily.chat_sessions` — which the rollup counts from exactly this
-    // table — stays at whatever it was when the day was last touched by some
-    // other stream. This is why the dashboard could report chatSessions=0
-    // for a period in which the chat panel listed twelve conversations.
-    const chatDay = day(typed[0].created_at);
-    if (chatDay) days.add(chatDay);
-
-    if (chatRow?.id) {
-      await crm.from("web_chat_messages").upsert(
-        typed.map((m) => ({
-          source_id: `chat_messages:${m.id}`,
-          chat_id: chatRow.id,
-          session_id: sessionId,
-          role: m.role,
-          content: m.content.slice(0, 20_000),
-          char_count: m.content.length,
-          created_at: m.created_at,
-          synced_at: new Date().toISOString(),
-        })),
-        { onConflict: "source_id" },
-      );
-    }
-  }
-
-  await writeCursor(crm, "chat_messages", { cursor_ts: since, rows });
-  return { rows };
+  total += rows;
+  await writeCursor(crm, "chat_messages", { cursor_ts: next.since, rowsTotal: total });
+  return { rows, exhausted: next.exhausted };
 }
 
 /** The older one-blob-per-conversation format, kept for its history. */
 async function syncChatLogs(
   crm: DB,
   site: SupabaseClient,
-  days: Set<string>,
-): Promise<{ rows: number }> {
+  deadline: number,
+): Promise<StreamOutcome> {
   const cursor = await readCursor(crm, "chat_logs");
   let since = cursor.cursor_ts ?? initialSince(730);
+  let total = cursor.rows_synced;
   let rows = 0;
+  let exhausted = false;
 
-  for (let page = 0; page < MAX_PAGES; page++) {
+  for (let page = 0; page < MAX_PAGES_PER_STEP && timeLeft(deadline); page++) {
     const { data, error } = await site
       .from("chat_logs")
       .select("id, created_at, ip_address, user_location, messages, metadata")
       .gte("created_at", since)
       .order("created_at", { ascending: true })
-      .limit(200);
+      .limit(CHAT_LOG_PAGE);
     if (error) {
-      if (isMissingTable(error.message)) return { rows: 0 };
+      if (isMissingTable(error.message)) return { rows: 0, exhausted: true };
       throw new Error(`chat_logs: ${error.message}`);
     }
-    if (!data?.length) break;
+    if (!data?.length) {
+      exhausted = true;
+      break;
+    }
 
+    let done = 0;
+    let lastProcessed = since;
     for (const r of data as Record<string, unknown>[]) {
+      // Each row is two round trips; stop between rows, not mid-row.
+      if (done > 0 && !timeLeft(deadline)) break;
       const created = s(r.created_at, 40) ?? new Date().toISOString();
       const raw = Array.isArray(r.messages) ? r.messages : [];
       const typed: ChatMsg[] = raw.map((m, idx) => {
@@ -959,6 +1036,8 @@ async function syncChatLogs(
           created_at: s(msg.created_at, 40) ?? created,
         };
       });
+      done++;
+      lastProcessed = created;
       if (!typed.length) continue;
 
       const summary = summariseTranscript(typed);
@@ -1004,22 +1083,24 @@ async function syncChatLogs(
           { onConflict: "source_id" },
         );
       }
-      // Same reason as the chat_messages stream: a conversation that does
-      // not mark its own day dirty leaves `web_daily.chat_sessions` frozen.
-      const chatDay = day(typed[0].created_at);
-      if (chatDay) days.add(chatDay);
       rows += 1;
     }
 
-    const last = s(data[data.length - 1].created_at, 40)!;
-    since = last === since && data.length === 200
-      ? new Date(new Date(last).getTime() + 1).toISOString()
-      : last;
-    if (data.length < 200) break;
+    const wholePage = done === data.length;
+    since = wholePage
+      ? nudgeCursor(lastProcessed, since, data.length === CHAT_LOG_PAGE)
+      : lastProcessed;
+    total += done;
+    await writeCursor(crm, "chat_logs", { cursor_ts: since, rowsTotal: total });
+    if (!wholePage) break;
+    if (data.length < CHAT_LOG_PAGE) {
+      exhausted = true;
+      break;
+    }
   }
 
-  await writeCursor(crm, "chat_logs", { cursor_ts: since, rows });
-  return { rows };
+  if (exhausted) await writeCursor(crm, "chat_logs", { cursor_ts: since, rowsTotal: total });
+  return { rows, exhausted };
 }
 
 // ── identity stitching ──────────────────────────────────────────────────────
@@ -1032,7 +1113,7 @@ async function syncChatLogs(
  * to a named lead — which is the difference between "someone read the
  * pricing page" and "the £8k prospect read the pricing page twice".
  */
-async function stitchIdentities(crm: DB): Promise<number> {
+export async function stitchIdentities(crm: DB): Promise<number> {
   const { data: sessions } = await crm
     .from("web_sessions")
     .select("session_id, identified_email")
@@ -1145,96 +1226,92 @@ async function chatAutoLeadEnabled(crm: DB): Promise<boolean> {
 async function runStream(
   crm: DB,
   name: StreamName,
-  work: () => Promise<{ rows: number }>,
+  work: () => Promise<StreamOutcome>,
 ): Promise<StreamResult> {
   const startedAt = Date.now();
-  const { data: run } = await crm
-    .from("web_sync_runs")
-    .insert({ stream: name, started_at: new Date().toISOString() })
-    .select("id")
-    .maybeSingle();
-
   try {
-    const { rows } = await work();
+    const { rows, exhausted } = await work();
     const durationMs = Date.now() - startedAt;
-    if (run?.id) {
-      await crm
-        .from("web_sync_runs")
-        .update({
-          finished_at: new Date().toISOString(),
-          rows_synced: rows,
-          ok: true,
-          duration_ms: durationMs,
-        })
-        .eq("id", run.id);
+    // A run row only when something happened. The old version logged every
+    // check, and a stuck pipeline wrote twenty-seven thousand of them.
+    if (rows > 0) {
+      await crm.from("web_sync_runs").insert({
+        stream: name,
+        started_at: new Date(startedAt).toISOString(),
+        finished_at: new Date().toISOString(),
+        rows_synced: rows,
+        ok: true,
+        duration_ms: durationMs,
+      });
     }
-    return { stream: name, rows, ok: true, durationMs };
+    return { stream: name, rows, ok: true, exhausted, durationMs };
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     const durationMs = Date.now() - startedAt;
-    if (run?.id) {
-      await crm
-        .from("web_sync_runs")
-        .update({
-          finished_at: new Date().toISOString(),
-          ok: false,
-          error: message.slice(0, 1000),
-          duration_ms: durationMs,
-        })
-        .eq("id", run.id);
-    }
-    await writeCursor(crm, name, { rows: 0, error: message.slice(0, 1000) });
-    return { stream: name, rows: 0, ok: false, error: message, durationMs };
+    await crm.from("web_sync_runs").insert({
+      stream: name,
+      started_at: new Date(startedAt).toISOString(),
+      finished_at: new Date().toISOString(),
+      ok: false,
+      error: message.slice(0, 1000),
+      duration_ms: durationMs,
+    });
+    const cursor = await readCursor(crm, name);
+    await writeCursor(crm, name, { rowsTotal: cursor.rows_synced, error: message.slice(0, 1000) });
+    return { stream: name, rows: 0, ok: false, exhausted: true, error: message, durationMs };
   }
 }
 
 /**
- * Pull everything the website knows into the CRM.
+ * One bounded step of the pull.
  *
  * Streams run in sequence, not in parallel: they share one connection to
  * a small Supabase instance, and five concurrent 1000-row scans is how
- * you get rate-limited on the source rather than finishing faster.
- * A stream that throws is caught and recorded — one broken table must
- * not cost the run the other four.
+ * you get rate-limited on the source rather than finishing faster. A
+ * stream that throws is caught and recorded — one broken table must not
+ * cost the step the other four — and is reported so the job can leave it
+ * alone for the rest of its run instead of hitting the same error every
+ * step. Once the deadline passes no further stream is started; the ones
+ * not reached simply report "not exhausted" and are picked up next step.
  */
-export async function syncWebsiteAnalytics(crm: DB): Promise<SyncResult> {
+export async function syncStep(
+  crm: DB,
+  opts: { deadline: number; cutover: string | null; skip?: StreamName[] },
+): Promise<SyncStepResult> {
   if (!isWebsiteSourceConfigured()) {
-    return {
-      ok: false,
-      streams: [],
-      totalRows: 0,
-      daysTouched: [],
-      skipped:
-        "Website source not configured — set WEBSITE_SUPABASE_URL and " +
+    throw new Error(
+      "Website source not configured — set WEBSITE_SUPABASE_URL and " +
         "WEBSITE_SUPABASE_SERVICE_ROLE_KEY.",
-    };
+    );
   }
-
   const site = createWebsiteClient();
-  const days = new Set<string>();
+  const { deadline, cutover } = opts;
+  const skip = new Set(opts.skip ?? []);
 
-  // Read once, before anything is written: every legacy decision below
-  // depends on where the rich tracker starts.
-  const cutover = await trackerCutover(site).catch(() => null);
-  await pruneLegacyAfterCutover(crm, cutover, days).catch(() => undefined);
+  const plan: [StreamName, () => Promise<StreamOutcome>][] = [
+    ["sessions", () => syncSessions(crm, site, deadline)],
+    ["events", () => syncEvents(crm, site, deadline)],
+    ["page_visits", () => syncPageVisits(crm, site, deadline, cutover)],
+    ["chat_messages", () => syncChatMessages(crm, site, deadline)],
+    ["chat_logs", () => syncChatLogs(crm, site, deadline)],
+  ];
 
   const streams: StreamResult[] = [];
-  streams.push(await runStream(crm, "sessions", () => syncSessions(crm, site, days)));
-  streams.push(await runStream(crm, "events", () => syncEvents(crm, site, days)));
-  streams.push(
-    await runStream(crm, "page_visits", () => syncPageVisits(crm, site, days, cutover)),
-  );
-  streams.push(
-    await runStream(crm, "chat_messages", () => syncChatMessages(crm, site, days)),
-  );
-  streams.push(await runStream(crm, "chat_logs", () => syncChatLogs(crm, site, days)));
-
-  await stitchIdentities(crm).catch(() => 0);
+  let exhausted = true;
+  for (const [name, work] of plan) {
+    if (skip.has(name)) continue;
+    if (Date.now() >= deadline) {
+      exhausted = false;
+      break;
+    }
+    const result = await runStream(crm, name, work);
+    streams.push(result);
+    if (!result.exhausted) exhausted = false;
+  }
 
   return {
-    ok: streams.every((s) => s.ok),
     streams,
-    totalRows: streams.reduce((sum, s) => sum + s.rows, 0),
-    daysTouched: [...days].sort(),
+    totalRows: streams.reduce((sum, r) => sum + r.rows, 0),
+    exhausted,
   };
 }

@@ -22,6 +22,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
 import { cn } from "@/lib/utils";
+import type { JobSummary } from "@/lib/web-analytics/job-core";
 import type {
   WebChatSession,
   WebDaily,
@@ -728,8 +729,78 @@ export function ChatPanel({ chats }: { chats: WebChatSession[] }) {
 
 // -- setup / sync -----------------------------------------------------------
 
+const PHASE_LABEL: Record<string, string> = {
+  sync: "pulling from the website",
+  rollup: "recomputing days",
+  chats: "reading conversations",
+  report: "writing the report",
+  done: "finishing",
+};
+
+const ago = (iso: string | null | undefined): string =>
+  iso ? formatDistanceToNow(new Date(iso), { addSuffix: true }) : "never";
+
+/**
+ * Where the job is, in one line.
+ *
+ * The stream table below says when each stream last moved; this says
+ * whether the whole thing is running, when it last finished, and when it
+ * will run again — the three questions "is it syncing?" actually asks.
+ */
+function JobStatus({ job, intervalHours }: { job: JobSummary; intervalHours: number }) {
+  const nextAuto = job.next_due_at ? ago(job.next_due_at) : "on the next tick";
+  if (job.running) {
+    return (
+      <div className="mb-3 rounded-xl bg-primary-50/60 p-3 text-sm text-slate-700">
+        <p className="font-medium text-primary-700">
+          {job.rebuild ? "Rebuild" : "Sync"} in progress — {PHASE_LABEL[job.phase ?? ""] ?? job.phase}
+          {job.stepping ? " (a step is running now)" : " (next step on the automation tick, within 5 minutes)"}
+        </p>
+        <p className="mt-1 text-xs text-slate-500">
+          Started {ago(job.started_at)} · step {job.steps} · {job.rows.toLocaleString()} rows pulled ·{" "}
+          {job.days_done} day{job.days_done === 1 ? "" : "s"} recomputed
+          {job.days_left ? `, ${job.days_left} queued` : ""}
+          {job.chats ? ` · ${job.chats} conversation${job.chats === 1 ? "" : "s"} read` : ""}
+        </p>
+        {job.errors.length > 0 && (
+          <p className="mt-1 text-xs text-rose-600">
+            {job.errors.length} warning{job.errors.length === 1 ? "" : "s"} so far: {job.errors[job.errors.length - 1]}
+          </p>
+        )}
+      </div>
+    );
+  }
+  return (
+    <div className="mb-3 rounded-xl bg-slate-50 p-3 text-sm text-slate-700">
+      <p className="font-medium">
+        Automatic sync every {intervalHours} hours · next run {nextAuto}
+      </p>
+      {job.last ? (
+        <p className="mt-1 text-xs text-slate-500">
+          Last {job.last.rebuild ? "rebuild" : "sync"} finished {ago(job.last.finished_at)} in{" "}
+          {job.last.steps} step{job.last.steps === 1 ? "" : "s"}: {job.last.rows.toLocaleString()} rows,{" "}
+          {job.last.days} day{job.last.days === 1 ? "" : "s"} recomputed
+          {job.last.chats ? `, ${job.last.chats} conversation${job.last.chats === 1 ? "" : "s"} read` : ""}
+          {job.last.ok ? " · clean" : ` · ${job.last.errors.length} warning${job.last.errors.length === 1 ? "" : "s"}`}
+        </p>
+      ) : (
+        <p className="mt-1 text-xs text-slate-500">No job has completed yet.</p>
+      )}
+      {job.last && !job.last.ok && (
+        <ul className="mt-1 space-y-0.5 text-xs text-rose-600">
+          {job.last.errors.slice(0, 5).map((e, i) => (
+            <li key={i}>{e}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 export function SyncPanel({
   status,
+  job,
+  intervalHours,
   site,
   siteUrl,
   sourceReady,
@@ -741,6 +812,8 @@ export function SyncPanel({
     rowsSynced: number;
     lastError: string | null;
   }[];
+  job: JobSummary | null;
+  intervalHours: number;
   site: string;
   siteUrl: string;
   sourceReady: boolean;
@@ -771,6 +844,8 @@ export function SyncPanel({
             </Badge>
           )}
         </div>
+
+        {job && sourceReady && <JobStatus job={job} intervalHours={intervalHours} />}
 
         {status.length === 0 ? (
           <p className="py-4 text-sm text-slate-400">
@@ -848,10 +923,15 @@ export function SyncPanel({
           </li>
         </ol>
         <p className="mt-3 text-xs text-slate-400">
-          Runs hourly on the automation tick, plus a full pass with a written report each
-          morning. “Sync now” does the same thing immediately. Rows are stored under the
-          label <span className="font-mono">{site}</span>, which is what every query here
-          filters on.
+          Runs automatically twice a day (06:15 and 18:15 UTC, or every{" "}
+          {intervalHours} hours after the last run if a scheduled one is missed). A run is a
+          job that works in short steps — the CRM&apos;s functions are cut off at about 26
+          seconds, so anything longer is picked up by the five-minute automation tick until
+          every stream is up to date. The morning run also writes the daily report and reads
+          the day&apos;s new conversations. “Sync now” starts the same job immediately and
+          keeps it moving while this page is open. Rows are stored under the label{" "}
+          <span className="font-mono">{site}</span>, which is what every query here filters
+          on.
         </p>
         <p className="mt-2 text-xs text-slate-400">
           <strong className="text-slate-500">Rebuild history</strong> is the other button,
@@ -861,7 +941,8 @@ export function SyncPanel({
           correction to the logic lands on new data and leaves everything older exactly as
           it was — which reads as “the fix did nothing”. A rebuild winds the watermarks
           back, re-reads the website through the current logic, and recomputes the last 90
-          days from scratch. It is slow and safe to repeat.
+          days from scratch. It is a job like any other: this page keeps it moving while it
+          is open, the automation tick finishes whatever is left, and it is safe to repeat.
         </p>
       </div>
     </div>

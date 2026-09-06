@@ -130,16 +130,34 @@ ad platforms that read from GA.
 
 ## How it runs
 
+The pipeline is a **job that advances in bounded steps**, not a single
+call. The CRM's serverless functions are killed at roughly 26 seconds, and a
+pull plus its rollups can need far longer than that — so every step does a
+few seconds of work, records exactly where it got to, and returns; the next
+caller carries on. Job state lives in `app_settings` (`web_analytics_job`),
+taken under a 90-second lease so two callers can never run a step at once.
+
 | When | What |
 | --- | --- |
-| Every 5 minutes | The automation tick calls the pipeline, which self-gates to once an hour |
-| Hourly | Pull all five streams → roll up the days that changed (data only — no reports, no chat labelling) |
-| 06:15 UTC | The Netlify scheduled function pulls a settled full day, writes the daily report and labels new chat conversations |
-| On demand | **Sync now** on the page, or `GET /api/web-analytics/sync` |
+| 06:15 and 18:15 UTC | `web-analytics-sync.mts` starts a job and does its first step. The morning run also asks for the daily report and for new chat conversations to be labelled. |
+| Every 5 minutes | The automation tick does one more step of whatever job is running (≈6s of work), and starts a job on its own if `WEB_ANALYTICS_SYNC_INTERVAL_HOURS` (default 12) have passed since the last one finished. |
+| On demand | **Sync now** on the page starts a job and keeps stepping it while the page is open; `GET /api/web-analytics/sync?budget=18000` does one step per call. |
+
+A job runs `sync → rollup → chats → report → done`. The sync phase pulls
+all five streams a page at a time, writing each stream's watermark after
+every page; the rollup phase recomputes one day per iteration, newest
+first, from the days the sync actually touched (`synced_at` on the mirror
+rows, read back — nothing is kept in memory between steps). A step the
+platform kills loses one page or one day of work; three killed steps in a
+row and the phase is abandoned with a recorded error rather than retried
+forever.
 
 Every stream is incremental (a watermark in `web_sync_state`) and idempotent
-(every write is an upsert on a natural key from the source), so a run that
+(every write is an upsert on a natural key from the source), so a step that
 dies halfway is safe to retry and nothing is ever double-counted.
+
+Tuning: `WEB_ANALYTICS_SYNC_INTERVAL_HOURS` (default 12) and
+`WEB_ANALYTICS_STEP_MS` (the tick's per-step budget, default 6000).
 
 ---
 

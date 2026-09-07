@@ -26,9 +26,14 @@ import "server-only";
 
 import {
   AI_MODELS,
+  effortParam,
   isReasoningModel,
   OpenAIRateLimitError,
+  OpenAIRequestError,
+  readUsage,
+  reasoningEffortFor,
   type ChatMessage,
+  type ChatUsage,
   type ToolCall,
   type ToolSchema,
 } from "@/lib/ai/openai";
@@ -61,6 +66,15 @@ export type ChatStreamOptions = {
    * Without it a gpt-5/o-series model runs at the provider's own default
    * effort — slower than an interactive chat turn can afford. */
   reasoningEffort?: string;
+  /** Cap on the reply (reasoning tokens count on reasoning models). */
+  maxCompletionTokens?: number;
+  /**
+   * 0126 — receives the token usage from the stream's final frame. Passed as
+   * a callback rather than attached to the returned message on purpose:
+   * callers push that message straight back to the API on the next turn,
+   * and the API rejects unknown fields on it.
+   */
+  onUsage?: (usage: ChatUsage) => void;
 };
 
 /**
@@ -94,12 +108,17 @@ export async function openaiChatStream(
       model,
       messages,
       stream: true,
+      // Ask for the usage frame: it arrives last, with an empty `choices`,
+      // and is the only place a streamed call reports its token count.
+      stream_options: { include_usage: true },
+      ...(opts?.maxCompletionTokens
+        ? { max_completion_tokens: opts.maxCompletionTokens }
+        : {}),
       // Same default as `openaiChat`: this assistant must not improvise data.
-      // (Reasoning models reject temperature — they take reasoning_effort.)
+      // (Reasoning models reject temperature — they take reasoning_effort,
+      // and which values they accept depends on the tools below.)
       ...(isReasoningModel(model)
-        ? opts?.reasoningEffort
-          ? { reasoning_effort: opts.reasoningEffort }
-          : {}
+        ? effortParam(reasoningEffortFor(model, opts?.reasoningEffort, Boolean(tools?.length)))
         : { temperature: opts?.temperature ?? 0 }),
       ...(tools && tools.length ? { tools, tool_choice: "auto" } : {}),
     }),
@@ -118,7 +137,7 @@ export async function openaiChatStream(
         Number.isFinite(seconds) ? seconds * 1000 : null,
       );
     }
-    throw new Error(`OpenAI chat failed (${res.status}): ${detail}`);
+    throw new OpenAIRequestError(res.status, detail);
   }
   if (!res.body) throw new Error("OpenAI chat returned no stream body.");
 
@@ -138,6 +157,11 @@ export async function openaiChatStream(
       // losing one chunk beats losing an answer the model already paid for.
       return;
     }
+
+    // The usage frame has no choices at all, so it must be read BEFORE the
+    // delta check below sends it home empty-handed.
+    const usage = readUsage(json);
+    if (usage) opts?.onUsage?.(usage);
 
     const delta = (
       json as {

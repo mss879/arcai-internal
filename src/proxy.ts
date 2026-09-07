@@ -22,8 +22,11 @@ export const config = {
      *   so running the session proxy on them is a paid edge invocation plus
      *   an auth round-trip that can never do anything. Every path here must
      *   guard itself (cron secret, webhook signature, or unguessable token).
+     * - api/ai + ai-widget.js (0126) — the website agent's public routes and
+     *   the widget file, called from clients' sites; each guards itself on
+     *   the project key and origin allow-list
      * - image/font assets
      */
-    "/((?!_next/static|_next/image|favicon.ico|sitemap.xml|robots.txt|sw.js|manifest.webmanifest|arcus/hand/|api/automation/tick|api/health|api/assistant/tick|api/whatsapp/agent-tick|api/whatsapp/webhook|api/webhooks|api/sms/automation/tick|api/web-analytics/sync|api/intelligence/digest|api/public|api/outreach/unsubscribe|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|woff2?)$).*)",
+    "/((?!_next/static|_next/image|favicon.ico|sitemap.xml|robots.txt|sw.js|manifest.webmanifest|arcus/hand/|api/automation/tick|api/health|api/assistant/tick|api/whatsapp/agent-tick|api/whatsapp/webhook|api/webhooks|api/sms/automation/tick|api/web-analytics/sync|api/intelligence/digest|api/public|api/ai|ai-widget.js|api/outreach/unsubscribe|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|woff2?)$).*)",
   ],
 };

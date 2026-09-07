@@ -125,6 +125,12 @@ export function SettingsView({ data }: { data: SettingsData }) {
             description="The price list every quote, proposal and the assistant read from."
           />
           <SettingsCard
+            href="/ai-projects/models"
+            icon={<Bot className="h-4 w-4" />}
+            title="AI model prices"
+            description="What each OpenAI model costs per million tokens, with effective dates — every client's AI usage is priced from here."
+          />
+          <SettingsCard
             href="/whatsapp?tab=agent"
             icon={<Bot className="h-4 w-4" />}
             title="WhatsApp agent"

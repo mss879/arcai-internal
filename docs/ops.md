@@ -109,3 +109,18 @@ their role, not by their capabilities. Nobody but the service role has one.
 - **The website** (`arc_ai_website`) is its own Supabase project with its
   own backups; the CRM writes reviews and vacancies into it but never reads
   it back for anything it cannot rebuild.
+
+## AI Projects (0126)
+
+- The private `ai-knowledge` bucket holds clients' uploaded documents. Like
+  every bucket it is **not** in `pg_dump`; back it up with the others. The
+  extracted text of every file is also on `ai_kb_sources.content`, so an
+  index can be rebuilt from the database alone.
+- `ai_usage_events` is the billing ledger. Never edit it in place; a wrong
+  price is corrected by adding a dated catalog row and, if the past matters,
+  by hand.
+- Four passes ride the automation tick: `aiIngest`, `aiCrawl`, `aiRollup`,
+  `aiBilling`. Stamps: `app_settings.ai_rollup` and `app_settings.ai_billing`.
+- Days and months in this module are Asia/Colombo (Web Analytics is UTC).
+- Public surface: `/ai-widget.js`, `/api/ai/config`, `/api/ai/chat`,
+  `/api/ai/lead` — see `docs/api.md`.

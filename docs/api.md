@@ -86,3 +86,54 @@ The two slip uploads are the only public writes that put a file in
 storage; both go to the private `payment-slips` bucket through the
 service-role client, and nothing is recorded as money until a person
 confirms the slip on Finance → Slips.
+
+## The website agent — `/ai-widget.js` and `/api/ai/*` (0126)
+
+A client's site carries one line:
+
+```html
+<script src="https://<crm-host>/ai-widget.js" data-project="pk_…" async></script>
+```
+
+`/ai-widget.js` is a static file (public, cached five minutes). Everything
+else takes the project's public key as `?p=` and is gated on the browser's
+`Origin`: the origin must be on the project's allow-list (Deploy tab) or be
+the CRM's own (`NEXT_PUBLIC_APP_URL`, which is how the preview works). Only a
+matching origin is echoed in `Access-Control-Allow-Origin`.
+
+| Route | What it does | Limit |
+| --- | --- | --- |
+| `GET /api/ai/config?p=` | The widget's branding, welcome message, chips and which abilities are on. Never the prompt or the model. | 60 / min per IP |
+| `POST /api/ai/chat?p=` | One visitor turn, streamed as SSE frames (`meta`, `delta`, `tool`, `action`, `done`, `error`). | 30 / min per IP · the project's per-visitor limit · 600 / hour per project · the project's daily message cap |
+| `POST /api/ai/lead?p=` | The fallback lead form the widget shows when the model is unavailable. | 5 / 10 min per session · 20 / hour per IP |
+
+A paused or draft project answers `enabled: false` on config (the widget
+hides itself) and refuses chat, except from the CRM origin, where usage is
+recorded as preview and never billed.
+
+### The client read API — `/api/ai/v1/*` (0127)
+
+How a client's own website reads its own leads back, to render their dashboard
+on their site rather than on ours. Authenticate with the project's read key:
+
+```
+Authorization: Bearer arck_…
+```
+
+| Route | What it does |
+| --- | --- |
+| `GET /api/ai/v1/leads` | That project's leads. `?since=`, `?status=`, `?limit=` (≤200). |
+| `GET /api/ai/v1/conversations` | Conversation summaries, previews excluded. |
+| `GET /api/ai/v1/conversations/:id` | One transcript; tool calls appear as a name only. |
+| `GET /api/ai/v1/summary?days=` | Counts for a dashboard header. |
+| `PATCH /api/ai/v1/leads/:id` | `{ status }` — the only write a client gets. |
+
+120 requests a minute per key. **These routes send no CORS headers and have no
+`OPTIONS` handler**, which is the security model, not an omission: the key
+belongs on a server, and a browser therefore cannot use it even if it leaks
+into a page. Responses carry `Cache-Control: no-store` and an allow-list of
+fields — never cost, tokens, prompts, models or billing.
+
+Outbound in the other direction (a captured lead, a tool the agent reaches
+for) is signed with the project's shared secret and documented in
+`docs/ai-projects-client-kit.md`.

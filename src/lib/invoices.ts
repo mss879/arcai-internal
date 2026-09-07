@@ -5,6 +5,9 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database, InvoiceItem, InvoiceStatus } from "@/lib/database.types";
 import { allocateDocumentNumber } from "@/lib/document-number";
 import { nextInvoiceNumber } from "@/lib/invoice";
+import { aggregateByModel, composeAiInvoice } from "@/lib/ai-projects/billing-core";
+import { PROJECT_WITH_CLIENT, type AiProjectWithClient } from "@/lib/ai-projects/projects";
+import { addDays, colomboDay, colomboDayStartIso, isDay, monthStart, nextPeriod, periodEnd, periodLabel } from "@/lib/ai-projects/time-core";
 import { invoiceStatusFor } from "@/lib/projects";
 import { logSystemWrite } from "@/lib/system-audit";
 
@@ -447,4 +450,188 @@ export async function createRecurringInvoice(
   }
 
   return { ok: true, invoiceId: invoice.id, invoiceNumber: number, emailed, created: true };
+}
+
+/**
+ * Raise the monthly AI usage invoice for one project and one month (0126).
+ *
+ * The bill is fee + (the month's exact model cost × markup) — composed by
+ * `composeAiInvoice`, converted at the project's LKR rate when it bills in
+ * rupees — as a normal `invoices` row, so the PDF, the statement, the portal
+ * and `recordPayment` all work unchanged. The `ai_invoices` link row is the
+ * idempotency key (one per project per month) and the snapshot of the terms
+ * the bill was raised on.
+ *
+ * Idempotent: a period that already has a live invoice returns it; a voided
+ * one may be re-raised. `draft` mode leaves the invoice `issued` and unsent
+ * — the Invoices page's "reviewable" state; `auto_send` emails it.
+ */
+export async function createAiUsageInvoice(
+  db: DB,
+  opts: { projectId: string; period: string; actorId?: string | null; email?: boolean },
+): Promise<
+  | { ok: true; invoiceId: string | null; invoiceNumber: string | null; skipped: boolean; emailed: boolean; created: boolean; total: number }
+  | { ok: false; error: string }
+> {
+  if (!isDay(opts.period) || monthStart(opts.period) !== opts.period) {
+    return { ok: false, error: "The period must be the first day of a month." };
+  }
+  const period = opts.period;
+  if (period >= monthStart(colomboDay())) return { ok: false, error: "Only past months can be invoiced — this one is still running." };
+
+  const { data: projectRow } = await db.from("ai_projects").select(PROJECT_WITH_CLIENT).eq("id", opts.projectId).maybeSingle();
+  const project = (projectRow as unknown as AiProjectWithClient | null) ?? null;
+  if (!project) return { ok: false, error: "That project no longer exists." };
+  if (!project.billing_enabled) return { ok: false, error: "Billing is switched off for this project." };
+  if (project.billing_from > periodEnd(period)) return { ok: false, error: `Billing for this project starts on ${project.billing_from}.` };
+
+  // The link row: claim it, or find what is already there.
+  const { data: existing } = await db.from("ai_invoices").select("*").eq("project_id", project.id).eq("period", period).maybeSingle();
+  if (existing?.invoice_id && existing.status === "created") {
+    const { data: live } = await db.from("invoices").select("id, invoice_number, status, grand_total").eq("id", existing.invoice_id).maybeSingle();
+    if (live && live.status !== "void") {
+      return { ok: true, invoiceId: live.id, invoiceNumber: live.invoice_number, skipped: false, emailed: existing.emailed, created: false, total: Number(live.grand_total) || 0 };
+    }
+  }
+  if (existing?.status === "skipped_zero") {
+    return { ok: true, invoiceId: null, invoiceNumber: null, skipped: true, emailed: false, created: false, total: 0 };
+  }
+  let linkId = existing?.id ?? null;
+  if (!linkId) {
+    const { data: link, error } = await db
+      .from("ai_invoices")
+      .insert({ project_id: project.id, period, status: "pending", attempts: 1, created_by: opts.actorId ?? null })
+      .select("id")
+      .single();
+    if (error || !link) return { ok: false, error: error?.code === "23505" ? "This month is already being invoiced." : (error?.message ?? "Could not start the invoice.") };
+    linkId = link.id;
+  } else {
+    await db.from("ai_invoices").update({ status: "pending", attempts: (existing?.attempts ?? 0) + 1, error: null }).eq("id", linkId);
+  }
+  const fail = async (error: string) => {
+    await db.from("ai_invoices").update({ status: "failed", error: error.slice(0, 500) }).eq("id", linkId!);
+    return { ok: false as const, error };
+  };
+
+  // The month's usage, billable only.
+  const { data: usage } = await db
+    .from("ai_usage_events")
+    .select("model, kind, input_tokens, cached_input_tokens, output_tokens, cost_usd")
+    .eq("project_id", project.id)
+    .eq("period", period)
+    .eq("billable", true);
+  const { models, embeddingTokens } = aggregateByModel(usage ?? []);
+  const { count: conversations } = await db
+    .from("ai_conversations")
+    .select("id", { count: "exact", head: true })
+    .eq("project_id", project.id)
+    .eq("is_preview", false)
+    .gte("started_at", colomboDayStartIso(period))
+    .lt("started_at", colomboDayStartIso(nextPeriod(period)));
+
+  const composed = composeAiInvoice({
+    period,
+    agentName: project.agent_name,
+    websiteUrl: project.website_url,
+    conversations: conversations ?? 0,
+    models,
+    embeddingTokens,
+    fee: Number(project.monthly_fee) || 0,
+    markup: Number(project.usage_markup) || 0,
+    minimum: Number(project.monthly_minimum) || 0,
+    currency: project.billing_currency,
+    fxLkrPerUsd: project.fx_lkr_per_usd == null ? null : Number(project.fx_lkr_per_usd),
+    wasActive: project.status === "active" || models.length > 0,
+  });
+  if (!composed.ok) return fail(composed.error);
+
+  const snapshot = {
+    usage_cost_usd: composed.usageUsd,
+    markup: Number(project.usage_markup) || 0,
+    fee: Number(project.monthly_fee) || 0,
+    minimum: Number(project.monthly_minimum) || 0,
+    currency: composed.currency,
+    fx_lkr_per_usd: composed.fx,
+    tokens: composed.tokens as unknown as Record<string, number>,
+    model_breakdown: composed.modelBreakdown,
+    mode: project.invoice_mode,
+  };
+  if (composed.skip) {
+    await db.from("ai_invoices").update({ ...snapshot, status: "skipped_zero", total: 0, error: null }).eq("id", linkId);
+    return { ok: true, invoiceId: null, invoiceNumber: null, skipped: true, emailed: false, created: false, total: 0 };
+  }
+
+  const client = project.client;
+  const label = periodLabel(period);
+  const number = await allocateDocumentNumber(db, "invoice", async () => {
+    const { data } = await db.from("invoices").select("invoice_number");
+    return nextInvoiceNumber((data ?? []).map((r) => r.invoice_number));
+  });
+  const today = colomboDay();
+  const { data: invoice, error: insertError } = await db
+    .from("invoices")
+    .insert({
+      invoice_number: number,
+      invoice_date: today,
+      bill_to_name: client?.name ?? project.name,
+      bill_to_details: [client?.company, client?.email, client?.phone].filter(Boolean).join("\n"),
+      items: composed.items,
+      grand_total: composed.grandTotal,
+      due_today: composed.grandTotal,
+      due_date: addDays(today, 14),
+      currency: composed.currency === "USD" ? "USD" : null,
+      client_id: project.client_id,
+      // Attribution only: the AI project is not a delivery project.
+      project_id: null,
+      recipient_email: client?.email ?? null,
+      created_by: opts.actorId ?? null,
+    })
+    .select("id")
+    .single();
+  if (insertError || !invoice) return fail(insertError?.message ?? "Could not raise the invoice.");
+
+  await db.from("ai_invoices").update({ ...snapshot, status: "created", invoice_id: invoice.id, total: composed.grandTotal, error: null }).eq("id", linkId);
+
+  await logSystemWrite(db, {
+    job: "aiBilling",
+    actor: opts.actorId ? `user:${opts.actorId}` : null,
+    table: "invoices",
+    rowId: invoice.id,
+    action: "created",
+    summary: `Invoice ${number} raised for ${project.name}'s AI assistant — ${label}${client?.name ? ` (${client.name})` : ""}`,
+    meta: { ai_project_id: project.id, period, usage_usd: composed.usageUsd, total: composed.grandTotal, currency: composed.currency, mode: project.invoice_mode },
+  });
+
+  let emailed = false;
+  if (project.invoice_mode === "auto_send" && opts.email !== false && client?.email) {
+    try {
+      const { sendAndLogEmail } = await import("@/lib/email-outbox");
+      const { invoiceEmailData } = await import("@/lib/invoice");
+      const { data: row } = await db.from("invoices").select("*").eq("id", invoice.id).single();
+      if (row) {
+        const res = await sendAndLogEmail(db, {
+          to: client.email,
+          kind: "invoice",
+          actor: opts.actorId ? "team" : "system",
+          sentBy: opts.actorId ?? null,
+          invoiceId: invoice.id,
+          clientId: project.client_id,
+          message: {
+            transport: "invoice",
+            note: `Your website assistant invoice for ${label} is attached. It's due on ${addDays(today, 14)}.`,
+            invoice: invoiceEmailData(row),
+          },
+        });
+        emailed = res.sent;
+        if (res.sent) {
+          await db.from("invoices").update({ recipient_email: client.email, sent_at: new Date().toISOString(), status: "sent" }).eq("id", invoice.id);
+          await db.from("ai_invoices").update({ emailed: true }).eq("id", linkId);
+        }
+      }
+    } catch (e) {
+      console.error("[invoices] AI usage invoice email failed:", e);
+    }
+  }
+
+  return { ok: true, invoiceId: invoice.id, invoiceNumber: number, skipped: false, emailed, created: true, total: composed.grandTotal };
 }

@@ -42,6 +42,11 @@ import { isSmsConfigured } from "@/lib/sms";
 import { processInsightScan } from "@/lib/web-analytics/insights";
 import { processWebAnalytics } from "@/lib/web-analytics/run";
 import { processCareers } from "@/lib/careers/sync";
+import { processAiIngest } from "@/lib/ai-projects/kb";
+import { processAiCrawl } from "@/lib/ai-projects/crawl";
+import { processAiRollup } from "@/lib/ai-projects/rollup";
+import { processAiBilling } from "@/lib/ai-projects/billing";
+import { processAiDeliver } from "@/lib/ai-projects/delivery";
 
 type DB = SupabaseClient<Database>;
 
@@ -184,6 +189,16 @@ const PASSES: ReadonlyArray<readonly [string, (db: DB) => Promise<unknown>]> = [
   // Self-gated to every 15 minutes: an application is somebody waiting for
   // a reply.
   ["careers", processCareers],
+  // 0126 — AI Projects: embed pending knowledge sources (≤3 per tick,
+  // resumable), then the crawler, the rollups and the monthly bill — each
+  // registered by its own step so a half-built module never ticks.
+  ["aiIngest", processAiIngest],
+  ["aiCrawl", processAiCrawl],
+  ["aiRollup", processAiRollup],
+  ["aiBilling", processAiBilling],
+  // 0127 — leads the inline attempt could not get onto the client's own
+  // system: retried over about nine hours, then given up on visibly.
+  ["aiDeliver", processAiDeliver],
   ["sms", (db) => (isSmsConfigured() ? processDueSmsRuns(db) : Promise.resolve({ skipped: true }))],
 ];
 

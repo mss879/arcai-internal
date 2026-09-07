@@ -12,6 +12,52 @@ type UUID = string;
 
 export type UserRole = "admin" | "member";
 
+// 0126 — AI Projects (src/lib/ai-projects): the hosted website agent.
+export type AiProjectStatus = "draft" | "active" | "paused" | "archived";
+export type AiReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
+export type AiWidgetPosition = "left" | "right";
+export type AiBillingCurrency = "USD" | "LKR";
+export type AiInvoiceMode = "draft" | "auto_send";
+export type AiModelKind = "chat" | "embedding";
+export type AiKbSourceKind = "text" | "file" | "url" | "crawl";
+export type AiKbSourceStatus = "pending" | "processing" | "ready" | "failed" | "stale";
+export type AiCrawlStatus =
+  | "queued"
+  | "starting"
+  | "crawling"
+  | "ingesting"
+  | "finalising"
+  | "completed"
+  | "failed"
+  | "cancelled";
+export type AiCrawlTrigger = "schedule" | "manual";
+export type AiMessageRole = "user" | "assistant" | "tool";
+export type AiUsageKind = "chat" | "embedding" | "vision";
+export type AiUsagePurpose = "reply" | "retrieval" | "ingest" | "describe";
+export type AiUsageStatus = "complete" | "partial";
+export type AiLeadStatus = "new" | "contacted" | "archived";
+export type AiInvoiceStatus = "pending" | "created" | "skipped_zero" | "failed";
+
+// 0127 — the client backend link: leads, tools and a dashboard on the
+// client's own site.
+export type AiToolKind = "read" | "write";
+export type AiToolMethod = "GET" | "POST";
+export type AiDeliveryKind = "lead" | "handoff";
+export type AiDeliveryDestination = "webhook" | "supabase";
+export type AiCalendarProvider = "none" | "endpoint" | "cal_com";
+export type AiDeliveryStatus = "pending" | "sent" | "failed";
+
+/** One field of a custom tool, as the agency defines it. Compiled to JSON
+ *  Schema by `compileToolSchema` (src/lib/ai-projects/tool-core.ts). */
+export type AiToolParam = {
+  name: string;
+  type: "string" | "number" | "boolean";
+  description: string;
+  required: boolean;
+  /** When set, the model may only pick one of these. */
+  options?: string[];
+};
+
 // 0105 — Web Analytics (the agency's own site, mirrored from its own
 // Supabase project). Unrelated to VisitorEventKind, which belongs to the
 // in-app tracking snippet for client sites.
@@ -536,6 +582,26 @@ export type InvoiceItem = {
   qty: string;
   rate: string;
   total: number;
+};
+
+/** 0126 — one row from match_ai_chunks(). */
+export type AiChunkMatch = {
+  id: UUID;
+  source_id: UUID;
+  title: string;
+  url: string | null;
+  content: string;
+  similarity: number;
+};
+
+/** 0126 — one model's share of a month, stored on ai_invoices.model_breakdown. */
+export type AiInvoiceModelLine = {
+  model: string;
+  calls: number;
+  input_tokens: number;
+  cached_input_tokens: number;
+  output_tokens: number;
+  cost_usd: number;
 };
 
 /** 0114 — what public.dashboard_summary() returns. */
@@ -6486,6 +6552,721 @@ export type Database = {
         Update: Partial<Database["public"]["Tables"]["error_events"]["Insert"]>;
         Relationships: [];
       };
+      // 0126 — the editable, effective-dated OpenAI price catalog (USD per 1M tokens)
+      ai_model_prices: {
+        Row: {
+          id: UUID;
+          model: string;
+          kind: AiModelKind;
+          label: string | null;
+          input_per_m: number;
+          cached_input_per_m: number;
+          output_per_m: number;
+          effective_from: string;
+          effective_to: string | null;
+          is_active: boolean;
+          note: string | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          model: string;
+          kind?: AiModelKind;
+          label?: string | null;
+          input_per_m?: number;
+          cached_input_per_m?: number;
+          output_per_m?: number;
+          effective_from?: string;
+          effective_to?: string | null;
+          is_active?: boolean;
+          note?: string | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["ai_model_prices"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0126 — one hosted website agent per client business
+      ai_projects: {
+        Row: {
+          id: UUID;
+          name: string;
+          client_id: UUID | null;
+          website_url: string | null;
+          status: AiProjectStatus;
+          public_key: string;
+          allowed_origins: string[];
+          agent_name: string;
+          system_prompt: string;
+          model: string;
+          temperature: number;
+          reasoning_effort: AiReasoningEffort;
+          welcome_message: string | null;
+          suggested_questions: string[];
+          avatar_url: string | null;
+          primary_color: string;
+          user_bubble_color: string | null;
+          agent_bubble_color: string | null;
+          widget_position: AiWidgetPosition;
+          show_branding: boolean;
+          booking_url: string | null;
+          notification_email: string | null;
+          lead_capture_enabled: boolean;
+          booking_enabled: boolean;
+          handoff_enabled: boolean;
+          rate_limit_per_minute: number;
+          daily_message_cap: number;
+          crawl_interval_days: number | null;
+          crawl_limit: number;
+          next_crawl_at: Timestamp | null;
+          last_crawl_at: Timestamp | null;
+          billing_enabled: boolean;
+          billing_currency: AiBillingCurrency;
+          monthly_fee: number;
+          usage_markup: number;
+          monthly_minimum: number;
+          fx_lkr_per_usd: number | null;
+          invoice_mode: AiInvoiceMode;
+          billing_from: string;
+          // 0127 — the client backend link.
+          backend_base_url: string | null;
+          backend_secret_enc: string | null;
+          read_key_enc: string | null;
+          read_key_hash: string | null;
+          lead_delivery_enabled: boolean;
+          lead_webhook_path: string;
+          backend_verified_at: Timestamp | null;
+          backend_last_error: string | null;
+          supabase_url: string | null;
+          supabase_anon_key_enc: string | null;
+          supabase_leads_table: string;
+          supabase_field_map: Record<string, string>;
+          supabase_delivery_enabled: boolean;
+          supabase_verified_at: Timestamp | null;
+          supabase_last_error: string | null;
+          calendar_provider: AiCalendarProvider;
+          calendar_api_key_enc: string | null;
+          calendar_event_type_id: string | null;
+          calendar_timezone: string;
+          calendar_availability_path: string;
+          calendar_book_path: string;
+          calendar_api_base: string | null;
+          calendar_verified_at: Timestamp | null;
+          calendar_last_error: string | null;
+          created_by: UUID | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          name: string;
+          client_id?: UUID | null;
+          website_url?: string | null;
+          status?: AiProjectStatus;
+          public_key: string;
+          allowed_origins?: string[];
+          agent_name?: string;
+          system_prompt?: string;
+          model?: string;
+          temperature?: number;
+          reasoning_effort?: AiReasoningEffort;
+          welcome_message?: string | null;
+          suggested_questions?: string[];
+          avatar_url?: string | null;
+          primary_color?: string;
+          user_bubble_color?: string | null;
+          agent_bubble_color?: string | null;
+          widget_position?: AiWidgetPosition;
+          show_branding?: boolean;
+          booking_url?: string | null;
+          notification_email?: string | null;
+          lead_capture_enabled?: boolean;
+          booking_enabled?: boolean;
+          handoff_enabled?: boolean;
+          rate_limit_per_minute?: number;
+          daily_message_cap?: number;
+          crawl_interval_days?: number | null;
+          crawl_limit?: number;
+          next_crawl_at?: Timestamp | null;
+          last_crawl_at?: Timestamp | null;
+          billing_enabled?: boolean;
+          billing_currency?: AiBillingCurrency;
+          monthly_fee?: number;
+          usage_markup?: number;
+          monthly_minimum?: number;
+          fx_lkr_per_usd?: number | null;
+          invoice_mode?: AiInvoiceMode;
+          billing_from?: string;
+          // 0127
+          backend_base_url?: string | null;
+          backend_secret_enc?: string | null;
+          read_key_enc?: string | null;
+          read_key_hash?: string | null;
+          lead_delivery_enabled?: boolean;
+          lead_webhook_path?: string;
+          backend_verified_at?: Timestamp | null;
+          backend_last_error?: string | null;
+          supabase_url?: string | null;
+          supabase_anon_key_enc?: string | null;
+          supabase_leads_table?: string;
+          supabase_field_map?: Record<string, string>;
+          supabase_delivery_enabled?: boolean;
+          supabase_verified_at?: Timestamp | null;
+          supabase_last_error?: string | null;
+          calendar_provider?: AiCalendarProvider;
+          calendar_api_key_enc?: string | null;
+          calendar_event_type_id?: string | null;
+          calendar_timezone?: string;
+          calendar_availability_path?: string;
+          calendar_book_path?: string;
+          calendar_api_base?: string | null;
+          calendar_verified_at?: Timestamp | null;
+          calendar_last_error?: string | null;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["ai_projects"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0126 — one Firecrawl run of a project's website; the row is the lease
+      ai_crawl_jobs: {
+        Row: {
+          id: UUID;
+          project_id: UUID;
+          status: AiCrawlStatus;
+          triggered_by: AiCrawlTrigger;
+          firecrawl_id: string | null;
+          next_url: string | null;
+          total: number | null;
+          completed: number | null;
+          pages_seen: number;
+          pages_changed: number;
+          pages_unchanged: number;
+          pages_stale: number;
+          chunks_written: number;
+          embedding_tokens: number;
+          steps: number;
+          killed: number;
+          version: number;
+          lease_until: Timestamp | null;
+          started_at: Timestamp;
+          finished_at: Timestamp | null;
+          error: string | null;
+          errors: string[];
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          project_id: UUID;
+          status?: AiCrawlStatus;
+          triggered_by?: AiCrawlTrigger;
+          firecrawl_id?: string | null;
+          next_url?: string | null;
+          total?: number | null;
+          completed?: number | null;
+          pages_seen?: number;
+          pages_changed?: number;
+          pages_unchanged?: number;
+          pages_stale?: number;
+          chunks_written?: number;
+          embedding_tokens?: number;
+          steps?: number;
+          killed?: number;
+          version?: number;
+          lease_until?: Timestamp | null;
+          started_at?: Timestamp;
+          finished_at?: Timestamp | null;
+          error?: string | null;
+          errors?: string[];
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["ai_crawl_jobs"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0126 — the knowledge base: pasted text, files, pages, crawled pages
+      ai_kb_sources: {
+        Row: {
+          id: UUID;
+          project_id: UUID;
+          source_kind: AiKbSourceKind;
+          title: string;
+          url: string | null;
+          file_path: string | null;
+          mime: string | null;
+          size_bytes: number | null;
+          content: string | null;
+          content_hash: string | null;
+          status: AiKbSourceStatus;
+          attempts: number;
+          error: string | null;
+          chunk_count: number;
+          embedding_tokens: number;
+          crawl_job_id: UUID | null;
+          last_seen_at: Timestamp | null;
+          created_by: UUID | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          project_id: UUID;
+          source_kind: AiKbSourceKind;
+          title: string;
+          url?: string | null;
+          file_path?: string | null;
+          mime?: string | null;
+          size_bytes?: number | null;
+          content?: string | null;
+          content_hash?: string | null;
+          status?: AiKbSourceStatus;
+          attempts?: number;
+          error?: string | null;
+          chunk_count?: number;
+          embedding_tokens?: number;
+          crawl_job_id?: UUID | null;
+          last_seen_at?: Timestamp | null;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["ai_kb_sources"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0126 — pgvector chunks. PostgREST returns `vector` as a string; inserts take number[]
+      ai_kb_chunks: {
+        Row: {
+          id: UUID;
+          project_id: UUID;
+          source_id: UUID;
+          position: number;
+          content: string;
+          token_estimate: number;
+          embedding: string;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          project_id: UUID;
+          source_id: UUID;
+          position?: number;
+          content: string;
+          token_estimate?: number;
+          embedding: number[];
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["ai_kb_chunks"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0126 — one visitor session on a client site
+      ai_conversations: {
+        Row: {
+          id: UUID;
+          project_id: UUID;
+          session_key: string;
+          visitor_id: string | null;
+          started_at: Timestamp;
+          last_message_at: Timestamp;
+          message_count: number;
+          user_messages: number;
+          assistant_messages: number;
+          page_url: string | null;
+          page_title: string | null;
+          referrer: string | null;
+          user_agent: string | null;
+          ip_hash: string | null;
+          country: string | null;
+          lead_id: UUID | null;
+          handoff_requested_at: Timestamp | null;
+          handoff_summary: string | null;
+          handoff_notified_at: Timestamp | null;
+          booking_offered_at: Timestamp | null;
+          total_cost_usd: number;
+          total_tokens: number;
+          is_preview: boolean;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          project_id: UUID;
+          session_key: string;
+          visitor_id?: string | null;
+          started_at?: Timestamp;
+          last_message_at?: Timestamp;
+          message_count?: number;
+          user_messages?: number;
+          assistant_messages?: number;
+          page_url?: string | null;
+          page_title?: string | null;
+          referrer?: string | null;
+          user_agent?: string | null;
+          ip_hash?: string | null;
+          country?: string | null;
+          lead_id?: UUID | null;
+          handoff_requested_at?: Timestamp | null;
+          handoff_summary?: string | null;
+          handoff_notified_at?: Timestamp | null;
+          booking_offered_at?: Timestamp | null;
+          total_cost_usd?: number;
+          total_tokens?: number;
+          is_preview?: boolean;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["ai_conversations"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0126 — the transcript, tool calls included
+      ai_messages: {
+        Row: {
+          id: UUID;
+          conversation_id: UUID;
+          project_id: UUID;
+          role: AiMessageRole;
+          content: string;
+          tool_name: string | null;
+          meta: Record<string, unknown>;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          conversation_id: UUID;
+          project_id: UUID;
+          role: AiMessageRole;
+          content?: string;
+          tool_name?: string | null;
+          meta?: Record<string, unknown>;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["ai_messages"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0126 — THE LEDGER: one row per model call, priced with the rates it was costed at
+      ai_usage_events: {
+        Row: {
+          id: UUID;
+          project_id: UUID;
+          conversation_id: UUID | null;
+          message_id: UUID | null;
+          kind: AiUsageKind;
+          purpose: AiUsagePurpose;
+          model: string;
+          input_tokens: number;
+          cached_input_tokens: number;
+          output_tokens: number;
+          input_price_per_m: number | null;
+          cached_price_per_m: number | null;
+          output_price_per_m: number | null;
+          price_row_id: UUID | null;
+          cost_usd: number;
+          billable: boolean;
+          status: AiUsageStatus;
+          day: string;
+          period: string;
+          latency_ms: number | null;
+          error: string | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          project_id: UUID;
+          conversation_id?: UUID | null;
+          message_id?: UUID | null;
+          kind: AiUsageKind;
+          purpose: AiUsagePurpose;
+          model: string;
+          input_tokens?: number;
+          cached_input_tokens?: number;
+          output_tokens?: number;
+          input_price_per_m?: number | null;
+          cached_price_per_m?: number | null;
+          output_price_per_m?: number | null;
+          price_row_id?: UUID | null;
+          cost_usd?: number;
+          billable?: boolean;
+          status?: AiUsageStatus;
+          day: string;
+          period: string;
+          latency_ms?: number | null;
+          error?: string | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["ai_usage_events"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0126 — per project-day rollup, recomputed whole by ai_usage_rollup_day()
+      ai_project_daily: {
+        Row: {
+          project_id: UUID;
+          day: string;
+          conversations: number;
+          user_messages: number;
+          assistant_messages: number;
+          chat_calls: number;
+          embedding_calls: number;
+          input_tokens: number;
+          cached_input_tokens: number;
+          output_tokens: number;
+          embedding_tokens: number;
+          cost_usd: number;
+          leads: number;
+          handoffs: number;
+          computed_at: Timestamp;
+        };
+        Insert: {
+          project_id: UUID;
+          day: string;
+          conversations?: number;
+          user_messages?: number;
+          assistant_messages?: number;
+          chat_calls?: number;
+          embedding_calls?: number;
+          input_tokens?: number;
+          cached_input_tokens?: number;
+          output_tokens?: number;
+          embedding_tokens?: number;
+          cost_usd?: number;
+          leads?: number;
+          handoffs?: number;
+          computed_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["ai_project_daily"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0126 — the same day, split by model
+      ai_model_daily: {
+        Row: {
+          project_id: UUID;
+          day: string;
+          model: string;
+          calls: number;
+          input_tokens: number;
+          cached_input_tokens: number;
+          output_tokens: number;
+          cost_usd: number;
+          computed_at: Timestamp;
+        };
+        Insert: {
+          project_id: UUID;
+          day: string;
+          model: string;
+          calls?: number;
+          input_tokens?: number;
+          cached_input_tokens?: number;
+          output_tokens?: number;
+          cost_usd?: number;
+          computed_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["ai_model_daily"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0126 — what the agent captured for the client
+      ai_leads: {
+        Row: {
+          id: UUID;
+          project_id: UUID;
+          conversation_id: UUID | null;
+          name: string | null;
+          email: string | null;
+          phone: string | null;
+          company: string | null;
+          interest: string | null;
+          page_url: string | null;
+          status: AiLeadStatus;
+          notified_at: Timestamp | null;
+          notify_error: string | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          project_id: UUID;
+          conversation_id?: UUID | null;
+          name?: string | null;
+          email?: string | null;
+          phone?: string | null;
+          company?: string | null;
+          interest?: string | null;
+          page_url?: string | null;
+          status?: AiLeadStatus;
+          notified_at?: Timestamp | null;
+          notify_error?: string | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["ai_leads"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0126 — the monthly bill's link row: one per project + period, with the rate snapshot
+      ai_invoices: {
+        Row: {
+          id: UUID;
+          project_id: UUID;
+          invoice_id: UUID | null;
+          period: string;
+          status: AiInvoiceStatus;
+          attempts: number;
+          error: string | null;
+          usage_cost_usd: number;
+          markup: number | null;
+          fee: number | null;
+          minimum: number | null;
+          currency: string | null;
+          fx_lkr_per_usd: number | null;
+          total: number | null;
+          tokens: Record<string, number>;
+          model_breakdown: AiInvoiceModelLine[];
+          mode: string | null;
+          emailed: boolean;
+          created_by: UUID | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          project_id: UUID;
+          invoice_id?: UUID | null;
+          period: string;
+          status?: AiInvoiceStatus;
+          attempts?: number;
+          error?: string | null;
+          usage_cost_usd?: number;
+          markup?: number | null;
+          fee?: number | null;
+          minimum?: number | null;
+          currency?: string | null;
+          fx_lkr_per_usd?: number | null;
+          total?: number | null;
+          tokens?: Record<string, number>;
+          model_breakdown?: AiInvoiceModelLine[];
+          mode?: string | null;
+          emailed?: boolean;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["ai_invoices"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0127 — the safe list: everything the agent may do in the client's backend
+      ai_tools: {
+        Row: {
+          id: UUID;
+          project_id: UUID;
+          name: string;
+          label: string;
+          description: string;
+          kind: AiToolKind;
+          method: AiToolMethod;
+          path: string;
+          parameters: AiToolParam[];
+          timeout_ms: number;
+          enabled: boolean;
+          calls_30d: number;
+          failures_30d: number;
+          last_called_at: Timestamp | null;
+          last_error: string | null;
+          created_by: UUID | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          project_id: UUID;
+          name: string;
+          label?: string;
+          description: string;
+          kind?: AiToolKind;
+          method?: AiToolMethod;
+          path: string;
+          parameters?: AiToolParam[];
+          timeout_ms?: number;
+          enabled?: boolean;
+          calls_30d?: number;
+          failures_30d?: number;
+          last_called_at?: Timestamp | null;
+          last_error?: string | null;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["ai_tools"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0127 — one row per invocation, so a failing client endpoint is a number not a hunt
+      ai_tool_calls: {
+        Row: {
+          id: UUID;
+          project_id: UUID;
+          conversation_id: UUID | null;
+          tool_id: UUID | null;
+          tool_name: string;
+          arguments: Record<string, unknown>;
+          ok: boolean;
+          status: number | null;
+          latency_ms: number | null;
+          error: string | null;
+          response_excerpt: string | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          project_id: UUID;
+          conversation_id?: UUID | null;
+          tool_id?: UUID | null;
+          tool_name: string;
+          arguments?: Record<string, unknown>;
+          ok?: boolean;
+          status?: number | null;
+          latency_ms?: number | null;
+          error?: string | null;
+          response_excerpt?: string | null;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["ai_tool_calls"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0127 — the lead push queue: tried inline, retried on the tick, given up visibly
+      ai_deliveries: {
+        Row: {
+          id: UUID;
+          project_id: UUID;
+          lead_id: UUID | null;
+          conversation_id: UUID | null;
+          kind: AiDeliveryKind;
+          destination: AiDeliveryDestination;
+          status: AiDeliveryStatus;
+          attempts: number;
+          next_attempt_at: Timestamp;
+          last_status: number | null;
+          last_error: string | null;
+          delivered_at: Timestamp | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          project_id: UUID;
+          lead_id?: UUID | null;
+          conversation_id?: UUID | null;
+          kind?: AiDeliveryKind;
+          destination?: AiDeliveryDestination;
+          status?: AiDeliveryStatus;
+          attempts?: number;
+          next_attempt_at?: Timestamp;
+          last_status?: number | null;
+          last_error?: string | null;
+          delivered_at?: Timestamp | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["ai_deliveries"]["Insert"]>;
+        Relationships: [];
+      };
     };
     Views: {
       // 0114 — per-project counts and cost totals for the board.
@@ -6514,6 +7295,21 @@ export type Database = {
       is_admin: {
         Args: { uid: UUID };
         Returns: boolean;
+      };
+      // 0126 — the nearest ready knowledge chunks of ONE AI project.
+      match_ai_chunks: {
+        Args: {
+          p_project_id: UUID;
+          query_embedding: number[];
+          match_threshold?: number;
+          match_count?: number;
+        };
+        Returns: AiChunkMatch[];
+      };
+      // 0126 — recompute one project-day's rollups from the usage ledger.
+      ai_usage_rollup_day: {
+        Args: { p_project_id: UUID; p_day: string };
+        Returns: undefined;
       };
       // 0116 — true when the caller is within the limit, and the hit is
       // recorded. security definer, so an anon caller can count without

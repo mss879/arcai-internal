@@ -63,6 +63,47 @@ export default defineConfig({
       // 0125 — the rules that decide which website conversions are leads and
       // which are the newsletter script. Every conversion figure rests on them.
       "src/lib/web-analytics/ledger-core.test.ts",
+      // Which `reasoning_effort` each model will actually accept. The two
+      // halves of the GPT-5 family want opposite values, and the wrong one
+      // is a 400 on every turn — invisible until a visitor types something.
+      "src/lib/ai/reasoning-core.test.ts",
+      // 0126 — AI Projects. Tokens → dollars is the one conversion every
+      // client invoice rests on; the promo/list price boundary is a date.
+      "src/lib/ai-projects/pricing-core.test.ts",
+      // 0126 — the monthly bill: fee, markup, minimum, FX and rounding.
+      // Every way it can be wrong is a number a client pays.
+      "src/lib/ai-projects/billing-core.test.ts",
+      // 0126 — which website may use a project. Getting the wildcard or the
+      // port wrong either locks a client out or lets the world in.
+      "src/lib/ai-projects/origin-core.test.ts",
+      // 0126 — the Colombo day and month every usage row and bill is filed
+      // under; the failure mode is a late-evening chat on next month's bill.
+      "src/lib/ai-projects/time-core.test.ts",
+      // 0126 — chunk sizes, overlap and the hash that decides whether a
+      // re-crawled page costs embedding tokens again.
+      "src/lib/ai-projects/kb-core.test.ts",
+      // 0126 — the crawl job's state machine; a bug here is a crawl that
+      // never finishes or one that never stops.
+      "src/lib/ai-projects/crawl-core.test.ts",
+      // 0126 — the request caps, the history window and the SHAPE of the
+      // system prompt (static before dynamic keeps prompt caching paying).
+      "src/lib/ai-projects/chat-core.test.ts",
+      // 0126 — the widget's wire format; the widget carries a hand-ported
+      // copy of this parser, so the reference must be pinned.
+      "src/lib/ai-projects/stream-core.test.ts",
+      // 0127 — the SSRF guard in front of every call to a client's server.
+      // Getting one range wrong points the agency's own server at its own
+      // network, including the cloud metadata endpoint.
+      "src/lib/ai-projects/outbound-core.test.ts",
+      // 0127 — the signature on everything crossing to a client's backend.
+      // The kit carries a copy of the verifier, so the scheme is pinned.
+      "src/lib/ai-projects/signature.test.ts",
+      // 0127 — the last gate before a model's arguments are POSTed to a
+      // client's live system. A model's arguments are a suggestion.
+      "src/lib/ai-projects/tool-core.test.ts",
+      // 0127 — when a lead delivery is retried and when it gives up. A lead
+      // is the most valuable thing this system produces; losing one is loud.
+      "src/lib/ai-projects/delivery-core.test.ts",
     ],
   },
 });

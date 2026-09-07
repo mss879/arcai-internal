@@ -186,6 +186,8 @@ export const STORAGE_BUCKETS = {
   projectDocs: "project-docs",
   // 0120 — private: a slip is a picture of somebody's bank account.
   paymentSlips: "payment-slips",
+  // 0126 — private: a client's own documents, read by their website agent.
+  aiKnowledge: "ai-knowledge",
 } as const;
 
 export const SERVICE_TYPE_LABELS: Record<string, string> = {

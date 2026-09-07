@@ -18,6 +18,11 @@ const PUBLIC_PREFIXES = [
   "/audit",
   // Public APIs: inquiry forms, inbound webhooks, visitor tracking, open API.
   "/api/public",
+  // 0126 — the hosted website agent: config, chat and lead routes the widget
+  // on a client's site calls, plus the widget file itself. Every route gates
+  // itself on the project key + origin allow-list (src/lib/ai-projects/cors.ts).
+  "/api/ai",
+  "/ai-widget.js",
   // Cron tick endpoints (optionally guarded by SMS_CRON_SECRET themselves).
   // ANY new /api cron route must be listed here as well as given its Netlify
   // scheduled function — miss this and the call is silently 307'd to /login,
@@ -91,6 +96,8 @@ const MACHINE_PREFIXES = [
   "/api/intelligence/digest",
   "/api/public",
   "/api/outreach/unsubscribe",
+  // 0126 — cookie-free by construction: it is called from other websites.
+  "/api/ai",
   "/.netlify/functions",
 ];
 

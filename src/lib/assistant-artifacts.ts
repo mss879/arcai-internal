@@ -95,6 +95,8 @@ export type AppArea =
   | "projects"
   | "delivery"
   | "website"
+  // 0126 — the hosted website agent (AI Projects).
+  | "ai_projects"
   | "crm"
   | "automation"
   | "finance"

@@ -28,6 +28,23 @@ export type ProjectLesson = Tables["project_lessons"]["Row"];
 export type ProjectAnomaly = Tables["project_anomalies"]["Row"];
 /** 0100 — a standing monthly income arrangement. */
 export type RecurringIncome = Tables["recurring_income"]["Row"];
+/** 0126 — AI Projects: the hosted website agent (src/lib/ai-projects). */
+export type AiProject = Tables["ai_projects"]["Row"];
+export type AiModelPrice = Tables["ai_model_prices"]["Row"];
+export type AiKbSource = Tables["ai_kb_sources"]["Row"];
+export type AiKbChunk = Tables["ai_kb_chunks"]["Row"];
+export type AiCrawlJob = Tables["ai_crawl_jobs"]["Row"];
+export type AiConversation = Tables["ai_conversations"]["Row"];
+export type AiMessage = Tables["ai_messages"]["Row"];
+export type AiUsageEvent = Tables["ai_usage_events"]["Row"];
+export type AiProjectDaily = Tables["ai_project_daily"]["Row"];
+export type AiModelDaily = Tables["ai_model_daily"]["Row"];
+export type AiLead = Tables["ai_leads"]["Row"];
+export type AiInvoice = Tables["ai_invoices"]["Row"];
+/** 0127 — the client backend link. */
+export type AiTool = Tables["ai_tools"]["Row"];
+export type AiToolCall = Tables["ai_tool_calls"]["Row"];
+export type AiDelivery = Tables["ai_deliveries"]["Row"];
 /** 0100 — one month of a recurring arrangement. */
 export type RecurringIncomeEntry = Tables["recurring_income_entries"]["Row"];
 export type ProjectTemplateItem = Tables["project_template_items"]["Row"];
@@ -158,6 +175,31 @@ export type {
   MemberLoanStatus,
   MemberLoanApproval,
   ClientStatus,
+  // 0126 — AI Projects
+  AiProjectStatus,
+  AiReasoningEffort,
+  AiWidgetPosition,
+  AiBillingCurrency,
+  AiInvoiceMode,
+  AiModelKind,
+  AiKbSourceKind,
+  AiKbSourceStatus,
+  AiCrawlStatus,
+  AiCrawlTrigger,
+  AiMessageRole,
+  AiUsageKind,
+  AiUsagePurpose,
+  AiUsageStatus,
+  AiLeadStatus,
+  AiInvoiceStatus,
+  // 0127
+  AiToolKind,
+  AiToolMethod,
+  AiToolParam,
+  AiDeliveryKind,
+  AiDeliveryDestination,
+  AiCalendarProvider,
+  AiDeliveryStatus,
   ResourceKind,
   InviteStatus,
   BookingStatus,

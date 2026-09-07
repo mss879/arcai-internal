@@ -204,6 +204,7 @@ const AREA_HREF: Record<AppArea, string> = {
   projects: "/projects",
   delivery: "/delivery",
   website: "/projects?service=website",
+  ai_projects: "/ai-projects",
   crm: "/crm",
   automation: "/automation",
   finance: "/finance",

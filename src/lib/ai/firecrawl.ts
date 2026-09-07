@@ -293,3 +293,102 @@ export async function firecrawlMap(
     })
     .filter((l: FirecrawlLink) => l.url);
 }
+
+// ---- Crawl (0126, AI Projects) ---------------------------------------------
+// A whole site, asynchronously: POST /crawl returns a job id, GET /crawl/{id}
+// reports progress and pages, paginated through a `next` URL. Firecrawl has
+// no scheduler — the CRM's tick starts crawls on the project's interval.
+
+export type FirecrawlCrawlPage = { url: string; title: string; markdown: string };
+
+export type FirecrawlCrawlStatus = {
+  status: string;
+  total: number;
+  completed: number;
+  /** The full URL of the next page of results, or null when this was the last. */
+  next: string | null;
+  pages: FirecrawlCrawlPage[];
+};
+
+/** Start a crawl. Null on failure (logged). */
+export async function firecrawlCrawlStart(
+  url: string,
+  opts?: { limit?: number; maxDepth?: number },
+): Promise<{ id: string } | null> {
+  let res: Response;
+  try {
+    res = await fetch(`${BASE_URL}/crawl`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey()}`,
+      },
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      body: JSON.stringify({
+        url,
+        limit: Math.max(1, Math.min(1000, opts?.limit ?? 150)),
+        ...(opts?.maxDepth ? { maxDiscoveryDepth: opts.maxDepth } : {}),
+        ignoreQueryParameters: true,
+        scrapeOptions: { formats: ["markdown"], onlyMainContent: true },
+      }),
+    });
+  } catch (e) {
+    console.error(`[firecrawl] crawl start errored: ${e instanceof Error ? e.message : e}`);
+    return null;
+  }
+  if (!res.ok) {
+    console.error(`[firecrawl] crawl start failed (${res.status}): ${await res.text()}`);
+    return null;
+  }
+  try {
+    const json = (await res.json()) as { id?: string; success?: boolean };
+    return json?.id ? { id: String(json.id) } : null;
+  } catch (e) {
+    console.error(`[firecrawl] crawl start: bad JSON — ${e instanceof Error ? e.message : e}`);
+    return null;
+  }
+}
+
+/**
+ * Read a crawl's progress and one page of its results. Pass a job id for
+ * the first page, then each response's `next` URL for the rest.
+ */
+export async function firecrawlCrawlStatus(idOrNextUrl: string): Promise<FirecrawlCrawlStatus | null> {
+  const target = /^https?:\/\//i.test(idOrNextUrl)
+    ? idOrNextUrl
+    : `${BASE_URL}/crawl/${encodeURIComponent(idOrNextUrl)}`;
+  let res: Response;
+  try {
+    res = await fetch(target, {
+      headers: { Authorization: `Bearer ${apiKey()}` },
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+  } catch (e) {
+    console.error(`[firecrawl] crawl status errored: ${e instanceof Error ? e.message : e}`);
+    return null;
+  }
+  if (!res.ok) {
+    console.error(`[firecrawl] crawl status failed (${res.status}): ${await res.text()}`);
+    return null;
+  }
+  let json: { status?: string; total?: number; completed?: number; next?: string | null; data?: RawResult[] };
+  try {
+    json = await res.json();
+  } catch (e) {
+    console.error(`[firecrawl] crawl status: bad JSON — ${e instanceof Error ? e.message : e}`);
+    return null;
+  }
+  const pages: FirecrawlCrawlPage[] = (Array.isArray(json.data) ? json.data : [])
+    .map((r) => {
+      const url = r.metadata?.sourceURL || r.url || "";
+      return url ? { url, title: r.metadata?.title || r.title || "", markdown: r.markdown || "" } : null;
+    })
+    .filter((p): p is FirecrawlCrawlPage => p !== null);
+  return {
+    status: String(json.status ?? "scraping"),
+    total: Number(json.total) || 0,
+    completed: Number(json.completed) || 0,
+    next: typeof json.next === "string" && json.next ? json.next : null,
+    pages,
+  };
+}

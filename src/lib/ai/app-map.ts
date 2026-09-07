@@ -106,6 +106,36 @@ export const APP_AREAS: AppAreaEntry[] = [
     ],
   },
   {
+    // 0126 — the hosted website agent: one project per client, with its
+    // knowledge base, agent settings, deploy snippet, analytics and bill.
+    area: "ai_projects",
+    label: "AI Projects",
+    href: "/ai-projects",
+    blurb:
+      "Hosted website chat agents, one per client: their knowledge base, the agent's prompt and model, the deploy snippet, usage analytics and the monthly usage invoice.",
+    icon: "Bot",
+    adminOnly: true,
+    aliases: [
+      "ai projects",
+      "ai project",
+      "chat widget",
+      "website agent",
+      "website assistant",
+      "client agents",
+      "chatbot",
+    ],
+  },
+  {
+    area: "ai_projects",
+    label: "AI model prices",
+    href: "/ai-projects/models",
+    blurb:
+      "What each OpenAI model costs per million tokens, with effective dates — the catalog every client's AI usage is priced from.",
+    icon: "Bot",
+    adminOnly: true,
+    aliases: ["model prices", "ai prices", "token prices", "openai prices", "model catalog"],
+  },
+  {
     area: "website",
     label: "Website builds",
     href: "/projects?service=website",
@@ -389,6 +419,7 @@ export const APP_AREAS: AppAreaEntry[] = [
 const DYNAMIC_ROUTE_PREFIXES: { prefix: string; area: AppArea }[] = [
   { prefix: "/crm/lead/", area: "crm" },
   { prefix: "/projects/", area: "projects" },
+  { prefix: "/ai-projects/", area: "ai_projects" },
   { prefix: "/meetings/", area: "meetings" },
   { prefix: "/team/", area: "team" },
 ];
@@ -1175,6 +1206,14 @@ export const CAPABILITY_CATALOG: Record<AppArea, Capability[]> = {
       example: "Open Kamal's page",
       kind: "read",
       tools: ["open_record"],
+    },
+  ],
+  ai_projects: [
+    {
+      label: "Open a client's AI project — knowledge, agent, deploy, analytics, invoices",
+      example: "Show me Silverline's AI project",
+      kind: "read",
+      tools: ["open_app_page"],
     },
   ],
   workspace: [

@@ -133,13 +133,14 @@ export function Stat({
  * whole shape is four lines of path arithmetic. Pulling in a charting
  * dependency for it would cost more in bundle size than the page.
  */
-export function TrendChart({
+export function TrendChart<T extends { day: string }>({
   rows,
   metric,
   label,
 }: {
-  rows: WebDaily[];
-  metric: keyof WebDaily;
+  // 0126 — generic so the AI Projects usage rollup can draw with it too.
+  rows: T[];
+  metric: keyof T;
   label: string;
 }) {
   const points = rows.map((r) => Number(r[metric] ?? 0));

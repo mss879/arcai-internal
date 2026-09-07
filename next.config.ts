@@ -38,6 +38,23 @@ const nextConfig: NextConfig = {
         ],
       },
       {
+        // 0126 — the website-agent widget, loaded on clients' sites. Cached
+        // briefly so a fix reaches every site within minutes, revalidated
+        // cheaply by ETag in between.
+        source: "/ai-widget.js",
+        headers: [
+          {
+            key: "Content-Type",
+            value: "application/javascript; charset=utf-8",
+          },
+          {
+            key: "Cache-Control",
+            value: "public, max-age=300, stale-while-revalidate=86400",
+          },
+          { key: "Access-Control-Allow-Origin", value: "*" },
+        ],
+      },
+      {
         // Always serve the freshest service worker.
         source: "/sw.js",
         headers: [

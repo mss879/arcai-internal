@@ -1,5 +1,11 @@
 import "server-only";
 
+import {
+  effortParam,
+  isReasoningModel,
+  reasoningEffortFor,
+} from "./reasoning-core";
+
 /**
  * Thin wrapper around the OpenAI REST API used by the voice assistant.
  *
@@ -31,14 +37,13 @@ export function isOpenAIConfigured(): boolean {
 }
 
 /**
- * Reasoning models (o-series + GPT-5 family) behave differently on the Chat
- * Completions API: they REJECT `temperature`/`top_p` (400 error) and take an
- * optional `reasoning_effort` instead. Detect them by name so the caller can't
- * accidentally send a param that fails the whole request.
+ * Reasoning models take `reasoning_effort` where the others take
+ * `temperature`, and which values each accepts depends on whether the request
+ * also carries function tools. All of that lives in `reasoning-core.ts`,
+ * which is pure so the rules can be pinned by tests; it is re-exported here
+ * because this module has always been where callers look for it.
  */
-export function isReasoningModel(model: string): boolean {
-  return /^(o\d|gpt-5)/i.test(model.trim());
-}
+export { effortParam, isReasoningModel, reasoningEffortFor };
 
 function apiKey(): string {
   const key = process.env.OPENAI_API_KEY;
@@ -72,6 +77,51 @@ export type ToolSchema = {
     parameters: Record<string, unknown>;
   };
 };
+
+/**
+ * Token usage for one call, as the API reports it.
+ *
+ * `promptTokens` INCLUDES `cachedTokens`: the billed input is
+ * (prompt − cached) at the input price plus cached at the cached price.
+ * `completionTokens` includes reasoning tokens on reasoning models.
+ */
+export type ChatUsage = {
+  promptTokens: number;
+  completionTokens: number;
+  cachedTokens: number;
+};
+
+/** Pull the usage object out of a chat-completions body (or a stream's final
+ * frame). Null when the body carries none. */
+export function readUsage(json: unknown): ChatUsage | null {
+  const usage = (json as { usage?: Record<string, unknown> } | null)?.usage;
+  if (!usage || typeof usage !== "object") return null;
+  const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+  const details = usage.prompt_tokens_details as Record<string, unknown> | undefined;
+  return {
+    promptTokens: num(usage.prompt_tokens),
+    completionTokens: num(usage.completion_tokens),
+    cachedTokens: num(details?.cached_tokens),
+  };
+}
+
+/**
+ * Thrown when the API refuses a request outright — a bad model name, a
+ * parameter this model does not take, a malformed body, an auth failure, a
+ * fault on their side. Distinct from a call that ran and was cut off, and the
+ * distinction is money: nothing was generated here, so OpenAI charged nothing,
+ * so a caller that meters tokens must not estimate any for it.
+ */
+export class OpenAIRequestError extends Error {
+  readonly status: number;
+  constructor(status: number, detail: string, what = "chat") {
+    // Same text as the plain Error it replaces — logs and captured errors
+    // that already exist keep reading exactly as they did.
+    super(`OpenAI ${what} failed (${status}): ${detail}`);
+    this.name = "OpenAIRequestError";
+    this.status = status;
+  }
+}
 
 /** Thrown on a 429 so callers can wait the server's own retry window
  * instead of guessing (or, worse, dropping the work). */
@@ -119,11 +169,10 @@ export async function openaiChat(
       // Factual/deterministic by default — this assistant must not improvise
       // data. Conversational callers (the WhatsApp sales agent) pass their own
       // temperature so every lead doesn't get a byte-identical reply.
-      // (Reasoning models reject temperature — they take reasoning_effort.)
+      // (Reasoning models reject temperature — they take reasoning_effort,
+      // and which values they accept depends on the tools below.)
       ...(isReasoningModel(model)
-        ? opts?.reasoningEffort
-          ? { reasoning_effort: opts.reasoningEffort }
-          : {}
+        ? effortParam(reasoningEffortFor(model, opts?.reasoningEffort, Boolean(tools?.length)))
         : { temperature: opts?.temperature ?? 0 }),
       ...(tools && tools.length ? { tools, tool_choice: "auto" } : {}),
     }),
@@ -142,7 +191,7 @@ export async function openaiChat(
         Number.isFinite(seconds) ? seconds * 1000 : null,
       );
     }
-    throw new Error(`OpenAI chat failed (${res.status}): ${detail}`);
+    throw new OpenAIRequestError(res.status, detail);
   }
 
   const json = await res.json();
@@ -186,14 +235,14 @@ export async function openaiChatJSON(
       response_format: { type: "json_object" },
       // Reasoning models reject temperature; they take reasoning_effort instead.
       ...(reasoning
-        ? { reasoning_effort: opts?.reasoningEffort || "medium" }
+        ? effortParam(reasoningEffortFor(model, opts?.reasoningEffort || "medium", false))
         : { temperature: opts?.temperature ?? 0.6 }),
     }),
   });
 
   if (!res.ok) {
     const detail = await res.text();
-    throw new Error(`OpenAI chat failed (${res.status}): ${detail}`);
+    throw new OpenAIRequestError(res.status, detail);
   }
 
   const json = await res.json();
@@ -312,7 +361,12 @@ export async function openaiResponsePoll(
 export async function openaiVisionJSON(
   imageUrl: string,
   prompt: string,
-  opts?: { model?: string; timeoutMs?: number },
+  opts?: {
+    model?: string;
+    timeoutMs?: number;
+    /** 0126 — receives the token usage so the caller can meter the call. */
+    onUsage?: (usage: ChatUsage) => void;
+  },
 ): Promise<string> {
   const model =
     opts?.model?.trim() ||
@@ -343,13 +397,105 @@ export async function openaiVisionJSON(
 
   if (!res.ok) {
     const detail = await res.text();
-    throw new Error(`OpenAI vision failed (${res.status}): ${detail}`);
+    throw new OpenAIRequestError(res.status, detail, "vision");
   }
 
   const json = await res.json();
+  // Meter before checking the content: an empty answer was still paid for.
+  const usage = readUsage(json);
+  if (usage) opts?.onUsage?.(usage);
   const content = json?.choices?.[0]?.message?.content;
   if (!content) throw new Error("OpenAI vision returned no content.");
   return content as string;
+}
+
+// ---- Embeddings ------------------------------------------------------------
+
+/** The embedding model. 1536 dimensions for text-embedding-3-small, which is
+ * what `ai_kb_chunks.embedding vector(1536)` (0126) is sized for — switching
+ * to a model with another width needs a new column, not just a new name. */
+export const EMBED_MODEL =
+  process.env.OPENAI_EMBED_MODEL?.trim() || "text-embedding-3-small";
+
+/** Inputs per call. The API takes up to 2048; 64 keeps one call comfortably
+ * inside a serverless step even for long chunks. */
+export const EMBED_BATCH_MAX = 64;
+
+export type EmbedResult = {
+  /** One vector per input, in input order. */
+  vectors: number[][];
+  /** Tokens the API counted for the whole batch — the number that is billed. */
+  totalTokens: number;
+  model: string;
+};
+
+/**
+ * Embed a batch of texts. One round-trip, vectors in input order.
+ *
+ * Throws on an empty string (the API rejects it and the batch with it) and
+ * on a batch over `EMBED_BATCH_MAX` — the caller chunks, this does not.
+ * @throws {OpenAIRateLimitError} on a 429, carrying the server's retry window.
+ */
+export async function openaiEmbed(
+  texts: string[],
+  opts?: { model?: string; timeoutMs?: number },
+): Promise<EmbedResult> {
+  const model = opts?.model?.trim() || EMBED_MODEL;
+  const inputs = texts.map((t) => t.trim());
+  if (!inputs.length) return { vectors: [], totalTokens: 0, model };
+  if (inputs.some((t) => !t)) {
+    throw new Error("openaiEmbed: an empty string cannot be embedded.");
+  }
+  if (inputs.length > EMBED_BATCH_MAX) {
+    throw new Error(`openaiEmbed: at most ${EMBED_BATCH_MAX} inputs per call.`);
+  }
+
+  const res = await fetch(`${BASE_URL}/embeddings`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey()}`,
+    },
+    signal: AbortSignal.timeout(Math.max(1_000, opts?.timeoutMs ?? 20_000)),
+    body: JSON.stringify({ model, input: inputs, encoding_format: "float" }),
+  });
+
+  if (!res.ok) {
+    const detail = await res.text();
+    if (res.status === 429) {
+      const header = res.headers.get("retry-after");
+      const seconds = header ? Number(header) : NaN;
+      throw new OpenAIRateLimitError(
+        `OpenAI embeddings rate-limited: ${detail}`,
+        Number.isFinite(seconds) ? seconds * 1000 : null,
+      );
+    }
+    throw new OpenAIRequestError(res.status, detail, "embeddings");
+  }
+
+  const json = await res.json();
+  const data: unknown[] = Array.isArray(json?.data) ? json.data : [];
+  // Items carry an `index`; place by it rather than trusting array order.
+  const vectors: number[][] = new Array(inputs.length);
+  for (const raw of data) {
+    const item = raw as { index?: number; embedding?: unknown };
+    if (
+      typeof item?.index === "number" &&
+      item.index >= 0 &&
+      item.index < inputs.length &&
+      Array.isArray(item.embedding)
+    ) {
+      vectors[item.index] = item.embedding as number[];
+    }
+  }
+  if (vectors.some((v) => !v)) {
+    throw new Error("OpenAI embeddings returned fewer vectors than inputs.");
+  }
+  return {
+    vectors,
+    totalTokens: Number(json?.usage?.total_tokens) || 0,
+    model,
+  };
 }
 
 // ---- Transcription (speech -> text) --------------------------------------

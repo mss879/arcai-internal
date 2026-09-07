@@ -3,6 +3,7 @@ import {
   BriefcaseBusiness,
   BarChart3,
   BookOpen,
+  Bot,
   BrainCircuit,
   CalendarClock,
   CreditCard,
@@ -100,6 +101,9 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { label: "Clients", href: "/clients", icon: Users },
       { label: "Client Delivery", href: "/delivery", icon: PackageCheck, capability: "delivery" },
+      // 0126 — the hosted website agent, one project per client. Admin-only:
+      // every project carries billing terms and the client's own documents.
+      { label: "AI Projects", href: "/ai-projects", icon: Bot, adminOnly: true },
       { label: "Meetings", href: "/meetings", icon: CalendarClock },
     ],
   },

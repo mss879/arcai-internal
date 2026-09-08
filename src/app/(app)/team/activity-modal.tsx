@@ -94,8 +94,10 @@ const OP_COLORS: Record<MemberChange["op"], string> = {
 };
 
 /**
- * Admin view of one member's work: Logins (sessions with device, duration,
- * IP and location, plus registered devices), Changes (every create/update/
+ * Admin view of one member's work: Sessions (each stretch of use with its
+ * device, duration, IP and location, plus registered devices — a session is
+ * opened by a sign-in OR by opening the app on an existing login, which is
+ * how a permanently signed-in iPad gets counted), Changes (every create/update/
  * delete they made, grouped per day), and Analytics (hours + changes per
  * day visualized, and where the work went). Last 30 days.
  */
@@ -170,7 +172,7 @@ export function ActivityModal({
           <div className="flex gap-1 rounded-xl bg-slate-100 p-1">
             {(
               [
-                { key: "logins", label: "Logins" },
+                { key: "logins", label: "Sessions" },
                 { key: "changes", label: "Changes" },
                 { key: "analytics", label: "Analytics" },
               ] as { key: TabKey; label: string }[]
@@ -268,15 +270,15 @@ function LoginsTab({
         <div className="flex items-center gap-2 border-b border-slate-100 px-4 py-3">
           <Clock className="h-4 w-4 text-primary-500" />
           <h4 className="text-sm font-semibold text-slate-900">
-            Logins — last 30 days
+            Sessions — last 30 days
           </h4>
           <span className="text-xs text-slate-400">({sessions.length})</span>
         </div>
 
         {sessions.length === 0 ? (
           <p className="px-4 py-8 text-center text-sm text-slate-400">
-            No logins recorded yet. Sign-ins are tracked from the moment this
-            update went live.
+            No sessions recorded yet. Use of the CRM is tracked from the
+            moment this update went live.
           </p>
         ) : (
           <div className="max-h-80 divide-y divide-slate-100 overflow-y-auto">
@@ -287,7 +289,7 @@ function LoginsTab({
                   <p className="flex items-baseline justify-between text-xs font-semibold uppercase tracking-wide text-slate-500">
                     {day}
                     <span className="font-normal normal-case tracking-normal text-slate-400">
-                      {list.length} login{list.length === 1 ? "" : "s"} ·{" "}
+                      {list.length} session{list.length === 1 ? "" : "s"} ·{" "}
                       {fmtMins(totalMins)} active
                     </span>
                   </p>
@@ -304,6 +306,12 @@ function LoginsTab({
                           </span>
                           <span className="rounded-full bg-emerald-100 px-1.5 text-[11px] font-semibold text-emerald-700">
                             {fmtMins(sessionMins(s))}
+                          </span>
+                          {/* Rows written before 0128 have no `kind`; they
+                              were all password sign-ins, so the default is
+                              right for them too. */}
+                          <span className="text-[11px] text-slate-400">
+                            {s.kind === "resume" ? "opened the app" : "signed in"}
                           </span>
                         </p>
                         <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-500">

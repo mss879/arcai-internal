@@ -164,7 +164,12 @@ export async function getMemberActivity(
       .eq("user_id", userId)
       .gte("logged_in_at", since)
       .order("logged_in_at", { ascending: false })
-      .limit(300),
+      // 300 was sized for the old model, where only a password sign-in
+      // made a row and a busy month held a dozen. A session is now opened
+      // every time the app is picked up, so a month can run to several
+      // hundred — and truncation here silently erases the oldest days
+      // from both this tab and the hours-per-day chart built from it.
+      .limit(1000),
     supabase
       .from("member_changes")
       .select("*")

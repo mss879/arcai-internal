@@ -19,6 +19,9 @@ export default defineConfig({
     environment: "node",
     include: [
       "src/components/assistant/interactivity/*.test.ts",
+      // 0128 — does a heartbeat continue a session or start a new one. The
+      // monitor was silently blind for weeks the last time this was wrong.
+      "src/lib/activity-core.test.ts",
       // 0112 — the one number the client sees; cheap to test, costly to get wrong.
       "src/lib/project-progress.test.ts",
       // The money invariant: deposit_paid and the payment rows are the same

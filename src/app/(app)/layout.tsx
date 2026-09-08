@@ -1,10 +1,10 @@
 import { Suspense } from "react";
+import { ActivityHeartbeat } from "@/components/layout/activity-heartbeat";
 import { AppShell } from "@/components/layout/app-shell";
 import { DeviceTrustBanner } from "@/components/layout/device-trust-banner";
 import { PingListener } from "@/components/layout/ping-listener";
 import { ScreenshotSentry } from "@/components/layout/screenshot-sentry";
 import { Skeleton } from "@/components/ui/skeleton";
-import { bumpActivity } from "@/lib/activity";
 import { approvalsCount } from "@/lib/approvals";
 import { requireProfile } from "@/lib/auth";
 import { getDeviceStatus, isTerminalDevice } from "@/lib/device-trust";
@@ -48,9 +48,6 @@ async function AuthenticatedShell({
     isTerminalDevice(profile.id),
     // 0119 — the approvals badge. Zero when 0119 isn't applied yet.
     approvalsCount(supabase).catch(() => 0),
-    // Activity heartbeat for the admin login monitor (members only) —
-    // stretches the current login session's last_active_at, max once/minute.
-    profile.role === "member" ? bumpActivity(profile.id) : null,
   ]);
 
   return (
@@ -61,6 +58,12 @@ async function AuthenticatedShell({
       isTerminal={isTerminal}
     >
       {profile.role === "member" && <ScreenshotSentry />}
+      {/* The login monitor's heartbeat. It lives in a client component
+          talking to /api/activity/ping, NOT here: layouts do not re-render
+          on navigation and cannot write cookies, so a server-side bump
+          fired once per hard load and could never open a session for a
+          member who is permanently signed in. */}
+      {profile.role === "member" && <ActivityHeartbeat />}
       {profile.role === "member" && (
         <PingListener
           userId={profile.id}

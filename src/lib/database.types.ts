@@ -3010,6 +3010,8 @@ export type Database = {
           user_agent: string | null;
           logged_in_at: Timestamp;
           last_active_at: Timestamp;
+          /** 0128 — 'login' typed a password, 'resume' opened the app. */
+          kind: "login" | "resume";
         };
         Insert: {
           id?: UUID;
@@ -3023,6 +3025,7 @@ export type Database = {
           user_agent?: string | null;
           logged_in_at?: Timestamp;
           last_active_at?: Timestamp;
+          kind?: "login" | "resume";
         };
         Update: Partial<
           Database["public"]["Tables"]["login_sessions"]["Insert"]

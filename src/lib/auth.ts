@@ -144,6 +144,25 @@ export async function requireAdmin(): Promise<Profile> {
   return profile;
 }
 
+/**
+ * The action guard: `requireAdmin()`'s rule as an ActionResult (0129).
+ *
+ * A page guard redirects, which is right for a page and useless for a
+ * server action — a member who never loads the page can still POST the
+ * action. Every admin-only action reaches for this, so the check is one
+ * line and cannot be written subtly differently twice.
+ */
+export async function assertAdmin(): Promise<
+  { ok: true; profile: Profile } | { ok: false; error: string }
+> {
+  const profile = await getProfile();
+  if (!profile) return { ok: false, error: "Not signed in." };
+  if (profile.role !== "admin") {
+    return { ok: false, error: "Admins only." };
+  }
+  return { ok: true, profile };
+}
+
 // ---- Capabilities (T5.2) ---------------------------------------------------
 
 /**

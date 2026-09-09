@@ -7,6 +7,7 @@ import {
   processDueAutomationRuns,
   scanTimeBasedTriggers,
 } from "@/lib/automation";
+import { assertAdmin } from "@/lib/auth";
 import { getRecipe } from "@/lib/automation-recipes";
 import { processFinanceReminders } from "@/lib/finance";
 import { createClient } from "@/lib/supabase/server";
@@ -22,6 +23,9 @@ import type {
 export async function createAutomation(
   name: string,
 ): Promise<ActionResult<{ automation: Automation }>> {
+  const gate = await assertAdmin();
+  if (!gate.ok) return { ok: false, error: gate.error };
+
   const supabase = await createClient();
   const {
     data: { user },
@@ -49,6 +53,9 @@ export async function updateAutomation(
     conditions?: Record<string, unknown>[];
   },
 ): Promise<ActionResult> {
+  const gate = await assertAdmin();
+  if (!gate.ok) return { ok: false, error: gate.error };
+
   const supabase = await createClient();
   const { error } = await supabase.from("automations").update(patch).eq("id", id);
   if (error) return { ok: false, error: error.message };
@@ -57,6 +64,9 @@ export async function updateAutomation(
 }
 
 export async function deleteAutomation(id: string): Promise<ActionResult> {
+  const gate = await assertAdmin();
+  if (!gate.ok) return { ok: false, error: gate.error };
+
   const supabase = await createClient();
   const { error } = await supabase.from("automations").delete().eq("id", id);
   if (error) return { ok: false, error: error.message };
@@ -74,6 +84,9 @@ export async function saveAutomationSteps(
   automationId: string,
   steps: AutomationStepInput[],
 ): Promise<ActionResult> {
+  const gate = await assertAdmin();
+  if (!gate.ok) return { ok: false, error: gate.error };
+
   const supabase = await createClient();
   const {
     data: { user },
@@ -106,6 +119,9 @@ export async function saveAutomationSteps(
 export async function installRecipe(
   recipeId: string,
 ): Promise<ActionResult<{ automationId: string }>> {
+  const gate = await assertAdmin();
+  if (!gate.ok) return { ok: false, error: gate.error };
+
   const supabase = await createClient();
   const {
     data: { user },
@@ -152,6 +168,9 @@ export async function testAutomation(
   automationId: string,
   contact: { name: string; phone?: string; email?: string },
 ): Promise<ActionResult> {
+  const gate = await assertAdmin();
+  if (!gate.ok) return { ok: false, error: gate.error };
+
   const supabase = await createClient();
   const {
     data: { user },
@@ -181,6 +200,9 @@ export async function testAutomation(
 // --- Runs -------------------------------------------------------
 
 export async function cancelAutomationRun(id: string): Promise<ActionResult> {
+  const gate = await assertAdmin();
+  if (!gate.ok) return { ok: false, error: gate.error };
+
   const supabase = await createClient();
   const { error } = await supabase
     .from("automation_runs")
@@ -193,6 +215,9 @@ export async function cancelAutomationRun(id: string): Promise<ActionResult> {
 }
 
 export async function deleteAutomationRun(id: string): Promise<ActionResult> {
+  const gate = await assertAdmin();
+  if (!gate.ok) return { ok: false, error: gate.error };
+
   const supabase = await createClient();
   const { error } = await supabase.from("automation_runs").delete().eq("id", id);
   if (error) return { ok: false, error: error.message };
@@ -202,6 +227,9 @@ export async function deleteAutomationRun(id: string): Promise<ActionResult> {
 
 /** Advance timers while the page is open (cron covers the rest). */
 export async function tickAutomations(): Promise<void> {
+  const gate = await assertAdmin();
+  if (!gate.ok) return;
+
   const supabase = await createClient();
   const {
     data: { user },
@@ -222,6 +250,9 @@ export async function createWebhookEndpoint(input: {
   action: "create_lead" | "fire_automation";
   config: Record<string, unknown>;
 }): Promise<ActionResult> {
+  const gate = await assertAdmin();
+  if (!gate.ok) return { ok: false, error: gate.error };
+
   const supabase = await createClient();
   const { error } = await supabase.from("webhook_endpoints").insert({
     name: input.name.trim() || "Inbound webhook",
@@ -235,6 +266,9 @@ export async function createWebhookEndpoint(input: {
 }
 
 export async function deleteWebhookEndpoint(id: string): Promise<ActionResult> {
+  const gate = await assertAdmin();
+  if (!gate.ok) return { ok: false, error: gate.error };
+
   const supabase = await createClient();
   const { error } = await supabase.from("webhook_endpoints").delete().eq("id", id);
   if (error) return { ok: false, error: error.message };
@@ -244,6 +278,9 @@ export async function deleteWebhookEndpoint(id: string): Promise<ActionResult> {
 }
 
 export async function createApiKey(name: string): Promise<ActionResult> {
+  const gate = await assertAdmin();
+  if (!gate.ok) return { ok: false, error: gate.error };
+
   const supabase = await createClient();
   const { error } = await supabase
     .from("api_keys")
@@ -257,6 +294,9 @@ export async function setApiKeyActive(
   id: string,
   isActive: boolean,
 ): Promise<ActionResult> {
+  const gate = await assertAdmin();
+  if (!gate.ok) return { ok: false, error: gate.error };
+
   const supabase = await createClient();
   const { error } = await supabase
     .from("api_keys")
@@ -268,6 +308,9 @@ export async function setApiKeyActive(
 }
 
 export async function deleteApiKey(id: string): Promise<ActionResult> {
+  const gate = await assertAdmin();
+  if (!gate.ok) return { ok: false, error: gate.error };
+
   const supabase = await createClient();
   const { error } = await supabase.from("api_keys").delete().eq("id", id);
   if (error) return { ok: false, error: error.message };

@@ -1,3 +1,4 @@
+import { requireAdmin } from "@/lib/auth";
 import { getMembers } from "@/lib/data";
 import { createClient } from "@/lib/supabase/server";
 import { isSmsConfigured } from "@/lib/sms";
@@ -23,6 +24,10 @@ export default async function AutomationPage({
 }) {
   // T5.1 — a settings-hub card can open a specific tab.
   const { tab: initialTab } = (await searchParams) ?? {};
+  // 0129 — this page reads api_keys, and a key authenticates
+  // /api/public/v1/* which then runs through the SERVICE ROLE. It was the
+  // one unguarded surface that turned a member into an admin-equivalent.
+  await requireAdmin();
   const supabase = await createClient();
 
   const [

@@ -94,6 +94,13 @@ export type ContentReference = Tables["content_references"]["Row"];
 export type ContentGeneration = Tables["content_generations"]["Row"];
 export type CarouselPost = Tables["carousel_posts"]["Row"];
 export type CarouselOption = Tables["carousel_options"]["Row"];
+// 0130 — Content Office
+export type OfficeAgentRow = Tables["office_agents"]["Row"];
+export type OfficeMission = Tables["office_missions"]["Row"];
+export type OfficeTask = Tables["office_tasks"]["Row"];
+export type OfficeEvent = Tables["office_events"]["Row"];
+export type OfficeSchedule = Tables["office_schedules"]["Row"];
+export type OfficeBrandProfile = Tables["office_brand_profiles"]["Row"];
 export type SmsMessage = Tables["sms_messages"]["Row"];
 export type WaContact = Tables["wa_contacts"]["Row"];
 export type WaMessage = Tables["wa_messages"]["Row"];

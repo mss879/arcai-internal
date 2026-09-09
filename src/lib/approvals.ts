@@ -30,7 +30,9 @@ export type ApprovalKind =
   | "change_request"
   | "carousel"
   // 0120
-  | "slip";
+  | "slip"
+  // 0130 — a Content Office mission the Director finished
+  | "content_mission";
 
 export type ApprovalItem = {
   /** `<kind>:<id>` — unique across queues. */
@@ -80,6 +82,7 @@ export async function listApprovalItems(db: DB): Promise<ApprovalItem[]> {
     changes,
     carousels,
     slips,
+    officeMissions,
   ] = await Promise.all([
     safe(async () => {
       const { data } = await db
@@ -152,6 +155,16 @@ export async function listApprovalItems(db: DB): Promise<ApprovalItem[]> {
         .select("id, source, status, match, amount_claimed, reference, invoice_id, client_id, created_at")
         .in("status", ["pending", "duplicate"])
         .order("created_at", { ascending: false })
+        .limit(50);
+      return data ?? [];
+    }),
+    // 0130 — missions the Director finished, waiting for a person.
+    safe(async () => {
+      const { data } = await db
+        .from("office_missions")
+        .select("id, title, goal, mode, summary, cost_usd, finished_at, created_at")
+        .eq("status", "review")
+        .order("finished_at", { ascending: false })
         .limit(50);
       return data ?? [];
     }),
@@ -314,6 +327,24 @@ export async function listApprovalItems(db: DB): Promise<ApprovalItem[]> {
       href: "/finance?tab=slips",
       at: sl.created_at,
       subject: sl.client_id ? (slipClientNames.get(sl.client_id) ?? null) : null,
+    })),
+    // 0130 — the office finished a brief; approve & schedule happens in the
+    // Content Office drawer, which is where this links.
+    ...officeMissions.map((m) => ({
+      key: `content_mission:${m.id}`,
+      kind: "content_mission" as const,
+      id: m.id,
+      title: m.mode === "direct" ? `An agent finished — ${m.title}` : `Content plan ready — ${m.title}`,
+      body: clip(
+        typeof (m.summary as Record<string, unknown>)?.summary === "string"
+          ? String((m.summary as Record<string, unknown>).summary)
+          : m.goal,
+      ),
+      amount: null,
+      currency: null,
+      href: `/content?mission=${m.id}`,
+      at: m.finished_at ?? m.created_at,
+      subject: null,
     })),
   ];
 

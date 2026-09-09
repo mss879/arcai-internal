@@ -29,7 +29,7 @@ const KEY_RE = /^[A-Za-z0-9_-]{8,80}$/;
 
 /** Same rule as `isReasoningModel` in openai.ts, which is server-only. */
 export function isReasoningModelName(model: string): boolean {
-  return /^(o\d|gpt-5)/i.test(model.trim());
+  return /^(o\d|gpt-[5-9])/i.test(model.trim());
 }
 
 export type ChatRequest = {

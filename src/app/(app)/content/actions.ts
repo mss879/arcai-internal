@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 
-import { getProfile } from "@/lib/auth";
+import { assertCapability, getProfile } from "@/lib/auth";
 import { sendAndLogEmail } from "@/lib/email-outbox";
 import { createClient } from "@/lib/supabase/server";
 import { STORAGE_BUCKETS } from "@/lib/constants";
@@ -52,6 +52,10 @@ export type GenerateContentResult =
 export async function generateContent(
   input: GenerateContentInput,
 ): Promise<GenerateContentResult> {
+  // T5.2/0130 — the page guard alone never stopped a POST.
+  const gate = await assertCapability("marketing");
+  if (!gate.ok) return gate;
+
   if (!isGeminiConfigured()) {
     return {
       ok: false,
@@ -189,6 +193,10 @@ export type AddReferenceInput = {
 export async function addReference(
   input: AddReferenceInput,
 ): Promise<ActionResult> {
+  // T5.2/0130 — the page guard alone never stopped a POST.
+  const gate = await assertCapability("marketing");
+  if (!gate.ok) return gate;
+
   const supabase = await createClient();
   const {
     data: { user },
@@ -216,6 +224,10 @@ export async function deleteReference(
   id: string,
   path: string,
 ): Promise<ActionResult> {
+  // T5.2/0130 — the page guard alone never stopped a POST.
+  const gate = await assertCapability("marketing");
+  if (!gate.ok) return gate;
+
   const supabase = await createClient();
   const {
     data: { user },
@@ -242,6 +254,10 @@ export async function deleteGeneration(
   id: string,
   path: string,
 ): Promise<ActionResult> {
+  // T5.2/0130 — the page guard alone never stopped a POST.
+  const gate = await assertCapability("marketing");
+  if (!gate.ok) return gate;
+
   const supabase = await createClient();
   const {
     data: { user },
@@ -277,6 +293,10 @@ export type CreateCarouselPostInput = {
 export async function createCarouselPost(
   input: CreateCarouselPostInput,
 ): Promise<ActionResult> {
+  // T5.2/0130 — the page guard alone never stopped a POST.
+  const gate = await assertCapability("marketing");
+  if (!gate.ok) return gate;
+
   const supabase = await createClient();
   const {
     data: { user },
@@ -304,6 +324,10 @@ export async function updateCarouselPost(
   id: string,
   input: CreateCarouselPostInput,
 ): Promise<ActionResult> {
+  // T5.2/0130 — the page guard alone never stopped a POST.
+  const gate = await assertCapability("marketing");
+  if (!gate.ok) return gate;
+
   const supabase = await createClient();
   const {
     data: { user },
@@ -334,6 +358,10 @@ export async function updateCarouselPost(
 }
 
 export async function deleteCarouselPost(id: string): Promise<ActionResult> {
+  // T5.2/0130 — the page guard alone never stopped a POST.
+  const gate = await assertCapability("marketing");
+  if (!gate.ok) return gate;
+
   const supabase = await createClient();
   const {
     data: { user },
@@ -368,6 +396,10 @@ export async function deleteCarouselPost(id: string): Promise<ActionResult> {
 
 /** "Generate now" + the retry button: (re)start the pipeline immediately. */
 export async function generateCarouselNow(id: string): Promise<ActionResult> {
+  // T5.2/0130 — the page guard alone never stopped a POST.
+  const gate = await assertCapability("marketing");
+  if (!gate.ok) return gate;
+
   const supabase = await createClient();
   const {
     data: { user },
@@ -386,6 +418,10 @@ export async function approveCarouselOption(
   postId: string,
   optionId: string,
 ): Promise<ActionResult> {
+  // T5.2/0130 — the page guard alone never stopped a POST.
+  const gate = await assertCapability("marketing");
+  if (!gate.ok) return gate;
+
   const supabase = await createClient();
   const {
     data: { user },
@@ -410,6 +446,10 @@ export async function approveCarouselOption(
 export async function regenerateCarouselOption(
   optionId: string,
 ): Promise<ActionResult> {
+  // T5.2/0130 — the page guard alone never stopped a POST.
+  const gate = await assertCapability("marketing");
+  if (!gate.ok) return gate;
+
   const supabase = await createClient();
   const {
     data: { user },
@@ -465,6 +505,10 @@ export async function regenerateCarouselOption(
  * Never throws; the next poll retries.
  */
 export async function advanceCarousels(): Promise<{ ok: boolean }> {
+  // T5.2/0130 — the page guard alone never stopped a POST.
+  const gate = await assertCapability("marketing");
+  if (!gate.ok) return { ok: false };
+
   const supabase = await createClient();
   const {
     data: { user },
@@ -493,6 +537,10 @@ export async function sendForClientApproval(
   postId: string,
   clientId: string,
 ): Promise<ActionResult<{ url: string }>> {
+  // T5.2/0130 — the page guard alone never stopped a POST.
+  const gate = await assertCapability("marketing");
+  if (!gate.ok) return gate;
+
   const profile = await getProfile();
   if (!profile) return { ok: false, error: "Not signed in." };
 
@@ -559,6 +607,10 @@ export async function scheduleSocialPost(input: {
   accountIds: string[];
   scheduledFor: string;
 }): Promise<ActionResult<{ queued: number }>> {
+  // T5.2/0130 — the page guard alone never stopped a POST.
+  const gate = await assertCapability("marketing");
+  if (!gate.ok) return gate;
+
   const profile = await getProfile();
   if (!profile) return { ok: false, error: "Not signed in." };
 
@@ -577,6 +629,10 @@ export async function scheduleSocialPost(input: {
 
 /** Take a post back off the queue before it goes out. */
 export async function cancelSocialPost(id: string): Promise<ActionResult> {
+  // T5.2/0130 — the page guard alone never stopped a POST.
+  const gate = await assertCapability("marketing");
+  if (!gate.ok) return gate;
+
   const profile = await getProfile();
   if (!profile) return { ok: false, error: "Not signed in." };
 
@@ -598,6 +654,10 @@ export async function cancelSocialPost(id: string): Promise<ActionResult> {
 
 /** Put a failed post back on the queue with a fresh set of attempts. */
 export async function retrySocialPost(id: string): Promise<ActionResult> {
+  // T5.2/0130 — the page guard alone never stopped a POST.
+  const gate = await assertCapability("marketing");
+  if (!gate.ok) return gate;
+
   const profile = await getProfile();
   if (!profile) return { ok: false, error: "Not signed in." };
 
@@ -625,6 +685,10 @@ export async function retrySocialPost(id: string): Promise<ActionResult> {
 export async function listSocialAccounts(): Promise<
   { id: string; platform: string; name: string; clientId: string | null }[]
 > {
+  // T5.2/0130 — the page guard alone never stopped a POST.
+  const gate = await assertCapability("marketing");
+  if (!gate.ok) return [];
+
   const profile = await getProfile();
   if (!profile) return [];
   return listActiveSocialAccounts(await createClient());

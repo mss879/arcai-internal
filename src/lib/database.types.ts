@@ -33,7 +33,7 @@ export type AiCrawlStatus =
 export type AiCrawlTrigger = "schedule" | "manual";
 export type AiMessageRole = "user" | "assistant" | "tool";
 export type AiUsageKind = "chat" | "embedding" | "vision";
-export type AiUsagePurpose = "reply" | "retrieval" | "ingest" | "describe";
+export type AiUsagePurpose = "reply" | "retrieval" | "ingest" | "describe" | "agent"; // 0130: "agent" = Content Office spend
 export type AiUsageStatus = "complete" | "partial";
 export type AiLeadStatus = "new" | "contacted" | "archived";
 export type AiInvoiceStatus = "pending" | "created" | "skipped_zero" | "failed";
@@ -749,6 +749,85 @@ export type SocialPostStatus =
   | "cancelled";
 /** One image in a post, in order. Public URLs — Meta fetches them itself. */
 export type SocialMediaItem = { url: string };
+
+// 0130 — Content Office (src/lib/agents): the multi-agent virtual office.
+export type OfficeAgentKey =
+  | "manager"
+  | "research"
+  | "planner"
+  | "writer"
+  | "designer"
+  | "brand"
+  | "qa"
+  | "publisher"
+  // 0131 — the two generalists: any one-off job, not part of the Director's plans.
+  | "ops_a"
+  | "ops_b";
+export type OfficeMissionMode = "manager" | "direct";
+export type OfficeMissionStatus =
+  | "planning"
+  | "running"
+  | "review"
+  | "approved"
+  | "done"
+  | "failed"
+  | "cancelled"
+  | "paused";
+export type OfficeTaskStatus =
+  | "queued"
+  | "ready"
+  | "running"
+  | "done"
+  | "failed"
+  | "cancelled"
+  | "blocked";
+export type OfficeTaskKind = "plan" | "work" | "review" | "revise";
+export type OfficeEventKind =
+  | "started"
+  | "thinking"
+  | "search"
+  | "tool"
+  | "handoff"
+  | "done"
+  | "failed"
+  | "blocked"
+  | "revision"
+  | "review"
+  | "note"
+  | "schedule";
+export type OfficeCadence = "daily" | "weekly" | "monthly" | "every_n_days";
+/** Every effort any family takes; `responsesEffortFor` coerces per model. */
+export type OfficeEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+export type OfficeDeliverable =
+  | "research_brief"
+  | "content_plan"
+  | "post_copy"
+  | "carousel_draft"
+  | "brand_review"
+  | "qa_report"
+  | "schedule_proposal";
+/** What a brief asks for. Stored on `office_missions.options`. */
+export type OfficeMissionOptions = {
+  platforms?: SocialPlatform[];
+  postCount?: number;
+  dateFrom?: string | null;
+  dateTo?: string | null;
+  /** Admin-only. Lets the Publisher queue posts itself. */
+  autoPublish?: boolean;
+  /** Direct mode: the one agent the task went to. */
+  agentKey?: OfficeAgentKey | null;
+  accountIds?: string[];
+};
+/** One task in the Director's plan (the model's own output shape). */
+export type OfficePlanTask = {
+  key: string;
+  agent: Exclude<OfficeAgentKey, "manager">;
+  title: string;
+  instructions: string;
+  depends_on: string[];
+  deliverable: OfficeDeliverable;
+};
+export type OfficePlan = { title: string; summary: string; tasks: OfficePlanTask[] };
 
 // 0120 — invoices as a state, payments with a source, the bank slip
 export type InvoiceStatus = "issued" | "sent" | "partially_paid" | "paid" | "void";
@@ -2208,6 +2287,9 @@ export type Database = {
           client_status: ContentClientStatus;
           client_feedback: string | null;
           client_decided_at: Timestamp | null;
+          // 0130 — which Content Office mission/task drafted it.
+          mission_id: UUID | null;
+          office_task_id: UUID | null;
           created_by: UUID | null;
           created_at: Timestamp;
           updated_at: Timestamp;
@@ -2231,6 +2313,9 @@ export type Database = {
           client_status?: ContentClientStatus;
           client_feedback?: string | null;
           client_decided_at?: Timestamp | null;
+          // 0130
+          mission_id?: UUID | null;
+          office_task_id?: UUID | null;
           created_by?: UUID | null;
           created_at?: Timestamp;
           updated_at?: Timestamp;
@@ -6952,7 +7037,9 @@ export type Database = {
       ai_usage_events: {
         Row: {
           id: UUID;
-          project_id: UUID;
+          /** 0130 — null for the Content Office's own spend (see office_task_id). */
+          project_id: UUID | null;
+          office_task_id: UUID | null;
           conversation_id: UUID | null;
           message_id: UUID | null;
           kind: AiUsageKind;
@@ -6976,7 +7063,8 @@ export type Database = {
         };
         Insert: {
           id?: UUID;
-          project_id: UUID;
+          project_id: UUID | null;
+          office_task_id?: UUID | null;
           conversation_id?: UUID | null;
           message_id?: UUID | null;
           kind: AiUsageKind;
@@ -7268,6 +7356,324 @@ export type Database = {
           updated_at?: Timestamp;
         };
         Update: Partial<Database["public"]["Tables"]["ai_deliveries"]["Insert"]>;
+        Relationships: [];
+      };
+
+      // 0129 — which migrations have actually been applied. 0025 and 0060
+      // were never applied and nobody noticed for ~60 migrations; every
+      // migration from 0129 stamps itself here and scripts/schema-audit.mjs
+      // diffs the expected objects against the live schema.
+      schema_migrations: {
+        Row: {
+          version: string;
+          applied_at: Timestamp;
+          note: string | null;
+        };
+        Insert: {
+          version: string;
+          applied_at?: Timestamp;
+          note?: string | null;
+        };
+        Update: Partial<Database["public"]["Tables"]["schema_migrations"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0130 — Content Office. Roster overrides; null = the code default.
+      office_agents: {
+        Row: {
+          key: string;
+          name: string;
+          title: string;
+          description: string;
+          model: string | null;
+          reasoning_effort: string | null;
+          instructions: string;
+          tools: string[];
+          enabled: boolean;
+          color: string | null;
+          sort: number;
+          updated_by: UUID | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          key: string;
+          name: string;
+          title?: string;
+          description?: string;
+          model?: string | null;
+          reasoning_effort?: string | null;
+          instructions?: string;
+          tools?: string[];
+          enabled?: boolean;
+          color?: string | null;
+          sort?: number;
+          updated_by?: UUID | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["office_agents"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0130 — the voice the writers and QA work against. client_id null = house.
+      office_brand_profiles: {
+        Row: {
+          id: UUID;
+          client_id: UUID | null;
+          name: string;
+          voice: Record<string, unknown>;
+          pillars: string[];
+          audience: string;
+          banned_words: string[];
+          hashtag_sets: unknown[];
+          colors: unknown[];
+          notes: string;
+          is_default: boolean;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          client_id?: UUID | null;
+          name: string;
+          voice?: Record<string, unknown>;
+          pillars?: string[];
+          audience?: string;
+          banned_words?: string[];
+          hashtag_sets?: unknown[];
+          colors?: unknown[];
+          notes?: string;
+          is_default?: boolean;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["office_brand_profiles"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0130 — one goal, one mission.
+      office_missions: {
+        Row: {
+          id: UUID;
+          title: string;
+          goal: string;
+          mode: OfficeMissionMode;
+          status: OfficeMissionStatus;
+          plan: Record<string, unknown>;
+          summary: Record<string, unknown>;
+          options: OfficeMissionOptions;
+          client_id: UUID | null;
+          brand_profile_id: UUID | null;
+          schedule_id: UUID | null;
+          cost_usd: number;
+          revision_round: number;
+          error: string | null;
+          created_by: UUID | null;
+          started_at: Timestamp | null;
+          finished_at: Timestamp | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          title?: string;
+          goal: string;
+          mode?: OfficeMissionMode;
+          status?: OfficeMissionStatus;
+          plan?: Record<string, unknown>;
+          summary?: Record<string, unknown>;
+          options?: OfficeMissionOptions;
+          client_id?: UUID | null;
+          brand_profile_id?: UUID | null;
+          schedule_id?: UUID | null;
+          cost_usd?: number;
+          revision_round?: number;
+          error?: string | null;
+          created_by?: UUID | null;
+          started_at?: Timestamp | null;
+          finished_at?: Timestamp | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["office_missions"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0130 — one agent, one unit of work, one lease. Small: it is realtime-published.
+      office_tasks: {
+        Row: {
+          id: UUID;
+          mission_id: UUID;
+          key: string;
+          agent_key: OfficeAgentKey;
+          kind: OfficeTaskKind;
+          title: string;
+          instructions: string;
+          depends_on: UUID[];
+          status: OfficeTaskStatus;
+          phase: string;
+          step: string;
+          input: Record<string, unknown>;
+          output: Record<string, unknown> | null;
+          attempts: number;
+          rounds: number;
+          version: number;
+          lease_until: Timestamp | null;
+          killed: number;
+          run_after: Timestamp | null;
+          openai_response_id: string | null;
+          response_started_at: Timestamp | null;
+          pending_create_at: Timestamp | null;
+          model: string | null;
+          effort: string | null;
+          model_note: string | null;
+          usage_input: number;
+          usage_cached: number;
+          usage_output: number;
+          usage_reasoning: number;
+          tool_calls: number;
+          searches: number;
+          cost_usd: number;
+          revision_of: UUID | null;
+          revision_round: number;
+          error: string | null;
+          started_at: Timestamp | null;
+          finished_at: Timestamp | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          mission_id: UUID;
+          key: string;
+          agent_key: OfficeAgentKey;
+          kind?: OfficeTaskKind;
+          title: string;
+          instructions?: string;
+          depends_on?: UUID[];
+          status?: OfficeTaskStatus;
+          phase?: string;
+          step?: string;
+          input?: Record<string, unknown>;
+          output?: Record<string, unknown> | null;
+          attempts?: number;
+          rounds?: number;
+          version?: number;
+          lease_until?: Timestamp | null;
+          killed?: number;
+          run_after?: Timestamp | null;
+          openai_response_id?: string | null;
+          response_started_at?: Timestamp | null;
+          pending_create_at?: Timestamp | null;
+          model?: string | null;
+          effort?: string | null;
+          model_note?: string | null;
+          usage_input?: number;
+          usage_cached?: number;
+          usage_output?: number;
+          usage_reasoning?: number;
+          tool_calls?: number;
+          searches?: number;
+          cost_usd?: number;
+          revision_of?: UUID | null;
+          revision_round?: number;
+          error?: string | null;
+          started_at?: Timestamp | null;
+          finished_at?: Timestamp | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["office_tasks"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0130 — the raw model transcript. Admin-read, not published.
+      office_task_transcripts: {
+        Row: {
+          task_id: UUID;
+          items: unknown[];
+          responses: unknown[];
+          updated_at: Timestamp;
+        };
+        Insert: {
+          task_id: UUID;
+          items?: unknown[];
+          responses?: unknown[];
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["office_task_transcripts"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0130 — the live feed the office floor animates from.
+      office_events: {
+        Row: {
+          id: number;
+          mission_id: UUID | null;
+          task_id: UUID | null;
+          agent_key: string;
+          kind: OfficeEventKind;
+          message: string;
+          meta: Record<string, unknown>;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: number;
+          mission_id?: UUID | null;
+          task_id?: UUID | null;
+          agent_key: string;
+          kind: OfficeEventKind;
+          message: string;
+          meta?: Record<string, unknown>;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["office_events"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0130 — timers that open missions unattended.
+      office_schedules: {
+        Row: {
+          id: UUID;
+          name: string;
+          goal: string;
+          mode: OfficeMissionMode;
+          agent_key: OfficeAgentKey | null;
+          cadence: OfficeCadence;
+          every_n: number | null;
+          run_time: string;
+          weekdays: number[];
+          day_of_month: number | null;
+          timezone: string;
+          options: OfficeMissionOptions;
+          client_id: UUID | null;
+          brand_profile_id: UUID | null;
+          is_active: boolean;
+          next_run_at: Timestamp | null;
+          last_run_at: Timestamp | null;
+          last_mission_id: UUID | null;
+          created_by: UUID | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          name: string;
+          goal: string;
+          mode?: OfficeMissionMode;
+          agent_key?: OfficeAgentKey | null;
+          cadence?: OfficeCadence;
+          every_n?: number | null;
+          run_time?: string;
+          weekdays?: number[];
+          day_of_month?: number | null;
+          timezone?: string;
+          options?: OfficeMissionOptions;
+          client_id?: UUID | null;
+          brand_profile_id?: UUID | null;
+          is_active?: boolean;
+          next_run_at?: Timestamp | null;
+          last_run_at?: Timestamp | null;
+          last_mission_id?: UUID | null;
+          created_by?: UUID | null;
+          created_at?: Timestamp;
+          updated_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["office_schedules"]["Insert"]>;
         Relationships: [];
       };
     };

@@ -36,7 +36,7 @@ function slugify(text: string): string {
  * Instagram carousel. jszip is imported on demand so it never weighs down
  * the page bundle.
  */
-async function downloadOptionZip(post: CarouselPost, option: CarouselOption) {
+export async function downloadOptionZip(post: CarouselPost, option: CarouselOption) {
   const slides = ((option.slides ?? []) as CarouselSlide[]).filter(
     (s) => s.image_url,
   );

@@ -124,3 +124,33 @@ their role, not by their capabilities. Nobody but the service role has one.
 - Days and months in this module are Asia/Colombo (Web Analytics is UTC).
 - Public surface: `/ai-widget.js`, `/api/ai/config`, `/api/ai/chat`,
   `/api/ai/lead` — see `docs/api.md`.
+
+## Content Office (0130)
+
+- The seven `office_*` tables are the agents' own. `office_missions`,
+  `office_tasks` and `office_events` are readable by every signed-in member
+  and writable by **nobody** through the anon key — every write is a server
+  action on the service role behind `assertCapability("marketing")`. Config
+  (`office_agents`, `office_brand_profiles`, `office_schedules`) is admin-write.
+  `office_task_transcripts` is admin-read: it carries raw web text.
+- Every agent call is an OpenAI **Responses API** call in background mode
+  (`src/lib/ai/responses.ts`); nothing awaits a model. The response id is
+  written before anything else after a create, so a killed step polls the
+  same paid response next time instead of buying another. `attempts` counts
+  paid starts (cap 3, backoff 1m/5m/15m); `killed` counts leased steps the
+  platform cut off (cap 3); a poll bumps neither.
+- Spend lands in `ai_usage_events` with `purpose = 'agent'` and
+  `project_id IS NULL` (`office_task_id` set). Every existing reader filters
+  by an explicit project, so these rows can never reach a client invoice.
+  A daily cap (`app_settings.content_office.daily_cap_usd`, default
+  `OFFICE_DAILY_BUDGET_USD` = 15) blocks new starts; polling continues.
+- One pass rides the automation tick: `contentOffice`. The open page drives
+  the same function every 5 s. Housekeeping stamp: `app_settings.office_janitor`
+  (events older than 14 days are trimmed every 6 h).
+- Publishing: missions end in `review`; a person presses **Approve &
+  schedule**, which goes through `queueSocialPost` like the Calendar does. A
+  mission or timer with `autoPublish` (admin-only) lets the Publisher agent
+  queue posts itself. `SOCIAL_TOKEN_KEY` and `SOCIAL_DRY_RUN` apply unchanged.
+- Timers (`office_schedules`) fire on the tick with a compare-and-set on
+  `next_run_at`. Unattended runs advance one step per tick and render one
+  slide per tick, so a timer should fire hours before the posts are due.

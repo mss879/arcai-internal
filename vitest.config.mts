@@ -107,6 +107,25 @@ export default defineConfig({
       // 0127 — when a lead delivery is retried and when it gives up. A lead
       // is the most valuable thing this system produces; losing one is loud.
       "src/lib/ai-projects/delivery-core.test.ts",
+      // 0129 — the defaults every unconfigured deployment falls back to.
+      // A config layer's own failure mode is blanking a field it was meant
+      // to supply; these pin that a half-filled form changes nothing.
+      "src/lib/business-config-core.test.ts",
+      // 0130 — the Responses API wire format. Text read from the wrong field
+      // is null; usage read from the wrong field meters every agent at $0.
+      "src/lib/ai/responses-core.test.ts",
+      // 0130 — the Content Office's cost-safety rules: leases, the two
+      // counters, plan validation, the renderer's copy shape, schedule times.
+      "src/lib/agents/office-core.test.ts",
+      // 0130 — the roster: a tool an agent is promised but does not have is a
+      // robot that stands at its desk forever.
+      "src/lib/agents/roster.test.ts",
+      // 0130 — which desk a robot walks to for which state; filler bots are
+      // deterministic so the floor never jumps on a re-render.
+      "src/app/(app)/content/office/office-sim.test.ts",
+      // 0130 — the floor is a level: every desk must be reachable from the
+      // door through the gate, and rotation must keep the geometry honest.
+      "src/app/(app)/content/office/office-layout.test.ts",
     ],
   },
 });

@@ -317,12 +317,12 @@ export const APP_AREAS: AppAreaEntry[] = [
   },
   {
     area: "content",
-    label: "Content Studio",
+    label: "Content Office",
     href: "/content",
     blurb:
-      "Marketing content — generate posts and carousels, plan them on a calendar, and keep the references the AI writes from.",
+      "Marketing content — a team of AI agents (a Director, researcher, planner, writer, art director, brand guardian, checker and publisher) that plans and drafts social posts you approve; plus the calendar, the reference library and the publish queue.",
     icon: "Sparkles",
-    aliases: ["content", "posts", "social", "marketing", "carousel", "studio", "captions"],
+    aliases: ["content", "posts", "social", "marketing", "carousel", "studio", "captions", "office", "content office", "agents", "robots"],
   },
   {
     area: "resources",

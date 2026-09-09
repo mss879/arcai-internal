@@ -5,30 +5,29 @@ export default function ContentLoading() {
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <Skeleton className="h-8 w-40" />
+        <Skeleton className="h-8 w-44" />
         <Skeleton className="h-10 w-32 rounded-xl" />
       </div>
 
       {/* Tabs */}
       <div className="flex gap-2">
-        {Array.from({ length: 3 }).map((_, i) => (
+        {Array.from({ length: 4 }).map((_, i) => (
           <Skeleton key={i} className="h-10 w-28 rounded-xl" />
         ))}
       </div>
 
-      {/* Content grid */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {Array.from({ length: 6 }).map((_, i) => (
-          <div
-            key={i}
-            className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm space-y-3"
-          >
-            <Skeleton className="h-36 w-full rounded-xl" />
-            <Skeleton className="h-4 w-3/4" />
-            <Skeleton className="h-3 w-1/2" />
-          </div>
-        ))}
+      {/* The floor and the rail — 0130 */}
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
+        <Skeleton className="aspect-[1280/760] w-full rounded-2xl" />
+        <div className="space-y-4">
+          <Skeleton className="h-28 w-full rounded-2xl" />
+          <Skeleton className="h-40 w-full rounded-2xl" />
+          <Skeleton className="h-64 w-full rounded-2xl" />
+        </div>
       </div>
+
+      {/* The dock */}
+      <Skeleton className="h-56 w-full rounded-2xl" />
     </div>
   );
 }

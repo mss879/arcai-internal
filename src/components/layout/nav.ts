@@ -119,7 +119,7 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     label: "Marketing & Outreach",
     items: [
-      { label: "Content Studio", href: "/content", icon: Sparkles, capability: "marketing" },
+      { label: "Content Office", href: "/content", icon: Sparkles, capability: "marketing" },
       { label: "SMS", href: "/sms", icon: MessageSquareText, capability: "marketing" },
       { label: "WhatsApp", href: "/whatsapp", icon: MessageCircle },
     ],

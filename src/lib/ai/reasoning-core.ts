@@ -29,7 +29,15 @@
  * can't accidentally send a param that fails the whole request.
  */
 export function isReasoningModel(model: string): boolean {
-  return /^(o\d|gpt-5)/i.test(model.trim());
+  // gpt-[5-9]: the 0130 Content Office puts gpt-6-astra behind this; a
+  // `gpt-5`-only match sent it `temperature` and every call was a 400.
+  return /^(o\d|gpt-[5-9])/i.test(model.trim());
+}
+
+/** The GPT generation (`gpt-6-astra` → 6, `gpt-4o` → 4), or null. */
+export function gptMajor(model: string): number | null {
+  const m = model.trim().match(/^gpt-(\d+)/i);
+  return m ? Number(m[1]) : null;
 }
 
 /**
@@ -81,4 +89,57 @@ export function reasoningEffortFor(
 /** The body fragment for an effort, or nothing when it is to be omitted. */
 export function effortParam(effort: string | null): { reasoning_effort?: string } {
   return effort ? { reasoning_effort: effort } : {};
+}
+
+// ---- The Responses API (0130) ---------------------------------------------
+//
+// Everything above was measured on /v1/chat/completions. /v1/responses is
+// the endpoint that DOES let gpt-5.4+ reason and call function tools in one
+// request, and it is the only endpoint gpt-6 will call tools on at all — so
+// the Content Office agents live there, with their own effort rules:
+//
+//   gpt-6.*             low medium high xhigh max   (no none/minimal; no temperature)
+//   gpt-5.4 · 5.5 · 5.6 none low medium high xhigh
+//   gpt-5 / o-series    minimal low medium high
+//   gpt-4.1 / gpt-4o    (omit)
+
+export const RESPONSES_EFFORTS_GPT6 = ["low", "medium", "high", "xhigh", "max"];
+export const RESPONSES_EFFORTS_MODERN = MODERN_EFFORTS;
+
+/**
+ * The `reasoning.effort` for a Responses call — or null to omit it. Never
+ * returns a value the model refuses; an impossible request is coerced to the
+ * nearest one the family takes, and gpt-6 always reasons (its floor is low).
+ */
+export function responsesEffortFor(
+  model: string,
+  requested: string | null | undefined,
+): string | null {
+  if (!isReasoningModel(model)) return null;
+  const want = requested?.trim().toLowerCase() || null;
+  const major = gptMajor(model);
+
+  if (major !== null && major >= 6) {
+    if (!want) return "medium";
+    if (want === "none" || want === "minimal") return "low";
+    return RESPONSES_EFFORTS_GPT6.includes(want) ? want : "medium";
+  }
+
+  const minor = gpt5Minor(model);
+  if (minor !== null && minor >= TOOLS_EXCLUDE_REASONING_FROM) {
+    if (!want) return null;
+    if (want === "minimal") return "none";
+    if (want === "max") return "xhigh";
+    return MODERN_EFFORTS.includes(want) ? want : "low";
+  }
+
+  if (!want) return null;
+  if (want === "none") return "minimal";
+  if (want === "xhigh" || want === "max") return "high";
+  return CLASSIC_EFFORTS.includes(want) ? want : "low";
+}
+
+/** Reasoning models reject `temperature` on both endpoints. */
+export function supportsTemperature(model: string): boolean {
+  return !isReasoningModel(model);
 }

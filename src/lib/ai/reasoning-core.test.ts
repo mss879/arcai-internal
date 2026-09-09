@@ -3,8 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   effortParam,
   gpt5Minor,
+  gptMajor,
   isReasoningModel,
   reasoningEffortFor,
+  responsesEffortFor,
+  supportsTemperature,
 } from "./reasoning-core";
 
 /**
@@ -92,5 +95,56 @@ describe("effortParam", () => {
   it("sends nothing at all rather than a null", () => {
     expect(effortParam(null)).toEqual({});
     expect(effortParam("none")).toEqual({ reasoning_effort: "none" });
+  });
+});
+
+// ---- 0130: the Responses API rules -----------------------------------------
+
+describe("gptMajor / gpt-6", () => {
+  it("reads the generation and counts gpt-6 as a reasoning model", () => {
+    expect(gptMajor("gpt-6-astra")).toBe(6);
+    expect(gptMajor("gpt-5.6-sol")).toBe(5);
+    expect(gptMajor("gpt-4o")).toBe(4);
+    expect(gptMajor("o3")).toBeNull();
+    expect(isReasoningModel("gpt-6-astra")).toBe(true);
+    expect(supportsTemperature("gpt-6-astra")).toBe(false);
+    expect(supportsTemperature("gpt-4o-mini")).toBe(true);
+  });
+});
+
+describe("responsesEffortFor", () => {
+  it("gpt-6 always reasons: floor low, ceiling max, default medium", () => {
+    expect(responsesEffortFor("gpt-6-astra", null)).toBe("medium");
+    expect(responsesEffortFor("gpt-6-astra", "none")).toBe("low");
+    expect(responsesEffortFor("gpt-6-astra", "minimal")).toBe("low");
+    expect(responsesEffortFor("gpt-6-astra", "max")).toBe("max");
+    expect(responsesEffortFor("gpt-6-astra", "xhigh")).toBe("xhigh");
+    expect(responsesEffortFor("gpt-6-astra", "bogus")).toBe("medium");
+    expect(responsesEffortFor("gpt-6-astra", "none")).not.toBe("none");
+  });
+
+  it("gpt-5.4+ takes none..xhigh, and unlike chat completions keeps it with tools", () => {
+    for (const m of ["gpt-5.4", "gpt-5.4-mini", "gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra"]) {
+      expect(responsesEffortFor(m, null)).toBeNull();
+      expect(responsesEffortFor(m, "minimal")).toBe("none");
+      expect(responsesEffortFor(m, "max")).toBe("xhigh");
+      expect(responsesEffortFor(m, "high")).toBe("high");
+      expect(responsesEffortFor(m, "xhigh")).toBe("xhigh");
+    }
+  });
+
+  it("classic gpt-5 and the o-series take minimal..high", () => {
+    for (const m of ["gpt-5", "gpt-5-mini", "o3"]) {
+      expect(responsesEffortFor(m, "none")).toBe("minimal");
+      expect(responsesEffortFor(m, "xhigh")).toBe("high");
+      expect(responsesEffortFor(m, "max")).toBe("high");
+      expect(responsesEffortFor(m, "low")).toBe("low");
+      expect(responsesEffortFor(m, null)).toBeNull();
+    }
+  });
+
+  it("non-reasoning models never get the parameter", () => {
+    expect(responsesEffortFor("gpt-4.1", "high")).toBeNull();
+    expect(responsesEffortFor("gpt-4o-mini", "low")).toBeNull();
   });
 });

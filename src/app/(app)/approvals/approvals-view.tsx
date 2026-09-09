@@ -7,6 +7,7 @@ import { formatDistanceToNow } from "date-fns";
 import {
   ArrowUpRight,
   BadgeDollarSign,
+  Bot,
   Check,
   CheckCircle2,
   Image as ImageIcon,
@@ -76,6 +77,8 @@ const META: Record<
   // 0120 — approve records the money at the claimed amount; Finance → Slips
   // is where to look at the picture or change the figure.
   slip: { label: "Bank slip", icon: Wallet, tone: "text-emerald-700", decidable: true },
+  // 0130 — approve & schedule happens in the Content Office drawer.
+  content_mission: { label: "Content Office", icon: Bot, tone: "text-orange-600", decidable: false },
 };
 
 export function ApprovalsView({

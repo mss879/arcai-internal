@@ -50,7 +50,9 @@ export function invalidatePriceCatalog(): void {
 }
 
 export type UsageInput = {
-  projectId: string;
+  /** Null for the Content Office's own spend (0130) — then `officeTaskId` owns the row. */
+  projectId: string | null;
+  officeTaskId?: string | null;
   conversationId?: string | null;
   messageId?: string | null;
   kind: AiUsageKind;
@@ -97,6 +99,7 @@ export async function recordUsage(db: DB, input: UsageInput): Promise<UsageRecor
     .from("ai_usage_events")
     .insert({
       project_id: input.projectId,
+      office_task_id: input.officeTaskId ?? null,
       conversation_id: input.conversationId ?? null,
       message_id: input.messageId ?? null,
       kind: input.kind,

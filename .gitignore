@@ -32,6 +32,10 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# 0129 — but the MANIFEST is tracked. It carries names and comments
+# only, never values; the 84 vars the code reads had drifted from the
+# 43 documented, because the one file that lists them was ignored.
+!.env.example
 
 # vercel
 .vercel

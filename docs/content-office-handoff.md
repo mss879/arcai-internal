@@ -1,9 +1,10 @@
 # Content Office — handoff
 
 **Read this first, then `AGENTS.md` and `docs/content-office.md`.**
-Built 2026-09-09 on `arc_ai_crm_system`. Everything is written; **migration
-0130 was applied by the owner on 2026-09-09 (schema-audit clean), the code is
-NOT yet committed.** Paste this into a new chat, or say: *"Read
+Built and **SHIPPED 2026-09-09** on `arc_ai_crm_system` — `93aaa8e..25bb334`
+on `mss879/arcai-internal` main, verified in a clean worktree before the push
+(tsc, 423 tests, lint baseline, build). Migration 0130 is applied; **0131 (two
+seed rows) still needs running.** Paste this into a new chat, or say: *"Read
 `docs/content-office-handoff.md` — help me run the walkthrough and push."*
 
 ## 1. Where things stand

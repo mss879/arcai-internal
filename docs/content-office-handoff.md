@@ -20,6 +20,15 @@ find .next/types -name "* [0-9].ts" -delete && npx tsc --noEmit && npx vitest ru
 `roster`, `office-sim`, `office-layout`; `reasoning-core` extended). Lint
 baseline unchanged.
 
+### The build needs a 4GB heap
+
+`netlify.toml` sets `NODE_OPTIONS = "--max-old-space-size=4096"`. Without it
+the deploy compiles and then dies in the "Running TypeScript" stage with
+"Ineffective mark-compacts near heap limit" — 172 tables in one hand-written
+`Database` type, ~100 new `.from()` call sites, a cold check peaking near
+2.8GB against the runner's ~2.09GB default. A local build does NOT test this;
+reproduce with `NODE_OPTIONS="--max-old-space-size=2048"` and cold caches.
+
 ### ⚠️ Before ANY push
 
 1. ~~Apply `supabase/migrations/0130_content_office.sql`~~ — done 2026-09-09;

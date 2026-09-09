@@ -3,6 +3,15 @@
 
 [build.environment]
   NODE_VERSION = "20"
+  # The type-check stage of `next build` needs more than Node's ~2GB default
+  # heap and dies with "Ineffective mark-compacts near heap limit" (0130).
+  # It is not a leak: `database.types.ts` is one hand-written Database type
+  # with 172 tables, and every `.from("x")` resolves an overload against that
+  # union and instantiates the query-builder generics. A cold type-check
+  # peaks near 2.8GB, and the office added ~100 call sites. Measured: the
+  # build fails at 2048 and passes at 4096 on the same tree. Raise this
+  # before adding another large module, not after the deploy goes red.
+  NODE_OPTIONS = "--max-old-space-size=4096"
 
 # User-defined serverless functions. The scheduled automation tick lives in
 # netlify/functions/automation-tick.mts and runs every 5 minutes to fire

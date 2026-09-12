@@ -25,6 +25,7 @@ import {
   Settings,
   ShieldCheck,
   Sparkles,
+  Target,
   Users,
   Zap,
   type LucideIcon,
@@ -133,6 +134,15 @@ export const NAV_GROUPS: NavGroup[] = [
         label: "Web Analytics",
         href: "/web-analytics",
         icon: BarChart3,
+        adminOnly: true,
+      },
+      {
+        // 0132 — what the Meta ads cost next to what they produced here:
+        // chats → qualified → calls booked. Synced on demand by Claude (no
+        // Meta token in this app). Admin-only: it is spend.
+        label: "Ads",
+        href: "/ads",
+        icon: Target,
         adminOnly: true,
       },
       {

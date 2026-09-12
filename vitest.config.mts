@@ -126,6 +126,20 @@ export default defineConfig({
       // 0130 — the floor is a level: every desk must be reachable from the
       // door through the gate, and rotation must keep the geometry honest.
       "src/app/(app)/content/office/office-layout.test.ts",
+      // 0132 — which ad a WhatsApp chat is credited to. The prefill match is
+      // the only evidence when Meta drops the referral; too loose and every
+      // organic "Hi" becomes ad revenue, too strict and the ad looks dead.
+      "src/lib/meta-ads/attribution-core.test.ts",
+      // 0132 — the rules that tell the owner to act on a campaign. A wrong
+      // threshold direction is a live ad left burning money, silently.
+      "src/lib/meta-ads/health-core.test.ts",
+      // 0132 — spend totals, windows and Colombo days on /ads. Summing the
+      // campaign row AND its ads counts every rupee twice.
+      "src/lib/meta-ads/report-core.test.ts",
+      // 0132 — the payload contract the sync script enforces before it
+      // writes production spend. A money string or a typo'd key must be an
+      // error, never a silently wrong number.
+      "scripts/ads-sync-core.test.mjs",
     ],
   },
 });

@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "ad_account_id": "1148854332990641",
+  "currency": "LKR",
+  "synced_at": "2026-09-13T21:00:00+05:30",
+  "window": { "start": "2026-09-12", "end": "2026-09-13" },
+  "entities": [
+    {
+      "level": "campaign",
+      "id": "120244355299530395",
+      "name": "ARC | Smart Websites | CTWA | WP Decision-Makers | Sep 2026",
+      "status": "ACTIVE",
+      "effective_status": "ACTIVE",
+      "objective": "OUTCOME_ENGAGEMENT",
+      "daily_budget": 2500,
+      "start_time": "2026-09-12T19:10:00+0530",
+      "end_time": "2026-09-15T23:59:00+0530"
+    },
+    {
+      "level": "adset",
+      "id": "120244355301620395",
+      "name": "ARC | WP Decision-Makers 30-64 | Smart Websites | Sep 2026",
+      "campaign_id": "120244355299530395",
+      "status": "ACTIVE",
+      "effective_status": "ACTIVE",
+      "optimization_goal": "CONVERSATIONS",
+      "start_time": "2026-09-12T19:10:00+0530",
+      "end_time": "2026-09-15T23:59:00+0530",
+      "targeting": {
+        "geo_locations": { "regions": [{ "key": "4478", "name": "Western Province" }] },
+        "age_min": 30,
+        "age_max": 64,
+        "publisher_platforms": ["facebook"],
+        "facebook_positions": ["feed"],
+        "device_platforms": ["mobile"]
+      }
+    },
+    {
+      "level": "ad",
+      "id": "120244355303630395",
+      "name": "Ad A — Companies with 20+ staff",
+      "campaign_id": "120244355299530395",
+      "adset_id": "120244355301620395",
+      "status": "ACTIVE",
+      "effective_status": "ACTIVE",
+      "creative": {
+        "headline": "Smart Websites for established companies",
+        "body": "Companies with 20+ staff… From Rs 175,000",
+        "prefill": "Hi Arc, I'd like to book a call about a Smart Website for our company.",
+        "image_hash": "0cd54b3466e1cb4a1fe757fe67b4c6c9",
+        "cta": "WHATSAPP_MESSAGE"
+      }
+    },
+    {
+      "level": "ad",
+      "id": "120244355304550395",
+      "name": "Ad B — Enquiry at 9pm",
+      "campaign_id": "120244355299530395",
+      "adset_id": "120244355301620395",
+      "status": "ACTIVE",
+      "effective_status": "ACTIVE",
+      "creative": {
+        "headline": "Smart Websites for established companies",
+        "body": "Directors of companies with 20+ staff: an enquiry arrives at 9pm…",
+        "prefill": "Hi Arc, our company is missing enquiries. Can we book a call about a Smart Website?",
+        "image_hash": "0cd54b3466e1cb4a1fe757fe67b4c6c9",
+        "cta": "WHATSAPP_MESSAGE"
+      }
+    }
+  ],
+  "insights": [
+    { "level": "campaign", "id": "120244355299530395", "date": "2026-09-12", "spend": 312.5, "impressions": 653, "reach": 598, "clicks": 16, "link_clicks": 9, "conversations": 1, "frequency": 1.09, "cpm": 478.56, "ctr": 2.45 },
+    { "level": "campaign", "id": "120244355299530395", "date": "2026-09-13", "spend": 2500, "impressions": 5201, "reach": 3802, "clicks": 97, "link_clicks": 53, "conversations": 5, "frequency": 1.37, "cpm": 480.68, "ctr": 1.86 },
+    { "level": "ad", "id": "120244355303630395", "date": "2026-09-12", "spend": 188.42, "impressions": 402, "reach": 371, "clicks": 11, "link_clicks": 6, "conversations": 1 },
+    { "level": "ad", "id": "120244355304550395", "date": "2026-09-12", "spend": 124.08, "impressions": 251, "reach": 236, "clicks": 5, "link_clicks": 3, "conversations": 0 },
+    { "level": "ad", "id": "120244355303630395", "date": "2026-09-13", "spend": 1402.77, "impressions": 2890, "reach": 2204, "clicks": 58, "link_clicks": 31, "conversations": 3 },
+    { "level": "ad", "id": "120244355304550395", "date": "2026-09-13", "spend": 1097.23, "impressions": 2311, "reach": 1850, "clicks": 39, "link_clicks": 22, "conversations": 2 }
+  ],
+  "notes": {
+    "summary": "SAMPLE DATA (scripts/fixtures) — not real results. Day one delivered from 19:10 only; day two spent the full Rs 2,500 at about Rs 500 per conversation. Ad A is opening more chats than Ad B.",
+    "health": "watch",
+    "recommendations": [
+      "Judge on calls booked by Wednesday, not cost per conversation.",
+      "Read the six threads before changing the creative."
+    ]
+  }
+}

@@ -154,3 +154,41 @@ their role, not by their capabilities. Nobody but the service role has one.
 - Timers (`office_schedules`) fire on the tick with a compare-and-set on
   `next_run_at`. Unattended runs advance one step per tick and render one
   slide per tick, so a timer should fire hours before the posts are due.
+
+## Meta Ads (0132, 0133)
+
+- **Apply** `supabase/migrations/0132_meta_ads.sql`, then
+  `0133_meta_ad_syncs_synced_at.sql`, in the SQL editor. Run
+  `node scripts/schema-audit.mjs` before and after, as with any migration.
+  0132 adds `meta_ad_entities`, `meta_ad_insights`, `meta_ad_syncs` and four
+  nullable `wa_contacts.ad_*` columns; 0133 adds `meta_ad_syncs.synced_at`
+  (when the numbers were read from Meta — the stale-payload guard reads it).
+  Both are additive, idempotent and safe on a live system. 0133 is separate
+  only because 0132 was applied before review added that column.
+- **Verify:** `select version from schema_migrations where version in
+  ('0132_meta_ads', '0133_meta_ad_syncs_synced_at');` returns two rows. `/ads`
+  shows "No ad data yet" instead of the setup screen.
+  `node scripts/ads-sync.mjs scripts/fixtures/ads-sync-sample.json --dry-run`
+  prints a plan, "credentials … found" and "a real run would be REFUSED".
+  The fixture is sample data carrying the live ids, so the script refuses to
+  write it for real. It also refuses any argument it does not know, and any
+  payload read from Meta before the numbers already stored.
+- **Who writes:** nobody through the anon key. The tables are admin-read
+  with **no** write policy for `authenticated`. Only `scripts/ads-sync.mjs`
+  writes, with the service role from `.env.local`, and only into these three
+  tables (upserts plus one sync row; it never deletes). There is no Meta
+  token, cron or Netlify function for ads. Claude syncs on demand; the
+  procedure is in `docs/meta-ads.md`.
+- **Claude Code permission:** the owner allows the script once by adding
+  `Bash(node scripts/ads-sync.mjs:*)` to `.claude/settings.local.json` →
+  `permissions.allow`.
+- **Webhook:** after 0132, the first message after an ad tap stamps
+  `wa_contacts.ad_source_id` / `ad_ctwa_clid` / `ad_referral` /
+  `ad_entered_at` once. Check with `select ad_source_id, count(*) from
+  wa_contacts where ad_source_id is not null group by 1;`. Before 0132, the
+  function logs `[whatsapp] ad first-touch stamp skipped (is 0132 applied?)`
+  and stores the message as normal. The referral is also kept on
+  `wa_messages.meta.referral` either way.
+- **Attribution** never uses `wa_contacts.campaign_id`. The Sept 2026
+  Smart Websites `wa_campaigns` row reuses the August ad's row id, so
+  `campaign_id` mixes the two campaigns.

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import type { Database, WaLanguage, WaMessageStatus } from "@/lib/database.types";
+import { isAdReferral, parseReferral, type AdReferral } from "@/lib/meta-ads/attribution-core";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
   detectWaOptOut,
@@ -48,6 +49,22 @@ type WaWebhookMessage = {
   // customer REMOVES their reaction; `message_id` is the wa_message_id of
   // the message they reacted to.
   reaction?: { message_id?: string; emoji?: string };
+  // 0132 — Click-to-WhatsApp: present on the FIRST message after someone
+  // taps an ad (source_id = the ad id), never again. Parsed defensively by
+  // parseReferral — it is Meta's JSON on an endpoint that must always 200.
+  referral?: {
+    source_url?: string;
+    source_id?: string;
+    source_type?: string;
+    headline?: string;
+    body?: string;
+    media_type?: string;
+    image_url?: string;
+    video_url?: string;
+    thumbnail_url?: string;
+    ctwa_clid?: string;
+    welcome_message?: { text?: string };
+  };
 };
 
 type WaWebhookValue = {
@@ -202,6 +219,14 @@ async function handleMessages(supabase: DB, value: WaWebhookValue): Promise<void
     }
     if (!contact) continue;
 
+    // 0132 — which ad they tapped, if any. Stamped BEFORE any dedupe
+    // `continue` below, so a retry of a delivery that died half-way still
+    // records it; the stamp is first-touch only, so a repeat changes nothing.
+    const referral = parseReferral(message.referral);
+    if (referral && isAdReferral(referral)) {
+      await stampAdFirstTouch(supabase, contact.id, referral);
+    }
+
     // A reaction annotates an existing message rather than being one of its
     // own, and WhatsApp allows exactly ONE per person per message. So clear
     // any earlier reaction from this contact on the same target first —
@@ -304,6 +329,9 @@ async function handleMessages(supabase: DB, value: WaWebhookValue): Promise<void
         reaction_target: message.reaction?.message_id?.trim() ?? null,
       };
     }
+    // 0132 — the referral rides on the message too, ad or post: it is the
+    // raw evidence, and meta exists on every database, 0132 or not.
+    if (referral) meta = { ...meta, referral };
     const now = new Date().toISOString();
 
     // Store the message; the unique wa_message_id dedupes Meta's retries.
@@ -440,6 +468,39 @@ async function activeCampaignId(supabase: DB): Promise<string | null> {
     .limit(1)
     .maybeSingle();
   return data?.id ?? null;
+}
+
+/**
+ * 0132 — first-touch ad attribution on the contact.
+ *
+ * A SEPARATE update, guarded by ad_source_id IS NULL, so the first ad that
+ * brought someone keeps the credit. Every failure is logged and swallowed:
+ * on a database without 0132 these columns do not exist and PostgREST
+ * refuses the update — which must never cost the message, the dedupe, the
+ * campaign stamp or the agent's reply.
+ */
+async function stampAdFirstTouch(
+  supabase: DB,
+  contactId: string,
+  referral: AdReferral,
+): Promise<void> {
+  try {
+    const { error } = await supabase
+      .from("wa_contacts")
+      .update({
+        ad_source_id: referral.source_id,
+        ad_ctwa_clid: referral.ctwa_clid,
+        ad_referral: referral,
+        ad_entered_at: new Date().toISOString(),
+      })
+      .eq("id", contactId)
+      .is("ad_source_id", null);
+    if (error) {
+      console.warn("[whatsapp] ad first-touch stamp skipped (is 0132 applied?):", error.message);
+    }
+  } catch (e) {
+    console.warn("[whatsapp] ad first-touch stamp failed:", e);
+  }
 }
 
 type InboundSlip = {

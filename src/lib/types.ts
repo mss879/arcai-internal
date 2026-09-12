@@ -104,6 +104,10 @@ export type OfficeBrandProfile = Tables["office_brand_profiles"]["Row"];
 export type SmsMessage = Tables["sms_messages"]["Row"];
 export type WaContact = Tables["wa_contacts"]["Row"];
 export type WaMessage = Tables["wa_messages"]["Row"];
+// 0132 — Meta Ads, synced on demand by Claude (src/lib/meta-ads).
+export type MetaAdEntity = Tables["meta_ad_entities"]["Row"];
+export type MetaAdInsight = Tables["meta_ad_insights"]["Row"];
+export type MetaAdSync = Tables["meta_ad_syncs"]["Row"];
 export type WaAgentConfig = Tables["wa_agent_config"]["Row"];
 export type WaKeywordRule = Tables["wa_keyword_rules"]["Row"];
 export type WaAgentLog = Tables["wa_agent_logs"]["Row"];

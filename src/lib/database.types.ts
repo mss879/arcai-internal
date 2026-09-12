@@ -38,6 +38,21 @@ export type AiUsageStatus = "complete" | "partial";
 export type AiLeadStatus = "new" | "contacted" | "archived";
 export type AiInvoiceStatus = "pending" | "created" | "skipped_zero" | "failed";
 
+// 0132 — Meta Ads (src/lib/meta-ads): synced on demand by Claude, never by
+// a token in this app.
+export type MetaAdLevel = "campaign" | "adset" | "ad";
+export type MetaAdHealth = "good" | "watch" | "act";
+export type MetaAdSyncSource = "claude" | "api" | "manual";
+export type MetaAdCreative = {
+  headline?: string;
+  body?: string;
+  description?: string;
+  /** The text the ad pre-types into WhatsApp — the attribution fallback. */
+  prefill?: string;
+  image_hash?: string;
+  cta?: string;
+};
+
 // 0127 — the client backend link: leads, tools and a dashboard on the
 // client's own site.
 export type AiToolKind = "read" | "write";
@@ -4958,6 +4973,13 @@ export type Database = {
           // machinery (follow-ups, promises, revival) skips the thread.
           mode: WaContactMode;
           onboarding_project_id: UUID | null;
+          // 0132 — first-touch Click-to-WhatsApp referral, stamped once by
+          // the webhook (only while ad_source_id is null). NOT campaign_id,
+          // which is timing, not evidence.
+          ad_source_id: string | null;
+          ad_ctwa_clid: string | null;
+          ad_referral: Record<string, unknown> | null;
+          ad_entered_at: Timestamp | null;
           created_at: Timestamp;
           updated_at: Timestamp;
         };
@@ -4997,6 +5019,11 @@ export type Database = {
           // 0086 — see the Row comment
           mode?: WaContactMode;
           onboarding_project_id?: UUID | null;
+          // 0132 — see the Row comment
+          ad_source_id?: string | null;
+          ad_ctwa_clid?: string | null;
+          ad_referral?: Record<string, unknown> | null;
+          ad_entered_at?: Timestamp | null;
           created_at?: Timestamp;
           updated_at?: Timestamp;
         };
@@ -7674,6 +7701,138 @@ export type Database = {
           updated_at?: Timestamp;
         };
         Update: Partial<Database["public"]["Tables"]["office_schedules"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0132 — Meta campaigns, ad sets and ads, keyed by Meta's own id.
+      // Admin read; written only by scripts/ads-sync.mjs (service role).
+      meta_ad_entities: {
+        Row: {
+          id: string;
+          level: MetaAdLevel;
+          ad_account_id: string;
+          name: string;
+          campaign_id: string | null;
+          adset_id: string | null;
+          status: string | null;
+          effective_status: string | null;
+          objective: string | null;
+          optimization_goal: string | null;
+          /** Major units of `currency` (LKR 2500.00, not Meta's 250000). */
+          daily_budget: number | null;
+          lifetime_budget: number | null;
+          currency: string | null;
+          start_time: Timestamp | null;
+          end_time: Timestamp | null;
+          targeting: Record<string, unknown> | null;
+          creative: MetaAdCreative | null;
+          raw: Record<string, unknown> | null;
+          first_seen_at: Timestamp;
+          synced_at: Timestamp;
+        };
+        Insert: {
+          id: string;
+          level: MetaAdLevel;
+          ad_account_id: string;
+          name?: string;
+          campaign_id?: string | null;
+          adset_id?: string | null;
+          status?: string | null;
+          effective_status?: string | null;
+          objective?: string | null;
+          optimization_goal?: string | null;
+          daily_budget?: number | null;
+          lifetime_budget?: number | null;
+          currency?: string | null;
+          start_time?: Timestamp | null;
+          end_time?: Timestamp | null;
+          targeting?: Record<string, unknown> | null;
+          creative?: MetaAdCreative | null;
+          raw?: Record<string, unknown> | null;
+          first_seen_at?: Timestamp;
+          synced_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["meta_ad_entities"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0132 — daily delivery and spend, one row per (level, entity, ad-account day).
+      meta_ad_insights: {
+        Row: {
+          id: UUID;
+          level: MetaAdLevel;
+          entity_id: string;
+          campaign_id: string | null;
+          adset_id: string | null;
+          /** The ad account's day (Asia/Colombo), as Meta reports it. */
+          date: string;
+          spend: number;
+          currency: string | null;
+          impressions: number;
+          reach: number;
+          clicks: number;
+          link_clicks: number;
+          /** Meta's "messaging conversations started". */
+          conversations: number;
+          frequency: number | null;
+          cpm: number | null;
+          ctr: number | null;
+          raw: Record<string, unknown> | null;
+          synced_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          level: MetaAdLevel;
+          entity_id: string;
+          campaign_id?: string | null;
+          adset_id?: string | null;
+          date: string;
+          spend?: number;
+          currency?: string | null;
+          impressions?: number;
+          reach?: number;
+          clicks?: number;
+          link_clicks?: number;
+          conversations?: number;
+          frequency?: number | null;
+          cpm?: number | null;
+          ctr?: number | null;
+          raw?: Record<string, unknown> | null;
+          synced_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["meta_ad_insights"]["Insert"]>;
+        Relationships: [];
+      };
+      // 0132 — one row per completed sync, written last; the analyst's notes.
+      meta_ad_syncs: {
+        Row: {
+          id: UUID;
+          source: MetaAdSyncSource;
+          ad_account_id: string | null;
+          window_start: string | null;
+          window_end: string | null;
+          entities_upserted: number;
+          insights_upserted: number;
+          summary: string | null;
+          health: MetaAdHealth | null;
+          recommendations: string[];
+          // When the numbers were read from Meta (the payload's synced_at).
+          synced_at: Timestamp;
+          created_at: Timestamp;
+        };
+        Insert: {
+          id?: UUID;
+          source?: MetaAdSyncSource;
+          ad_account_id?: string | null;
+          window_start?: string | null;
+          window_end?: string | null;
+          entities_upserted?: number;
+          insights_upserted?: number;
+          summary?: string | null;
+          health?: MetaAdHealth | null;
+          recommendations?: string[];
+          synced_at?: Timestamp;
+          created_at?: Timestamp;
+        };
+        Update: Partial<Database["public"]["Tables"]["meta_ad_syncs"]["Insert"]>;
         Relationships: [];
       };
     };
